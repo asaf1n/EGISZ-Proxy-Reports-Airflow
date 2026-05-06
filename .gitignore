@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.idea/
+.vscode/
+
+# Local secrets
+k8s/**/**secret*.yaml
+!k8s/**/**.example.yaml

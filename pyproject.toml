@@ -1,0 +1,32 @@
+[
+  project
+]
+name = "egisz-proxy-reports-etl"
+version = "0.1.0"
+description = "Minimal Firebird → Postgres ETL for EGISZ proxy reports (Airflow/K8s)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "EGISZ" }]
+
+dependencies = [
+  "firebird-driver>=1.10.0",
+  "psycopg2-binary>=2.9.9",
+]
+
+[project.scripts]
+proxy-reports-etl = "proxy_reports_etl.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
