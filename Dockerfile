@@ -11,4 +11,4 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir -e .
 
-ENTRYPOINT ["python", "-m", "proxy_reports_etl.cli"]
+ENTRYPOINT ["python", "-m", "egisz_etl.cli"]
