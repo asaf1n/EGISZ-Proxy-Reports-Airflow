@@ -12,9 +12,6 @@ dependencies = [
   "psycopg2-binary>=2.9.9",
 ]
 
-[project.scripts]
-proxy-reports-etl = "proxy_reports_etl.cli:main"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

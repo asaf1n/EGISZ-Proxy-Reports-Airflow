@@ -28,3 +28,7 @@ extraEnvFrom: |
       name: airflow-metadata-connection
   - secretRef:
       name: proxy-reports-etl-env
+
+webserver:
+  service:
+    type: LoadBalancer

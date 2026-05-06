@@ -113,7 +113,16 @@ services:
       db-init:
         condition: service_completed_successfully
     environment:
-      <<: *airflow-env
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_ADMIN_USER:-postgres}:${POSTGRES_ADMIN_PASSWORD:-postgres}@postgres:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__UNIT_TEST_MODE: "False"
+      AIRFLOW__WEBSERVER__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__WEBSERVER__DAG_DEFAULT_VIEW: tree
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__WEBSERVER__RBAC: "True"
       AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER:-admin}
       AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-airflow}
       AIRFLOW_WWW_USER_FIRSTNAME: Proxy
@@ -144,6 +153,4 @@ services:
 volumes:
   metabase_shared:
   postgres_data:
-  airflow_logs:
-es_data:
   airflow_logs:
