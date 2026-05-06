@@ -1,0 +1,1289 @@
+{
+  "name": "01 Оперативный мониторинг и динамика",
+  "width": "full",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** / **DOCUMENTID**, **emdrId** (РЭМД), плюс **relatesToMessage** в XML колбэка — это **коррелятор запрос–ответ**, не замена идентификатора СЭМД. Агрегаты «сколько СЭМД» — по колонке **«Документ (ключ учёта)»** (`egisz_document_identity_key`: приоритет relatesTo → localUid → emdr). Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**; период **ошибок связи (транспорт)** — отдельный фильтр `parse_created` по **«Дата создания документа»** (карточки «Статусы», «Доля по клиникам», «Ошибки по типу», «Доля по СЭМД»). Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
+  "parameters": [
+    {
+      "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
+      "name": "Период по «Обработано IPS» (колбэки)",
+      "slug": "dwh_date_filter",
+      "type": "date/all-options",
+      "sectionId": "date"
+    },
+    {
+      "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ac",
+      "name": "Период по «Дата создания документа» (ошибки канала)",
+      "slug": "parse_created_filter",
+      "type": "date/all-options",
+      "sectionId": "date"
+    },
+    {
+      "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
+      "name": "Код СЭМД",
+      "slug": "top_semd_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
+      "name": "JID клиники",
+      "slug": "top_clinic_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef1",
+      "name": "localUid СЭМД",
+      "slug": "local_uid_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef2",
+      "name": "Связанное сообщение (relatesToMessage)",
+      "slug": "relates_to_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef3",
+      "name": "Рег. номер РЭМД (emdrid)",
+      "slug": "emdr_id_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
+      "name": "Статус",
+      "slug": "status_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef5",
+      "name": "LOGID журнала EXCHANGELOG",
+      "slug": "log_id_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef6",
+      "name": "EGMID сообщения EGISZ_MESSAGES",
+      "slug": "egmid_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "Последние операции",
+      "description": "До 50 последних строк в выбранном периоде; сортировка по «Обработано IPS» (новые сверху).",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT public.v_egisz_transactions_enriched_ui.* FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД (emdrid)\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Обработано IPS\" DESC NULLS LAST LIMIT 50",
+          "template-tags": {
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000005-0005-4005-8005-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано IPS»"
+            },
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            },
+            "local_uid": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "required": false
+            },
+            "relates_to": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000013",
+              "name": "relates_to",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "required": false
+            },
+            "emdr_id": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000014",
+              "name": "emdr_id",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "required": false
+            },
+            "status": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000015",
+              "name": "status",
+              "display-name": "Статус",
+              "required": false
+            },
+            "log_id": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000016",
+              "name": "log_id",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "required": false
+            },
+            "egmid": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000005-0005-4005-8005-000000000017",
+              "name": "egmid",
+              "display-name": "EGMID сообщения EGISZ_MESSAGES",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table": {
+          "columns": [
+            {
+              "name": "Обработано IPS",
+              "enabled": true
+            },
+            {
+              "name": "Статус",
+              "enabled": true
+            },
+            {
+              "name": "JID клиники",
+              "enabled": true
+            },
+            {
+              "name": "Код СЭМД",
+              "enabled": true
+            },
+            {
+              "name": "Наименование СЭМД",
+              "enabled": true
+            },
+            {
+              "name": "Интерпретация ошибок",
+              "enabled": true
+            },
+            {
+              "name": "Рег. номер РЭМД (emdrid)",
+              "enabled": true
+            },
+            {
+              "name": "Зарегистрирован в ЕГИСЗ РЭМД",
+              "enabled": true
+            },
+            {
+              "name": "Хост клиники (VPN ГОСТ)",
+              "enabled": true
+            },
+            {
+              "name": "OID организации",
+              "enabled": true
+            },
+            {
+              "name": "localUid СЭМД",
+              "enabled": true
+            },
+            {
+              "name": "Ошибки JSON",
+              "enabled": true
+            },
+            {
+              "name": "Создание СЭМД",
+              "enabled": true
+            },
+            {
+              "name": "День (тренд)",
+              "enabled": true
+            },
+            {
+              "name": "Наименование клиники",
+              "enabled": true
+            },
+            {
+              "name": "ИНН клиники",
+              "enabled": true
+            },
+            {
+              "name": "OID клиники",
+              "enabled": true
+            },
+            {
+              "name": "Связанное сообщение",
+              "enabled": false
+            }
+          ]
+        },
+        "table.columns": [
+          {
+            "name": "Обработано IPS",
+            "enabled": true
+          },
+          {
+            "name": "Статус",
+            "enabled": true
+          },
+          {
+            "name": "JID клиники",
+            "enabled": true
+          },
+          {
+            "name": "Код СЭМД",
+            "enabled": true
+          },
+          {
+            "name": "Наименование СЭМД",
+            "enabled": true
+          },
+          {
+            "name": "Интерпретация ошибок",
+            "enabled": true
+          },
+          {
+            "name": "Рег. номер РЭМД (emdrid)",
+            "enabled": true
+          },
+          {
+            "name": "Зарегистрирован в ЕГИСЗ РЭМД",
+            "enabled": true
+          },
+          {
+            "name": "Хост клиники (VPN ГОСТ)",
+            "enabled": true
+          },
+          {
+            "name": "OID организации",
+            "enabled": true
+          },
+          {
+            "name": "localUid СЭМД",
+            "enabled": true
+          },
+          {
+            "name": "Ошибки JSON",
+            "enabled": true
+          },
+          {
+            "name": "Создание СЭМД",
+            "enabled": true
+          },
+          {
+            "name": "День (тренд)",
+            "enabled": true
+          },
+          {
+            "name": "Наименование клиники",
+            "enabled": true
+          },
+          {
+            "name": "ИНН клиники",
+            "enabled": true
+          },
+          {
+            "name": "OID клиники",
+            "enabled": true
+          },
+          {
+            "name": "Связанное сообщение",
+            "enabled": true
+          }
+        ],
+        "table.column_widths": [
+          null,
+          null,
+          null,
+          76,
+          216,
+          568,
+          null,
+          197
+        ],
+        "table.pivot_column": "Рег. номер РЭМД (emdrid)",
+        "table.cell_column": "Связанное сообщение",
+        "column_settings": {
+          "[\"name\",\"localUid СЭМД\"]": {
+            "column_title": "localUid СЭМД"
+          },
+          "[\"name\",\"OID клиники\"]": {
+            "column_title": "OID клиники"
+          },
+          "[\"name\",\"Статус\"]": {
+            "column_title": "Статус"
+          },
+          "[\"name\",\"Хост клиники (VPN ГОСТ)\"]": {
+            "column_title": "Хост клиники (VPN ГОСТ)"
+          },
+          "[\"name\",\"OID организации\"]": {
+            "column_title": "OID МО"
+          },
+          "[\"name\",\"Создание СЭМД\"]": {
+            "column_title": "Создание СЭМД"
+          },
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
+          },
+          "[\"name\",\"Ошибки JSON\"]": {
+            "column_title": "Ошибки JSON"
+          },
+          "[\"name\",\"Обработано IPS\"]": {
+            "column_title": "Обработано IPS",
+            "date_style": "D MMMM, YYYY",
+            "date_abbreviate": true,
+            "time_style": "HH:mm"
+          },
+          "[\"name\",\"Код СЭМД\"]": {
+            "column_title": "Код СЭМД"
+          },
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          },
+          "[\"name\",\"ИНН клиники\"]": {
+            "column_title": "ИНН клиники"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Зарегистрирован в ЕГИСЗ РЭМД\"]": {
+            "column_title": "Зарегистрирован в ЕГИСЗ РЭМД",
+            "date_style": "D MMMM, YYYY",
+            "date_abbreviate": true,
+            "time_style": "HH:mm"
+          },
+          "[\"name\",\"Связанное сообщение\"]": {
+            "column_title": "relatesToMessage (коррелятор XML, не UID СЭМД)"
+          },
+          "[\"name\",\"Рег. номер РЭМД (emdrid)\"]": {
+            "column_title": "Рег. номер РЭМД (emdrid)"
+          }
+        }
+      },
+      "sizeX": 18,
+      "sizeY": 8,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "Статусы за период",
+      "description": "По **витрине ответов РЭМД**: успех / неизвестно / ошибки (в т.ч. асинхронный ответ РЭМД) — COUNT DISTINCT экземпляров СЭМД (**«Документ (ключ учёта)»**). Срез **«Ошибка связи»** — из `v_rpt_network_errors_detail_ui`, те же опциональные фильтры **Код СЭМД** и **JID** (колбэк или JID из gost в журнале), период — **«Дата создания документа»**. «Итого» на круговой диаграмме — сумма срезов; один СЭМД теоретически может учитываться и в колбэках, и в транспорте при разных временных окнах фильтров.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        },
+        "parse_created": {
+          "table_ref": "public.v_rpt_network_errors_detail_ui",
+          "field_name": "Дата создания документа"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH fact_status AS ( SELECT CASE WHEN \"Статус\" = 'error' AND NULLIF(TRIM(\"Подкатегория ошибки (глобально)\"), '') = 'ошибка асинхронного ответа РЭМД' THEN 'ошибка асинхронного ответа' WHEN \"Статус\" = 'error' THEN 'отказы РЭМД (status=error)' ELSE \"Статус\" END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net AS ( SELECT 'Ошибка связи'::text AS \"Статус\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] ) SELECT * FROM fact_status UNION ALL SELECT * FROM net WHERE \"Документов\" > 0 ORDER BY 2 DESC",
+          "template-tags": {
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000004-0004-4004-8004-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "parse_created": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000004-0004-4004-8004-000000000101",
+              "name": "parse_created",
+              "display-name": "По дате «Дата создания документа», ошибки связи",
+              "required": false
+            },
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000004-0004-4004-8004-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000004-0004-4004-8004-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "graph.show_values": true,
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "pie.percent_visibility": "inside",
+        "pie.dimension": [
+          "Статус"
+        ],
+        "pie.show_labels": false,
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "graph.metrics": [
+          "Документов"
+        ],
+        "pie.show_legend": true,
+        "pie.show_total": true,
+        "column_settings": {
+          "[\"name\",\"Статус\"]": {
+            "column_title": "Статус"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.dimensions": [
+          "Статус"
+        ]
+      },
+      "sizeX": 6,
+      "sizeY": 8,
+      "row": 0,
+      "col": 18
+    },
+    {
+      "name": "Доля ошибок по СЭМД",
+      "description": "Топ-10 типов СЭМД среди отказов РЭМД (колбэки) **плюс** ошибки связи из транспорта по **«Тип СЭМД (код · НСИ)»** из связанного колбэка (при отсутствии — отдельная подпись). Период транспорта — **«Дата создания документа»**.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        },
+        "parse_created": {
+          "table_ref": "public.v_rpt_network_errors_detail_ui",
+          "field_name": "Дата создания документа"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_code_remd AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), per_code_net AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(ошибка связи: тип СЭМД не из колбэка)') AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] GROUP BY 1 ), per_code AS ( SELECT lbl, SUM(cnt)::bigint AS cnt FROM ( SELECT lbl, cnt FROM per_code_remd UNION ALL SELECT lbl, cnt FROM per_code_net ) u GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "template-tags": {
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000003-0003-4003-8003-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000003-0003-4003-8003-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000003-0003-4003-8003-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            },
+            "parse_created": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000003-0003-4003-8003-000000000012",
+              "name": "parse_created",
+              "display-name": "По дате «Дата создания документа», ошибки связи",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.show_legend": true,
+        "pie.percent_visibility": "inside",
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "version": 2,
+        "pie.dimension": [
+          "СЭМД"
+        ],
+        "pie.metric": "Количество",
+        "column_settings": {
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД (код или наименование)"
+          },
+          "[\"name\",\"Количество\"]": {
+            "number_separators": ".",
+            "decimals": 0
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 5,
+      "row": 8,
+      "col": 0
+    },
+    {
+      "name": "Ошибки по типу",
+      "description": "Отказы РЭМД: до 8 наиболее частых формулировок по «Ошибки JSON» **плюс** срез **«Ошибка связи (транспорт)»** из журнала (отдельная метка). Период транспорта — **«Дата создания документа»**.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        },
+        "parse_created": {
+          "table_ref": "public.v_rpt_network_errors_detail_ui",
+          "field_name": "Дата создания документа"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_err AS ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_interpretation_type(err->>'code', err->>'message'), 52) FROM jsonb_array_elements(COALESCE(\"Ошибки JSON\", '[]'::jsonb)) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net_err AS ( SELECT 'Ошибка связи (транспорт)'::text AS err_lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] ), all_err AS ( SELECT err_lbl, cnt FROM per_err UNION ALL SELECT err_lbl, cnt FROM net_err WHERE cnt > 0 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM all_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "template-tags": {
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000002-0002-4002-8002-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000002-0002-4002-8002-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000002-0002-4002-8002-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            },
+            "parse_created": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000002-0002-4002-8002-000000000012",
+              "name": "parse_created",
+              "display-name": "По дате «Дата создания документа», ошибки связи",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.show_legend": true,
+        "pie.percent_visibility": "inside",
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "version": 2,
+        "column_settings": {
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки"
+          },
+          "[\"name\",\"Количество\"]": {
+            "number_separators": ".",
+            "decimals": 0
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 5,
+      "row": 8,
+      "col": 8
+    },
+    {
+      "name": "Доля ошибок по клиникам",
+      "description": "Топ-10 клиник: отказы РЭМД (колбэки) **и** ошибки связи (транспорт) по **«Клиника (транспорт)»** / JID из колбэка или журнала. Период транспорта — **«Дата создания документа»**; ответов РЭМД — **«Обработано IPS»**.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        },
+        "parse_created": {
+          "table_ref": "public.v_rpt_network_errors_detail_ui",
+          "field_name": "Дата создания документа"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_clinic_remd AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), per_clinic_net AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), ''), 24) || ' | ' || COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''), '(нет JID)')) AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] GROUP BY 1 ), combined AS ( SELECT lbl, cnt FROM per_clinic_remd UNION ALL SELECT lbl, cnt FROM per_clinic_net ), per_clinic AS ( SELECT lbl, SUM(cnt)::bigint AS cnt FROM combined GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "template-tags": {
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000004-0004-4004-8004-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000004-0004-4004-8004-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "fa000004-0004-4004-8004-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            },
+            "parse_created": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "fa000004-0004-4004-8004-000000000012",
+              "name": "parse_created",
+              "display-name": "По дате «Дата создания документа», ошибки связи",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.show_legend": true,
+        "pie.percent_visibility": "inside",
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "version": 2,
+        "column_settings": {
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"Количество\"]": {
+            "number_separators": ".",
+            "decimals": 0
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 5,
+      "row": 8,
+      "col": 16
+    },
+    {
+      "name": "По клиникам (имя)",
+      "description": "Топ клиник по числу **документов** (DISTINCT «Документ (ключ учёта)»), все статусы.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "template-tags": {
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000003-0003-4003-8003-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000003-0003-4003-8003-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000003-0003-4003-8003-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Наименование клиники"
+        ],
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 10,
+      "sizeY": 6,
+      "row": 13,
+      "col": 0
+    },
+    {
+      "name": "% Ошибок за период",
+      "description": "Доля отказов РЭМД по срезам: только строки, где есть хотя бы один СЭМД со статусом error (строки только с успехом отфильтрованы как шум). Учёт СЭМД — «Документ (ключ учёта)». Фильтр по «Обработано».",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH filtered AS ( SELECT * FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), with_err AS ( SELECT f.*, COALESCE(ek.err_kind, CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' WHEN f.\"Статус\" = 'unknown' THEN '(неизвестно)' ELSE '(' || COALESCE(f.\"Статус\", '?') || ')' END) AS err_kind FROM filtered f LEFT JOIN LATERAL ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_interpretation_type(err->>'code', err->>'message'), 120) FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_kind WHERE f.\"Статус\" = 'error' ) ek ON TRUE ) SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "template-tags": {
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f9000004-0004-4004-8004-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f9000004-0004-4004-8004-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f9000004-0004-4004-8004-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table": {
+          "columns": [
+            {
+              "name": "Связанное сообщение",
+              "enabled": false
+            }
+          ]
+        },
+        "table.columns": [
+          {
+            "name": "Доля ошибок",
+            "enabled": true
+          },
+          {
+            "name": "Тип СЭМД (код · НСИ)",
+            "enabled": true
+          },
+          {
+            "name": "Тип ошибки",
+            "enabled": true
+          },
+          {
+            "name": "JID клиники",
+            "enabled": true
+          },
+          {
+            "name": "Наименование клиники",
+            "enabled": true
+          },
+          {
+            "name": "Документов",
+            "enabled": true
+          },
+          {
+            "name": "Ошибок",
+            "enabled": true
+          }
+        ],
+        "table.pivot_column": "Доля ошибок",
+        "table.cell_column": "Документов",
+        "column_settings": {
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД (код · НСИ)"
+          },
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "СЭМД в срезе (все статусы)",
+            "number_separators": ".",
+            "decimals": 0
+          },
+          "[\"name\",\"Ошибок\"]": {
+            "column_title": "Ошибок",
+            "number_separators": ".",
+            "decimals": 0
+          },
+          "[\"name\",\"Доля ошибок\"]": {
+            "column_title": "% ошибок в срезе",
+            "decimals": 2
+          }
+        }
+      },
+      "sizeX": 14,
+      "sizeY": 12,
+      "row": 13,
+      "col": 10
+    },
+    {
+      "name": "Топ типов СЭМД",
+      "description": "Количество **уникальных документов** (DISTINCT «Документ (ключ учёта)») по подписи СЭМД (код и наименование; при пустом коде — только наименование).",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"СЭМД (подпись)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "template-tags": {
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000002-0002-4002-8002-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»"
+            },
+            "top_semd": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000002-0002-4002-8002-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "required": false
+            },
+            "top_clinic": {
+              "type": "text",
+              "widget-type": "string/=",
+              "id": "f1000002-0002-4002-8002-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "СЭМД (подпись)"
+        ],
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"СЭМД (подпись)\"]": {
+            "column_title": "СЭМД (код или наименование)"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 10,
+      "sizeY": 6,
+      "row": 19,
+      "col": 0
+    },
+    {
+      "name": "01 · Транзакции по дням и статусам",
+      "description": "Количество **СЭМД** (уникальных по **«Документ (ключ учёта)»**, не путать с **relatesToMessage**) по календарным дням: дата из ответа ЕГИСЗ (Дата регистрации / registrationDate), при отсутствии — дата загрузки в витрину (Обработано). Тот же фильтр периода, что у карточки «05 · Динамика по типам СЭМД» (ось «День (тренд)»).",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "День (тренд)"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT DATE(COALESCE(\"Зарегистрирован в ЕГИСЗ РЭМД\", \"Обработано IPS\")) AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "name": "dwh_date",
+              "display-name": "По дате «День (тренд)»",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "bar",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата",
+          "Статус"
+        ],
+        "stackable.stack_type": "stacked",
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "graph.show_values": true,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"Статус\"]": {
+            "column_title": "Статус"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 25,
+      "col": 0
+    },
+    {
+      "name": "01 · Динамика по типам СЭМД",
+      "description": "Тренд по календарным дням: дата из ответа ЕГИСЗ (Дата регистрации), иначе дата попадания в витрину (Обработано). Отражает динамику ответов/регистрации, а не момент срабатывания ETL. Фильтр периода привязан к той же логике (колонка «День (тренд)» в витрине). В легенде: код и наименование СЭМД, например «227. Протокол Консультации».",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "День (тренд)"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"День (тренд)\" AS \"Дата\", CASE WHEN NULLIF(TRIM(\"Код СЭМД\"), '') IS NULL THEN initcap(COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)')) ELSE NULLIF(TRIM(\"Код СЭМД\"), '') || '. ' || initcap(COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)')) END AS \"Наименование СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f8a9b0c1-d2e3-4f5a-b6c7-d8e9f0a1b2c3",
+              "name": "dwh_date",
+              "display-name": "По дате «День (тренд)»",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата",
+          "Наименование СЭМД"
+        ],
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 25,
+      "col": 12
+    },
+    {
+      "name": "01 · Доля ошибок по дням",
+      "description": "По календарным дням (колонка «День (тренд)»): **уникальные документы** (DISTINCT «Документ (ключ учёта)»), из них со статусом error и процент ошибок. Дополняет stacked-график по статусам.",
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "День (тренд)"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"День (тренд)\" AS \"Дата\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 1 ASC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+              "name": "dwh_date",
+              "display-name": "По дате «День (тренд)»",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"Всего\"]": {
+            "column_title": "Всего",
+            "number_separators": ".",
+            "decimals": 0
+          },
+          "[\"name\",\"Ошибок\"]": {
+            "column_title": "Ошибок",
+            "number_separators": ".",
+            "decimals": 0
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "column_title": "% ошибок",
+            "decimals": 2
+          }
+        },
+        "graph.metrics": [
+          "% ошибок"
+        ]
+      },
+      "sizeX": 24,
+      "sizeY": 6,
+      "row": 33,
+      "col": 0
+    },
+    {
+      "name": "01 · Объём по часам (72 ч)",
+      "description": "Нагрузка по моменту попадания в витрину («Обработано»), последние 72 часа; часовая детализация без общего фильтра дашборда.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH vit_ref AS ( SELECT COALESCE((SELECT MAX(\"Обработано IPS\") FROM public.v_egisz_transactions_enriched_ui), NOW()) AS ref_ts ) SELECT date_trunc('hour', \"Обработано IPS\") AS \"Час\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui CROSS JOIN vit_ref WHERE \"Обработано IPS\" >= vit_ref.ref_ts - INTERVAL '72 hours' GROUP BY 1 ORDER BY 1 ASC",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Час"
+        ],
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Час\"]": {
+            "column_title": "Час"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 24,
+      "sizeY": 6,
+      "row": 39,
+      "col": 0
+    }
+  ]
+}

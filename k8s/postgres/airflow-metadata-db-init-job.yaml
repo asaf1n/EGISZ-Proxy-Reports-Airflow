@@ -16,9 +16,9 @@ spec:
             - name: PGPORT
               value: "5432"
             - name: PGUSER
-              value: egisz
+              value: postgres
             - name: PGPASSWORD
-              value: egisz
+              value: postgres
           command: ["/bin/sh","-c"]
           args:
             - |
