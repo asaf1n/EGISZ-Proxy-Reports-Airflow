@@ -10,8 +10,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/proxy-reports-etl
-RUN pip install --no-cache-dir -e /opt/proxy-reports-etl
+RUN chown -R airflow:0 /opt/proxy-reports-etl
 
 USER airflow
+RUN pip install --no-cache-dir -e /opt/proxy-reports-etl
+
 
 COPY airflow/dags/*.py /opt/airflow/dags/

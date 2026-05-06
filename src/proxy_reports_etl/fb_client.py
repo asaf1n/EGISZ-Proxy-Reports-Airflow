@@ -10,7 +10,7 @@ from proxy_reports_etl.config import FirebirdConfig
 def connect_fb(cfg: FirebirdConfig):
     # firebird-driver uses embedded/remote client depending on DSN;
     # client library presence is handled by the container image (libfbclient).
-    return connect(dsn=cfg.dsn, user=cfg.user, password=cfg.password, charset=cfg.charset)
+    return connect(database=cfg.dsn, user=cfg.user, password=cfg.password, charset=cfg.charset)
 
 
 def fetch_rows_after_cursor(

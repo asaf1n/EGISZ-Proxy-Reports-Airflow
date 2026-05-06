@@ -1,3 +1,14 @@
+Metadata-Version: 2.4
+Name: egisz-proxy-reports-etl
+Version: 0.1.0
+Summary: Minimal Firebird → Postgres ETL for EGISZ proxy reports (Airflow/K8s).
+Author: EGISZ
+License: Proprietary
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: firebird-driver>=1.10.0
+Requires-Dist: psycopg2-binary>=2.9.9
+
 ﻿# EGISZ Proxy Reports Airflow
 
 Проект для выгрузки данных из Firebird (`EXCHANGELOG`) в PostgreSQL DWH, оркестрации через Airflow и автоматической публикации дашбордов в Metabase.

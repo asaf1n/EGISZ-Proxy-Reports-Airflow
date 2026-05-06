@@ -5,13 +5,14 @@ metadata:
   labels:
     app.kubernetes.io/name: metabase
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   selector:
     app.kubernetes.io/name: metabase
   ports:
     - name: http
       port: 3000
       targetPort: 3000
+      nodePort: 30080
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -40,12 +41,12 @@ spec:
             - name: MB_DB_TYPE
               value: postgres
             - name: MB_DB_HOST
-              value: postgres.example.local
+              value: host.docker.internal
             - name: MB_DB_PORT
               value: "5432"
             - name: MB_DB_DBNAME
-              value: metabase
+              value: dwh_egisz
             - name: MB_DB_USER
-              value: metabase
+              value: egisz
             - name: MB_DB_PASS
-              value: metabase
+              value: egisz

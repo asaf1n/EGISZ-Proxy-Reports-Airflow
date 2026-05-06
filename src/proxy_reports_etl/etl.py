@@ -9,9 +9,9 @@ from proxy_reports_etl.locks import release_advisory_lock, try_acquire_advisory_
 from proxy_reports_etl.pg_client import (
     ensure_tables,
     get_last_cursor,
-    set_last_cursor,
-    upsert_raw_rows,
+    upsert_rows_and_state,
 )
+from proxy_reports_etl.normalize import normalize_exchange_row
 
 
 @dataclass(frozen=True)
@@ -55,11 +55,16 @@ def run_sync(*, cfg: AppConfig, fb_con, pg_con, log=print) -> SyncStats:
             after_cursor=after_cursor,
             limit=cfg.etl.batch_size,
         )
-        max_cursor = upsert_raw_rows(
-            pg_con, target_table=cfg.etl.target_table, rows=rows, cursor_column=cfg.etl.cursor_column
+        fact_rows = [normalize_exchange_row(row) for row in rows]
+        max_cursor = upsert_rows_and_state(
+            pg_con,
+            target_table=cfg.etl.target_table,
+            raw_rows=rows,
+            fact_rows=fact_rows,
+            cursor_column=cfg.etl.cursor_column,
+            pipeline=cfg.etl.pipeline,
         )
         if max_cursor is not None:
-            set_last_cursor(pg_con, pipeline=cfg.etl.pipeline, last_cursor=max_cursor)
             last_after = max_cursor
         else:
             last_after = last_before

@@ -1,0 +1,2 @@
+[console_scripts]
+proxy-reports-etl = proxy_reports_etl.cli:main

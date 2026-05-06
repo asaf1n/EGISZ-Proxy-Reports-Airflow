@@ -71,11 +71,11 @@ def load_config_from_env() -> AppConfig:
     )
     pg = PostgresConfig(dsn=_req("PG_DSN"))
     etl = EtlConfig(
-        pipeline=_env("ETL_PIPELINE", default="proxy_reports") or "proxy_reports",
+        pipeline=_env("ETL_PIPELINE", default="egisz_integration") or "egisz_integration",
         source_sql=_req("FB_SOURCE_SQL"),
         cursor_column=_env("ETL_CURSOR_COLUMN", default="LOGID") or "LOGID",
         batch_size=_int("ETL_BATCH_SIZE", default=500),
-        target_table=_env("PG_TARGET_TABLE", default="proxy_reports_raw") or "proxy_reports_raw",
+        target_table=_env("PG_TARGET_TABLE", default="egisz_integration_raw") or "egisz_integration_raw",
     )
     if etl.batch_size <= 0:
         raise ConfigError("ETL_BATCH_SIZE must be > 0")
