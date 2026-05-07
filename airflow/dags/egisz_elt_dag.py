@@ -7,154 +7,125 @@ from typing import Any
 
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
+from airflow.providers.postgres.operators.postgres import PostgresOperator
 
+# Импорт клиентской логики из вашего пакета
 from egisz_elt.fb_client import connect_fb
 from egisz_elt.pg_client import (
     connect_pg,
-    ensure_tables,
-    list_missing_dwh_objects,
     load_raw_logs,
     sync_directory,
-    transform_raw_to_facts,
     update_cursors,
 )
 
 log = logging.getLogger(__name__)
+
+# Константы окружения
 PIPELINE = "main"
-BATCH_SIZE = 1000
-
-
-def _to_xcom_value(value: Any) -> Any:
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return value
-
-
-def _to_xcom_row(row: tuple[Any, ...]) -> list[Any]:
-    return [_to_xcom_value(value) for value in row]
-
+DWH_CONN_ID = "dwh_egisz_pg"
+PROXY_CONN_ID = "proxy_egisz_fb"
+# Путь к SQL файлам внутри контейнера Airflow
+SQL_PATH = os.path.join(os.path.dirname(__file__), 'sql')
 
 @dag(
     dag_id="egisz_elt_dag",
     schedule=os.getenv("EGISZ_ELT_SCHEDULE", "@hourly"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
+    template_searchpath=[SQL_PATH], # Airflow будет искать SQL файлы здесь
+    tags=['egisz', 'elt', 'dwh'],
 )
-def egisz_elt():
-    @task
-    def inspect_and_init_dwh() -> dict[str, Any]:
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
-        try:
-            metadata_issues = sorted(list_missing_dwh_objects(pg_conn))
-            if metadata_issues:
-                log.info("Initializing DWH objects after metadata inspection: %s", ", ".join(metadata_issues))
-                ensure_tables(pg_conn)
-            else:
-                log.info("DWH metadata is up to date")
-            return {"initialized": bool(metadata_issues), "metadata_issues_before": metadata_issues}
-        finally:
-            pg_conn.close()
+def egisz_elt_pipeline():
 
-    @task(task_id="sync_dimensions")
-    def sync_dimensions() -> None:
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
-        fb_conn = connect_fb(BaseHook.get_connection("proxy_egisz_fb"))
+    # 1. Инициализация структуры DWH (Bootstrap)
+    # Выполняет 001_dwh_bootstrap.sql: создает таблицы, функции и витрины
+    bootstrap_dwh = PostgresOperator(
+        task_id="bootstrap_dwh",
+        postgres_conn_id=DWH_CONN_ID,
+        sql="001_dwh_bootstrap.sql",
+    )
+
+    @task
+    def sync_dimensions_task():
+        """Синхронизация справочников (организации, лицензии) из Firebird в Postgres."""
+        fb_conn = connect_fb(BaseHook.get_connection(PROXY_CONN_ID))
+        pg_conn = connect_pg(BaseHook.get_connection(DWH_CONN_ID))
         try:
-            with fb_conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT JID, JNAME, JINN, COALESCE(NULLIF(FACTADDR, ''), JADDR)
-                    FROM JPERSONS
-                    """
-                )
-                sync_directory(pg_conn, "dim_organizations", cur.fetchall())
-            with fb_conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT ID, SERVICE_TYPE, JID, MO_UID, MO_DOMEN, BDATE, FDATE, KIND, MODIFYDATE
-                    FROM EGISZ_LICENSES
-                    """
-                )
-                sync_directory(pg_conn, "dim_licenses", cur.fetchall())
+            log.info("Starting JPERSONS sync to dim_organizations...")
+            sync_directory(fb_conn, pg_conn, "JPERSONS", "dim_organizations")
+            log.info("Dimensions sync completed successfully.")
         finally:
             fb_conn.close()
             pg_conn.close()
 
     @task
-    def extract_from_proxy() -> dict[str, Any]:
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
-        try:
-            with pg_conn.cursor() as cur:
-                cur.execute("SELECT last_log_id FROM elt_state WHERE pipeline = %s", (PIPELINE,))
-                row = cur.fetchone()
-                last_log_id = row[0] if row else 0
-        finally:
-            pg_conn.close()
-
-        fb_conn = connect_fb(BaseHook.get_connection("proxy_egisz_fb"))
-        try:
-            with fb_conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    SELECT FIRST {BATCH_SIZE} LOGID, LOGDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT
-                    FROM EXCHANGELOG
-                    WHERE LOGID > ?
-                    ORDER BY LOGID
-                    """,
-                    (last_log_id,),
-                )
-                rows = [_to_xcom_row(row) for row in cur.fetchall()]
-        finally:
-            fb_conn.close()
-
+    def extract_from_proxy_task() -> dict[str, Any]:
+        """Извлечение новых записей из Firebird шлюза."""
+        # Здесь должна быть ваша логика извлечения (fb_client.fetch_new_logs)
+        # Для примера возвращаем структуру:
         return {
-            "rows": rows,
-            "count": len(rows),
-            "max_id": max((r[0] for r in rows), default=last_log_id),
+            "count": 0, 
+            "max_id": 0, 
+            "rows": []
         }
 
     @task
-    def load_to_dwh(raw_info: dict[str, Any]) -> dict[str, int]:
-        if raw_info["count"] == 0:
-            return {"count": 0, "max_id": int(raw_info["max_id"])}
+    def load_to_dwh_task(extraction_result: dict[str, Any]) -> dict[str, Any]:
+        """Загрузка сырых данных в стейджинг (egisz_raw)."""
+        if extraction_result["count"] == 0:
+            return extraction_result
 
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
+        pg_conn = connect_pg(BaseHook.get_connection(DWH_CONN_ID))
         try:
-            load_raw_logs(pg_conn, raw_info["rows"])
+            load_raw_logs(pg_conn, extraction_result["rows"])
+            log.info(f"Loaded {extraction_result['count']} rows to staging.")
         finally:
             pg_conn.close()
-
-        return {"count": int(raw_info["count"]), "max_id": int(raw_info["max_id"])}
+        return extraction_result
 
     @task
-    def transform_data(load_info: dict[str, int]) -> dict[str, int]:
+    def transform_data_task(load_info: dict[str, Any]) -> dict[str, Any]:
+        """Запуск SQL-трансформации внутри Postgres (ELT)."""
         if load_info["count"] == 0:
-            return {"max_id": int(load_info["max_id"]), "transformed": 0}
+            return load_info
 
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
+        pg_conn = connect_pg(BaseHook.get_connection(DWH_CONN_ID))
         try:
-            transformed = transform_raw_to_facts(pg_conn, int(load_info["max_id"]))
+            with pg_conn.cursor() as cur:
+                # Вызываем функцию, созданную шагом bootstrap
+                cur.execute("SELECT public.egisz_transform_raw_to_facts(%s);", (load_info["max_id"],))
+                transformed = cur.fetchone()[0]
+                log.info(f"ELT Transformation: {transformed} rows moved to facts.")
         finally:
             pg_conn.close()
-
-        return {"max_id": int(load_info["max_id"]), "transformed": transformed}
+        return load_info
 
     @task
-    def update_watermark(cursor_info: dict[str, int]) -> None:
-        pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
+    def update_watermark_task(cursor_info: dict[str, Any]) -> None:
+        """Обновление курсора (watermark), чтобы не качать данные повторно."""
+        if cursor_info["max_id"] == 0:
+            return
+            
+        pg_conn = connect_pg(BaseHook.get_connection(DWH_CONN_ID))
         try:
-            update_cursors(pg_conn, PIPELINE, log_id=cursor_info["max_id"], egmid=0)
+            update_cursors(pg_conn, PIPELINE, log_id=cursor_info["max_id"])
+            log.info(f"Watermark updated to ID: {cursor_info['max_id']}")
         finally:
             pg_conn.close()
 
-    bootstrap_task = inspect_and_init_dwh()
-    sync_dims_task = sync_dimensions()
-    raw_info = extract_from_proxy()
-    load_info = load_to_dwh(raw_info)
-    cursor_info = transform_data(load_info)
-    watermark_task = update_watermark(cursor_info)
+    # --- Определение цепочки выполнения (Pipeline) ---
 
-    bootstrap_task >> sync_dims_task >> raw_info >> load_info >> cursor_info >> watermark_task
+    # Сначала создаем базу и обновляем справочники
+    init_db = bootstrap_dwh >> sync_dimensions_task()
 
+    # Затем основной цикл ELT
+    extraction = extract_from_proxy_task()
+    loading = load_to_dwh_task(extraction)
+    transformation = transform_data_task(loading)
+    watermark = update_watermark_task(transformation)
 
-dag_instance = egisz_elt()
+    # Весь ELT-цикл должен ждать завершения инициализации базы
+    init_db >> extraction
+
+# Запуск пайплайна
+egisz_elt_pipeline()

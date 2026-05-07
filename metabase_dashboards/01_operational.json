@@ -189,7 +189,7 @@
               "enabled": true
             },
             {
-              "name": "Интерпретация ошибок",
+              "name": "Сводка ошибки",
               "enabled": true
             },
             {
@@ -197,7 +197,7 @@
               "enabled": true
             },
             {
-              "name": "Зарегистрирован в ЕГИСЗ РЭМД",
+              "name": "Обработано IPS",
               "enabled": true
             },
             {
@@ -264,7 +264,7 @@
             "enabled": true
           },
           {
-            "name": "Интерпретация ошибок",
+            "name": "Сводка ошибки",
             "enabled": true
           },
           {
@@ -272,7 +272,7 @@
             "enabled": true
           },
           {
-            "name": "Зарегистрирован в ЕГИСЗ РЭМД",
+            "name": "Обработано IPS",
             "enabled": true
           },
           {
@@ -370,12 +370,6 @@
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Наименование клиники"
-          },
-          "[\"name\",\"Зарегистрирован в ЕГИСЗ РЭМД\"]": {
-            "column_title": "Зарегистрирован в ЕГИСЗ РЭМД",
-            "date_style": "D MMMM, YYYY",
-            "date_abbreviate": true,
-            "time_style": "HH:mm"
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "relatesToMessage (коррелятор XML, не UID СЭМД)"
@@ -1043,7 +1037,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT DATE(COALESCE(\"Зарегистрирован в ЕГИСЗ РЭМД\", \"Обработано IPS\")) AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "query": "SELECT DATE(\"Обработано IPS\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
