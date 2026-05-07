@@ -28,6 +28,8 @@ extraEnvFrom: |
       name: airflow-metadata-connection
   - secretRef:
       name: proxy-reports-etl-env
+  - configMapRef:
+      name: airflow-connections
 
 webserver:
   service:

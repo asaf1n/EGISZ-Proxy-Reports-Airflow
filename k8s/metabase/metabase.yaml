@@ -32,11 +32,20 @@ spec:
     spec:
       containers:
         - name: metabase
-          image: metabase/metabase:v0.49.14
+          image: egisz-monitor-metabase:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
               name: http
           env:
+            - name: MB_PASSWORD_COMPLEXITY
+              value: weak
+            - name: MB_PASSWORD_LENGTH
+              value: "4"
+            - name: METABASE_ADMIN_EMAIL
+              value: "admin@egisz.local"
+            - name: METABASE_ADMIN_PASSWORD
+              value: "egisz"
             # Metabase application DB (external Postgres)
             - name: MB_DB_TYPE
               value: postgres
@@ -45,8 +54,19 @@ spec:
             - name: MB_DB_PORT
               value: "5432"
             - name: MB_DB_DBNAME
-              value: dwh_egisz
+              value: metabase_app
             - name: MB_DB_USER
-              value: egisz
+              value: postgres
             - name: MB_DB_PASS
+              value: postgres
+            # Target application DB for reports
+            - name: APP_DB_HOST
+              value: host.docker.internal
+            - name: APP_DB_PORT
+              value: "5432"
+            - name: APP_DB_NAME
+              value: dwh_egisz
+            - name: APP_DB_USER
+              value: egisz
+            - name: APP_DB_PASSWORD
               value: egisz
