@@ -1,12 +1,12 @@
 # Example values for Apache Airflow Helm chart.
-# This repo only provides an ETL DAG + worker image; deploy Airflow via the official chart.
+# This repo only provides an ELT DAG + worker image; deploy Airflow via the official chart.
 #
 #   helm repo add apache-airflow https://airflow.apache.org/charts
 #   helm upgrade --install airflow apache-airflow/airflow --namespace egisz-proxy --create-namespace -f k8s/airflow/values.example.yaml
 #
 # Required:
 # - Build/push image from k8s/airflow/Dockerfile
-# - Create secret with ETL env vars (see k8s/postgres/dwh-credentials-secret.example.yaml)
+# - Create secret with ELT env vars (see k8s/postgres/dwh-credentials-secret.example.yaml)
 
 airflowVersion: "2.9.3"
 
@@ -20,7 +20,7 @@ images:
 metadataSecretName: airflow-metadata-connection
 
 env:
-  - name: PROXY_REPORTS_ETL_SCHEDULE
+  - name: EGISZ_ELT_SCHEDULE
     value: "@hourly"
 
 extraEnvFrom:

@@ -6,6 +6,9 @@ from airflow.models import Connection
 
 log = logging.getLogger(__name__)
 
+ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
+
+
 def connect_pg(conn_params: Connection | str) -> psycopg2.extensions.connection:
     if isinstance(conn_params, str):
         return psycopg2.connect(conn_params)
@@ -32,7 +35,7 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
 
         # Raw таблица (Сюда грузим всё ПЕРЕД парсингом)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS proxy_reports_raw (
+            CREATE TABLE IF NOT EXISTS egisz_raw (
                 logid bigint PRIMARY KEY,
                 logdate timestamptz,
                 msgid text,
@@ -46,7 +49,7 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
         # Таблица фактов (Результат трансформации)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
-                exchangelog_log_id bigint PRIMARY KEY REFERENCES proxy_reports_raw(logid),
+                exchangelog_log_id bigint PRIMARY KEY REFERENCES egisz_raw(logid),
                 log_date timestamptz,
                 message_id text,
                 relates_to_id text,
@@ -63,7 +66,7 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
 
         # Вспомогательная таблица сообщений (EGISZ_MESSAGES)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS fact_proxy_exchange (
+            CREATE TABLE IF NOT EXISTS egisz_messages_raw (
                 egmid bigint PRIMARY KEY,
                 jid integer,
                 kind text,
@@ -116,7 +119,7 @@ def load_raw_logs(con, rows: list[tuple]):
     """Загрузка сырых данных в PG"""
     with con.cursor() as cur:
         execute_values(cur, """
-            INSERT INTO proxy_reports_raw (logid, logdate, msgid, logstate, logtext, msgtext)
+            INSERT INTO egisz_raw (logid, logdate, msgid, logstate, logtext, msgtext)
             VALUES %s ON CONFLICT (logid) DO NOTHING
         """, rows)
     con.commit()
@@ -138,6 +141,8 @@ def upsert_facts(con, rows: list[dict]):
     con.commit()
 
 def sync_directory(con, table_name: str, rows: list[tuple]):
+    if table_name not in ALLOWED_SYNC_TABLES:
+        raise ValueError(f"Unsupported directory table: {table_name}")
     with con.cursor() as cur:
         cur.execute(f"TRUNCATE TABLE {table_name} CASCADE;")
         execute_values(cur, f"INSERT INTO {table_name} VALUES %s", rows)

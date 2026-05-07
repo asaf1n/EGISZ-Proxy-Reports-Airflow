@@ -35,8 +35,8 @@ class PostgresConfig:
 
 
 @dataclass
-class ETLConfig:
-    """ETL pipeline configuration with dual cursor support."""
+class ELTConfig:
+    """ELT pipeline configuration with dual cursor support."""
     pipeline: str
     batch_size: int
     log_cursor_column: str  # EXCHANGELOG cursor (usually LOGID)
@@ -47,14 +47,14 @@ class ETLConfig:
     fact_target_table: str
 
     @staticmethod
-    def from_env() -> ETLConfig:
-        return ETLConfig(
-            pipeline=os.getenv("ETL_PIPELINE", "proxy_reports"),
-            batch_size=int(os.getenv("ETL_BATCH_SIZE", "500")),
+    def from_env() -> ELTConfig:
+        return ELTConfig(
+            pipeline=os.getenv("ELT_PIPELINE", "egisz"),
+            batch_size=int(os.getenv("ELT_BATCH_SIZE", "500")),
             log_cursor_column=os.getenv("LOG_CURSOR_COLUMN", "LOGID"),
             msg_cursor_column=os.getenv("MSG_CURSOR_COLUMN", "EGMID"),
             log_source_table=os.getenv("LOG_SOURCE_TABLE", "EXCHANGELOG"),
             msg_source_table=os.getenv("MSG_SOURCE_TABLE", "EGISZ_MESSAGES"),
-            log_target_table=os.getenv("LOG_TARGET_TABLE", "proxy_reports_raw"),
+            log_target_table=os.getenv("LOG_TARGET_TABLE", "egisz_raw"),
             fact_target_table=os.getenv("FACT_TARGET_TABLE", "fact_egisz_transactions"),
         )

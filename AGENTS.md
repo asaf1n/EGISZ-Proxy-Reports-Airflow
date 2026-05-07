@@ -12,7 +12,7 @@ Do not invent names. Follow this exact taxonomy:
 ## 2. 🛠️ Airflow-Native Architecture (TaskFlow API)
 This project uses modern Apache Airflow (2.x+). We do NOT use Airflow as a "dumb scheduler".
 *   **Decorators:** Always use TaskFlow API decorators (`@dag`, `@task`). Avoid legacy operators (like `PythonOperator` or `BashOperator`) for Python logic.
-*   **Task Decomposition:** ETL logic MUST be decomposed into atomic tasks:
+*   **Task Decomposition:** ELT logic MUST be decomposed into atomic tasks:
     1.  `extract_from_proxy`
     2.  `transform_data`
     3.  `load_to_dwh`
@@ -25,7 +25,7 @@ This project uses modern Apache Airflow (2.x+). We do NOT use Airflow as a "dumb
 *   **Airflow Hooks:** Always use Airflow's built-in connection management.
     *   For Firebird: `BaseHook.get_connection('proxy_egisz_fb')`
     *   For PostgreSQL: `BaseHook.get_connection('dwh_egisz_pg')`
-*   **Service Accounts:** When generating SQL scripts or BI configurations, use the `postgres` user for read-only/BI access, and the `egisz` user for Airflow ETL operations.
+*   **Service Accounts:** When generating SQL scripts or BI configurations, use the `postgres` user for read-only/BI access, and the `egisz` user for Airflow ELT operations.
 
 ## 4. 📊 BI & Metabase Integration
 *   Metabase is deployed in Kubernetes alongside Airflow.
@@ -34,7 +34,7 @@ This project uses modern Apache Airflow (2.x+). We do NOT use Airflow as a "dumb
 
 ## 5. 🛑 Anti-Patterns (What NOT to do)
 *   **DO NOT** generate monolithic Python scripts intended to be run by a single Airflow task.
-*   **DO NOT** use OS-level environment variables (`os.getenv('DB_PASSWORD')`) inside DAGs or ETL operators.
+*   **DO NOT** use OS-level environment variables (`os.getenv('DB_PASSWORD')`) inside DAGs or ELT operators.
 *   **DO NOT** use the term `proxy_reports` in new variables, classes, or file names.
 *   **DO NOT** write data to the `postgres` system database. All DWH operations must explicitly target the `dwh_egisz` database.
 

@@ -1,14 +1,14 @@
 [project]
 name = "egisz-proxy-reports-elt"
 version = "0.1.0"
-description = "Minimal Firebird → Postgres ETL for EGISZ proxy reports (Airflow/K8s)."
+description = "Minimal Firebird to Postgres ELT for EGISZ proxy reports (Airflow/K8s)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "EGISZ" }]
 
 dependencies = [
-  "firebird-driver>=1.10.0",
+  "firebird-driver>=1.10.0,<2.0.0",
   "psycopg2-binary>=2.9.9",
 ]
 

@@ -18,17 +18,20 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__DAG_DEFAULT_VIEW: tree
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
     AIRFLOW__WEBSERVER__RBAC: "True"
-    # ETL Variables
+    # ELT variables
     FB_DSN: ${FB_DSN:-host.docker.internal/3050:proxy_egisz}
     FB_USER: ${FB_USER:-sysdba}
     FB_PASSWORD: ${FB_PASSWORD:-masterkey}
     FB_CHARSET: ${FB_CHARSET:-WIN1251}
-    PG_DSN: ${PG_DSN:-postgresql://postgres:postgres@postgres:5432/dwh_egisz}
-    ETL_PIPELINE: ${ETL_PIPELINE:-proxy_reports}
-    ETL_BATCH_SIZE: ${ETL_BATCH_SIZE:-500}
-    ETL_CURSOR_COLUMN: ${ETL_CURSOR_COLUMN:-LOGID}
-    PG_TARGET_TABLE: ${PG_TARGET_TABLE:-proxy_reports_raw}
-    FB_SOURCE_SQL: ${FB_SOURCE_SQL:-SELECT LOGID, LOGDATE, LOGTYPE, LOGSTATE, LOGMODE, MSGID, MSGTEXT, GRPID, CREATEDATE, MODIFYDATE, REPL$ID, REPL$GRPID, LOGTEXT, METHOD, URI, ACTION, PARENTLOGID FROM EXCHANGELOG}
+    PG_DSN: ${PG_DSN:-postgresql://egisz:egisz@postgres:5432/dwh_egisz}
+    ELT_PIPELINE: ${ELT_PIPELINE:-egisz}
+    ELT_BATCH_SIZE: ${ELT_BATCH_SIZE:-500}
+    ELT_CURSOR_COLUMN: ${ELT_CURSOR_COLUMN:-LOGID}
+    PG_TARGET_TABLE: ${PG_TARGET_TABLE:-egisz_raw}
+    FB_SOURCE_SQL: ${FB_SOURCE_SQL:-SELECT LOGID, LOGDATE, LOGTYPE, LOGSTATE, LOGMODE, MSGID, MSGTEXT, GRPID, CREATEDATE, MODIFYDATE, REPL$$ID, REPL$$GRPID, LOGTEXT, METHOD, URI, ACTION, PARENTLOGID FROM EXCHANGELOG}
+    EGISZ_ELT_SCHEDULE: ${EGISZ_ELT_SCHEDULE:-@hourly}
+    AIRFLOW_CONN_DWH_EGISZ_PG: ${AIRFLOW_CONN_DWH_EGISZ_PG:-postgres://egisz:egisz@postgres:5432/dwh_egisz?sslmode=disable}
+    AIRFLOW_CONN_PROXY_EGISZ_FB: ${AIRFLOW_CONN_PROXY_EGISZ_FB:-drizzle://sysdba:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251}
   volumes:
     - ./airflow/dags:/opt/airflow/dags:ro
     - ./airflow/logs:/opt/airflow/logs
@@ -78,12 +81,12 @@ services:
       db-init:
         condition: service_completed_successfully
     ports:
-      - "${METABASE_PORT:-3005}:3000"
+      - "${METABASE_PORT:-3035}:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       MB_URL: http://localhost:3000
-      MB_SITE_URL: http://127.0.0.1:3000
+      MB_SITE_URL: http://127.0.0.1:3035
       MB_PASSWORD_COMPLEXITY: weak
       MB_PASSWORD_LENGTH: "4"
       METABASE_ADMIN_EMAIL: ${METABASE_ADMIN_EMAIL:-admin@egisz.local}

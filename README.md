@@ -1,115 +1,42 @@
-﻿Понял, убираем внутреннюю "кухню" нейминга из пользовательской документации, оставляя только практическую часть. 
+﻿# EGISZ ELT
 
-Вот исправленный вариант `README.md`:
+Проект для извлечения, хранения и визуализации аналитики по обмену электронными медицинскими документами (СЭМД) с ЕГИСЗ. 
 
-***
+Архитектура построена на парадигме **ELT (Extract-Load-Transform)**: данные извлекаются из БД шлюза (Firebird), сохраняются в хранилище данных (PostgreSQL) в сыром виде (Raw), а затем трансформируются в аналитические витрины с помощью Apache Airflow. Визуализация осуществляется в Metabase.
 
-# EGISZ Monitor ETL & BI (Firebird → Postgres)
+## 🏗 Архитектура и Инструментарий
 
-Современный ETL-пайплайн и аналитический контур для мониторинга интеграции с ЕГИСЗ. Проект построен на Airflow TaskFlow API с выделенным BI-слоем на базе Metabase.
+* **Оркестрация:** Apache Airflow 2.11+
+* **Источники данных (Source):** Firebird SQL Server (БД прокси-сервиса `proxy_egisz`)
+* **Хранилище данных (DWH):** PostgreSQL 16+ (База `dwh_egisz`)
+* **Визуализация:** Metabase (База метаданных `metabase_app`)
+* **Среда выполнения:** Kubernetes / Docker / Локальное Python окружение (.venv)
 
-## 🏗 Архитектура и Принципы
+### Логика ELT-процесса
 
-*   **Airflow-Native (TaskFlow API):** Процесс декомпозирован на атомарные задачи (Extract, Transform, Load). Данные между задачами передаются через внутренний механизм XCom.
-*   **Безопасность:** Отказ от локальных `.env` файлов в пользу встроенного менеджера секретов Airflow Connections.
-*   **Идемпотентность:** Повторный запуск безопасен; прогресс инкрементальной загрузки (watermark) надежно сохраняется в целевой БД.
+1.  **Extract & Load (Сырые данные):** * Инкрементальная выгрузка логов (`EXCHANGELOG`) и сообщений (`EGISZ_MESSAGES`) по двум независимым курсорам (`LOGID` и `EGMID`).
+    * Загрузка данных "как есть" в таблицы `egisz_raw` и `egisz_messages_raw` (PostgreSQL).
+    * Полная синхронизация справочников `JPERSONS` (Организации) и `EGISZ_LICENSES` (Настройки доступа).
+2.  **Transform (Парсинг и Факты):**
+    * Парсинг XML из сырых логов внутри БД.
+    * Идентификация документов (извлечение `emdrId`, `documentNumber`, `localUid`).
+    * Фильтрация сервисных запросов (например, игнорирование `getDocumentFileRequest`).
+    * Обработка сетевых ошибок (`LOGSTATE = 3`).
+    * Запись результатов в таблицу фактов `fact_egisz_transactions`.
+3.  **Views (Витрины данных):**
+    * Построение SQL-представлений (`v_egisz_transactions_full`, `v_rpt_network_errors_detail_ui`) поверх таблиц фактов и справочников для быстрого рендеринга дашбордов в Metabase.
 
----
+## 🚀 Быстрый старт (Локальное развертывание)
 
-## 🛠 Руководство пользователя: Настройка и Синхронизация
+Для запуска стека требуется установленный Python 3.10+, Docker и Kubernetes кластер (например, Docker Desktop с включенным k8s).
 
-### 1. Настройка подключений (Airflow Connections)
-Для работы ETL-пайплайна необходимо настроить подключения к базам данных внутри интерфейса Airflow.
+### 1. Подготовка окружения
 
-1. Откройте Web UI Airflow (`http://localhost:8080`).
-2. Перейдите в меню **Admin** -> **Connections** и добавьте два новых подключения:
+Убедитесь, что Firebird и PostgreSQL доступны (например, на `host.docker.internal`). База `dwh_egisz` и пользователь с правами на создание таблиц должны быть созданы заранее в PostgreSQL.
 
-**A. Подключение к источнику (Firebird)**
-*   **Connection Id:** `proxy_egisz_fb`
-*   **Connection Type:** `Firebird` (или `Generic`, с указанием полного URI)
-*   **Host:** `host.docker.internal`
-*   **Schema / Database:** `proxy_egisz`
-*   **Login:** `sysdba`
-*   **Password:** `masterkey`
-*   **Port:** `3050`
-*   **Extra:** `{"charset": "WIN1251"}`
+Создайте виртуальное окружение и установите зависимости:
 
-**B. Подключение к хранилищу (PostgreSQL DWH)**
-*   **Connection Id:** `dwh_egisz_pg`
-*   **Connection Type:** `Postgres`
-*   **Host:** `host.docker.internal`
-*   **Schema:** `dwh_egisz`
-*   **Login:** `egisz`
-*   **Password:** `egisz`
-*   **Port:** `5432`
-
-### 2. Импорт и деплой DAGs
-Пайплайн управляется головным файлом `egisz_elt_dag.py`.
-
-1. **Сборка образа:** При внесении изменений в код пакета `egisz_elt` пересоберите Docker-образ воркера Airflow:
-   ```bash
-   docker build -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile .
-   ```
-2. **Синхронизация:** Убедитесь, что файл `airflow/dags/egisz_elt_dag.py` смонтирован или загружен в директорию дагов кластера Kubernetes.
-3. Обновите страницу дагов в UI Airflow — `egisz_elt_dag` должен появиться в списке.
-
-### 3. Запуск ETL-синхронизации
-1. В интерфейсе Airflow переведите тогл DAG `egisz_elt_dag` в состояние **Unpause** (Активно).
-2. Нажмите кнопку **Trigger DAG** (Play) для ручного запуска.
-3. Перейдите на вкладку **Graph**, чтобы контролировать выполнение атомарных шагов:
-   * `extract_from_proxy` (извлечение батча данных)
-   * `transform_data` (нормализация типов и кодировки)
-   * `load_to_dwh` (UPSERT в хранилище)
-   * `update_watermark` (фиксация состояния загрузки)
-
----
-
-## 📊 Аналитика: Настройка и использование Metabase
-
-BI-система Metabase разворачивается в кластере Kubernetes для визуализации данных из DWH.
-
-### 1. Деплой Metabase в Kubernetes
-1. Создайте секрет с учетными данными администратора (на основе `k8s/metabase-admin-secret.example.yaml`):
-   ```bash
-   kubectl apply -f k8s/metabase-admin-secret.yaml
-   ```
-2. Разверните манифест Metabase:
-   ```bash
-   kubectl apply -f k8s/metabase/metabase.yaml
-   ```
-3. Пробросьте порт для доступа к интерфейсу:
-   ```bash
-   kubectl port-forward svc/metabase 3000:80
-   ```
-
-### 2. Подключение Metabase к DWH
-1. Откройте `http://localhost:3000` и авторизуйтесь.
-2. Перейдите в **Admin settings** -> **Databases** -> **Add database**.
-3. Укажите следующие реквизиты сервисного подключения:
-   *   **Database type:** PostgreSQL
-   *   **Name:** `EGISZ DWH`
-   *   **Host:** `host.docker.internal`
-   *   **Port:** `5432`
-   *   **Database name:** `dwh_egisz`
-   *   **Username:** `postgresdwh`
-   *   **Password:** `postgresdwh`
-4. Сохраните настройки и дождитесь окончания синхронизации схемы.
-
-### 3. Импорт готовых дашбордов
-В проекте предусмотрены готовые шаблоны отчетов, расположенные в директории `metabase_dashboards/`.
-
-1. Убедитесь, что контейнер Metabase запущен.
-2. Выполните скрипт импорта, который обратится к API Metabase и загрузит JSON-файлы дашбордов:
-   ```bash
-   ./metabase/setup-dashboards.sh
-   ```
-3. При необходимости примените фильтры полей (Field Filters) для корректной работы drill-down логики:
-   ```bash
-   python scripts/apply_metabase_field_filters.py
-   ```
-
-### 4. Использование аналитики
-*   Перейдите в раздел **Dashboards** в Metabase.
-*   Отчеты разделены на смысловые блоки: Операционная сводка, Ошибки сервиса, Архив СЭМД и т.д.
-*   Данные на дашбордах обновляются автоматически в соответствии с расписанием запусков DAG `egisz_elt_dag` в Airflow.
-```
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -e .
