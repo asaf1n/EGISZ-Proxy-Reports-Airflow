@@ -14,6 +14,7 @@ APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
 APP_DB_USER="${APP_DB_USER:-postgres}"
 APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
+DB_METADATA_FILE=""
 
 log_info() {
   echo "[dashboards] $*" >&2
@@ -195,7 +196,54 @@ validate_dwh_contract() {
 sync_metabase_schema() {
   log_info "Requesting Metabase schema sync for ${APP_DB_NAME} (database id ${APP_DB_ID})"
   api_request POST "/api/database/${APP_DB_ID}/sync_schema" "{}" >/dev/null
-  DB_METADATA=$(api_request GET "/api/database/${APP_DB_ID}/metadata")
+  DB_METADATA_FILE="$(mktemp)"
+  wait_for_metabase_metadata
+}
+
+required_field_filters() {
+  jq -r '
+    .. | objects | select(has("metabase-field-filters"))
+    | ."metabase-field-filters"[]?
+    | [.table_ref, .field_name]
+    | @tsv
+  ' "${DASHBOARDS_DIR}"/*.json | sort -u
+}
+
+metadata_has_field() {
+  local table_ref="$1" field_name="$2" table_name
+  table_name="${table_ref#public.}"
+  jq -e --arg table "${table_name}" --arg field "${field_name}" '
+    [
+      .tables[]?
+      | select((.schema // "public") == "public" and .name == $table)
+      | .fields[]?
+      | select(.name == $field or .display_name == $field)
+      | .id
+    ][0] != null
+  ' "${DB_METADATA_FILE}" >/dev/null
+}
+
+wait_for_metabase_metadata() {
+  local attempt table_ref field_name missing sample
+  for attempt in $(seq 1 30); do
+    api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+    missing=0
+    sample=""
+    while IFS=$'\t' read -r table_ref field_name; do
+      [ -n "${table_ref}" ] || continue
+      if ! metadata_has_field "${table_ref}" "${field_name}"; then
+        missing=$((missing + 1))
+        [ -n "${sample}" ] || sample="${table_ref}.${field_name}"
+      fi
+    done < <(required_field_filters)
+
+    if [ "${missing}" -eq 0 ]; then
+      return
+    fi
+    log_info "Waiting for Metabase field metadata (${missing} field(s) unresolved; first: ${sample})"
+    sleep 5
+  done
+  fail "Metabase metadata did not expose required dashboard field filters in time"
 }
 
 delete_existing_dashboard() {
@@ -214,7 +262,7 @@ delete_existing_dashboard() {
 
 dashboard_payload() {
   local file="$1"
-  jq --argjson db "${APP_DB_ID}" --argjson col "${COL_ID}" --argjson meta "${DB_METADATA}" '
+  jq --argjson db "${APP_DB_ID}" --argjson col "${COL_ID}" --slurpfile meta_file "${DB_METADATA_FILE}" '
     def walk(f):
       . as $in
       | if type == "object" then
@@ -228,7 +276,7 @@ dashboard_payload() {
     def field_id($table_ref; $field_name):
       ($table_ref | sub("^public\\."; "")) as $table_name
       | [
-          $meta.tables[]?
+          $meta_file[0].tables[]?
           | select((.schema // "public") == "public" and .name == $table_name)
           | .fields[]?
           | select(.name == $field_name or .display_name == $field_name)

@@ -1,7 +1,7 @@
 [project]
-name = "egisz-proxy-reports-elt"
+name = "egisz-elt"
 version = "0.1.0"
-description = "Minimal Firebird to Postgres ELT for EGISZ proxy reports (Airflow/K8s)."
+description = "Firebird to PostgreSQL DWH ELT for EGISZ analytics with Airflow and Metabase."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -25,3 +25,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+egisz_elt = ["sql/*.sql"]

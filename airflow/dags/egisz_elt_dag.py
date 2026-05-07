@@ -9,14 +9,14 @@ from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 
 from egisz_elt.fb_client import connect_fb
-from egisz_elt.normalize import normalize_exchange_row
 from egisz_elt.pg_client import (
     connect_pg,
     ensure_tables,
+    list_missing_dwh_objects,
     load_raw_logs,
     sync_directory,
+    transform_raw_to_facts,
     update_cursors,
-    upsert_facts,
 )
 
 log = logging.getLogger(__name__)
@@ -42,20 +42,31 @@ def _to_xcom_row(row: tuple[Any, ...]) -> list[Any]:
 )
 def egisz_elt():
     @task
-    def setup_db() -> None:
+    def inspect_and_init_dwh() -> dict[str, Any]:
         pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
         try:
-            ensure_tables(pg_conn)
+            metadata_issues = sorted(list_missing_dwh_objects(pg_conn))
+            if metadata_issues:
+                log.info("Initializing DWH objects after metadata inspection: %s", ", ".join(metadata_issues))
+                ensure_tables(pg_conn)
+            else:
+                log.info("DWH metadata is up to date")
+            return {"initialized": bool(metadata_issues), "metadata_issues_before": metadata_issues}
         finally:
             pg_conn.close()
 
-    @task
-    def sync_dims() -> None:
+    @task(task_id="sync_dimensions")
+    def sync_dimensions() -> None:
         pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
         fb_conn = connect_fb(BaseHook.get_connection("proxy_egisz_fb"))
         try:
             with fb_conn.cursor() as cur:
-                cur.execute("SELECT JID, NAME, INN, ADDRESS FROM JPERSONS")
+                cur.execute(
+                    """
+                    SELECT JID, JNAME, JINN, COALESCE(NULLIF(FACTADDR, ''), JADDR)
+                    FROM JPERSONS
+                    """
+                )
                 sync_directory(pg_conn, "dim_organizations", cur.fetchall())
             with fb_conn.cursor() as cur:
                 cur.execute(
@@ -118,38 +129,15 @@ def egisz_elt():
     @task
     def transform_data(load_info: dict[str, int]) -> dict[str, int]:
         if load_info["count"] == 0:
-            return {"max_id": int(load_info["max_id"])}
+            return {"max_id": int(load_info["max_id"]), "transformed": 0}
 
         pg_conn = connect_pg(BaseHook.get_connection("dwh_egisz_pg"))
         try:
-            with pg_conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        logid AS "LOGID",
-                        logdate AS "LOGDATE",
-                        msgid AS "MSGID",
-                        logstate AS "LOGSTATE",
-                        logtext AS "LOGTEXT",
-                        msgtext AS "MSGTEXT"
-                    FROM egisz_raw r
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM fact_egisz_transactions f
-                        WHERE f.exchangelog_log_id = r.logid
-                    )
-                    LIMIT %s
-                    """,
-                    (BATCH_SIZE,),
-                )
-                raw_rows = [dict(zip([d[0] for d in cur.description], r)) for r in cur.fetchall()]
-
-            fact_rows = [norm for row in raw_rows if (norm := normalize_exchange_row(row))]
-            upsert_facts(pg_conn, fact_rows)
+            transformed = transform_raw_to_facts(pg_conn, int(load_info["max_id"]))
         finally:
             pg_conn.close()
 
-        return {"max_id": int(load_info["max_id"])}
+        return {"max_id": int(load_info["max_id"]), "transformed": transformed}
 
     @task
     def update_watermark(cursor_info: dict[str, int]) -> None:
@@ -159,14 +147,14 @@ def egisz_elt():
         finally:
             pg_conn.close()
 
-    setup_db_task = setup_db()
-    sync_dims_task = sync_dims()
+    bootstrap_task = inspect_and_init_dwh()
+    sync_dims_task = sync_dimensions()
     raw_info = extract_from_proxy()
     load_info = load_to_dwh(raw_info)
     cursor_info = transform_data(load_info)
     watermark_task = update_watermark(cursor_info)
 
-    setup_db_task >> sync_dims_task >> raw_info >> load_info >> cursor_info >> watermark_task
+    bootstrap_task >> sync_dims_task >> raw_info >> load_info >> cursor_info >> watermark_task
 
 
 dag_instance = egisz_elt()

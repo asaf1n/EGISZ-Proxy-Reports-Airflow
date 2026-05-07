@@ -1,4 +1,4 @@
-FROM metabase/metabase:v0.49.14
+FROM metabase/metabase:v0.60.2.5@sha256:e6fb150fad339ae05d4b77c31de077fa3ff62e894006bb850172eb1df2a40fb6
 
 LABEL org.opencontainers.image.title="egisz-integration-metabase"
 LABEL org.opencontainers.image.description="Metabase OSS for EGISZ integration service reports"
