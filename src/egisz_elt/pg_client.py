@@ -5,7 +5,6 @@ from importlib import resources
 from typing import Any
 
 import psycopg2
-from airflow.models import Connection
 from psycopg2.extras import execute_values
 
 log = logging.getLogger(__name__)
@@ -74,8 +73,10 @@ REQUIRED_TABLE_COLUMNS = {
     },
 }
 
+RAW_LOG_COLUMNS = ("logid", "logdate", "msgid", "logstate", "logtext", "msgtext")
 
-def connect_pg(conn_params: Connection | str) -> psycopg2.extensions.connection:
+
+def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
     if isinstance(conn_params, str):
         return psycopg2.connect(conn_params)
     return psycopg2.connect(
@@ -177,16 +178,10 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
     values: list[tuple[Any, ...]] = []
     for row in rows:
         if isinstance(row, dict):
-            values.append(
-                (
-                    row.get("logid"),
-                    row.get("logdate"),
-                    row.get("msgid"),
-                    row.get("logstate"),
-                    row.get("logtext"),
-                    row.get("msgtext"),
-                )
-            )
+            missing_columns = [column for column in RAW_LOG_COLUMNS if column not in row]
+            if missing_columns:
+                raise ValueError(f"Raw EXCHANGELOG row is missing required column(s): {', '.join(missing_columns)}")
+            values.append(tuple(row[column] for column in RAW_LOG_COLUMNS))
         else:
             values.append(tuple(row))
 

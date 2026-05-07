@@ -43,7 +43,7 @@
    Airflow выполняет SQL из `src/egisz_elt/sql/001_dwh_bootstrap.sql`: создаёт таблицы, функции парсинга и базовые представления.
 
 2. **Синхронизация справочника организаций**
-   Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `INN`, `ADDRESS`. Данные идемпотентно загружаются в `dim_organizations` через `ON CONFLICT`.
+   Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `JINN`, `JADDR`; в DWH они загружаются как `jid`, `name`, `inn`, `address`. Пустые значения ИНН или адреса сохраняются как `NULL`. Данные идемпотентно загружаются в `dim_organizations` через `ON CONFLICT`.
 
 3. **Инкрементальная выгрузка журнала**
    Из `EXCHANGELOG` читается батч по курсору `LOGID`:

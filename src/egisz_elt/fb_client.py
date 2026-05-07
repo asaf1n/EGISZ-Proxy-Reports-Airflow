@@ -41,8 +41,8 @@ def fetch_rows_after_cursor(
         # Try to convert to int if it's numeric
         try:
             cursor_value = int(cursor_value)
-        except (ValueError, TypeError):
-            pass  # Keep as-is for string cursors
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Cursor value for {source_table}.{cursor_column} must be numeric") from exc
     
     q = (
         f"SELECT * FROM {source_table} "
@@ -125,8 +125,8 @@ def fetch_organizations(con) -> list[tuple[Any, ...]]:
             SELECT
                 JID,
                 JNAME,
-                INN,
-                ADDRESS
+                JINN,
+                JADDR
             FROM JPERSONS
             WHERE JID IS NOT NULL
             """

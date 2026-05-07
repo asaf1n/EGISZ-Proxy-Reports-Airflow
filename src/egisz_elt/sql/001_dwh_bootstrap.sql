@@ -105,9 +105,10 @@ BEGIN
         '<(?:[A-Za-z0-9_]+:)?' || safe_tag || '(?:\s[^>]*)?>(.*?)</(?:[A-Za-z0-9_]+:)?' || safe_tag || '>',
         'is'
     );
+    IF match IS NULL THEN
+        RETURN NULL;
+    END IF;
     RETURN NULLIF(btrim(replace(replace(replace(match[1], E'\n', ' '), E'\r', ' '), E'\t', ' ')), '');
-EXCEPTION WHEN others THEN
-    RETURN NULL;
 END;
 $$;
 
@@ -117,9 +118,10 @@ LANGUAGE plpgsql
 IMMUTABLE
 AS $$
 BEGIN
+    IF NULLIF(btrim(COALESCE(p_text, '')), '') IS NULL THEN
+        RETURN NULL;
+    END IF;
     RETURN p_text::timestamptz;
-EXCEPTION WHEN others THEN
-    RETURN NULL;
 END;
 $$;
 
@@ -247,19 +249,19 @@ BEGIN
         message_id = EXCLUDED.message_id,
         relates_to_id = EXCLUDED.relates_to_id,
         local_uid_semd = EXCLUDED.local_uid_semd,
-        emdr_id = COALESCE(EXCLUDED.emdr_id, fact_egisz_transactions.emdr_id),
+        emdr_id = EXCLUDED.emdr_id,
         doc_number = EXCLUDED.doc_number,
         org_oid = EXCLUDED.org_oid,
         status = EXCLUDED.status,
         error_message = EXCLUDED.error_message,
         callback_url = EXCLUDED.callback_url,
-        egmid = COALESCE(EXCLUDED.egmid, fact_egisz_transactions.egmid),
-        jid = COALESCE(EXCLUDED.jid, fact_egisz_transactions.jid),
+        egmid = EXCLUDED.egmid,
+        jid = EXCLUDED.jid,
         semd_code = EXCLUDED.semd_code,
         semd_name = EXCLUDED.semd_name,
         error_code = EXCLUDED.error_code,
         errors_json = EXCLUDED.errors_json,
-        creation_date = COALESCE(EXCLUDED.creation_date, fact_egisz_transactions.creation_date),
+        creation_date = EXCLUDED.creation_date,
         processed_at = now();
     GET DIAGNOSTICS affected = ROW_COUNT;
     RETURN affected;
