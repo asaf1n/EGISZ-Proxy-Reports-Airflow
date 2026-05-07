@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Firebird to PostgreSQL DWH ELT for EGISZ analytics with Airflow and Metabase."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = "LicenseRef-Proprietary"
 authors = [{ name = "EGISZ" }]
 
 dependencies = [

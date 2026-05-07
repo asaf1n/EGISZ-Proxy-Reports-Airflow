@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: metabase
-          image: egisz-monitor-metabase:latest
+          image: egisz-metabase:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -42,31 +42,69 @@ spec:
               value: weak
             - name: MB_PASSWORD_LENGTH
               value: "4"
-            - name: METABASE_ADMIN_EMAIL
-              value: "admin@egisz.local"
-            - name: METABASE_ADMIN_PASSWORD
-              value: "egisz"
-            # Metabase application DB (external Postgres)
+            - name: METABASE_SITE_NAME
+              value: "Интеграция с ЕГИСЗ"
             - name: MB_DB_TYPE
               value: postgres
             - name: MB_DB_HOST
-              value: host.docker.internal
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_DB_HOST
             - name: MB_DB_PORT
-              value: "5432"
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_DB_PORT
             - name: MB_DB_DBNAME
-              value: metabase_app
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_DB_NAME
             - name: MB_DB_USER
-              value: postgres
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_DB_USER
             - name: MB_DB_PASS
-              value: postgres
-            # Target application DB for reports
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_DB_PASSWORD
+            - name: METABASE_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_ADMIN_EMAIL
+            - name: METABASE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: METABASE_ADMIN_PASSWORD
             - name: APP_DB_HOST
-              value: host.docker.internal
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: DWH_DB_HOST
             - name: APP_DB_PORT
-              value: "5432"
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: DWH_DB_PORT
             - name: APP_DB_NAME
-              value: dwh_egisz
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: DWH_DB_NAME
             - name: APP_DB_USER
-              value: egisz
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: DWH_BI_USER
             - name: APP_DB_PASSWORD
-              value: egisz
+              valueFrom:
+                secretKeyRef:
+                  name: metabase-connections
+                  key: DWH_BI_PASSWORD
+            - name: APP_DB_DISPLAY_NAME
+              value: "DWH ЕГИСЗ"

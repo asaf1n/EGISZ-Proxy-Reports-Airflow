@@ -9,11 +9,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends firebird3.0-common libfbclient2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . /opt/proxy-reports-elt
-RUN chown -R airflow:0 /opt/proxy-reports-elt
+COPY . /opt/egisz-elt
+RUN chown -R airflow:0 /opt/egisz-elt
 
 USER airflow
-RUN pip install --no-cache-dir -e /opt/proxy-reports-elt
+RUN pip install --no-cache-dir -e /opt/egisz-elt
 
 
 COPY airflow/dags/*.py /opt/airflow/dags/

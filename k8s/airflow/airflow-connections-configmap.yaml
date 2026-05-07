@@ -1,11 +1,8 @@
 apiVersion: v1
-kind: ConfigMap
+kind: Secret
 metadata:
   name: airflow-connections
-data:
-  # Postgres connection for DWH (same host as Firebird)
-  # Format: postgres://user:password@host:port/dbname
+type: Opaque
+stringData:
   AIRFLOW_CONN_DWH_EGISZ_PG: "postgres://egisz:egisz@host.docker.internal:5432/dwh_egisz?sslmode=disable"
-  # Firebird connection for Proxy  
-  # Format: drizzle://user:password@host:port/database?charset=WIN1251
   AIRFLOW_CONN_PROXY_EGISZ_FB: "drizzle://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251"

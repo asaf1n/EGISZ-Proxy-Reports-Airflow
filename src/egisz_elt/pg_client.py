@@ -27,6 +27,8 @@ REQUIRED_DWH_OBJECTS = {
     "dim_licenses",
     "fact_egisz_transactions",
     "egisz_xml_text",
+    "safe_cast_timestamptz",
+    "egisz_clean_host",
     "egisz_transform_raw_to_facts",
     "egisz_semd_type_report_label",
     "egisz_error_interpretation_type",
@@ -67,6 +69,7 @@ REQUIRED_TABLE_COLUMNS = {
         "semd_name",
         "error_code",
         "errors_json",
+        "creation_date",
         "processed_at",
     },
 }
@@ -152,8 +155,44 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
     con.commit()
 
 
-def load_raw_logs(con: psycopg2.extensions.connection, rows: list[tuple[Any, ...]]) -> None:
+def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> tuple[int, int]:
+    """Read the last processed Firebird cursors for a pipeline."""
+    with con.cursor() as cur:
+        cur.execute(
+            """
+            SELECT last_log_id, last_egmid
+            FROM elt_state
+            WHERE pipeline = %s
+            """,
+            (pipeline,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return (0, 0)
+    return (int(row[0] or 0), int(row[1] or 0))
+
+
+def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:
     """Load EXCHANGELOG rows into egisz_raw without transforming them in Python."""
+    values: list[tuple[Any, ...]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            values.append(
+                (
+                    row.get("logid"),
+                    row.get("logdate"),
+                    row.get("msgid"),
+                    row.get("logstate"),
+                    row.get("logtext"),
+                    row.get("msgtext"),
+                )
+            )
+        else:
+            values.append(tuple(row))
+
+    if not values:
+        return
+
     with con.cursor() as cur:
         execute_values(
             cur,
@@ -168,7 +207,7 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[tuple[Any, ...
                 msgtext = EXCLUDED.msgtext,
                 loaded_at = now()
             """,
-            rows,
+            values,
         )
     con.commit()
 

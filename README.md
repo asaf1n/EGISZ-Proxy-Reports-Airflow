@@ -1,75 +1,264 @@
-﻿# EGISZ Airflow ELT
+# EGISZ Airflow ELT
 
-Мониторинг и аналитика обмена данными с ЕГИСЗ. Проект переведен на **ELT-архитектуру** (Extract, Load, Transform) для обеспечения стабильности, идемпотентности и высокой производительности при обработке тяжелых XML-сообщений.
+Проект для построения витрины аналитики **«Интеграция с ЕГИСЗ»**: инкрементальная выгрузка журнала обмена из Firebird (`proxy_egisz`), загрузка сырых событий в PostgreSQL DWH (`dwh_egisz`), SQL-парсинг SOAP/XML payload и публикация дашбордов Metabase.
 
----
-
-## 🏗 Архитектура
-
-Проект реализует современный цикл обработки данных:
-1.  **Extract**: Извлечение инкрементальных логов из Firebird (шлюз).
-2.  **Load**: Загрузка сырых данных «как есть» в стейджинг Postgres (`egisz_raw`).
-3.  **Transform**: SQL-трансформация внутри DWH (парсинг XML, очистка хостов, расчет расхождений JID) и обновление аналитических витрин.
-
-### Стек технологий
-* **Оркестрация**: Apache Airflow **2.11.2** (TaskFlow API).
-* **База данных (DWH)**: PostgreSQL 12+ (использование JSONB для XML/JSON полей).
-* **Источник (Source)**: Firebird 5.0.
-* **Визуализация**: Metabase **v0.60.2.5**.
+Сервис ориентирован на эксплуатационную аналитику обмена с ЕГИСЗ: статусы обработки, ошибки канала, идентификаторы СЭМД, разрезы по клиникам и контроль полноты обработки.
 
 ---
 
-## 🚀 Быстрый старт
+## Содержание
 
-### 1. Подготовка окружения
-Убедитесь, что у вас установлен Docker Desktop и включен Kubernetes. Настройте доступы к базам данных в Airflow Connections:
-* `dwh_egisz_pg`: Подключение к вашей базе PostgreSQL.
-* `proxy_egisz_fb`: Подключение к Firebird (тип `drizzle` или `firebird`).
+- [Архитектура и технологический стек](#архитектура-и-технологический-стек)
+- [Логика выгрузки и хранения](#логика-выгрузки-и-хранения)
+- [Логика парсинга и интерпретации данных](#логика-парсинга-и-интерпретации-данных)
+- [Airflow DAG](#airflow-dag)
+- [DWH-модель](#dwh-модель)
+- [Metabase и дашборды](#metabase-и-дашборды)
+- [Подключения и секреты](#подключения-и-секреты)
+- [Запуск в чистом Kubernetes](#запуск-в-чистом-kubernetes)
+- [Каталоги репозитория](#каталоги-репозитория)
 
-### 2. Запуск (Локально)
-Для автоматической сборки образов с уникальными тегами и деплоя в кластер используйте PowerShell скрипт:
-```powershell
-./up.ps1
+---
+
+## Архитектура и технологический стек
+
+* **Источник данных:** Firebird 5, база `proxy_egisz`. Используется как OLTP-источник журнала обмена ЕГИСЗ.
+* **Оркестрация:** Apache Airflow 2.11.2, DAG `egisz_elt_dag`, TaskFlow API.
+* **DWH:** PostgreSQL, база `dwh_egisz`. В ней создаются staging-таблицы, таблица фактов, справочники, функции парсинга и Metabase-facing views.
+* **BI:** Metabase v0.60.2.5. Дашборды хранятся как JSON в `metabase_dashboards/` и импортируются скриптом `metabase/setup-dashboards.sh`.
+* **Метаданные сервисов:** Airflow и Metabase используют отдельные внешние PostgreSQL-базы (`airflow_db`, `metabase_app`). DWH не используется как служебная база приложений.
+
+Локальные порты для Docker Desktop Kubernetes:
+
+* Airflow: `http://localhost:8080`
+* Metabase: `http://localhost:3000`
+
+---
+
+## Логика выгрузки и хранения
+
+Процесс построен как ELT: Python-слой только извлекает и загружает данные, а смысловая трансформация выполняется в PostgreSQL.
+
+1. **Bootstrap DWH**
+   Airflow выполняет SQL из `src/egisz_elt/sql/001_dwh_bootstrap.sql`: создаёт таблицы, функции парсинга и базовые представления.
+
+2. **Синхронизация справочника организаций**
+   Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `INN`, `ADDRESS`. Данные идемпотентно загружаются в `dim_organizations` через `ON CONFLICT`.
+
+3. **Инкрементальная выгрузка журнала**
+   Из `EXCHANGELOG` читается батч по курсору `LOGID`:
+
+   ```sql
+   SELECT LOGID, LOGDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT
+   FROM EXCHANGELOG
+   WHERE LOGID > :last_log_id
+   ORDER BY LOGID
+   ROWS :limit
+   ```
+
+4. **Загрузка raw-слоя**
+   Сырые строки журнала сохраняются в `egisz_raw`. Первичный ключ — `logid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`.
+
+5. **SQL-трансформация**
+   Функция `public.egisz_transform_raw_to_facts(max_log_id)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`.
+
+6. **Обновление watermark**
+   После успешной трансформации курсор сохраняется в `elt_state.last_log_id`.
+
+---
+
+## Логика парсинга и интерпретации данных
+
+Ключевой принцип: **`MSGTEXT` хранится как сырой payload, а бизнес-поля извлекаются в DWH SQL-функциями**. Это оставляет исходный журнал неизменным и позволяет пересчитать витрину при изменении правил парсинга.
+
+### XML-теги и поля витрины
+
+| Сущность | Источник | Поле DWH | Правило |
+| :--- | :--- | :--- | :--- |
+| ID строки журнала | `EXCHANGELOG.LOGID` | `fact_egisz_transactions.exchangelog_log_id` | Технический ключ факта и связь с `egisz_raw`. |
+| MSGID обмена | `EXCHANGELOG.MSGID` или XML `<messageId>` | `message_id` | Приоритет XML `<messageId>`, fallback — `MSGID` из журнала. |
+| Связанное сообщение | XML `<relatesToMessage>` или `<relatesTo>` | `relates_to_id` | Коррелятор исходящего запроса и callback; не подменяет идентификатор СЭМД. |
+| Локальный ID СЭМД | XML `<localUid>` или `<DOCUMENTID>` | `local_uid_semd` | Приоритет `localUid`, fallback — `DOCUMENTID`. |
+| Федеральный ID | XML `<emdrId>` | `emdr_id` | Идентификатор документа на стороне РЭМД/ЕГИСЗ, если он есть в payload. |
+| Номер документа | XML `<documentNumber>` | `doc_number` | Используется как дополнительный fallback для ключа учёта. |
+| OID организации | XML `<organization>` | `org_oid` | Используется для связи с лицензиями через `dim_licenses.mo_uid`. |
+| Код СЭМД | XML `<kind>` или `<KIND>` | `semd_code` | Поддерживаются оба регистра тега. |
+| Название СЭМД | XML `<name>` или `<documentName>` | `semd_name` | Формирует человекочитаемую подпись типа документа. |
+| Код ошибки | XML `<code>` | `error_code` | Попадает в `errors_json` и классификацию ошибок. |
+| Текст ошибки | XML `<message>` или transport log | `error_message` | Для `LOGSTATE = 3` берётся транспортный текст из `LOGTEXT`. |
+| Дата создания СЭМД | XML `<creationDateTime>` или `<creationDate>` | `creation_date` | Приводится к `timestamptz` через безопасный cast. |
+| JID клиники | `LOGTEXT` / `MSGTEXT`, pattern `gost-<JID>` | `jid` | Извлекается регулярным выражением `gost-([0-9]+)`. |
+
+### Безопасное извлечение XML
+
+Функция `public.egisz_xml_text(payload, tag_name)`:
+
+* проверяет, что payload похож на XML;
+* очищает имя тега от неожиданных символов;
+* ищет тег с namespace-префиксом или без него;
+* убирает переносы строк, табы и пустые значения;
+* при любой ошибке возвращает `NULL`, чтобы одна плохая строка не ломала весь батч.
+
+### Нормализация статуса
+
+Статус факта вычисляется в SQL:
+
+* `LOGSTATE = 3` всегда трактуется как `error`, потому что это транспортная ошибка канала;
+* XML status с `success` превращается в `success`;
+* XML status с `error` или payload, содержащий `error`, превращается в `error`;
+* всё остальное получает статус `unknown`.
+
+### Ошибки и `errors_json`
+
+Для ошибочных фактов формируется JSON-массив:
+
+```json
+[{"code": "...", "message": "..."}]
 ```
-* **Airflow Webserver**: [http://localhost:8085](http://localhost:8085)
-* **Metabase**: [http://localhost:3035](http://localhost:3035)
+
+Если ошибка транспортная (`LOGSTATE = 3`), текст строится как `Network Error: <LOGTEXT>`. Если ошибка пришла в XML, используется `<message>`.
+
+### Ключ документа для отчётов
+
+В основной витрине документ отображается как:
+
+```sql
+COALESCE(local_uid_semd, doc_number, emdr_id, message_id, exchangelog_log_id::text)
+```
+
+Это важно для аналитики: `relatesToMessage` — коррелятор обмена, а не основной идентификатор СЭМД. Для подсчёта документов в Metabase нужно использовать именно «Документ (ключ учёта)».
+
+### Классификация ошибок
+
+Функция `public.egisz_error_interpretation_type(error_code, error_message)` группирует ошибки для дашбордов:
+
+* пустые код и сообщение — «ошибка без деталей»;
+* `network` / `connection` — «ошибка связи (транспорт)»;
+* `timeout` / `timed out` — «таймаут канала»;
+* `remd` / `рэмд` — «ошибка асинхронного ответа РЭМД»;
+* при наличии кода ошибки — `код: текст`;
+* иначе берётся сокращённый текст ошибки.
+
+### Подпись типа СЭМД
+
+Функция `public.egisz_semd_type_report_label(semd_code, semd_name)` формирует подпись:
+
+* если нет кода и названия — `(неизвестно)`;
+* если есть только название — название;
+* если есть только код — код;
+* если есть оба значения — `код · название`.
 
 ---
 
-## 📊 Аналитика в Metabase
+## Airflow DAG
 
-Процесс настройки дашбордов полностью автоматизирован. При старте контейнера или запуске `setup-dashboards.sh` выполняется:
-* Создание коллекции **«Интеграция с ЕГИСЗ»**.
-* Импорт 6 дашбордов (Операционная сводка, Ошибки, Архив СЭМД и др.).
-* Автоматическая привязка Field Filters к метаданным полей.
+DAG `egisz_elt_dag` использует только Airflow Connections:
 
-**Основные витрины:**
-* `v_egisz_transactions_enriched_ui`: Основная витрина с очищенными IP-хостами и датами создания СЭМД.
-* `v_rpt_network_errors_detail_ui`: Детализация сетевых и транспортных ошибок.
+* `proxy_egisz_fb` — Firebird source connection;
+* `dwh_egisz_pg` — PostgreSQL DWH connection.
 
----
+Задачи:
 
-## ⚙️ Описание пайплайна (DAG)
+1. `bootstrap_dwh` — применяет DWH SQL и восстанавливает/обновляет структуру витрины.
+2. `sync_dimensions` — синхронизирует `JPERSONS` в `dim_organizations`.
+3. `extract_from_proxy` — читает батч `EXCHANGELOG` после `last_log_id`.
+4. `load_to_dwh` — загружает батч в `egisz_raw`.
+5. `transform_data` — вызывает `egisz_transform_raw_to_facts(max_log_id)`.
+6. `update_watermark` — фиксирует успешный курсор в `elt_state`.
 
-Пайплайн `egisz_elt_dag` состоит из следующих этапов:
-
-1.  **bootstrap_dwh**: (SQL) Проверка и создание структуры таблиц, функций и вью (`001_dwh_bootstrap.sql`).
-2.  **sync_dimensions**: Синхронизация справочника организаций `JPERSONS` (идемпотентно через `ON CONFLICT`).
-3.  **extract_from_proxy**: Получение новых записей из Firebird на основе последнего Watermark.
-4.  **load_to_dwh**: Быстрая вставка сырых данных в таблицы `egisz_raw` и `egisz_messages_raw`.
-5.  **transform_data**: Вызов SQL-процедуры для парсинга XML и наполнения таблицы фактов.
-6.  **update_watermark**: Сохранение ID последней обработанной записи.
+Данные между задачами передаются через XCom как JSON-сериализуемые словари. Батч ограничен константой `BATCH_SIZE = 500`.
 
 ---
 
-## 📁 Структура проекта
+## DWH-модель
 
-* `src/egisz_elt/`: Основной Python-пакет с логикой клиентов (PG, FB).
-* `src/egisz_elt/sql/`: SQL-скрипты инициализации и трансформации.
-* `airflow/dags/`: Определение Airflow DAG и TaskFlow логики.
-* `metabase/`: Скрипты провижининга и JSON-шаблоны дашбордов.
-* `k8s/`: Манифесты для развертывания в Kubernetes.
+Основные таблицы:
+
+* `elt_state` — курсоры инкрементальной обработки (`last_log_id`, `last_egmid`).
+* `egisz_raw` — raw-слой `EXCHANGELOG`.
+* `egisz_messages_raw` — подготовленная таблица для raw-слоя `EGISZ_MESSAGES`.
+* `dim_organizations` — справочник организаций из `JPERSONS`.
+* `dim_licenses` — справочник лицензий и привязок `mo_uid` / `JID`.
+* `fact_egisz_transactions` — нормализованные факты обмена.
+
+Основные представления:
+
+* `v_egisz_transactions_enriched_ui` — главная витрина для Metabase.
+* `v_rpt_network_errors_detail_ui` — детализация транспортных и сетевых ошибок.
+* `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
+* `v_health_signals_ui` — агрегированные health-сигналы.
 
 ---
 
-> **Note**: В проекте используются регулярные выражения для очистки IP-адресов от префиксов `http://` и портов прямо на уровне базы данных, что позволяет использовать стандартные фильтры Metabase по "Хосту клиники".
+## Metabase и дашборды
+
+Дашборды хранятся как код в `metabase_dashboards/`:
+
+* `01_operational.json` — оперативный мониторинг и динамика.
+* `02_service.json` — сервис, healthcheck и сбои канала.
+* `03_documents_no_response.json` — документы без ответа.
+* `04_quality_and_errors.json` — ошибки и качество данных.
+* `05_executive.json` — сводная статистика сервиса интеграции.
+* `06_semd_archive.json` — архив СЭМД.
+
+Скрипт `metabase/setup-dashboards.sh`:
+
+* создаёт коллекцию «Интеграция с ЕГИСЗ»;
+* регистрирует DWH в Metabase;
+* проверяет наличие DWH-объектов, которые используются в SQL карточек;
+* запускает sync schema;
+* подставляет реальные field id для Field Filters;
+* импортирует JSON-дашборды.
+
+---
+
+## Подключения и секреты
+
+Перед чистым запуском подготовьте реальные secret-файлы:
+
+```powershell
+Copy-Item k8s/airflow/airflow-metadata-secret.example.yaml k8s/airflow/airflow-metadata-secret.yaml
+Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/metabase-connections-secret.yaml
+```
+
+Что настроить:
+
+* `k8s/airflow/airflow-metadata-secret.yaml` — подключение Airflow к внешней metadata DB `airflow_db`.
+* `k8s/airflow/airflow-connections-configmap.yaml` — Airflow Connections `dwh_egisz_pg` и `proxy_egisz_fb`.
+* `k8s/metabase/metabase-connections-secret.yaml` — служебная БД Metabase (`metabase_app`) и BI-доступ к `dwh_egisz`.
+
+Пример локального доступа из контейнеров Docker Desktop:
+
+* PostgreSQL: `host.docker.internal:5432`
+* Firebird: `host.docker.internal:3050`, база/alias `proxy_egisz`
+
+---
+
+## Запуск в чистом Kubernetes
+
+```powershell
+.\up.ps1
+```
+
+Скрипт:
+
+1. создаёт локальные secret-файлы из example-шаблонов, если их ещё нет;
+2. применяет Secrets подключений;
+3. собирает образ Airflow `egisz-airflow-worker`;
+4. собирает образ Metabase `egisz-metabase`;
+5. устанавливает Airflow через Helm;
+6. выполняет `bootstrap_dwh` через Airflow, чтобы подготовить внешний DWH;
+7. разворачивает Metabase;
+8. импортирует дашборды.
+
+---
+
+## Каталоги репозитория
+
+* `airflow/dags/` — DAG `egisz_elt_dag.py`.
+* `src/egisz_elt/` — Python-клиенты Firebird/PostgreSQL и загрузочная логика.
+* `src/egisz_elt/sql/` — DWH schema, функции парсинга и представления.
+* `metabase/` — Dockerfile, entrypoint и provisioning-скрипты Metabase.
+* `metabase_dashboards/` — JSON-дашборды.
+* `k8s/` — Kubernetes manifests и Helm values.
+* `up.ps1` — сборка образов и установка в чистый Kubernetes.

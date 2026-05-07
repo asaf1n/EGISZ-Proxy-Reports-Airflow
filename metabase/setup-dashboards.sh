@@ -8,7 +8,7 @@ DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
 
-APP_DB_HOST="${APP_DB_HOST:-postgres}"
+APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
 APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
 APP_DB_USER="${APP_DB_USER:-postgres}"

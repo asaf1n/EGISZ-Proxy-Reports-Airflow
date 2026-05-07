@@ -4,9 +4,15 @@ from typing import Any
 
 from firebird.driver import connect
 
+
 def connect_fb(conn: Any):
     """Connect to Firebird proxy database using Airflow Connection object."""
-    dsn = f"{conn.host}:{conn.schema}" if conn.host else conn.schema
+    if conn.host and conn.port:
+        dsn = f"{conn.host}/{conn.port}:{conn.schema}"
+    elif conn.host:
+        dsn = f"{conn.host}:{conn.schema}"
+    else:
+        dsn = conn.schema
     charset = conn.extra_dejson.get("charset", "UTF8") if conn.extra_dejson else "UTF8"
     return connect(database=dsn, user=conn.login, password=conn.password, charset=charset)
 
@@ -61,5 +67,70 @@ def ping_fb(con) -> None:
     try:
         cur.execute("SELECT 1 AS ok FROM RDB$DATABASE")
         cur.fetchone()
+    finally:
+        cur.close()
+
+
+def fetch_exchangelog_after_cursor(
+    con,
+    *,
+    after_log_id: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch a JSON-serializable EXCHANGELOG batch for Airflow XComs."""
+    if limit <= 0:
+        return []
+
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                LOGID,
+                LOGDATE,
+                MSGID,
+                LOGSTATE,
+                LOGTEXT,
+                MSGTEXT
+            FROM EXCHANGELOG
+            WHERE LOGID > ?
+            ORDER BY LOGID
+            ROWS ?
+            """,
+            (int(after_log_id or 0), int(limit)),
+        )
+        rows: list[dict[str, Any]] = []
+        for logid, logdate, msgid, logstate, logtext, msgtext in cur.fetchall():
+            rows.append(
+                {
+                    "logid": int(logid),
+                    "logdate": logdate.isoformat() if logdate is not None else None,
+                    "msgid": msgid,
+                    "logstate": logstate,
+                    "logtext": logtext,
+                    "msgtext": msgtext,
+                }
+            )
+        return rows
+    finally:
+        cur.close()
+
+
+def fetch_organizations(con) -> list[tuple[Any, ...]]:
+    """Fetch organization directory rows from JPERSONS."""
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                JID,
+                JNAME,
+                INN,
+                ADDRESS
+            FROM JPERSONS
+            WHERE JID IS NOT NULL
+            """
+        )
+        return [tuple(row) for row in cur.fetchall()]
     finally:
         cur.close()
