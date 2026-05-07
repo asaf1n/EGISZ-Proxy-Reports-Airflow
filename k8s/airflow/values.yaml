@@ -27,7 +27,7 @@ extraEnvFrom: |
   - secretRef:
       name: airflow-metadata-connection
   - secretRef:
-      name: proxy-reports-etl-env
+      name: proxy-reports-elt-env
   - configMapRef:
       name: airflow-connections
 

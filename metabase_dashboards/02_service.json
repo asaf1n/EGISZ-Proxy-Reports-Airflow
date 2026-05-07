@@ -238,7 +238,7 @@
     },
     {
       "name": "02 · Сигналы healthcheck",
-      "description": "Пять сигналов: error_rate_high (>10% за 24ч при объёме **документов** >50), unknown_high (>5%), channel_errors_burst (**уникальных документов** со сбоем канала за час >10), queue_red_24h (>50 в очереди >24ч), cursor_stale (etl_state.updated_at >6ч). Уровень — green/yellow/red.",
+      "description": "Пять сигналов: error_rate_high (>10% за 24ч при объёме **документов** >50), unknown_high (>5%), channel_errors_burst (**уникальных документов** со сбоем канала за час >10), queue_red_24h (>50 в очереди >24ч), cursor_stale (elt_state.updated_at >6ч). Уровень — green/yellow/red.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -527,11 +527,11 @@
     },
     {
       "name": "02 · Сводка прокси-БД",
-      "description": "Цифры из `v_health_proxy_db_ui`: очередь исходящих в прокси-БД (`stg_egisz_outbound_documents`), max EGMID в нём, очередь без ответа, `etl_state.last_log_id`, `etl_state.last_egmid` (курсор выгрузки снимка `EGISZ_MESSAGES`).",
+      "description": "Цифры из `v_health_proxy_db_ui`: очередь исходящих в прокси-БД (`stg_egisz_outbound_documents`), max EGMID в нём, очередь без ответа, `elt_state.last_log_id`, `elt_state.last_egmid` (курсор выгрузки снимка `EGISZ_MESSAGES`).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Staging: всего строк\", \"Без EGMID\", \"Очередь всего\", \"Очередь > 24ч\", \"Staging max EGMID\", \"Staging max Sent\", \"Последний апдейт курсора\", \"etl_state.last_log_id\", \"etl_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
+          "query": "SELECT \"Staging: всего строк\", \"Без EGMID\", \"Очередь всего\", \"Очередь > 24ч\", \"Staging max EGMID\", \"Staging max Sent\", \"Последний апдейт курсора\", \"elt_state.last_log_id\", \"elt_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
           "template-tags": {}
         },
         "database": 1
@@ -553,8 +553,8 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"etl_state.last_log_id\"]": {
-            "column_title": "etl_state.last_log_id"
+          "[\"name\",\"elt_state.last_log_id\"]": {
+            "column_title": "elt_state.last_log_id"
           }
         }
       },

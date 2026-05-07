@@ -18,10 +18,11 @@ def connect_pg(conn_params: Connection | str) -> psycopg2.extensions.connection:
     )
 
 def ensure_tables(con: psycopg2.extensions.connection) -> None:
+    """Инициализация таблиц и представлений ELT"""
     with con.cursor() as cur:
-        # 1. Метаданные ETL
+        # Состояние курсоров (двойной курсор)
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS etl_state (
+            CREATE TABLE IF NOT EXISTS elt_state (
                 pipeline text PRIMARY KEY,
                 last_log_id bigint DEFAULT 0,
                 last_egmid bigint DEFAULT 0,
@@ -29,10 +30,23 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
             );
         """)
 
-        # 2. Таблицы фактов и справочников
+        # Raw таблица (Сюда грузим всё ПЕРЕД парсингом)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS proxy_reports_raw (
+                logid bigint PRIMARY KEY,
+                logdate timestamptz,
+                msgid text,
+                logstate integer,
+                logtext text,
+                msgtext text,
+                loaded_at timestamptz DEFAULT now()
+            );
+        """)
+
+        # Таблица фактов (Результат трансформации)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
-                exchangelog_log_id bigint PRIMARY KEY,
+                exchangelog_log_id bigint PRIMARY KEY REFERENCES proxy_reports_raw(logid),
                 log_date timestamptz,
                 message_id text,
                 relates_to_id text,
@@ -43,9 +57,12 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
                 status text,
                 error_message text,
                 callback_url text,
-                loaded_at timestamptz DEFAULT now()
+                processed_at timestamptz DEFAULT now()
             );
-            
+        """)
+
+        # Вспомогательная таблица сообщений (EGISZ_MESSAGES)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS fact_proxy_exchange (
                 egmid bigint PRIMARY KEY,
                 jid integer,
@@ -53,15 +70,10 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
                 created_at timestamptz,
                 loaded_at timestamptz DEFAULT now()
             );
+        """)
 
-            CREATE TABLE IF NOT EXISTS dim_organizations (
-                jid integer PRIMARY KEY,
-                name text,
-                inn text,
-                address text,
-                updated_at timestamptz DEFAULT now()
-            );
-
+        # Справочник лицензий (9 полей)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS dim_licenses (
                 id bigint PRIMARY KEY,
                 service_type integer,
@@ -76,39 +88,41 @@ def ensure_tables(con: psycopg2.extensions.connection) -> None:
             );
         """)
 
-        # 3. ПРЕДСТАВЛЕНИЯ (Views) для Metabase
-        # На основе анализа AGENTS.md из egisz-monitor-corp
+        # Справочник организаций (JPERSONS)
         cur.execute("""
-            -- Ключевая витрина: Транзакции с данными организаций
-            CREATE OR REPLACE VIEW v_egisz_transactions_full AS
-            SELECT 
-                t.*,
-                o.name as org_name,
-                o.inn as org_inn,
-                l.kind as license_kind,
-                l.fdate as license_expiry
-            FROM fact_egisz_transactions t
-            LEFT JOIN dim_organizations o ON t.org_oid = o.mo_uid OR (t.org_oid IS NULL AND o.jid = (SELECT jid FROM fact_proxy_exchange WHERE egmid = t.exchangelog_log_id LIMIT 1))
-            LEFT JOIN dim_licenses l ON t.org_oid = l.mo_uid;
-
-            -- Витрина только для сетевых ошибок (LOGSTATE=3)
-            CREATE OR REPLACE VIEW v_rpt_network_errors_detail_ui AS
-            SELECT * FROM fact_egisz_transactions 
-            WHERE error_message LIKE 'Network Error%';
-
-            -- Сводка по статусам для операционного дашборда
-            CREATE OR REPLACE VIEW v_egisz_status_counts AS
-            SELECT status, count(*) as cnt, date_trunc('day', log_date) as day
-            FROM fact_egisz_transactions
-            GROUP BY 1, 3;
+            CREATE TABLE IF NOT EXISTS dim_organizations (
+                jid integer PRIMARY KEY,
+                name text,
+                inn text,
+                address text,
+                updated_at timestamptz DEFAULT now()
+            );
         """)
 
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_fact_local_uid ON fact_egisz_transactions(local_uid_semd);")
-        
+        # ПРЕДСТАВЛЕНИЯ (VIEWS)
+        cur.execute("""
+            CREATE OR REPLACE VIEW v_egisz_transactions_full AS
+            SELECT t.*, o.name as org_name, o.inn as org_inn, l.kind as license_kind
+            FROM fact_egisz_transactions t
+            LEFT JOIN dim_organizations o ON t.org_oid = o.mo_uid
+            LEFT JOIN dim_licenses l ON t.org_oid = l.mo_uid;
+
+            CREATE OR REPLACE VIEW v_rpt_network_errors_detail_ui AS
+            SELECT * FROM fact_egisz_transactions WHERE error_message LIKE 'Network Error%';
+        """)
     con.commit()
-    log.info("DWH: Tables and Views ensured.")
+
+def load_raw_logs(con, rows: list[tuple]):
+    """Загрузка сырых данных в PG"""
+    with con.cursor() as cur:
+        execute_values(cur, """
+            INSERT INTO proxy_reports_raw (logid, logdate, msgid, logstate, logtext, msgtext)
+            VALUES %s ON CONFLICT (logid) DO NOTHING
+        """, rows)
+    con.commit()
 
 def upsert_facts(con, rows: list[dict]):
+    """Загрузка распарсенных фактов"""
     if not rows: return
     keys = ['log_id', 'log_date', 'msg_id', 'relates_to', 'local_uid', 'emdr_id', 'doc_num', 'org_oid', 'status', 'error_msg', 'callback_url']
     tuples = [tuple(r.get(k) for k in keys) for r in rows]
@@ -124,19 +138,18 @@ def upsert_facts(con, rows: list[dict]):
     con.commit()
 
 def sync_directory(con, table_name: str, rows: list[tuple]):
-    if not rows: return
     with con.cursor() as cur:
         cur.execute(f"TRUNCATE TABLE {table_name} CASCADE;")
         execute_values(cur, f"INSERT INTO {table_name} VALUES %s", rows)
     con.commit()
 
-def update_cursors(con, pipeline: str, log_id: int, egmid: int):
+def update_cursors(con, pipeline: str, log_id: int = 0, egmid: int = 0):
     with con.cursor() as cur:
         cur.execute("""
-            INSERT INTO etl_state (pipeline, last_log_id, last_egmid)
+            INSERT INTO elt_state (pipeline, last_log_id, last_egmid)
             VALUES (%s, %s, %s) ON CONFLICT (pipeline) DO UPDATE SET
-                last_log_id = GREATEST(etl_state.last_log_id, EXCLUDED.last_log_id),
-                last_egmid = GREATEST(etl_state.last_egmid, EXCLUDED.last_egmid),
+                last_log_id = GREATEST(elt_state.last_log_id, EXCLUDED.last_log_id),
+                last_egmid = GREATEST(elt_state.last_egmid, EXCLUDED.last_egmid),
                 updated_at = now();
         """, (pipeline, log_id, egmid))
     con.commit()

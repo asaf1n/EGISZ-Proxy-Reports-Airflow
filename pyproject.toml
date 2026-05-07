@@ -1,5 +1,5 @@
 [project]
-name = "egisz-proxy-reports-etl"
+name = "egisz-proxy-reports-elt"
 version = "0.1.0"
 description = "Minimal Firebird → Postgres ETL for EGISZ proxy reports (Airflow/K8s)."
 readme = "README.md"

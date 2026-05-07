@@ -25,4 +25,4 @@ env:
 
 extraEnvFrom:
   - secretRef:
-      name: proxy-reports-etl-env
+      name: proxy-reports-elt-env

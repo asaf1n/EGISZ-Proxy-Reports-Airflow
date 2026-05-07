@@ -4,7 +4,7 @@ You are an expert Data Engineer and DevOps Architect. Whenever you generate, ref
 
 ## 1. 🏷️ Domain-Driven Naming Conventions (STRICT)
 Do not invent names. Follow this exact taxonomy:
-*   **Domain & General Logic:** `egisz` (e.g., Python package is `egisz_etl`, main DAG is `egisz_etl_dag.py`). **NEVER** use the legacy term `proxy_reports` for general domain logic.
+*   **Domain & General Logic:** `egisz` (e.g., Python package is `egisz_elt`, main DAG is `egisz_elt_dag.py`). **NEVER** use the legacy term `proxy_reports` for general domain logic.
 *   **Source Database (OLTP):** `proxy_egisz`. This refers EXCLUSIVELY to the source Firebird 5.0 database.
 *   **Target Database (DWH):** `dwh_egisz`. This refers EXCLUSIVELY to the target PostgreSQL 18 database.
 *   **Target Tables:** Prefix raw target tables with `egisz_` (e.g., `egisz_raw`).
