@@ -30,7 +30,7 @@ from egisz_elt.pg_client import (
 log = logging.getLogger(__name__)
 
 PIPELINE = "egisz"
-BATCH_SIZE = 3500
+BATCH_SIZE = 10000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 
