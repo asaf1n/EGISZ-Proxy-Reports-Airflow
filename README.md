@@ -281,35 +281,6 @@ Docker здесь используется только для сборки ло
 
 ### Остановка Airflow и Metabase
 
-Остановить локальные `port-forward` процессы: в каждом окне PowerShell, где запущен `kubectl port-forward`, нажмите `Ctrl+C`.
-
-Остановить только Metabase pod, не удаляя deployment/service и внешнюю БД `metabase_app`:
-
-```powershell
-kubectl scale deployment/metabase --replicas=0
-```
-
-Остановить только Airflow pod'ы, не удаляя Helm release и metadata PVC:
-
-```powershell
-kubectl scale deployment/airflow-webserver deployment/airflow-scheduler --replicas=0
-kubectl scale statefulset/airflow-worker statefulset/airflow-triggerer --replicas=0
-```
-
-Вернуть Airflow и Metabase после такого stop:
-
-```powershell
-kubectl scale deployment/metabase --replicas=1
-kubectl scale deployment/airflow-webserver deployment/airflow-scheduler --replicas=1
-kubectl scale statefulset/airflow-worker statefulset/airflow-triggerer --replicas=1
-```
-
-Остановить Metabase полностью из Kubernetes:
-
-```powershell
-kubectl delete deployment/metabase service/metabase
-```
-
 Остановить Airflow release полностью:
 
 ```powershell
@@ -323,29 +294,11 @@ kubectl get pvc
 kubectl delete pvc <airflow-postgresql-pvc-name>
 ```
 
-### Применение последних правок DWH и дашбордов
-
-После изменения SQL-витрин или JSON-карточек примените DWH-контракт через DAG, затем переимпортируйте Metabase:
+Остановить Metabase полностью из Kubernetes:
 
 ```powershell
-kubectl port-forward svc/airflow-webserver 8080:8080
+kubectl delete deployment/metabase service/metabase
 ```
-
-В другом окне:
-
-```powershell
-kubectl exec deploy/airflow-scheduler -- airflow dags trigger egisz_elt_dag
-kubectl logs deploy/airflow-scheduler --tail=200 -f
-```
-
-Если нужно применить только Metabase-слой после уже успешного `bootstrap_dwh`:
-
-```powershell
-.\up.ps1 -Component Metabase
-kubectl port-forward svc/metabase 3000:3000
-```
-
---- 
 
 ## Каталоги репозитория
 

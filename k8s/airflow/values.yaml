@@ -5,6 +5,10 @@
 
 airflowVersion: "2.11.2"
 
+config:
+  core:
+    dags_are_paused_at_creation: "False"
+
 images:
   airflow:
     repository: egisz-airflow-worker

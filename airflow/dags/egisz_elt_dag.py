@@ -21,6 +21,7 @@ from egisz_elt.pg_client import (
     connect_pg,
     ensure_tables,
     get_cursors,
+    list_missing_dwh_objects,
     load_raw_messages,
     load_raw_logs,
     sync_directory,
@@ -70,6 +71,11 @@ def egisz_elt_pipeline() -> None:
     def bootstrap_dwh() -> None:
         pg_conn = _dwh_connection()
         try:
+            missing_or_incompatible = sorted(list_missing_dwh_objects(pg_conn))
+            if not missing_or_incompatible:
+                log.info("DWH contract is already satisfied; skipping schema bootstrap.")
+                return
+            log.warning("DWH contract drift detected: %s. Applying schema bootstrap.", missing_or_incompatible)
             ensure_tables(pg_conn)
         finally:
             pg_conn.close()

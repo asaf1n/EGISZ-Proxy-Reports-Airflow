@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from egisz_elt.pg_client import _read_bootstrap_sql, load_raw_logs, normalize_message_id, transform_raw_to_facts
+from egisz_elt.pg_client import (
+    BOOTSTRAP_LOCK_TIMEOUT,
+    BOOTSTRAP_STATEMENT_TIMEOUT,
+    _read_bootstrap_sql,
+    ensure_tables,
+    load_raw_logs,
+    normalize_message_id,
+    transform_raw_to_facts,
+)
 
 
 class FakeConnection:
@@ -64,6 +72,20 @@ class FakeTransformConnection:
 
     def commit(self) -> None:
         self.committed = True
+
+
+def test_ensure_tables_sets_bounded_bootstrap_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
+    con = FakeTransformConnection()
+    monkeypatch.setattr("egisz_elt.pg_client._read_bootstrap_sql", lambda: "CREATE TABLE example(id int);")
+
+    ensure_tables(con)
+
+    assert con.cursor_instance.calls == [
+        ("SET LOCAL lock_timeout = %s", (BOOTSTRAP_LOCK_TIMEOUT,)),
+        ("SET LOCAL statement_timeout = %s", (BOOTSTRAP_STATEMENT_TIMEOUT,)),
+        ("CREATE TABLE example(id int);", None),
+    ]
+    assert con.committed is True
 
 
 def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:

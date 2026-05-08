@@ -108,6 +108,8 @@ REQUIRED_TABLE_COLUMNS = {
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
 RAW_MESSAGE_COLUMNS = ("egmid", "jid", "kind", "created_at", "msgid", "reply_to", "document_id", "msgtext")
+BOOTSTRAP_LOCK_TIMEOUT = "30s"
+BOOTSTRAP_STATEMENT_TIMEOUT = "10min"
 
 
 def normalize_message_id(value: Any) -> Any:
@@ -198,6 +200,8 @@ def list_missing_dwh_objects(con: psycopg2.extensions.connection) -> set[str]:
 def ensure_tables(con: psycopg2.extensions.connection) -> None:
     """Initialize or heal DWH tables, SQL functions, and Metabase-facing views."""
     with con.cursor() as cur:
+        cur.execute("SET LOCAL lock_timeout = %s", (BOOTSTRAP_LOCK_TIMEOUT,))
+        cur.execute("SET LOCAL statement_timeout = %s", (BOOTSTRAP_STATEMENT_TIMEOUT,))
         cur.execute(_read_bootstrap_sql())
     con.commit()
 

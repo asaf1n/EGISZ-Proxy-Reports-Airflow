@@ -111,24 +111,39 @@ with dwh_conn.cursor() as cur:
     cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(sql.Identifier(elt_user)))
     cur.execute(
         """
-        DO $$
-        DECLARE
-            obj record;
-        BEGIN
-            FOR obj IN
-                SELECT p.oid::regprocedure AS signature
-                FROM pg_proc p
-                JOIN pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname = 'public'
-                  AND p.proname LIKE 'egisz_%%'
-            LOOP
-                EXECUTE format('ALTER FUNCTION %%s OWNER TO %%I', obj.signature, %s);
-            END LOOP;
-        END
-        $$;
+        SELECT n.nspname, c.relname, c.relkind
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+        ORDER BY c.relkind, c.relname
         """,
-        (elt_user,),
     )
+    for schema_name, object_name, relkind in cur.fetchall():
+        if relkind in ("r", "p"):
+            command = sql.SQL("ALTER TABLE {}.{} OWNER TO {}")
+        elif relkind == "v":
+            command = sql.SQL("ALTER VIEW {}.{} OWNER TO {}")
+        elif relkind == "m":
+            command = sql.SQL("ALTER MATERIALIZED VIEW {}.{} OWNER TO {}")
+        elif relkind == "S":
+            command = sql.SQL("ALTER SEQUENCE {}.{} OWNER TO {}")
+        else:
+            continue
+        cur.execute(command.format(sql.Identifier(schema_name), sql.Identifier(object_name), sql.Identifier(elt_user)))
+
+    cur.execute(
+        """
+        SELECT p.oid::regprocedure::text AS signature
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+        ORDER BY p.proname
+        """
+    )
+    for (signature,) in cur.fetchall():
+        cur.execute(sql.SQL("ALTER FUNCTION {} OWNER TO {}").format(sql.SQL(signature), sql.Identifier(elt_user)))
+
     cur.execute(
         "SELECT has_schema_privilege(%s, 'public', 'CREATE'), has_schema_privilege(%s, 'public', 'USAGE')",
         (elt_user, elt_user),
@@ -157,8 +172,78 @@ function Ensure-AirflowInternalMetadataDatabase {
         return
     }
 
+    $schedulerDeployment = kubectl get deployment/airflow-scheduler --ignore-not-found -o name
+    if ([string]::IsNullOrWhiteSpace($schedulerDeployment)) {
+        Write-Host "Airflow scheduler is not present yet; Helm will initialize airflow_db on first startup."
+        return
+    }
+
     Invoke-Checked "Ensure airflow_db in internal Airflow PostgreSQL" {
-        kubectl exec airflow-postgresql-0 -- bash -lc "export PGPASSWORD=postgres; psql -U postgres -d postgres -tc `"SELECT 1 FROM pg_database WHERE datname = 'airflow_db'`" | grep -q 1 || createdb -U postgres airflow_db"
+        @'
+import psycopg2
+from psycopg2 import sql
+
+conn = psycopg2.connect(
+    host="airflow-postgresql.default",
+    port=5432,
+    user="postgres",
+    password="postgres",
+    database="postgres",
+)
+conn.autocommit = True
+with conn.cursor() as cur:
+    cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", ("airflow_db",))
+    if cur.fetchone() is None:
+        cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier("airflow_db")))
+conn.close()
+print("Airflow internal metadata database airflow_db is present")
+'@ | kubectl exec -i deploy/airflow-scheduler -c scheduler -- python -
+    }
+}
+
+function Suspend-MetabaseForDwhBootstrap {
+    Write-Host "Checking whether Metabase must be paused before DWH bootstrap..."
+    $deployment = kubectl get deployment/metabase --ignore-not-found -o name
+    if ([string]::IsNullOrWhiteSpace($deployment)) {
+        Write-Host "Metabase deployment is not present; no BI queries can block DWH bootstrap."
+        return 0
+    }
+
+    $replicasText = kubectl get deployment/metabase -o jsonpath='{.spec.replicas}'
+    if ([string]::IsNullOrWhiteSpace($replicasText)) {
+        $replicasText = "1"
+    }
+    $replicas = [int]$replicasText
+    if ($replicas -le 0) {
+        Write-Host "Metabase is already paused."
+        return 0
+    }
+
+    Write-Host "Pausing Metabase (${replicas} replica(s)) so dashboard queries do not hold DWH DDL locks..."
+    Invoke-Checked "Pause Metabase before DWH bootstrap" {
+        kubectl scale deployment/metabase --replicas=0
+    }
+    Invoke-Checked "Wait for Metabase pause" {
+        kubectl rollout status deployment/metabase --timeout=120s
+    }
+    return $replicas
+}
+
+function Restore-MetabaseAfterDwhBootstrap {
+    param(
+        [int]$Replicas
+    )
+
+    if ($Replicas -le 0) {
+        return
+    }
+
+    Write-Host "Restoring Metabase to ${Replicas} replica(s)..."
+    Invoke-Checked "Restore Metabase after DWH bootstrap" {
+        kubectl scale deployment/metabase --replicas=$Replicas
+    }
+    Invoke-Checked "Wait for Metabase restore" {
+        kubectl rollout status deployment/metabase --timeout=300s
     }
 }
 
@@ -201,8 +286,13 @@ function Install-Airflow {
     }
 
     Write-Host "Bootstrapping external DWH schema through Airflow connection dwh_egisz_pg..."
-    Invoke-Checked "Bootstrap DWH through Airflow" {
-        kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
+    $metabaseReplicas = Suspend-MetabaseForDwhBootstrap
+    try {
+        Invoke-Checked "Bootstrap DWH through Airflow" {
+            kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
+        }
+    } finally {
+        Restore-MetabaseAfterDwhBootstrap -Replicas $metabaseReplicas
     }
 }
 
