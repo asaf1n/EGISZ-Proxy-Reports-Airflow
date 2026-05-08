@@ -237,20 +237,41 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 
 ## Запуск в чистом Kubernetes
 
+### 1. Инсталляция и запуск Airflow
+
 ```powershell
-.\up.ps1
+kubectl config current-context
+kubectl get nodes
+.\up.ps1 -Component Airflow
+kubectl get pods
+kubectl get svc
 ```
 
-Скрипт:
+Команда собирает свежий образ Airflow с текущими DAG и пакетом `egisz_elt`, подготавливает Airflow secrets/connections, проверяет права ELT-пользователя `egisz` в `dwh_egisz`, устанавливает/обновляет Airflow через Helm и выполняет `bootstrap_dwh`.
 
-1. создаёт локальные secret-файлы из example-шаблонов, если их ещё нет;
-2. применяет Secrets подключений;
-3. собирает образ Airflow `egisz-airflow-worker`;
-4. собирает образ Metabase `egisz-metabase`;
-5. устанавливает Airflow через Helm;
-6. выполняет `bootstrap_dwh` через Airflow, чтобы подготовить внешний DWH;
-7. разворачивает Metabase;
-8. импортирует дашборды.
+### 2. Инсталляция и запуск Metabase
+
+```powershell
+kubectl config current-context
+kubectl get nodes
+.\up.ps1 -Component Metabase
+kubectl get pods
+kubectl get svc
+```
+
+Команда собирает свежий образ Metabase с текущими provisioning-скриптами и JSON-дашбордами, подготавливает Metabase secrets, применяет Kubernetes-манифест, обновляет image у deployment и импортирует дашборды.
+
+### 3. Полная установка или обновление запущенного проекта
+
+```powershell
+.\up.ps1
+kubectl get pods
+kubectl get svc
+```
+
+Полный запуск равен последовательному запуску двух компонентных сценариев: `.\up.ps1 -Component Airflow` и `.\up.ps1 -Component Metabase`. В каждом сценарии вместе с основным образом собираются и применяются все сопутствующие ресурсы, поэтому раздельное поднятие Airflow и Metabase даёт полный запуск проекта.
+
+Docker здесь используется только для сборки локальных images `egisz-airflow-worker` и `egisz-metabase`: Docker Desktop Kubernetes запускает pod'ы в локальном Docker Desktop/Kind-кластере и видит эти images. Runtime остаётся Kubernetes: Airflow устанавливается через Helm, Metabase — через `kubectl`.
 
 ---
 

@@ -22,7 +22,7 @@ from egisz_elt.pg_client import (
 log = logging.getLogger(__name__)
 
 PIPELINE = "egisz"
-BATCH_SIZE = 500
+BATCH_SIZE = 3500
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 
@@ -37,7 +37,7 @@ def _proxy_connection():
 
 @dag(
     dag_id="egisz_elt_dag",
-    schedule="@hourly",
+    schedule="*/5 * * * *",
     start_date=datetime(2023, 1, 1),
     catchup=False,
     tags=["egisz", "elt", "dwh"],
