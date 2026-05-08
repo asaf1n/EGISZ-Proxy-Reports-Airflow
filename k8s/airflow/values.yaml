@@ -11,7 +11,21 @@ images:
     tag: latest
     pullPolicy: IfNotPresent
 
-metadataSecretName: airflow-metadata-connection
+data:
+  metadataConnection:
+    user: postgres
+    pass: postgres
+    protocol: postgresql
+    port: 5432
+    db: airflow_db
+    sslmode: disable
+
+postgresql:
+  enabled: true
+  auth:
+    enablePostgresUser: true
+    postgresPassword: postgres
+    database: airflow_db
 
 extraEnvFrom: |
   - secretRef:

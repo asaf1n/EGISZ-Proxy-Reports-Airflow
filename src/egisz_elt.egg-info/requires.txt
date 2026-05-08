@@ -1,2 +1,5 @@
 firebird-driver<2.0.0,>=1.10.0
 psycopg2-binary>=2.9.9
+
+[dev]
+apache-airflow==2.11.2

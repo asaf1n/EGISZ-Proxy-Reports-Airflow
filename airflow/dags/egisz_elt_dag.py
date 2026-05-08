@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Any
 
@@ -30,7 +31,7 @@ from egisz_elt.pg_client import (
 log = logging.getLogger(__name__)
 
 PIPELINE = "egisz"
-BATCH_SIZE = 10000
+BATCH_SIZE = 5000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 
@@ -58,7 +59,7 @@ def _xml_text_values(payload: str | None, tag_name: str) -> set[str]:
 
 @dag(
     dag_id="egisz_elt_dag",
-    schedule="*/5 * * * *",
+    schedule="*/3 * * * *",
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
@@ -101,16 +102,31 @@ def egisz_elt_pipeline() -> None:
 
         fb_conn = _proxy_connection()
         try:
+            started_at = time.monotonic()
             log_rows = fetch_exchangelog_after_cursor(
                 fb_conn,
                 after_log_id=last_log_id,
                 limit=BATCH_SIZE,
             )
+            log.info(
+                "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
+                len(log_rows),
+                last_log_id,
+                time.monotonic() - started_at,
+            )
+            started_at = time.monotonic()
             message_rows = fetch_egisz_messages_after_cursor(
                 fb_conn,
                 after_egmid=last_egmid,
                 limit=BATCH_SIZE,
             )
+            log.info(
+                "Fetched %s EGISZ_MESSAGES row(s) after EGMID=%s in %.2fs.",
+                len(message_rows),
+                last_egmid,
+                time.monotonic() - started_at,
+            )
+            started_at = time.monotonic()
             related_msgids: set[str] = set()
             related_document_ids: set[str] = set()
             for row in log_rows:
@@ -126,6 +142,13 @@ def egisz_elt_pipeline() -> None:
                 fb_conn,
                 msgids=related_msgids,
                 document_ids=related_document_ids,
+            )
+            log.info(
+                "Fetched %s related EGISZ_MESSAGES row(s) for %s MSGID(s) and %s DOCUMENTID(s) in %.2fs.",
+                len(related_message_rows),
+                len(related_msgids),
+                len(related_document_ids),
+                time.monotonic() - started_at,
             )
         finally:
             fb_conn.close()

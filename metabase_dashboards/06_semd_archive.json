@@ -180,6 +180,10 @@
               "enabled": true
             },
             {
+              "name": "Исходный текст ошибки",
+              "enabled": true
+            },
+            {
               "name": "Рег. номер РЭМД (emdrid)",
               "enabled": true
             },
@@ -378,13 +382,20 @@
       }
     },
     {
-      "name": "06 · Архив СЭМД (без фильтра по дате)",
-      "description": "Полный архив обработанных СЭМД. **ВНИМАНИЕ: этот запрос не использует фильтр по дате дашборда!** Используйте фильтры по JID, коду СЭМД, localUid, relatesToMessage, emdrId, статусу, LOGID и EGMID для поиска конкретных документов. Сортировка по «Обработано IPS» (новые сверху).",
+      "name": "06 · Архив СЭМД (расширенный список)",
+      "description": "Архив СЭМД с теми же идентификационными фильтрами и корректной привязкой периода по «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT public.v_egisz_transactions_enriched_ui.* FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД (emdrid)\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Обработано IPS\" DESC NULLS LAST LIMIT 500",
+          "query": "SELECT public.v_egisz_transactions_enriched_ui.* FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД (emdrid)\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Обработано IPS\" DESC NULLS LAST LIMIT 500",
           "template-tags": {
+            "dwh_date": {
+              "type": "dimension",
+              "widget-type": "date/all-options",
+              "id": "f1000005-0005-4005-8005-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано IPS»"
+            },
             "top_semd": {
               "type": "text",
               "widget-type": "string/=",
@@ -479,6 +490,10 @@
             },
             {
               "name": "Сводка ошибки",
+              "enabled": true
+            },
+            {
+              "name": "Исходный текст ошибки",
               "enabled": true
             },
             {

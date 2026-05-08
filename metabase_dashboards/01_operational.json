@@ -193,6 +193,10 @@
               "enabled": true
             },
             {
+              "name": "Исходный текст ошибки",
+              "enabled": true
+            },
+            {
               "name": "Рег. номер РЭМД (emdrid)",
               "enabled": true
             },
@@ -265,6 +269,10 @@
           },
           {
             "name": "Сводка ошибки",
+            "enabled": true
+          },
+          {
+            "name": "Исходный текст ошибки",
             "enabled": true
           },
           {
@@ -577,7 +585,7 @@
     },
     {
       "name": "Ошибки по типу",
-      "description": "Отказы РЭМД: до 8 наиболее частых формулировок по «Ошибки JSON» **плюс** срез **«Ошибка связи (транспорт)»** из журнала (отдельная метка). Период транспорта — **«Дата создания документа»**.",
+      "description": "Отказы РЭМД: до 8 наиболее частых формулировок по «Ошибки JSON» **плюс** срез **«Сетевая ошибка»** из журнала (отдельная метка). Период транспорта — **«Дата создания документа»**.",
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
@@ -591,7 +599,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_err AS ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_interpretation_type(err->>'code', err->>'message'), 52) FROM jsonb_array_elements(COALESCE(\"Ошибки JSON\", '[]'::jsonb)) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net_err AS ( SELECT 'Ошибка связи (транспорт)'::text AS err_lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] ), all_err AS ( SELECT err_lbl, cnt FROM per_err UNION ALL SELECT err_lbl, cnt FROM net_err WHERE cnt > 0 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM all_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_err AS ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 52) FROM jsonb_array_elements(COALESCE(\"Ошибки JSON\", '[]'::jsonb)) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net_err AS ( SELECT 'Сетевая ошибка'::text AS err_lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] ), all_err AS ( SELECT err_lbl, cnt FROM per_err UNION ALL SELECT err_lbl, cnt FROM net_err WHERE cnt > 0 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM all_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_semd": {
               "type": "text",
@@ -842,7 +850,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT * FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), with_err AS ( SELECT f.*, COALESCE(ek.err_kind, CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' WHEN f.\"Статус\" = 'unknown' THEN '(неизвестно)' ELSE '(' || COALESCE(f.\"Статус\", '?') || ')' END) AS err_kind FROM filtered f LEFT JOIN LATERAL ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_interpretation_type(err->>'code', err->>'message'), 120) FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_kind WHERE f.\"Статус\" = 'error' ) ek ON TRUE ) SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "query": "WITH filtered AS ( SELECT * FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), with_err AS ( SELECT f.*, COALESCE(ek.err_kind, CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' WHEN f.\"Статус\" = 'unknown' THEN '(неизвестно)' ELSE '(' || COALESCE(f.\"Статус\", '?') || ')' END) AS err_kind FROM filtered f LEFT JOIN LATERAL ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 120) FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_kind WHERE f.\"Статус\" = 'error' ) ek ON TRUE ) SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(\"Исходный текст ошибки\", ''), 500)) AS \"Исходный текст ошибок\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
           "template-tags": {
             "top_semd": {
               "type": "text",
@@ -895,6 +903,14 @@
             "enabled": true
           },
           {
+            "name": "Сводка ошибки",
+            "enabled": true
+          },
+          {
+            "name": "Исходный текст ошибок",
+            "enabled": true
+          },
+          {
             "name": "JID клиники",
             "enabled": true
           },
@@ -939,6 +955,12 @@
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок в срезе",
             "decimals": 2
+          },
+          "[\"name\",\"Сводка ошибки\"]": {
+            "column_title": "Сводка ошибки"
+          },
+          "[\"name\",\"Исходный текст ошибок\"]": {
+            "column_title": "Исходный текст ошибок"
           }
         }
       },

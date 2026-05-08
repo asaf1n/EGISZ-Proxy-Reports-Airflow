@@ -22,6 +22,40 @@ function Get-EnvOrDefault {
     return $value
 }
 
+function Invoke-Checked {
+    param(
+        [string]$Description,
+        [scriptblock]$Command
+    )
+
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "${Description} failed with exit code ${LASTEXITCODE}"
+    }
+}
+
+function Test-KubernetesConnection {
+    Write-Host "Checking Kubernetes context..."
+    $context = ""
+    try {
+        $context = kubectl config current-context 2>$null
+    } catch {
+        $context = ""
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($context)) {
+        throw "kubectl current-context is not set. Enable/select Docker Desktop Kubernetes before running up.ps1."
+    }
+
+    try {
+        kubectl cluster-info --request-timeout=10s >$null
+    } catch {
+        throw "Kubernetes cluster '${context}' is not reachable. Check Docker Desktop Kubernetes or kubeconfig."
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Kubernetes cluster '${context}' is not reachable. Check Docker Desktop Kubernetes or kubeconfig."
+    }
+}
+
 function Ensure-DwhDatabasePrivileges {
     $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "127.0.0.1"
     $env:EGISZ_PG_PORT = Get-EnvOrDefault "EGISZ_PG_PORT" "5432"
@@ -110,58 +144,99 @@ print(f"DWH privileges OK: {elt_user}@{host}:{port}/{dwh_db} can CREATE in publi
 
 function Ensure-SecretFiles {
     Write-Host "Preparing Kubernetes secrets from examples..."
-    if (-not (Test-Path k8s/airflow/airflow-metadata-secret.yaml)) {
-        Copy-Item k8s/airflow/airflow-metadata-secret.example.yaml k8s/airflow/airflow-metadata-secret.yaml
-    }
     if (-not (Test-Path k8s/metabase/metabase-connections-secret.yaml)) {
         Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/metabase-connections-secret.yaml
     }
 }
 
+function Ensure-AirflowInternalMetadataDatabase {
+    Write-Host "Ensuring Airflow internal metadata database airflow_db exists when PostgreSQL already has a PVC..."
+    $postgresPod = kubectl get pod airflow-postgresql-0 --ignore-not-found -o name
+    if ([string]::IsNullOrWhiteSpace($postgresPod)) {
+        Write-Host "Airflow PostgreSQL pod is not present yet; Helm will initialize airflow_db on first startup."
+        return
+    }
+
+    Invoke-Checked "Ensure airflow_db in internal Airflow PostgreSQL" {
+        kubectl exec airflow-postgresql-0 -- bash -lc "export PGPASSWORD=postgres; psql -U postgres -d postgres -tc `"SELECT 1 FROM pg_database WHERE datname = 'airflow_db'`" | grep -q 1 || createdb -U postgres airflow_db"
+    }
+}
+
 function Install-Airflow {
     Ensure-SecretFiles
+    Test-KubernetesConnection
 
     Write-Host "Ensuring external PostgreSQL DWH privileges for Airflow ELT user..."
     Ensure-DwhDatabasePrivileges
 
     Write-Host "Applying Airflow connection secrets..."
-    kubectl apply -f k8s/airflow/airflow-metadata-secret.yaml
-    kubectl apply -f k8s/airflow/airflow-connections-configmap.yaml
+    Invoke-Checked "Apply Airflow connection secrets" {
+        kubectl apply -f k8s/airflow/airflow-connections-configmap.yaml
+    }
 
     Write-Host "Building Airflow image with current DAG and egisz_elt package..."
-    docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile .
+    Invoke-Checked "Build Airflow image" {
+        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile .
+    }
+
+    Ensure-AirflowInternalMetadataDatabase
 
     Write-Host "Installing Airflow..."
-    helm upgrade --install airflow apache-airflow/airflow -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
+    Invoke-Checked "Install Airflow Helm release" {
+        helm upgrade --install airflow apache-airflow/airflow -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
+    }
 
     Write-Host "Waiting for Airflow pods to be ready..."
-    kubectl rollout status deployment/airflow-webserver --timeout=300s
-    kubectl rollout status deployment/airflow-scheduler --timeout=300s
-    kubectl rollout status statefulset/airflow-worker --timeout=300s
-    kubectl rollout status statefulset/airflow-triggerer --timeout=300s
+    Invoke-Checked "Wait for Airflow webserver" {
+        kubectl rollout status deployment/airflow-webserver --timeout=300s
+    }
+    Invoke-Checked "Wait for Airflow scheduler" {
+        kubectl rollout status deployment/airflow-scheduler --timeout=300s
+    }
+    Invoke-Checked "Wait for Airflow worker" {
+        kubectl rollout status statefulset/airflow-worker --timeout=300s
+    }
+    Invoke-Checked "Wait for Airflow triggerer" {
+        kubectl rollout status statefulset/airflow-triggerer --timeout=300s
+    }
 
     Write-Host "Bootstrapping external DWH schema through Airflow connection dwh_egisz_pg..."
-    kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
+    Invoke-Checked "Bootstrap DWH through Airflow" {
+        kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
+    }
 }
 
 function Install-Metabase {
     Ensure-SecretFiles
+    Test-KubernetesConnection
 
     Write-Host "Applying Metabase connection secrets..."
-    kubectl apply -f k8s/metabase/metabase-connections-secret.yaml
+    Invoke-Checked "Apply Metabase connection secrets" {
+        kubectl apply -f k8s/metabase/metabase-connections-secret.yaml
+    }
 
     Write-Host "Building Metabase image with current dashboard provisioning scripts..."
-    docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile .
+    Invoke-Checked "Build Metabase image" {
+        docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile .
+    }
 
     Write-Host "Starting Metabase..."
-    kubectl apply -f k8s/metabase/metabase.yaml
-    kubectl set image deployment/metabase metabase=$MetabaseImage
+    Invoke-Checked "Apply Metabase deployment" {
+        kubectl apply -f k8s/metabase/metabase.yaml
+    }
+    Invoke-Checked "Set Metabase image" {
+        kubectl set image deployment/metabase metabase=$MetabaseImage
+    }
 
     Write-Host "Waiting for Metabase pod to be ready..."
-    kubectl rollout status deployment/metabase --timeout=300s
+    Invoke-Checked "Wait for Metabase deployment" {
+        kubectl rollout status deployment/metabase --timeout=300s
+    }
 
     Write-Host "Provisioning Metabase dashboards..."
-    kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh
+    Invoke-Checked "Provision Metabase dashboards" {
+        kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh
+    }
 }
 
 if ($Component -in @("All", "Airflow")) {

@@ -12,6 +12,11 @@ dependencies = [
   "psycopg2-binary>=2.9.9",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "apache-airflow==2.11.2",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

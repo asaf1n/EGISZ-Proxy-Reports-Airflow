@@ -5,6 +5,8 @@ METABASE_URL="${METABASE_URL:-${MB_URL:-http://localhost:3000}}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}"
 DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
+METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
+DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
 
@@ -30,6 +32,24 @@ fail() {
   exit 1
 }
 
+current_dashboard_manifest() {
+  if [ -f "${DASHBOARDS_DIR}/.manifest.sha256" ]; then
+    cat "${DASHBOARDS_DIR}/.manifest.sha256"
+  else
+    find "${DASHBOARDS_DIR}" -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort | xargs sha256sum | sha256sum
+  fi
+}
+
+dashboard_manifest_unchanged() {
+  [ -f "${DASHBOARD_MANIFEST_FILE}" ] || return 1
+  [ "$(current_dashboard_manifest)" = "$(cat "${DASHBOARD_MANIFEST_FILE}")" ]
+}
+
+write_dashboard_manifest() {
+  mkdir -p "$(dirname "${DASHBOARD_MANIFEST_FILE}")"
+  current_dashboard_manifest > "${DASHBOARD_MANIFEST_FILE}"
+}
+
 api_request() {
   local method="$1" path="$2" payload="${3:-}"
   local response code body
@@ -46,20 +66,6 @@ api_request() {
   body=$(echo "${response}" | sed '$d')
   [[ "${code}" =~ ^2 ]] || fail "Metabase API ${method} ${path} returned HTTP ${code}: ${body}"
   echo "${body}"
-}
-
-api_delete_ignore_404() {
-  local path="$1"
-  local response code body
-  response=$(curl -sS -w "\n%{http_code}" -X DELETE "${METABASE_URL}${path}" \
-    -H "X-Metabase-Session: ${SESSION_TOKEN}")
-  code=$(echo "${response}" | tail -n1)
-  body=$(echo "${response}" | sed '$d')
-  if [ "${code}" = "404" ]; then
-    log_info "Already absent: ${path}"
-    return
-  fi
-  [[ "${code}" =~ ^2 ]] || fail "Metabase API DELETE ${path} returned HTTP ${code}: ${body}"
 }
 
 login() {
@@ -263,46 +269,42 @@ wait_for_metabase_metadata() {
   fail "Metabase metadata did not expose required dashboard field filters in time"
 }
 
-delete_existing_dashboard() {
+existing_dashboard_id() {
   local dashboard_name="$1"
-  local ids
   if declare -F mb_all_dashboards_json >/dev/null; then
-    ids=$(
-      mb_all_dashboards_json "${METABASE_URL}" "${SESSION_TOKEN}" |
-        jq -r --arg name "${dashboard_name}" --argjson col "${COL_ID}" '.[]? | select(.collection_id == $col and .name == $name) | .id'
-    )
+    mb_all_dashboards_json "${METABASE_URL}" "${SESSION_TOKEN}" |
+      jq -r --arg name "${dashboard_name}" --argjson col "${COL_ID}" '[.[]? | select(.collection_id == $col and .name == $name) | .id][0] // empty'
   else
-    ids=$(
-      api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
-        jq -r --arg name "${dashboard_name}" '.data[]? | select(.model == "dashboard" and .name == $name) | .id'
-    )
+    api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
+      jq -r --arg name "${dashboard_name}" '[.data[]? | select(.model == "dashboard" and .name == $name) | .id][0] // empty'
   fi
-  local id
-  for id in ${ids}; do
-    log_info "Removing old dashboard '${dashboard_name}' (id ${id})"
-    api_delete_ignore_404 "/api/dashboard/${id}"
-  done
 }
 
-delete_existing_cards_for_dashboard() {
-  local file="$1"
-  local names card_ids card_id
-  names="$(jq -r '.cards[]?.name' "${file}")"
-  [ -n "${names}" ] || return
+existing_card_id() {
+  local card_name="$1"
+  api_request GET "/api/collection/${COL_ID}/items?models=card&limit=1000" |
+    jq -r --arg name "${card_name}" '[.data[]? | select(.model == "card" and .name == $name) | .id][0] // empty'
+}
 
-  card_ids=$(
+expected_card_names() {
+  jq -r '.cards[]?.name' "${DASHBOARDS_DIR}"/*.json | sort -u
+}
+
+archive_stale_collection_cards() {
+  local expected_file card_id card_name
+  expected_file="$(mktemp)"
+  expected_card_names > "${expected_file}"
+  while IFS=$'\t' read -r card_id card_name; do
+    [ -n "${card_id}" ] || continue
+    if ! grep -Fxq "${card_name}" "${expected_file}"; then
+      log_info "Archiving stale card ${card_id}: ${card_name}"
+      api_request PUT "/api/card/${card_id}" '{"archived":true}' >/dev/null
+    fi
+  done < <(
     api_request GET "/api/collection/${COL_ID}/items?models=card&limit=1000" |
-      jq -r --argjson names "$(jq -Rsc 'split("\n") | map(select(length > 0))' <<< "${names}")" '
-        .data[]?
-        | select(.model == "card" and (.name as $n | $names | index($n)))
-        | .id
-      '
+      jq -r '.data[]? | select(.model == "card") | [.id, .name] | @tsv'
   )
-
-  for card_id in ${card_ids}; do
-    log_info "Removing old card id ${card_id}"
-    api_delete_ignore_404 "/api/card/${card_id}"
-  done
+  rm -f "${expected_file}" >/dev/null 2>&1 || true
 }
 
 dashboard_payload() {
@@ -361,9 +363,9 @@ dashboard_payload() {
   ' "${file}"
 }
 
-create_card() {
+create_or_update_card() {
   local file="$1"
-  local payload card_id
+  local payload card_id card_name
   payload="$(
     dashboard_payload "${file}" |
       jq '{
@@ -376,14 +378,24 @@ create_card() {
         table_id: (.table_id // null)
       }'
   )"
+  card_name="$(jq -r '.name' "${file}")"
+  card_id="$(existing_card_id "${card_name}")"
+  if [ -n "${card_id}" ]; then
+    # Metabase merges native-query metadata on card updates and can keep stale
+    # template tags that are no longer present in dashboard JSON. Recreate the
+    # card object while preserving the dashboard object itself.
+    api_request PUT "/api/card/${card_id}" '{"archived":true}' >/dev/null
+  fi
   card_id="$(api_request POST "/api/card" "${payload}" | jq -r '.id')"
-  [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot create card from ${file}"
+  [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot create or update card from ${file}"
   printf '%s\n' "${card_id}"
 }
 
-create_dashboard() {
+create_or_update_dashboard() {
   local file="$1"
   local payload dashboard_id saved_parameters cards num_cards i
+  local dashboard_name
+  dashboard_name="$(jq -r '.name' "${file}")"
 
   payload="$(
     dashboard_payload "${file}" |
@@ -397,8 +409,13 @@ create_dashboard() {
         auto_apply_filters: true
       }'
   )"
-  dashboard_id="$(api_request POST "/api/dashboard" "${payload}" | jq -r '.id')"
-  [ -n "${dashboard_id}" ] && [ "${dashboard_id}" != "null" ] || fail "cannot create dashboard from ${file}"
+  dashboard_id="$(existing_dashboard_id "${dashboard_name}")"
+  if [ -n "${dashboard_id}" ]; then
+    api_request PUT "/api/dashboard/${dashboard_id}" "${payload}" >/dev/null
+  else
+    dashboard_id="$(api_request POST "/api/dashboard" "${payload}" | jq -r '.id')"
+  fi
+  [ -n "${dashboard_id}" ] && [ "${dashboard_id}" != "null" ] || fail "cannot create or update dashboard from ${file}"
 
   saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
   cards="[]"
@@ -408,7 +425,7 @@ create_dashboard() {
       local card_file card_id size_x size_y row col mappings dashcard_id dashcard
       card_file="$(mktemp)"
       jq -c ".cards[${i}]" "${file}" > "${card_file}"
-      card_id="$(create_card "${card_file}")"
+      card_id="$(create_or_update_card "${card_file}")"
       rm -f "${card_file}" >/dev/null 2>&1 || true
 
       size_x="$(jq -r ".cards[${i}].sizeX // .cards[${i}].size_x // 4" "${file}")"
@@ -499,14 +516,50 @@ verify_dashboard_cards() {
   for file in "${DASHBOARDS_DIR}"/*.json; do
     expected="$(jq '.cards | length' "${file}")"
     [ "${expected}" -gt 0 ] || continue
-    dashboard_id="$(
-      api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
-        jq -r --arg name "$(jq -r '.name' "${file}")" '[.data[]? | select(.model == "dashboard" and .name == $name) | .id][0] // empty'
-    )"
+    dashboard_id="$(existing_dashboard_id "$(jq -r '.name' "${file}")")"
     [ -n "${dashboard_id}" ] || fail "dashboard is missing after import: ${file}"
     actual="$(api_request GET "/api/dashboard/${dashboard_id}" | jq '(.dashcards // .ordered_cards // []) | length')"
     [ "${actual}" -ge "${expected}" ] || fail "dashboard ${dashboard_id} has ${actual}/${expected} card(s)"
   done
+}
+
+dashboards_present_with_cards() {
+  local file expected dashboard_id actual
+  for file in "${DASHBOARDS_DIR}"/*.json; do
+    [ -f "${file}" ] || continue
+    expected="$(jq '.cards | length' "${file}")"
+    dashboard_id="$(existing_dashboard_id "$(jq -r '.name' "${file}")")"
+    [ -n "${dashboard_id}" ] || return 1
+    actual="$(api_request GET "/api/dashboard/${dashboard_id}" | jq '(.dashcards // .ordered_cards // []) | length')"
+    [ "${actual}" -ge "${expected}" ] || return 1
+  done
+}
+
+maybe_skip_dashboard_import() {
+  case "${METABASE_FORCE_PROVISION}" in
+    true|always|force)
+      log_info "Forced dashboard provisioning is enabled."
+      return
+      ;;
+    false|never|skip)
+      log_info "Dashboard provisioning disabled by METABASE_FORCE_PROVISION=${METABASE_FORCE_PROVISION}."
+      exit 0
+      ;;
+    auto)
+      if dashboards_present_with_cards; then
+        if dashboard_manifest_unchanged; then
+          log_info "Dashboard manifest is unchanged and existing dashboards are complete; skipping import."
+          exit 0
+        else
+          log_info "Dashboard manifest changed; refreshing existing dashboards and cards."
+          return
+        fi
+      fi
+      ;;
+    *)
+      fail "Unsupported METABASE_FORCE_PROVISION=${METABASE_FORCE_PROVISION}; use auto, always, or never"
+      ;;
+  esac
 }
 
 log_info "Waiting for Metabase at ${METABASE_URL}"
@@ -519,18 +572,19 @@ resolve_or_create_app_database_id
 validate_dwh_contract
 sync_metabase_schema
 ensure_collection
+maybe_skip_dashboard_import
 
 log_info "Importing dashboards to collection '${COLLECTION_NAME}' from ${DASHBOARDS_DIR}"
+archive_stale_collection_cards
 for file in "${DASHBOARDS_DIR}"/*.json; do
   [ -f "${file}" ] || continue
   dashboard_name=$(jq -r '.name' "${file}")
   [ -n "${dashboard_name}" ] && [ "${dashboard_name}" != "null" ] || fail "dashboard file has no name: ${file}"
-  delete_existing_dashboard "${dashboard_name}"
-  delete_existing_cards_for_dashboard "${file}"
-  create_dashboard "${file}" >/dev/null
+  create_or_update_dashboard "${file}" >/dev/null
   log_info "Imported ${dashboard_name}"
 done
 
 verify_collection_contents
 verify_dashboard_cards
+write_dashboard_manifest
 log_info "Setup complete: collection '${COLLECTION_NAME}' contains $(ls "${DASHBOARDS_DIR}"/*.json | wc -l | tr -d ' ') dashboard(s)."

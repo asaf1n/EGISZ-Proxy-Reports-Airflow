@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from egisz_elt.pg_client import load_raw_logs, normalize_message_id, transform_raw_to_facts
+from egisz_elt.pg_client import _read_bootstrap_sql, load_raw_logs, normalize_message_id, transform_raw_to_facts
 
 
 class FakeConnection:
@@ -77,3 +77,22 @@ def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
         (10, 20, 30, 40),
     )
     assert con.committed is True
+
+
+def test_bootstrap_sql_uses_semd_identifiers_before_transport_host_fallback() -> None:
+    sql = _read_bootstrap_sql()
+
+    document_priority = "COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id"
+    jid_priority = "COALESCE(p.message_jid, p.jid_from_payload) AS resolved_jid"
+
+    assert document_priority in sql
+    assert jid_priority in sql
+
+
+def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors() -> None:
+    sql = _read_bootstrap_sql()
+
+    assert "Не указан адрес пациента" in sql
+    assert "Сетевая ошибка: " in sql
+    assert "egisz_error_interpretation_rules" in sql
+    assert "v_rpt_error_interpretations_ui" in sql

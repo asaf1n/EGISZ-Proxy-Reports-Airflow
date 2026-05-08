@@ -26,7 +26,7 @@
 * **Оркестрация:** Apache Airflow 2.11.2, DAG `egisz_elt_dag`, TaskFlow API.
 * **DWH:** PostgreSQL, база `dwh_egisz`. В ней создаются staging-таблицы, таблица фактов, справочники, функции парсинга и Metabase-facing views.
 * **BI:** Metabase v0.60.2.5. Дашборды хранятся как JSON в `metabase_dashboards/` и импортируются скриптом `metabase/setup-dashboards.sh`.
-* **Метаданные сервисов:** Airflow и Metabase используют отдельные внешние PostgreSQL-базы (`airflow_db`, `metabase_app`). DWH не используется как служебная база приложений.
+* **Метаданные сервисов:** Airflow использует встроенный PostgreSQL Helm chart с базой `airflow_db`, Metabase использует отдельную PostgreSQL-базу `metabase_app`. DWH не используется как служебная база приложений.
 
 Локальные порты для Docker Desktop Kubernetes:
 
@@ -117,37 +117,47 @@
 [{"code": "...", "message": "..."}]
 ```
 
-Если ошибка транспортная (`LOGSTATE = 3`), текст строится как `Network Error: <LOGTEXT>`. Если ошибка пришла в XML, используется `<message>`.
+Если ошибка транспортная (`LOGSTATE = 3`), текст строится как `Сетевая ошибка: <LOGTEXT>`. Если ошибка пришла в XML, `errors_json` собирается по элементам `<item><code>...<message>...`, поэтому несколько сообщений Schematron сохраняются отдельными элементами массива.
 
 ### Ключ документа для отчётов
 
 В основной витрине документ отображается как:
 
 ```sql
-COALESCE(local_uid_semd, emdr_id, doc_number, message_id, relates_to_id, exchangelog_log_id::text)
+COALESCE(local_uid_semd, emdr_id, relates_to_id, doc_number, message_id, exchangelog_log_id::text)
 ```
 
-Это важно для аналитики: `relatesToMessage` — коррелятор обмена, а не основной идентификатор СЭМД. Он используется для связи callback с исходным `MessageID`, но в ключ учёта попадает только как поздний технический fallback.
+Это важно для аналитики: основное сопоставление СЭМД идёт по `localUid`/`DOCUMENTID`, `emdrId` и затем `relatesToMessage`. Хост клиники из `gost-*` используется только как поздняя подсказка, потому что один хост может обслуживать несколько клиник.
 
 ### Классификация ошибок
 
-Функция `public.egisz_error_interpretation_type(error_code, error_message)` группирует ошибки для дашбордов:
+Функции `public.egisz_error_interpretation_item`, `public.egisz_error_interpretation_row` и `public.egisz_error_interpretation_type` интерпретируют и группируют ошибки для дашбордов. Справочные правила хранятся в `public.egisz_error_interpretation_rules`, а отдельная витрина `public.v_rpt_error_interpretations_ui` раскрывает ошибки построчно:
 
 * пустые код и сообщение — «ошибка без деталей»;
-* `network` / `connection` — «ошибка связи (транспорт)»;
-* `timeout` / `timed out` — «таймаут канала»;
+* `network` / `connection` / `timeout` / `Сетевая ошибка` — «ошибка связи (транспорт)»;
+* каскад Schematron по `ClinicalDocument/recordTarget/patientRole/addr/address:Type` — «Не указан адрес пациента»;
 * `remd` / `рэмд` — «ошибка асинхронного ответа РЭМД»;
-* при наличии кода ошибки — `код: текст`;
-* иначе берётся сокращённый текст ошибки.
+* XSD/cvc — короткая подсказка по XML-валидации;
+* без ошибок в UI-сводке возвращается пустая строка или «Успешно» для успешных документов.
+
+Для BI-группировки используется отдельная функция `public.egisz_error_group_type(code, message)`. Она не дробит «Тип ошибки» по произвольному исходному тексту:
+
+* сетевые и транспортные ошибки попадают в общий тип `Сетевая ошибка`;
+* ошибки ответа РЭМД попадают в известную подгруппу справочника, если правило уже накоплено в `egisz_error_interpretation_rules`;
+* если справочного правила недостаточно, ошибка попадает в общий тип `Ошибка асинхронного ответа РЭМД`.
+
+Главная витрина `public.v_egisz_transactions_enriched_ui` дополнительно отдаёт поле `Исходный текст ошибки`. Карточки со сводкой ошибки выводят рядом исходный текст или агрегированный пример исходных текстов, чтобы можно было сверить нормализованную группировку с реальным сообщением.
 
 ### Подпись типа СЭМД
 
-Функция `public.egisz_semd_type_report_label(semd_code, semd_name)` формирует подпись:
+Функция `public.egisz_semd_type_report_label(semd_code, semd_name)` формирует подпись через DWH-таблицу `dim_semd_types`:
 
 * если нет кода и названия — `(неизвестно)`;
-* если есть только название — название;
-* если есть только код — код;
-* если есть оба значения — `код · название`.
+* если код есть в справочнике НСИ — `код · наименование из dim_semd_types`;
+* если кода нет в справочнике, но в payload есть осмысленное название — `код · название из payload`;
+* если есть только код — `код · Наименование СЭМД отсутствует в НСИ 1520`.
+
+`dim_semd_types.code` соответствует полю `OID` из приложенного файла `1.2.643.5.1.13.13.11.1520_12.48_json.zip`, а `TYPE` хранится отдельно как `type_code`. Обновление справочника ручное: заменить seed-данные в `src/egisz_elt/sql/001_dwh_bootstrap.sql` или обновить строки в `dim_semd_types` напрямую в DWH и затем переимпортировать Metabase.
 
 ---
 
@@ -180,6 +190,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 * `egisz_messages_raw` — подготовленная таблица для raw-слоя `EGISZ_MESSAGES`.
 * `dim_organizations` — справочник организаций из `JPERSONS`.
 * `dim_licenses` — справочник лицензий и привязок `mo_uid` / `JID`.
+* `dim_semd_types` — справочник наименований типов СЭМД из НСИ `1.2.643.5.1.13.13.11.1520`, версия `12.48`; используется для отображения `Тип СЭМД (код · НСИ)` и `Наименование СЭМД`.
 * `fact_egisz_transactions` — нормализованные факты обмена.
 
 Основные представления:
@@ -218,13 +229,12 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 Перед чистым запуском подготовьте реальные secret-файлы:
 
 ```powershell
-Copy-Item k8s/airflow/airflow-metadata-secret.example.yaml k8s/airflow/airflow-metadata-secret.yaml
 Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/metabase-connections-secret.yaml
 ```
 
 Что настроить:
 
-* `k8s/airflow/airflow-metadata-secret.yaml` — подключение Airflow к внешней metadata DB `airflow_db`.
+* Airflow metadata DB `airflow_db` создаётся встроенным PostgreSQL Helm chart в Kubernetes PVC.
 * `k8s/airflow/airflow-connections-configmap.yaml` — Airflow Connections `dwh_egisz_pg` и `proxy_egisz_fb`.
 * `k8s/metabase/metabase-connections-secret.yaml` — служебная БД Metabase (`metabase_app`) и BI-доступ к `dwh_egisz`.
 
@@ -232,6 +242,19 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 
 * PostgreSQL: `host.docker.internal:5432`
 * Firebird: `host.docker.internal:3050`, база/alias `proxy_egisz`
+
+### Где расположены компоненты и где задаются параметры
+
+Kubernetes-манифесты в репозитории не задают отдельный namespace. Все команды `kubectl` ниже работают в текущем namespace выбранного Kubernetes-контекста. Если проект развёрнут в отдельный namespace, добавляйте `-n <namespace>` к командам `kubectl`.
+
+| Часть | Где находится runtime / данные | Основной конфиг |
+| :--- | :--- | :--- |
+| Firebird source `proxy_egisz` | Внешняя БД, не поднимается этим проектом. Для локального Docker Desktop ожидается `host.docker.internal:3050`, база/alias `proxy_egisz`. | `k8s/airflow/airflow-connections-configmap.yaml`, ключ `AIRFLOW_CONN_PROXY_EGISZ_FB`. |
+| PostgreSQL DWH `dwh_egisz` | Внешняя PostgreSQL-БД, не контейнер этого проекта. Airflow пишет пользователем `egisz`, Metabase читает BI-пользователем `postgres`. | Airflow: `k8s/airflow/airflow-connections-configmap.yaml`, ключ `AIRFLOW_CONN_DWH_EGISZ_PG`. Metabase: `k8s/metabase/metabase-connections-secret.yaml`, ключи `DWH_DB_*` и `DWH_BI_*`. Bootstrap прав доступа в `up.ps1` читает `EGISZ_PG_*`, `EGISZ_DWH_*`. |
+| Airflow metadata DB `airflow_db` | PostgreSQL Helm chart внутри Kubernetes-кластера, pod/statefulset `airflow-postgresql-0`, данные в Kubernetes PVC. Это служебная БД Airflow, не DWH. | `k8s/airflow/values.yaml`, блоки `data.metadataConnection` и `postgresql`. |
+| Airflow сервисы | Kubernetes/Helm release `airflow`: `airflow-webserver`, `airflow-scheduler`, `airflow-worker`, `airflow-triggerer`. Образ собирается локально как `egisz-airflow-worker:<tag>`. | `k8s/airflow/values.yaml`, `k8s/airflow/Dockerfile`, `airflow/dags/egisz_elt_dag.py`, `src/egisz_elt/`. Установка через `up.ps1 -Component Airflow`. |
+| Metabase application DB `metabase_app` | Внешняя PostgreSQL-БД для внутренних таблиц Metabase. DWH `dwh_egisz` для этого не используется. | `k8s/metabase/metabase-connections-secret.yaml`, ключи `METABASE_DB_*`. |
+| Metabase сервис | Kubernetes deployment/service `metabase`, образ `egisz-metabase:<tag>`, web UI на порту `3000`. | `k8s/metabase/metabase.yaml`, `metabase/Dockerfile`, `metabase/provision.sh`, `metabase/setup-dashboards.sh`, `metabase_dashboards/*.json`. Установка через `up.ps1 -Component Metabase`. |
 
 ---
 
@@ -256,7 +279,73 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 
 Docker здесь используется только для сборки локальных images `egisz-airflow-worker` и `egisz-metabase`: Docker Desktop Kubernetes запускает pod'ы в локальном Docker Desktop/Kind-кластере и видит эти images. Runtime остаётся Kubernetes: Airflow устанавливается через Helm, Metabase — через `kubectl`.
 
----
+### Остановка Airflow и Metabase
+
+Остановить локальные `port-forward` процессы: в каждом окне PowerShell, где запущен `kubectl port-forward`, нажмите `Ctrl+C`.
+
+Остановить только Metabase pod, не удаляя deployment/service и внешнюю БД `metabase_app`:
+
+```powershell
+kubectl scale deployment/metabase --replicas=0
+```
+
+Остановить только Airflow pod'ы, не удаляя Helm release и metadata PVC:
+
+```powershell
+kubectl scale deployment/airflow-webserver deployment/airflow-scheduler --replicas=0
+kubectl scale statefulset/airflow-worker statefulset/airflow-triggerer --replicas=0
+```
+
+Вернуть Airflow и Metabase после такого stop:
+
+```powershell
+kubectl scale deployment/metabase --replicas=1
+kubectl scale deployment/airflow-webserver deployment/airflow-scheduler --replicas=1
+kubectl scale statefulset/airflow-worker statefulset/airflow-triggerer --replicas=1
+```
+
+Остановить Metabase полностью из Kubernetes:
+
+```powershell
+kubectl delete deployment/metabase service/metabase
+```
+
+Остановить Airflow release полностью:
+
+```powershell
+helm uninstall airflow
+```
+
+После `helm uninstall airflow` служебные PVC Kubernetes могут остаться в кластере. Если нужно начать Airflow metadata DB с нуля, отдельно проверьте и удалите PVC Airflow PostgreSQL:
+
+```powershell
+kubectl get pvc
+kubectl delete pvc <airflow-postgresql-pvc-name>
+```
+
+### Применение последних правок DWH и дашбордов
+
+После изменения SQL-витрин или JSON-карточек примените DWH-контракт через DAG, затем переимпортируйте Metabase:
+
+```powershell
+kubectl port-forward svc/airflow-webserver 8080:8080
+```
+
+В другом окне:
+
+```powershell
+kubectl exec deploy/airflow-scheduler -- airflow dags trigger egisz_elt_dag
+kubectl logs deploy/airflow-scheduler --tail=200 -f
+```
+
+Если нужно применить только Metabase-слой после уже успешного `bootstrap_dwh`:
+
+```powershell
+.\up.ps1 -Component Metabase
+kubectl port-forward svc/metabase 3000:3000
+```
+
+--- 
 
 ## Каталоги репозитория
 

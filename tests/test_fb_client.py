@@ -6,16 +6,20 @@ from egisz_elt.fb_client import fetch_egisz_messages_after_cursor, fetch_exchang
 
 
 class FakeCursor:
+    description: list[tuple[str, ...]] = []
+
     def __init__(self, connection: "FakeConnection") -> None:
         self.connection = connection
         self.result: list[tuple[Any, ...]] = []
         self.executed_sql = ""
+        self.params: tuple[Any, ...] | None = None
         self.closed = False
 
     def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
         self.executed_sql = sql
+        self.params = params
         self.connection.executed_sql.append(sql)
-        self.result = self.connection.organization_rows
+        self.result = self.connection.rows
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.result
@@ -25,12 +29,13 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, organization_rows: list[tuple[Any, ...]]) -> None:
-        self.organization_rows = organization_rows
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self.rows = rows
         self.executed_sql: list[str] = []
+        self.cursor_instance = FakeCursor(self)
 
     def cursor(self) -> FakeCursor:
-        return FakeCursor(self)
+        return self.cursor_instance
 
 
 def test_fetch_organizations_selects_jpersons_legal_entity_columns() -> None:
@@ -51,34 +56,8 @@ def test_fetch_organizations_preserves_empty_legal_entity_values() -> None:
     assert fetch_organizations(con) == [(1, "Clinic", None, None)]
 
 
-class FakeMessagesCursor:
-    description: list[tuple[str, ...]] = []
-
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.rows = rows
-        self.params: tuple[Any, ...] | None = None
-        self.closed = False
-
-    def execute(self, sql: str, params: tuple[Any, ...] | None = None) -> None:
-        self.params = params
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return self.rows
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakeMessagesConnection:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
-        self.cursor_instance = FakeMessagesCursor(rows)
-
-    def cursor(self) -> FakeMessagesCursor:
-        return self.cursor_instance
-
-
 def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
-    con = FakeMessagesConnection(
+    con = FakeConnection(
         [(42, 10, "1", None, "<urn:uuid:msg>", "urn:uuid:reply", "doc-1", "<xml/>")],
     )
 
@@ -100,7 +79,7 @@ def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
 
 
 def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytics() -> None:
-    con = FakeMessagesConnection(
+    con = FakeConnection(
         [(101, None, None, "msg-1", 1, "log", "<xml/>")],
     )
 

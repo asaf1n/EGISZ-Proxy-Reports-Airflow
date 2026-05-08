@@ -1,9 +1,12 @@
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
 .venv/
 .idea/
 .vscode/
+build/
+dist/
+*.egg-info/
 
 # Local secrets
 k8s/**/**secret*.yaml
