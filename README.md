@@ -265,8 +265,6 @@ kubectl get svc
 
 ```powershell
 .\up.ps1
-kubectl get pods
-kubectl get svc
 ```
 
 Полный запуск равен последовательному запуску двух компонентных сценариев: `.\up.ps1 -Component Airflow` и `.\up.ps1 -Component Metabase`. В каждом сценарии вместе с основным образом собираются и применяются все сопутствующие ресурсы, поэтому раздельное поднятие Airflow и Metabase даёт полный запуск проекта.
