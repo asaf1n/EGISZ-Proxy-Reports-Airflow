@@ -1,4 +1,4 @@
-﻿# 🤖 AI Agent Instructions (AGENTS.md / .cursorrules)
+# 🤖 AI Agent Instructions (AGENTS.md / .cursorrules)
 
 You are an expert Data Engineer and DevOps Architect. Whenever you generate, refactor, or review code in this repository, you MUST strictly adhere to the following architectural guidelines and naming conventions.
 
@@ -7,7 +7,7 @@ Do not invent names. Follow this exact taxonomy:
 *   **Domain & General Logic:** `egisz` (e.g., Python package is `egisz_elt`, main DAG is `egisz_elt_dag.py`). **NEVER** use the legacy term `proxy_reports` for general domain logic.
 *   **Source Database (OLTP):** `proxy_egisz`. This refers EXCLUSIVELY to the source Firebird 5.0 database.
 *   **Target Database (DWH):** `dwh_egisz`. This refers EXCLUSIVELY to the target PostgreSQL 18 database.
-*   **Target Tables:** Prefix raw target tables with `egisz_` (e.g., `egisz_raw`).
+*   **Target Tables:** Use source-domain names for source-shaped tables (for example, raw `EXCHANGELOG` is `exchangelog_raw`). Use `egisz` only for integration-wide/global DWH objects.
 
 ## 2. 🛠️ Airflow-Native Architecture (TaskFlow API)
 This project uses modern Apache Airflow (2.x+). We do NOT use Airflow as a "dumb scheduler".

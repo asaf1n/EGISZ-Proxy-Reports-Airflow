@@ -5,15 +5,28 @@ CREATE TABLE IF NOT EXISTS elt_state (
     updated_at timestamptz DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS egisz_raw (
+DO $$
+BEGIN
+    IF to_regclass('public.exchangelog_raw') IS NULL AND to_regclass('public.egisz_raw') IS NOT NULL THEN
+        ALTER TABLE public.egisz_raw RENAME TO exchangelog_raw;
+    ELSIF to_regclass('public.exchangelog_raw') IS NULL AND to_regclass('public.exchangelog') IS NOT NULL THEN
+        ALTER TABLE public.exchangelog RENAME TO exchangelog_raw;
+    END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logid bigint PRIMARY KEY,
     logdate timestamptz,
+    createdate timestamptz,
     msgid text,
     logstate integer,
     logtext text,
     msgtext text,
     loaded_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
 
 CREATE TABLE IF NOT EXISTS egisz_messages_raw (
     egmid bigint PRIMARY KEY,
@@ -26,6 +39,8 @@ CREATE TABLE IF NOT EXISTS egisz_messages_raw (
     msgtext text,
     loaded_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE egisz_messages_raw ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,
@@ -49,7 +64,7 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
 );
 
 CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
-    exchangelog_log_id bigint PRIMARY KEY REFERENCES egisz_raw(logid),
+    exchangelog_log_id bigint PRIMARY KEY REFERENCES exchangelog_raw(logid),
     log_date timestamptz,
     message_id text,
     relates_to_id text,
@@ -74,8 +89,9 @@ ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS errors_json jsonb DEFAULT '[]'::jsonb;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
 
-CREATE INDEX IF NOT EXISTS idx_egisz_raw_msgid ON egisz_raw (msgid);
-CREATE INDEX IF NOT EXISTS idx_egisz_raw_logstate ON egisz_raw (logstate);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid ON egisz_messages_raw (msgid);
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_document_id ON egisz_messages_raw (document_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
@@ -110,6 +126,14 @@ BEGIN
     END IF;
     RETURN NULLIF(btrim(replace(replace(replace(match[1], E'\n', ' '), E'\r', ' '), E'\t', ' ')), '');
 END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_normalize_message_id(value text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT NULLIF(regexp_replace(trim(both '<>' from btrim(COALESCE(value, ''))), '^urn:uuid:', '', 'i'), '');
 $$;
 
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
@@ -186,32 +210,67 @@ AS $$
 DECLARE
     affected integer := 0;
 BEGIN
-    WITH parsed AS (
+    WITH raw_parsed AS (
         SELECT
             r.logid,
             r.logdate,
+            r.createdate,
             r.msgid,
             r.logstate,
             r.logtext,
             r.msgtext,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'messageId'), r.msgid) AS message_id,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo')) AS relates_to_id,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'localUid'), public.egisz_xml_text(r.msgtext, 'DOCUMENTID'), m.document_id) AS local_uid_semd,
+            public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'messageId'), r.msgid)) AS message_id,
+            public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo'))) AS relates_to_id,
+            public.egisz_xml_text(r.msgtext, 'localUid') AS local_uid_xml,
+            public.egisz_xml_text(r.msgtext, 'DOCUMENTID') AS document_id_xml,
+            public.egisz_xml_text(r.msgtext, 'kind') AS kind_xml,
+            public.egisz_xml_text(r.msgtext, 'KIND') AS kind_upper_xml,
             public.egisz_xml_text(r.msgtext, 'emdrId') AS emdr_id,
             public.egisz_xml_text(r.msgtext, 'documentNumber') AS doc_number,
             COALESCE(public.egisz_xml_text(r.msgtext, 'organization'), public.egisz_xml_text(r.msgtext, 'organizationOid')) AS org_oid,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'kind'), public.egisz_xml_text(r.msgtext, 'KIND'), m.kind) AS semd_code,
             COALESCE(public.egisz_xml_text(r.msgtext, 'documentTypeName'), public.egisz_xml_text(r.msgtext, 'name'), public.egisz_xml_text(r.msgtext, 'documentName')) AS semd_name,
             COALESCE(public.egisz_xml_text(r.msgtext, 'errorCode'), public.egisz_xml_text(r.msgtext, 'code')) AS error_code,
             COALESCE(public.egisz_xml_text(r.msgtext, 'errorMessage'), public.egisz_xml_text(r.msgtext, 'message'), public.egisz_xml_text(r.msgtext, 'faultstring')) AS xml_message,
             lower(COALESCE(public.egisz_xml_text(r.msgtext, 'status'), '')) AS raw_status,
             NULLIF((regexp_match(COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '')::integer AS jid_from_payload,
-            public.safe_cast_timestamptz(COALESCE(public.egisz_xml_text(r.msgtext, 'creationDateTime'), public.egisz_xml_text(r.msgtext, 'creationDate'))) AS creation_date,
-            m.egmid
-        FROM egisz_raw r
-        LEFT JOIN egisz_messages_raw m ON m.msgid = r.msgid
+            public.safe_cast_timestamptz(COALESCE(public.egisz_xml_text(r.msgtext, 'creationDateTime'), public.egisz_xml_text(r.msgtext, 'creationDate'))) AS creation_date
+        FROM exchangelog_raw r
         WHERE r.logid <= max_log_id
           AND COALESCE(public.egisz_xml_text(r.msgtext, 'action'), '') <> 'getDocumentFile'
+    ),
+    parsed AS (
+        SELECT
+            r.logid,
+            COALESCE(m.created_at, r.createdate) AS logdate,
+            r.msgid,
+            r.logstate,
+            r.logtext,
+            r.msgtext,
+            r.message_id,
+            r.relates_to_id,
+            COALESCE(r.local_uid_xml, r.document_id_xml, m.document_id) AS local_uid_semd,
+            r.emdr_id,
+            r.doc_number,
+            r.org_oid,
+            COALESCE(r.kind_xml, r.kind_upper_xml, m.kind) AS semd_code,
+            r.semd_name,
+            r.error_code,
+            r.xml_message,
+            r.raw_status,
+            r.jid_from_payload,
+            r.creation_date,
+            m.egmid
+        FROM raw_parsed r
+        LEFT JOIN LATERAL (
+            SELECT em.*
+            FROM egisz_messages_raw em
+            WHERE public.egisz_normalize_message_id(em.msgid) = r.relates_to_id
+               OR public.egisz_normalize_message_id(em.msgid) = r.message_id
+            ORDER BY
+                CASE WHEN public.egisz_normalize_message_id(em.msgid) = r.relates_to_id THEN 0 ELSE 1 END,
+                em.egmid DESC
+            LIMIT 1
+        ) m ON TRUE
     ),
     enriched AS (
         SELECT
@@ -268,6 +327,15 @@ BEGIN
 END;
 $$;
 
+UPDATE fact_egisz_transactions
+SET
+    message_id = public.egisz_normalize_message_id(message_id),
+    relates_to_id = public.egisz_normalize_message_id(relates_to_id)
+WHERE message_id LIKE 'urn:uuid:%'
+   OR message_id LIKE '<urn:uuid:%>'
+   OR relates_to_id LIKE 'urn:uuid:%'
+   OR relates_to_id LIKE '<urn:uuid:%>';
+
 DROP VIEW IF EXISTS public.v_health_by_clinic_ui;
 DROP VIEW IF EXISTS public.v_health_signals_ui;
 DROP VIEW IF EXISTS public.v_health_proxy_db_ui;
@@ -289,7 +357,7 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День",
     t.log_date::date AS "День (тренд)",
-    COALESCE(t.relates_to_id, t.local_uid_semd, t.doc_number, t.emdr_id, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
+    COALESCE(t.local_uid_semd, t.emdr_id, t.doc_number, t.message_id, t.relates_to_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
     public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Подкатегория ошибки (глобально)",
     public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Интерпретация ошибок",
@@ -346,7 +414,7 @@ SELECT * FROM public.v_egisz_transactions_enriched_ui;
 CREATE OR REPLACE VIEW public.v_stg_channel_errors_by_document AS
 SELECT
     r.logid AS id,
-    COALESCE(r.logdate, r.loaded_at) AS created_at,
+    COALESCE(r.createdate, r.loaded_at) AS created_at,
     CASE WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3' ELSE 'PARSE_ERROR' END AS error_code,
     COALESCE(NULLIF(r.logtext, ''), NULLIF(r.msgtext, ''), '(без текста)') AS message,
     CASE WHEN r.logstate = 3 THEN 'network' ELSE 'async_response' END AS error_top_type,
@@ -367,17 +435,30 @@ SELECT
     ) AS local_uid_hint,
     public.egisz_xml_text(r.msgtext, 'emdrId') AS emdr_id_hint,
     COALESCE(
-        public.egisz_xml_text(r.msgtext, 'relatesToMessage'),
-        public.egisz_xml_text(r.msgtext, 'relatesTo'),
         public.egisz_xml_text(r.msgtext, 'localUid'),
         public.egisz_xml_text(r.msgtext, 'DOCUMENTID'),
+        public.egisz_xml_text(r.msgtext, 'emdrId'),
+        public.egisz_xml_text(r.msgtext, 'relatesToMessage'),
+        public.egisz_xml_text(r.msgtext, 'relatesTo'),
         m.document_id,
         r.msgid,
         r.logid::text
     ) AS document_group_key,
     COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo')) AS relates_to_id
-FROM egisz_raw r
-LEFT JOIN egisz_messages_raw m ON m.msgid = r.msgid
+FROM exchangelog_raw r
+LEFT JOIN LATERAL (
+    SELECT em.*
+    FROM egisz_messages_raw em
+    WHERE public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo')))
+       OR public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(r.msgid)
+    ORDER BY
+        CASE
+            WHEN public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo'))) THEN 0
+            ELSE 1
+        END,
+        em.egmid DESC
+    LIMIT 1
+) m ON TRUE
 WHERE r.logstate = 3
    OR COALESCE(r.msgtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%error%'
@@ -446,8 +527,8 @@ SELECT
 FROM egisz_messages_raw m
 LEFT JOIN dim_organizations o ON o.jid = m.jid
 LEFT JOIN fact_egisz_transactions f
-       ON f.message_id = m.msgid
-       OR lower(NULLIF(btrim(f.relates_to_id), '')) = lower(NULLIF(btrim(m.reply_to), ''))
+       ON public.egisz_normalize_message_id(f.message_id) = public.egisz_normalize_message_id(m.msgid)
+       OR public.egisz_normalize_message_id(f.relates_to_id) = public.egisz_normalize_message_id(m.msgid)
        OR lower(NULLIF(btrim(f.local_uid_semd), '')) = lower(NULLIF(btrim(m.document_id), ''))
 WHERE f.exchangelog_log_id IS NULL;
 
@@ -574,7 +655,7 @@ LEFT JOIN queue q ON q."JID клиники" = f."JID клиники";
 
 CREATE OR REPLACE VIEW public.v_health_proxy_db_ui AS
 SELECT
-    (SELECT COUNT(*) FROM egisz_raw)::bigint AS "Staging: всего строк",
+    (SELECT COUNT(*) FROM exchangelog_raw)::bigint AS "Staging: всего строк",
     (SELECT COUNT(*) FROM egisz_messages_raw WHERE egmid IS NULL)::bigint AS "Без EGMID",
     (SELECT COUNT(DISTINCT "localUid СЭМД") FROM public.v_rpt_documents_no_response_ui)::bigint AS "Очередь всего",
     (SELECT COUNT(DISTINCT "localUid СЭМД") FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" < now() - INTERVAL '24 hours')::bigint AS "Очередь > 24ч",
@@ -585,13 +666,13 @@ SELECT
     (SELECT MAX(updated_at) FROM elt_state) AS "Последний апдейт курсора",
     (SELECT MAX(last_log_id) FROM elt_state) AS "elt_state.last_log_id",
     (SELECT MAX(last_egmid) FROM elt_state) AS "elt_state.last_egmid (курсор EGISZ_MESSAGES)",
-    (SELECT MAX(logid) FROM egisz_raw) AS "Staging max ID",
+    (SELECT MAX(logid) FROM exchangelog_raw) AS "Staging max ID",
     (SELECT COUNT(DISTINCT "Документ (ключ учёта)") FROM public.v_egisz_transactions_enriched_ui)::bigint AS "Всего документов";
 
 CREATE OR REPLACE VIEW public.v_health_signals_ui AS
 SELECT * FROM (
     VALUES
-        ('raw_rows', 'Raw-строки proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM egisz_raw), 'строк', 'egisz_raw', 'Контроль поступления журнала EXCHANGELOG'),
+        ('raw_rows', 'Raw-строки proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM exchangelog_raw), 'строк', 'exchangelog_raw', 'Контроль поступления журнала EXCHANGELOG'),
         ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT "localUid СЭМД")::numeric FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" < now() - INTERVAL '24 hours'), 'документов', 'egisz_messages_raw без callback-факта', 'Проверить клиники с зависшими документами и транспортный канал'),
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Ключ документа (группировка)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'EXCHANGELOG LOGSTATE=3 и журнал ошибок', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05')

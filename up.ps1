@@ -70,6 +70,26 @@ with dwh_conn.cursor() as cur:
     cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(dwh_db), sql.Identifier(elt_user)))
     cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(sql.Identifier(elt_user)))
     cur.execute(
+        """
+        DO $$
+        DECLARE
+            obj record;
+        BEGIN
+            FOR obj IN
+                SELECT p.oid::regprocedure AS signature
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND p.proname LIKE 'egisz_%%'
+            LOOP
+                EXECUTE format('ALTER FUNCTION %%s OWNER TO %%I', obj.signature, %s);
+            END LOOP;
+        END
+        $$;
+        """,
+        (elt_user,),
+    )
+    cur.execute(
         "SELECT has_schema_privilege(%s, 'public', 'CREATE'), has_schema_privilege(%s, 'public', 'USAGE')",
         (elt_user, elt_user),
     )

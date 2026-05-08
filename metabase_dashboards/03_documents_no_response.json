@@ -1,7 +1,7 @@
 {
   "name": "03 Документы без ответа",
   "width": "full",
-  "description": "Очередь исходящих **СЭМД** без callback: единица учёта — **`localUid СЭМД`** (исходящая запись в РЭМД), это **не** то же самое, что **relatesToMessage** из колбэка. Построчный список, топ клиник, возраст ожидания, срез по типу СЭМД. [Field filter](https://www.metabase.com/docs/v0.60/questions/native-editor/field-filters) по **«Отправлено»**; **Код СЭМД** / **JID** — `top_semd_filter` / `top_clinic_filter` (как на **01**).",
+  "description": "Очередь исходящих **СЭМД** без callback: единица учёта — **`localUid СЭМД`** (исходящая запись в РЭМД), это **не** то же самое, что **relatesToMessage** из колбэка. Построчный список, топ клиник, возраст ожидания, срез по типу СЭМД. Field filter по **«Отправлено»**; **Код СЭМД** / **JID** — `top_semd_filter` / `top_clinic_filter` (как на **01**).",
   "parameters": [
     {
       "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",

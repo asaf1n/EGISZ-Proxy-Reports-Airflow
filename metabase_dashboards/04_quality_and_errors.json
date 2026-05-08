@@ -1,7 +1,7 @@
 {
   "name": "04 Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ [1520](https://nsi.rosminzdrav.ru/dictionaries/1.2.643.5.1.13.13.11.1520/passport/12.33)). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)** (`egisz_document_identity_key`). Проверки JID/OID, полнота полей. **Отказы РЭМД:** рейтинги по «Ошибки JSON», матрица тип СЭМД × тип ошибки. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
+  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)** (`egisz_document_identity_key`). Проверки JID/OID, полнота полей. **Отказы РЭМД:** рейтинги по «Ошибки JSON», матрица тип СЭМД × тип ошибки. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
@@ -266,7 +266,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"localUid СЭМД\"::text), '') IS NULL)::bigint AS \"Без localUid\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"Код СЭМД\"::text), '') IS NULL)::bigint AS \"Без кода СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success' AND \"Обработано IPS\" IS NULL)::bigint AS \"Успех без даты регистрации\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]]",
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"localUid СЭМД\"::text), '') IS NULL)::bigint AS \"Без localUid\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"Код СЭМД\"::text), '') IS NULL)::bigint AS \"Без кода СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success' AND \"Обработано IPS\" IS NULL)::bigint AS \"Успех без Обработано IPS\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]]",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -300,8 +300,8 @@
             "number_separators": ".",
             "decimals": 0
           },
-          "[\"name\",\"Успех без даты регистрации\"]": {
-            "column_title": "Успех без даты регистрации",
+          "[\"name\",\"Успех без Обработано IPS\"]": {
+            "column_title": "Успех без Обработано IPS",
             "number_separators": ".",
             "decimals": 0
           }

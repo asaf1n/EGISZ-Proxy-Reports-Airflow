@@ -16,6 +16,11 @@ APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
 DB_METADATA_FILE=""
 
+if [ -f "/app/include/mb_list.sh" ]; then
+  # shellcheck source=/app/include/mb_list.sh
+  source "/app/include/mb_list.sh"
+fi
+
 log_info() {
   echo "[dashboards] $*" >&2
 }
@@ -41,6 +46,20 @@ api_request() {
   body=$(echo "${response}" | sed '$d')
   [[ "${code}" =~ ^2 ]] || fail "Metabase API ${method} ${path} returned HTTP ${code}: ${body}"
   echo "${body}"
+}
+
+api_delete_ignore_404() {
+  local path="$1"
+  local response code body
+  response=$(curl -sS -w "\n%{http_code}" -X DELETE "${METABASE_URL}${path}" \
+    -H "X-Metabase-Session: ${SESSION_TOKEN}")
+  code=$(echo "${response}" | tail -n1)
+  body=$(echo "${response}" | sed '$d')
+  if [ "${code}" = "404" ]; then
+    log_info "Already absent: ${path}"
+    return
+  fi
+  [[ "${code}" =~ ^2 ]] || fail "Metabase API DELETE ${path} returned HTTP ${code}: ${body}"
 }
 
 login() {
@@ -103,8 +122,7 @@ login() {
 resolve_or_create_app_database_id() {
   APP_DB_ID=$(
     api_request GET "/api/database" |
-      jq -r --arg db "${APP_DB_NAME}" '.data[]? | select(.details.dbname == $db or .name == $db) | .id' |
-      head -n1
+      jq -r --arg db "${APP_DB_NAME}" '[.data[]? | select(.details.dbname == $db or .name == $db) | .id][0] // empty'
   )
   if [ -n "${APP_DB_ID}" ]; then
     return
@@ -140,8 +158,7 @@ resolve_or_create_app_database_id() {
 ensure_collection() {
   COL_ID=$(
     api_request GET "/api/collection" |
-      jq -r --arg name "${COLLECTION_NAME}" '.[]? | select(.name == $name) | .id' |
-      head -n1
+      jq -r --arg name "${COLLECTION_NAME}" '[.[]? | select(.name == $name) | .id][0] // empty'
   )
   if [ -z "${COL_ID}" ] || [ "${COL_ID}" = "null" ]; then
     local payload
@@ -249,14 +266,42 @@ wait_for_metabase_metadata() {
 delete_existing_dashboard() {
   local dashboard_name="$1"
   local ids
-  ids=$(
-    api_request GET "/api/collection/${COL_ID}/items?models=dashboard" |
-      jq -r --arg name "${dashboard_name}" '.data[]? | select(.model == "dashboard" and .name == $name) | .id'
-  )
+  if declare -F mb_all_dashboards_json >/dev/null; then
+    ids=$(
+      mb_all_dashboards_json "${METABASE_URL}" "${SESSION_TOKEN}" |
+        jq -r --arg name "${dashboard_name}" --argjson col "${COL_ID}" '.[]? | select(.collection_id == $col and .name == $name) | .id'
+    )
+  else
+    ids=$(
+      api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
+        jq -r --arg name "${dashboard_name}" '.data[]? | select(.model == "dashboard" and .name == $name) | .id'
+    )
+  fi
   local id
   for id in ${ids}; do
     log_info "Removing old dashboard '${dashboard_name}' (id ${id})"
-    api_request DELETE "/api/dashboard/${id}" >/dev/null
+    api_delete_ignore_404 "/api/dashboard/${id}"
+  done
+}
+
+delete_existing_cards_for_dashboard() {
+  local file="$1"
+  local names card_ids card_id
+  names="$(jq -r '.cards[]?.name' "${file}")"
+  [ -n "${names}" ] || return
+
+  card_ids=$(
+    api_request GET "/api/collection/${COL_ID}/items?models=card&limit=1000" |
+      jq -r --argjson names "$(jq -Rsc 'split("\n") | map(select(length > 0))' <<< "${names}")" '
+        .data[]?
+        | select(.model == "card" and (.name as $n | $names | index($n)))
+        | .id
+      '
+  )
+
+  for card_id in ${card_ids}; do
+    log_info "Removing old card id ${card_id}"
+    api_delete_ignore_404 "/api/card/${card_id}"
   done
 }
 
@@ -316,6 +361,123 @@ dashboard_payload() {
   ' "${file}"
 }
 
+create_card() {
+  local file="$1"
+  local payload card_id
+  payload="$(
+    dashboard_payload "${file}" |
+      jq '{
+        name,
+        description,
+        collection_id,
+        dataset_query,
+        display,
+        visualization_settings,
+        table_id: (.table_id // null)
+      }'
+  )"
+  card_id="$(api_request POST "/api/card" "${payload}" | jq -r '.id')"
+  [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot create card from ${file}"
+  printf '%s\n' "${card_id}"
+}
+
+create_dashboard() {
+  local file="$1"
+  local payload dashboard_id saved_parameters cards num_cards i
+
+  payload="$(
+    dashboard_payload "${file}" |
+      jq '{
+        name,
+        description,
+        collection_id,
+        parameters: (.parameters // []),
+        width: (.width // "full"),
+        cacheables: [],
+        auto_apply_filters: true
+      }'
+  )"
+  dashboard_id="$(api_request POST "/api/dashboard" "${payload}" | jq -r '.id')"
+  [ -n "${dashboard_id}" ] && [ "${dashboard_id}" != "null" ] || fail "cannot create dashboard from ${file}"
+
+  saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
+  cards="[]"
+  num_cards="$(jq '.cards | length' "${file}")"
+  if [ "${num_cards}" -gt 0 ]; then
+    for i in $(seq 0 $((num_cards - 1))); do
+      local card_file card_id size_x size_y row col mappings dashcard_id dashcard
+      card_file="$(mktemp)"
+      jq -c ".cards[${i}]" "${file}" > "${card_file}"
+      card_id="$(create_card "${card_file}")"
+      rm -f "${card_file}" >/dev/null 2>&1 || true
+
+      size_x="$(jq -r ".cards[${i}].sizeX // .cards[${i}].size_x // 4" "${file}")"
+      size_y="$(jq -r ".cards[${i}].sizeY // .cards[${i}].size_y // 4" "${file}")"
+      row="$(jq -r ".cards[${i}].row // 0" "${file}")"
+      col="$(jq -r ".cards[${i}].col // 0" "${file}")"
+      mappings="$(
+        jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" '
+          (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
+          | ($tags | keys) as $tagKeys
+          | [
+              $dashParams[] as $param
+              | (
+                  if (($param.slug // "") | endswith("_filter")) then
+                    ($param.slug | sub("_filter$"; ""))
+                  else
+                    ($param.slug // "")
+                  end
+                ) as $tagName
+              | select(($tagKeys | index($tagName)) != null)
+              | ($tags[$tagName].type // "") as $tagType
+              | {
+                  parameter_id: $param.id,
+                  card_id: $cardDbId,
+                  target: (
+                    if $tagType == "dimension" then
+                      ["dimension", ["template-tag", $tagName]]
+                    else
+                      ["variable", ["template-tag", $tagName]]
+                    end
+                  )
+                }
+            ]
+        ' "${file}"
+      )"
+
+      dashcard_id=$((-(i + 1)))
+      dashcard="$(
+        jq -n \
+          --argjson dashcardId "${dashcard_id}" \
+          --argjson cardId "${card_id}" \
+          --argjson sizeX "${size_x}" \
+          --argjson sizeY "${size_y}" \
+          --argjson row "${row}" \
+          --argjson col "${col}" \
+          --argjson mappings "${mappings}" \
+          '{
+            id: $dashcardId,
+            card_id: $cardId,
+            dashboard_tab_id: null,
+            action_id: null,
+            size_x: $sizeX,
+            size_y: $sizeY,
+            row: $row,
+            col: $col,
+            parameter_mappings: $mappings,
+            series: [],
+            visualization_settings: {}
+          }'
+      )"
+      cards="$(jq -n --argjson existing "${cards}" --argjson card "${dashcard}" '$existing + [$card]')"
+    done
+
+    api_request PUT "/api/dashboard/${dashboard_id}/cards" "$(jq -n --argjson cards "${cards}" '{ordered_tabs: [], cards: $cards}')" >/dev/null
+  fi
+
+  printf '%s\n' "${dashboard_id}"
+}
+
 verify_collection_contents() {
   local expected actual missing=()
   actual=$(api_request GET "/api/collection/${COL_ID}/items?models=dashboard" | jq -r '.data[]? | select(.model == "dashboard") | .name')
@@ -330,6 +492,21 @@ verify_collection_contents() {
     printf '%s\n' "${missing[@]}" >&2
     fail "collection '${COLLECTION_NAME}' is missing imported dashboard(s)"
   fi
+}
+
+verify_dashboard_cards() {
+  local file expected dashboard_id actual
+  for file in "${DASHBOARDS_DIR}"/*.json; do
+    expected="$(jq '.cards | length' "${file}")"
+    [ "${expected}" -gt 0 ] || continue
+    dashboard_id="$(
+      api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
+        jq -r --arg name "$(jq -r '.name' "${file}")" '[.data[]? | select(.model == "dashboard" and .name == $name) | .id][0] // empty'
+    )"
+    [ -n "${dashboard_id}" ] || fail "dashboard is missing after import: ${file}"
+    actual="$(api_request GET "/api/dashboard/${dashboard_id}" | jq '(.dashcards // .ordered_cards // []) | length')"
+    [ "${actual}" -ge "${expected}" ] || fail "dashboard ${dashboard_id} has ${actual}/${expected} card(s)"
+  done
 }
 
 log_info "Waiting for Metabase at ${METABASE_URL}"
@@ -349,10 +526,11 @@ for file in "${DASHBOARDS_DIR}"/*.json; do
   dashboard_name=$(jq -r '.name' "${file}")
   [ -n "${dashboard_name}" ] && [ "${dashboard_name}" != "null" ] || fail "dashboard file has no name: ${file}"
   delete_existing_dashboard "${dashboard_name}"
-  payload=$(dashboard_payload "${file}")
-  api_request POST "/api/dashboard" "${payload}" >/dev/null
+  delete_existing_cards_for_dashboard "${file}"
+  create_dashboard "${file}" >/dev/null
   log_info "Imported ${dashboard_name}"
 done
 
 verify_collection_contents
+verify_dashboard_cards
 log_info "Setup complete: collection '${COLLECTION_NAME}' contains $(ls "${DASHBOARDS_DIR}"/*.json | wc -l | tr -d ' ') dashboard(s)."

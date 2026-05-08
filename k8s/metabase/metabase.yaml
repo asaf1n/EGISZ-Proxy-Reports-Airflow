@@ -44,6 +44,8 @@ spec:
               value: "4"
             - name: METABASE_SITE_NAME
               value: "Интеграция с ЕГИСЗ"
+            - name: METABASE_AUTO_PROVISION
+              value: "false"
             - name: MB_DB_TYPE
               value: postgres
             - name: MB_DB_HOST

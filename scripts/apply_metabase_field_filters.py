@@ -19,7 +19,7 @@ def _resolve(
     disp = (tag_def or {}).get("display-name") or ""
     q = query or ""
 
-    if tag_name == "parse_date":
+    if tag_name in ("parse_date", "parse_created"):
         if "v_rpt_network_errors_detail_ui" in q:
             return "public.v_rpt_network_errors_detail_ui", "Дата создания документа"
         if "v_stg_channel_network_errors_by_document" in q:
@@ -30,13 +30,6 @@ def _resolve(
         if "v_rpt_clinic_connectivity_daily_ui" in q:
             return "public.v_rpt_clinic_connectivity_daily_ui", "День"
         return "public.v_rpt_connectivity_global_daily_ui", "День"
-
-    if tag_name == "parse_created":
-        if "v_rpt_network_errors_detail_ui" in q:
-            return "public.v_rpt_network_errors_detail_ui", "Дата создания документа"
-        if "v_stg_channel_network_errors_by_document" in q:
-            return "public.v_stg_channel_network_errors_by_document", "created_at"
-        return "public.v_stg_channel_errors_by_document", "created_at"
 
     if tag_name != "dwh_date":
         return None

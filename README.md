@@ -49,7 +49,7 @@
    Из `EXCHANGELOG` читается батч по курсору `LOGID`:
 
    ```sql
-   SELECT LOGID, LOGDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT
+   SELECT LOGID, LOGDATE, CREATEDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT
    FROM EXCHANGELOG
    WHERE LOGID > :last_log_id
    ORDER BY LOGID
@@ -57,7 +57,7 @@
    ```
 
 4. **Загрузка raw-слоя**
-   Сырые строки журнала сохраняются в `egisz_raw`. Первичный ключ — `logid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`.
+   Сырые строки журнала сохраняются в `exchangelog_raw`. Первичный ключ — `logid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`. `EXCHANGELOG.LOGDATE` хранится как сервисная дата журнала и не используется для аналитики сообщений.
 
 5. **SQL-трансформация**
    Функция `public.egisz_transform_raw_to_facts(max_log_id)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`.
@@ -75,9 +75,10 @@
 
 | Сущность | Источник | Поле DWH | Правило |
 | :--- | :--- | :--- | :--- |
-| ID строки журнала | `EXCHANGELOG.LOGID` | `fact_egisz_transactions.exchangelog_log_id` | Технический ключ факта и связь с `egisz_raw`. |
+| ID строки журнала | `EXCHANGELOG.LOGID` | `fact_egisz_transactions.exchangelog_log_id` | Технический ключ факта и связь с `exchangelog_raw`. |
 | MSGID обмена | `EXCHANGELOG.MSGID` или XML `<messageId>` | `message_id` | Приоритет XML `<messageId>`, fallback — `MSGID` из журнала. |
 | Связанное сообщение | XML `<relatesToMessage>` или `<relatesTo>` | `relates_to_id` | Коррелятор исходящего запроса и callback; не подменяет идентификатор СЭМД. |
+| Обработано IPS | `EGISZ_MESSAGES.CREATEDATE`, затем `EXCHANGELOG.CREATEDATE` | `log_date` | Аналитическая дата обработки сообщения. `EXCHANGELOG.LOGDATE` не используется для этой метрики. |
 | Локальный ID СЭМД | XML `<localUid>` или `<DOCUMENTID>` | `local_uid_semd` | Приоритет `localUid`, fallback — `DOCUMENTID`. |
 | Федеральный ID | XML `<emdrId>` | `emdr_id` | Идентификатор документа на стороне РЭМД/ЕГИСЗ, если он есть в payload. |
 | Номер документа | XML `<documentNumber>` | `doc_number` | Используется как дополнительный fallback для ключа учёта. |
@@ -123,10 +124,10 @@
 В основной витрине документ отображается как:
 
 ```sql
-COALESCE(local_uid_semd, doc_number, emdr_id, message_id, exchangelog_log_id::text)
+COALESCE(local_uid_semd, emdr_id, doc_number, message_id, relates_to_id, exchangelog_log_id::text)
 ```
 
-Это важно для аналитики: `relatesToMessage` — коррелятор обмена, а не основной идентификатор СЭМД. Для подсчёта документов в Metabase нужно использовать именно «Документ (ключ учёта)».
+Это важно для аналитики: `relatesToMessage` — коррелятор обмена, а не основной идентификатор СЭМД. Он используется для связи callback с исходным `MessageID`, но в ключ учёта попадает только как поздний технический fallback.
 
 ### Классификация ошибок
 
@@ -162,7 +163,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 1. `bootstrap_dwh` — применяет DWH SQL и восстанавливает/обновляет структуру витрины.
 2. `sync_dimensions` — синхронизирует `JPERSONS` в `dim_organizations`.
 3. `extract_from_proxy` — читает батч `EXCHANGELOG` после `last_log_id`.
-4. `load_to_dwh` — загружает батч в `egisz_raw`.
+4. `load_to_dwh` — загружает батч в `exchangelog_raw`.
 5. `transform_data` — вызывает `egisz_transform_raw_to_facts(max_log_id)`.
 6. `update_watermark` — фиксирует успешный курсор в `elt_state`.
 
@@ -175,7 +176,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 Основные таблицы:
 
 * `elt_state` — курсоры инкрементальной обработки (`last_log_id`, `last_egmid`).
-* `egisz_raw` — raw-слой `EXCHANGELOG`.
+* `exchangelog_raw` — raw-слой `EXCHANGELOG`.
 * `egisz_messages_raw` — подготовленная таблица для raw-слоя `EGISZ_MESSAGES`.
 * `dim_organizations` — справочник организаций из `JPERSONS`.
 * `dim_licenses` — справочник лицензий и привязок `mo_uid` / `JID`.

@@ -7,11 +7,12 @@ from typing import Any
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 
-from egisz_elt.fb_client import connect_fb, fetch_exchangelog_after_cursor, fetch_organizations
+from egisz_elt.fb_client import connect_fb, fetch_egisz_messages_after_cursor, fetch_exchangelog_after_cursor, fetch_organizations
 from egisz_elt.pg_client import (
     connect_pg,
     ensure_tables,
     get_cursors,
+    load_raw_messages,
     load_raw_logs,
     sync_directory,
     transform_raw_to_facts,
@@ -66,40 +67,66 @@ def egisz_elt_pipeline() -> None:
     def extract_from_proxy() -> dict[str, Any]:
         pg_conn = _dwh_connection()
         try:
-            last_log_id, _ = get_cursors(pg_conn, PIPELINE)
+            last_log_id, last_egmid = get_cursors(pg_conn, PIPELINE)
         finally:
             pg_conn.close()
 
         fb_conn = _proxy_connection()
         try:
-            rows = fetch_exchangelog_after_cursor(
+            log_rows = fetch_exchangelog_after_cursor(
                 fb_conn,
                 after_log_id=last_log_id,
+                limit=BATCH_SIZE,
+            )
+            message_rows = fetch_egisz_messages_after_cursor(
+                fb_conn,
+                after_egmid=last_egmid,
                 limit=BATCH_SIZE,
             )
         finally:
             fb_conn.close()
 
-        max_id = max((int(row["logid"]) for row in rows), default=last_log_id)
-        log.info("Extracted %s EXCHANGELOG row(s), max LOGID=%s.", len(rows), max_id)
-        return {"count": len(rows), "max_id": max_id, "rows": rows}
+        max_id = max((int(row["logid"]) for row in log_rows), default=last_log_id)
+        max_egmid = max((int(row["egmid"]) for row in message_rows), default=last_egmid)
+        log.info(
+            "Extracted %s EXCHANGELOG row(s), max LOGID=%s; %s EGISZ_MESSAGES row(s), max EGMID=%s.",
+            len(log_rows),
+            max_id,
+            len(message_rows),
+            max_egmid,
+        )
+        return {
+            "count": len(log_rows),
+            "message_count": len(message_rows),
+            "max_id": max_id,
+            "max_egmid": max_egmid,
+            "rows": log_rows,
+            "message_rows": message_rows,
+        }
 
     @task
     def load_to_dwh(extraction_result: dict[str, Any]) -> dict[str, Any]:
-        if extraction_result["count"] <= 0:
+        if extraction_result["count"] <= 0 and extraction_result.get("message_count", 0) <= 0:
             return extraction_result
 
         pg_conn = _dwh_connection()
         try:
-            load_raw_logs(pg_conn, extraction_result["rows"])
-            log.info("Loaded %s raw row(s) into egisz_raw.", extraction_result["count"])
+            if extraction_result["count"] > 0:
+                load_raw_logs(pg_conn, extraction_result["rows"])
+            if extraction_result.get("message_count", 0) > 0:
+                load_raw_messages(pg_conn, extraction_result["message_rows"])
+            log.info(
+                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw and %s EGISZ_MESSAGES row(s) into egisz_messages_raw.",
+                extraction_result["count"],
+                extraction_result.get("message_count", 0),
+            )
         finally:
             pg_conn.close()
         return extraction_result
 
     @task
     def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
-        if load_info["max_id"] <= 0:
+        if load_info["max_id"] <= 0 and load_info.get("message_count", 0) <= 0:
             return {**load_info, "transformed": 0}
 
         pg_conn = _dwh_connection()
@@ -112,13 +139,18 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def update_watermark(load_info: dict[str, Any]) -> None:
-        if load_info["max_id"] <= 0:
+        if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
             return
 
         pg_conn = _dwh_connection()
         try:
-            update_cursors(pg_conn, PIPELINE, log_id=int(load_info["max_id"]))
-            log.info("Updated %s watermark to LOGID=%s.", PIPELINE, load_info["max_id"])
+            update_cursors(pg_conn, PIPELINE, log_id=int(load_info["max_id"]), egmid=int(load_info.get("max_egmid", 0)))
+            log.info(
+                "Updated %s watermark to LOGID=%s, EGMID=%s.",
+                PIPELINE,
+                load_info["max_id"],
+                load_info.get("max_egmid", 0),
+            )
         finally:
             pg_conn.close()
 

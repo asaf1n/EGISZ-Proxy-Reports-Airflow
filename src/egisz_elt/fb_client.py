@@ -88,6 +88,7 @@ def fetch_exchangelog_after_cursor(
             SELECT
                 LOGID,
                 LOGDATE,
+                CREATEDATE,
                 MSGID,
                 LOGSTATE,
                 LOGTEXT,
@@ -100,14 +101,64 @@ def fetch_exchangelog_after_cursor(
             (int(after_log_id or 0), int(limit)),
         )
         rows: list[dict[str, Any]] = []
-        for logid, logdate, msgid, logstate, logtext, msgtext in cur.fetchall():
+        for logid, logdate, createdate, msgid, logstate, logtext, msgtext in cur.fetchall():
             rows.append(
                 {
                     "logid": int(logid),
                     "logdate": logdate.isoformat() if logdate is not None else None,
+                    "createdate": createdate.isoformat() if createdate is not None else None,
                     "msgid": msgid,
                     "logstate": logstate,
                     "logtext": logtext,
+                    "msgtext": msgtext,
+                }
+            )
+        return rows
+    finally:
+        cur.close()
+
+
+def fetch_egisz_messages_after_cursor(
+    con,
+    *,
+    after_egmid: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch a JSON-serializable EGISZ_MESSAGES batch for Airflow XComs."""
+    if limit <= 0:
+        return []
+
+    cur = con.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                EGMID,
+                CAST(NULL AS INTEGER) AS JID,
+                CAST(NULL AS VARCHAR(64)) AS KIND,
+                CREATEDATE,
+                MSGID,
+                REPLYTO,
+                DOCUMENTID,
+                CAST(NULL AS VARCHAR(8191)) AS MSGTEXT
+            FROM EGISZ_MESSAGES
+            WHERE EGMID > ?
+            ORDER BY EGMID
+            ROWS ?
+            """,
+            (int(after_egmid or 0), int(limit)),
+        )
+        rows: list[dict[str, Any]] = []
+        for egmid, jid, kind, created, msgid, reply_to, document_id, msgtext in cur.fetchall():
+            rows.append(
+                {
+                    "egmid": int(egmid),
+                    "jid": int(jid) if jid is not None else None,
+                    "kind": kind,
+                    "created_at": created.isoformat() if created is not None else None,
+                    "msgid": msgid,
+                    "reply_to": reply_to,
+                    "document_id": document_id,
                     "msgtext": msgtext,
                 }
             )
