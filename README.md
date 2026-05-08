@@ -237,34 +237,19 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 
 ## Запуск в чистом Kubernetes
 
-### 1. Инсталляция и запуск Airflow
-
-```powershell
-kubectl config current-context
-kubectl get nodes
-.\up.ps1 -Component Airflow
-kubectl get pods
-kubectl get svc
-```
-
-Команда собирает свежий образ Airflow с текущими DAG и пакетом `egisz_elt`, подготавливает Airflow secrets/connections, проверяет права ELT-пользователя `egisz` в `dwh_egisz`, устанавливает/обновляет Airflow через Helm и выполняет `bootstrap_dwh`.
-
-### 2. Инсталляция и запуск Metabase
-
-```powershell
-kubectl config current-context
-kubectl get nodes
-.\up.ps1 -Component Metabase
-kubectl get pods
-kubectl get svc
-```
-
-Команда собирает свежий образ Metabase с текущими provisioning-скриптами и JSON-дашбордами, подготавливает Metabase secrets, применяет Kubernetes-манифест, обновляет image у deployment и импортирует дашборды.
-
-### 3. Полная установка или обновление запущенного проекта
+### Полная установка или обновление запущенного проекта
 
 ```powershell
 .\up.ps1
+```
+Отдельная установка/запуск Airflow: 
+```powershell
+.\up.ps1 -Component Airflow
+```
+
+Отдельная установка/запуск Metabase: 
+```powershell
+.\up.ps1 -Component Metabase
 ```
 
 Полный запуск равен последовательному запуску двух компонентных сценариев: `.\up.ps1 -Component Airflow` и `.\up.ps1 -Component Metabase`. В каждом сценарии вместе с основным образом собираются и применяются все сопутствующие ресурсы, поэтому раздельное поднятие Airflow и Metabase даёт полный запуск проекта.
