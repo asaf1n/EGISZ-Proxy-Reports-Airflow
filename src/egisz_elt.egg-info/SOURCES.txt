@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/egisz_elt/__init__.py
+src/egisz_elt/fb_client.py
+src/egisz_elt/normalize.py
+src/egisz_elt/pg_client.py
+src/egisz_elt.egg-info/PKG-INFO
+src/egisz_elt.egg-info/SOURCES.txt
+src/egisz_elt.egg-info/dependency_links.txt
+src/egisz_elt.egg-info/requires.txt
+src/egisz_elt.egg-info/top_level.txt
+src/egisz_elt/sql/001_dwh_bootstrap.sql
+tests/test_fb_client.py
+tests/test_pg_client.py

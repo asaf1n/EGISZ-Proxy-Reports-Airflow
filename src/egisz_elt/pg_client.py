@@ -258,10 +258,20 @@ def load_raw_messages(con: psycopg2.extensions.connection, rows: list[dict[str, 
     con.commit()
 
 
-def transform_raw_to_facts(con: psycopg2.extensions.connection, max_log_id: int) -> int:
+def transform_raw_to_facts(
+    con: psycopg2.extensions.connection,
+    *,
+    min_log_id: int,
+    max_log_id: int,
+    min_egmid: int = 0,
+    max_egmid: int = 0,
+) -> int:
     """Run the database-side ELT transform and refresh EGISZ materialized views if present."""
     with con.cursor() as cur:
-        cur.execute("SELECT public.egisz_transform_raw_to_facts(%s)", (max_log_id,))
+        cur.execute(
+            "SELECT public.egisz_transform_raw_to_facts(%s, %s, %s, %s)",
+            (min_log_id, max_log_id, min_egmid, max_egmid),
+        )
         transformed = int(cur.fetchone()[0] or 0)
         cur.execute(
             """

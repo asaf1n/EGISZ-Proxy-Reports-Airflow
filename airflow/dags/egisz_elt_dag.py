@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
 
-from egisz_elt.fb_client import connect_fb, fetch_egisz_messages_after_cursor, fetch_exchangelog_after_cursor, fetch_organizations
+from egisz_elt.fb_client import (
+    connect_fb,
+    fetch_egisz_messages_after_cursor,
+    fetch_egisz_messages_by_identifiers,
+    fetch_exchangelog_after_cursor,
+    fetch_licenses,
+    fetch_organizations,
+)
 from egisz_elt.pg_client import (
     connect_pg,
     ensure_tables,
@@ -35,11 +43,25 @@ def _proxy_connection():
     return connect_fb(BaseHook.get_connection(PROXY_CONN_ID))
 
 
+def _xml_text_values(payload: str | None, tag_name: str) -> set[str]:
+    if not payload or "<" not in payload:
+        return set()
+    safe_tag = re.sub(r"[^A-Za-z0-9_:-]", "", tag_name)
+    if not safe_tag:
+        return set()
+    pattern = re.compile(
+        rf"<(?:[A-Za-z0-9_]+:)?{safe_tag}(?:\s[^>]*)?>(.*?)</(?:[A-Za-z0-9_]+:)?{safe_tag}>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return {match.strip() for match in pattern.findall(payload) if match.strip()}
+
+
 @dag(
     dag_id="egisz_elt_dag",
     schedule="*/5 * * * *",
     start_date=datetime(2023, 1, 1),
     catchup=False,
+    max_active_runs=1,
     tags=["egisz", "elt", "dwh"],
 )
 def egisz_elt_pipeline() -> None:
@@ -56,9 +78,15 @@ def egisz_elt_pipeline() -> None:
         fb_conn = _proxy_connection()
         pg_conn = _dwh_connection()
         try:
-            rows = fetch_organizations(fb_conn)
-            sync_directory(pg_conn, "dim_organizations", rows)
-            log.info("Synced %s organization row(s) into dim_organizations.", len(rows))
+            organization_rows = fetch_organizations(fb_conn)
+            license_rows = fetch_licenses(fb_conn)
+            sync_directory(pg_conn, "dim_organizations", organization_rows)
+            sync_directory(pg_conn, "dim_licenses", license_rows)
+            log.info(
+                "Synced %s organization row(s) and %s license row(s) into DWH dimensions.",
+                len(organization_rows),
+                len(license_rows),
+            )
         finally:
             fb_conn.close()
             pg_conn.close()
@@ -83,23 +111,45 @@ def egisz_elt_pipeline() -> None:
                 after_egmid=last_egmid,
                 limit=BATCH_SIZE,
             )
+            related_msgids: set[str] = set()
+            related_document_ids: set[str] = set()
+            for row in log_rows:
+                if row.get("msgid"):
+                    related_msgids.add(str(row["msgid"]).strip())
+                payload = row.get("msgtext")
+                related_msgids.update(_xml_text_values(payload, "messageId"))
+                related_msgids.update(_xml_text_values(payload, "relatesToMessage"))
+                related_msgids.update(_xml_text_values(payload, "relatesTo"))
+                related_document_ids.update(_xml_text_values(payload, "localUid"))
+                related_document_ids.update(_xml_text_values(payload, "DOCUMENTID"))
+            related_message_rows = fetch_egisz_messages_by_identifiers(
+                fb_conn,
+                msgids=related_msgids,
+                document_ids=related_document_ids,
+            )
         finally:
             fb_conn.close()
 
+        cursor_max_egmid = max((int(row["egmid"]) for row in message_rows), default=last_egmid)
+        messages_by_egmid = {int(row["egmid"]): row for row in message_rows}
+        for row in related_message_rows:
+            messages_by_egmid[int(row["egmid"])] = row
+        message_rows = list(messages_by_egmid.values())
         max_id = max((int(row["logid"]) for row in log_rows), default=last_log_id)
-        max_egmid = max((int(row["egmid"]) for row in message_rows), default=last_egmid)
         log.info(
-            "Extracted %s EXCHANGELOG row(s), max LOGID=%s; %s EGISZ_MESSAGES row(s), max EGMID=%s.",
+            "Extracted %s EXCHANGELOG row(s), max LOGID=%s; %s EGISZ_MESSAGES row(s), cursor max EGMID=%s.",
             len(log_rows),
             max_id,
             len(message_rows),
-            max_egmid,
+            cursor_max_egmid,
         )
         return {
             "count": len(log_rows),
             "message_count": len(message_rows),
+            "last_log_id": last_log_id,
+            "last_egmid": last_egmid,
             "max_id": max_id,
-            "max_egmid": max_egmid,
+            "max_egmid": cursor_max_egmid,
             "rows": log_rows,
             "message_rows": message_rows,
         }
@@ -131,7 +181,13 @@ def egisz_elt_pipeline() -> None:
 
         pg_conn = _dwh_connection()
         try:
-            transformed = transform_raw_to_facts(pg_conn, int(load_info["max_id"]))
+            transformed = transform_raw_to_facts(
+                pg_conn,
+                min_log_id=int(load_info.get("last_log_id", 0)),
+                max_log_id=int(load_info["max_id"]),
+                min_egmid=int(load_info.get("last_egmid", 0)),
+                max_egmid=int(load_info.get("max_egmid", 0)),
+            )
             log.info("Transformed %s row(s) into fact_egisz_transactions.", transformed)
         finally:
             pg_conn.close()

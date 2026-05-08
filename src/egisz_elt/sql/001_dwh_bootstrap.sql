@@ -97,6 +97,7 @@ CREATE INDEX IF NOT EXISTS idx_egisz_messages_document_id ON egisz_messages_raw 
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id ON fact_egisz_transactions (message_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid ON fact_egisz_transactions (local_uid_semd);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to ON fact_egisz_transactions (relates_to_id);
 
@@ -136,6 +137,8 @@ AS $$
     SELECT NULLIF(regexp_replace(trim(both '<>' from btrim(COALESCE(value, ''))), '^urn:uuid:', '', 'i'), '');
 $$;
 
+CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid_norm ON egisz_messages_raw (public.egisz_normalize_message_id(msgid));
+
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
 RETURNS timestamptz
 LANGUAGE plpgsql
@@ -164,6 +167,8 @@ AS $$
         ''
     );
 $$;
+
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.egisz_clean_host(mo_domen));
 
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_type(error_code text, error_message text)
 RETURNS text
@@ -203,14 +208,41 @@ AS $$
     END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_transform_raw_to_facts(max_log_id bigint)
+CREATE OR REPLACE FUNCTION public.egisz_transform_raw_to_facts(
+    min_log_id bigint,
+    max_log_id bigint,
+    min_egmid bigint DEFAULT 0,
+    max_egmid bigint DEFAULT 0
+)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
     affected integer := 0;
 BEGIN
-    WITH raw_parsed AS (
+    WITH changed_messages AS (
+        SELECT
+            public.egisz_normalize_message_id(msgid) AS msgid,
+            lower(NULLIF(btrim(document_id), '')) AS document_id
+        FROM egisz_messages_raw
+        WHERE egmid > min_egmid
+          AND egmid <= max_egmid
+    ),
+    candidate_log_ids AS (
+        SELECT r.logid
+        FROM exchangelog_raw r
+        WHERE r.logid > min_log_id
+          AND r.logid <= max_log_id
+
+        UNION
+
+        SELECT f.exchangelog_log_id
+        FROM fact_egisz_transactions f
+        JOIN changed_messages m
+          ON m.msgid IN (f.message_id, f.relates_to_id)
+          OR m.document_id = lower(NULLIF(btrim(f.local_uid_semd), ''))
+    ),
+    raw_parsed AS (
         SELECT
             r.logid,
             r.logdate,
@@ -235,8 +267,8 @@ BEGIN
             NULLIF((regexp_match(COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '')::integer AS jid_from_payload,
             public.safe_cast_timestamptz(COALESCE(public.egisz_xml_text(r.msgtext, 'creationDateTime'), public.egisz_xml_text(r.msgtext, 'creationDate'))) AS creation_date
         FROM exchangelog_raw r
-        WHERE r.logid <= max_log_id
-          AND COALESCE(public.egisz_xml_text(r.msgtext, 'action'), '') <> 'getDocumentFile'
+        JOIN candidate_log_ids c ON c.logid = r.logid
+        WHERE COALESCE(public.egisz_xml_text(r.msgtext, 'action'), '') <> 'getDocumentFile'
     ),
     parsed AS (
         SELECT
@@ -259,13 +291,24 @@ BEGIN
             r.raw_status,
             r.jid_from_payload,
             r.creation_date,
-            m.egmid
+            m.egmid,
+            COALESCE(m.jid, m.license_jid) AS message_jid,
+            COALESCE(m.kind, m.license_kind) AS message_kind
         FROM raw_parsed r
         LEFT JOIN LATERAL (
-            SELECT em.*
+            SELECT
+                em.*,
+                l.jid AS license_jid,
+                l.kind AS license_kind
             FROM egisz_messages_raw em
+            LEFT JOIN dim_licenses l
+              ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
             WHERE public.egisz_normalize_message_id(em.msgid) = r.relates_to_id
                OR public.egisz_normalize_message_id(em.msgid) = r.message_id
+               OR lower(NULLIF(btrim(em.document_id), '')) IN (
+                    lower(NULLIF(btrim(r.local_uid_xml), '')),
+                    lower(NULLIF(btrim(r.document_id_xml), ''))
+               )
             ORDER BY
                 CASE WHEN public.egisz_normalize_message_id(em.msgid) = r.relates_to_id THEN 0 ELSE 1 END,
                 em.egmid DESC
@@ -275,6 +318,8 @@ BEGIN
     enriched AS (
         SELECT
             p.*,
+            COALESCE(p.jid_from_payload, p.message_jid) AS resolved_jid,
+            COALESCE(p.semd_code, p.message_kind) AS resolved_semd_code,
             CASE
                 WHEN p.logstate = 3 THEN 'error'
                 WHEN p.raw_status LIKE '%success%' THEN 'success'
@@ -295,7 +340,7 @@ BEGIN
     SELECT
         e.logid, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.final_status, e.final_error_message, e.logtext, e.egmid,
-        e.jid_from_payload, e.semd_code, e.semd_name, e.error_code,
+        e.resolved_jid, e.resolved_semd_code, e.semd_name, e.error_code,
         CASE
             WHEN e.final_status = 'error'
                 THEN jsonb_build_array(jsonb_build_object('code', e.error_code, 'message', e.final_error_message))
@@ -325,6 +370,13 @@ BEGIN
     GET DIAGNOSTICS affected = ROW_COUNT;
     RETURN affected;
 END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_transform_raw_to_facts(max_log_id bigint)
+RETURNS integer
+LANGUAGE sql
+AS $$
+    SELECT public.egisz_transform_raw_to_facts(0, max_log_id, 0, 0);
 $$;
 
 UPDATE fact_egisz_transactions

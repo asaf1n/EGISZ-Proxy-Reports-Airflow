@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from egisz_elt.pg_client import load_raw_logs, normalize_message_id
+from egisz_elt.pg_client import load_raw_logs, normalize_message_id, transform_raw_to_facts
 
 
 class FakeConnection:
@@ -31,3 +31,49 @@ def test_normalize_message_id_strips_urn_uuid_wrapper() -> None:
     assert normalize_message_id("<urn:uuid:dd73fc79-e2e6-479c-a285-2a470fc4f04e>") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
     assert normalize_message_id("urn:uuid:dd73fc79-e2e6-479c-a285-2a470fc4f04e") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
     assert normalize_message_id("dd73fc79-e2e6-479c-a285-2a470fc4f04e") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
+
+
+class FakeTransformCursor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...] | None]] = []
+        self.result: tuple[int] = (3,)
+
+    def __enter__(self) -> "FakeTransformCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+        self.calls.append((sql, params))
+
+    def fetchone(self) -> tuple[int]:
+        return self.result
+
+    def fetchall(self) -> list[tuple[str, str]]:
+        return []
+
+
+class FakeTransformConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = FakeTransformCursor()
+        self.committed = False
+
+    def cursor(self) -> FakeTransformCursor:
+        return self.cursor_instance
+
+    def commit(self) -> None:
+        self.committed = True
+
+
+def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
+    con = FakeTransformConnection()
+
+    transformed = transform_raw_to_facts(con, min_log_id=10, max_log_id=20, min_egmid=30, max_egmid=40)
+
+    assert transformed == 3
+    assert con.cursor_instance.calls[0] == (
+        "SELECT public.egisz_transform_raw_to_facts(%s, %s, %s, %s)",
+        (10, 20, 30, 40),
+    )
+    assert con.committed is True
