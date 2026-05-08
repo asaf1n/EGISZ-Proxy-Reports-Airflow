@@ -60,7 +60,7 @@ def _xml_text_values(payload: str | None, tag_name: str) -> set[str]:
 
 @dag(
     dag_id="egisz_elt_dag",
-    schedule="*/3 * * * *",
+    schedule="*/5 * * * *",
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
