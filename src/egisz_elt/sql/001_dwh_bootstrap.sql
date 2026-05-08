@@ -94,6 +94,7 @@ CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logs
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid ON egisz_messages_raw (msgid);
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_document_id ON egisz_messages_raw (document_id);
+CREATE INDEX IF NOT EXISTS idx_egisz_messages_document_id_norm ON egisz_messages_raw (lower(NULLIF(btrim(document_id), '')));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
@@ -220,27 +221,11 @@ AS $$
 DECLARE
     affected integer := 0;
 BEGIN
-    WITH changed_messages AS (
-        SELECT
-            public.egisz_normalize_message_id(msgid) AS msgid,
-            lower(NULLIF(btrim(document_id), '')) AS document_id
-        FROM egisz_messages_raw
-        WHERE egmid > min_egmid
-          AND egmid <= max_egmid
-    ),
-    candidate_log_ids AS (
+    WITH candidate_log_ids AS (
         SELECT r.logid
         FROM exchangelog_raw r
         WHERE r.logid > min_log_id
           AND r.logid <= max_log_id
-
-        UNION
-
-        SELECT f.exchangelog_log_id
-        FROM fact_egisz_transactions f
-        JOIN changed_messages m
-          ON m.msgid IN (f.message_id, f.relates_to_id)
-          OR m.document_id = lower(NULLIF(btrim(f.local_uid_semd), ''))
     ),
     raw_parsed AS (
         SELECT
@@ -296,22 +281,34 @@ BEGIN
             COALESCE(m.kind, m.license_kind) AS message_kind
         FROM raw_parsed r
         LEFT JOIN LATERAL (
-            SELECT
-                em.*,
-                l.jid AS license_jid,
-                l.kind AS license_kind
-            FROM egisz_messages_raw em
-            LEFT JOIN dim_licenses l
-              ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
-            WHERE public.egisz_normalize_message_id(em.msgid) = r.relates_to_id
-               OR public.egisz_normalize_message_id(em.msgid) = r.message_id
-               OR lower(NULLIF(btrim(em.document_id), '')) IN (
+            SELECT candidate.*
+            FROM (
+                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 0 AS priority
+                FROM egisz_messages_raw em
+                LEFT JOIN dim_licenses l
+                  ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
+                WHERE public.egisz_normalize_message_id(em.msgid) = r.relates_to_id
+
+                UNION ALL
+
+                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 1 AS priority
+                FROM egisz_messages_raw em
+                LEFT JOIN dim_licenses l
+                  ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
+                WHERE public.egisz_normalize_message_id(em.msgid) = r.message_id
+
+                UNION ALL
+
+                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 2 AS priority
+                FROM egisz_messages_raw em
+                LEFT JOIN dim_licenses l
+                  ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
+                WHERE lower(NULLIF(btrim(em.document_id), '')) IN (
                     lower(NULLIF(btrim(r.local_uid_xml), '')),
                     lower(NULLIF(btrim(r.document_id_xml), ''))
-               )
-            ORDER BY
-                CASE WHEN public.egisz_normalize_message_id(em.msgid) = r.relates_to_id THEN 0 ELSE 1 END,
-                em.egmid DESC
+                )
+            ) candidate
+            ORDER BY candidate.priority, candidate.egmid DESC
             LIMIT 1
         ) m ON TRUE
     ),
