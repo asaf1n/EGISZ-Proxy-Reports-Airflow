@@ -42,11 +42,13 @@
 1. **Bootstrap DWH**
    Airflow выполняет SQL из `src/egisz_elt/sql/001_dwh_bootstrap.sql`: создаёт таблицы, функции парсинга и базовые представления.
 
-2. **Синхронизация справочника организаций**
-   Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `JINN`, `JADDR`; в DWH они загружаются как `jid`, `name`, `inn`, `address`. Пустые значения ИНН или адреса сохраняются как `NULL`. Данные идемпотентно загружаются в `dim_organizations` через `ON CONFLICT`.
+2. **Синхронизация справочников**
+   Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `JINN`, `JADDR`; в DWH они загружаются как `jid`, `name`, `inn`, `address` в `dim_organizations`. Параллельно синхронизируется `dim_licenses` из `EGISZ_LICENSES` для привязки `mo_uid` / `JID` и обогащения колбэков. Пустые значения ИНН или адреса сохраняются как `NULL`. Загрузка обеих размерностей идемпотентна и выполняется через `ON CONFLICT`.
 
-3. **Инкрементальная выгрузка журнала**
-   Из `EXCHANGELOG` читается батч по курсору `LOGID`:
+3. **Инкрементальная выгрузка журнала и сообщений**
+   Из `EXCHANGELOG` читается батч по курсору `LOGID`, а из `EGISZ_MESSAGES` — отдельный батч по курсору `EGMID`. Текущий размер батча в DAG: `BATCH_SIZE = 5000`.
+
+   Базовый запрос к `EXCHANGELOG`:
 
    ```sql
    SELECT LOGID, LOGDATE, CREATEDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT
@@ -57,13 +59,13 @@
    ```
 
 4. **Загрузка raw-слоя**
-   Сырые строки журнала сохраняются в `exchangelog_raw`. Первичный ключ — `logid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`. `EXCHANGELOG.LOGDATE` хранится как сервисная дата журнала и не используется для аналитики сообщений.
+   Сырые строки журнала сохраняются в `exchangelog_raw`, а сообщения из `EGISZ_MESSAGES` — в `egisz_messages_raw`. Первичные ключи — `logid` и `egmid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`. `EXCHANGELOG.LOGDATE` хранится как сервисная дата журнала и не используется для аналитики сообщений.
 
 5. **SQL-трансформация**
    Функция `public.egisz_transform_raw_to_facts(max_log_id)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`.
 
 6. **Обновление watermark**
-   После успешной трансформации курсор сохраняется в `elt_state.last_log_id`.
+   После успешной трансформации DAG сохраняет оба курсора в `elt_state`: `last_log_id` и `last_egmid`.
 
 ---
 
@@ -140,22 +142,22 @@ COALESCE(local_uid_semd, emdr_id, relates_to_id, doc_number, message_id, exchang
 * XSD/cvc — короткая подсказка по XML-валидации;
 * без ошибок в UI-сводке возвращается пустая строка или «Успешно» для успешных документов.
 
-Для BI-группировки используется отдельная функция `public.egisz_error_group_type(code, message)`. Она не дробит «Тип ошибки» по произвольному исходному тексту:
+Для BI-группировки используется отдельная функция `public.egisz_error_group_type(code, message)`. Она нужна для детализации причин внутри JSON-ошибок, но верхнеуровневое поле `Тип ошибки` в витрине intentionally сведено к двум эксплуатационным классам: `Ошибки асинхронного ответа РЭМД` и `Сетевая ошибка`.
+
+Детализация по `egisz_error_group_type` не дробит ошибки по произвольному тексту:
 
 * сетевые и транспортные ошибки попадают в общий тип `Сетевая ошибка`;
 * ошибки ответа РЭМД попадают в известную подгруппу справочника, если правило уже накоплено в `egisz_error_interpretation_rules`;
 * если справочного правила недостаточно, ошибка попадает в общий тип `Ошибка асинхронного ответа РЭМД`.
 
-Главная витрина `public.v_egisz_transactions_enriched_ui` дополнительно отдаёт поле `Исходный текст ошибки`. Карточки со сводкой ошибки выводят рядом исходный текст или агрегированный пример исходных текстов, чтобы можно было сверить нормализованную группировку с реальным сообщением.
+Главная витрина `public.v_egisz_transactions_enriched_ui` отдаёт `Ошибки JSON` как основной источник текста ошибок XML (`<ns2message>`). Сырый отдельный столбец `Исходный текст ошибки` в аналитических карточках больше не используется.
 
-### Подпись типа СЭМД
+### Код и наименование СЭМД
 
-Функция `public.egisz_semd_type_report_label(semd_code, semd_name)` формирует подпись через DWH-таблицу `dim_semd_types`:
+Основные аналитические поля:
 
-* если нет кода и названия — `(неизвестно)`;
-* если код есть в справочнике НСИ — `код · наименование из dim_semd_types`;
-* если кода нет в справочнике, но в payload есть осмысленное название — `код · название из payload`;
-* если есть только код — `код · Наименование СЭМД отсутствует в НСИ 1520`.
+* `Код СЭМД` — это `OID` из справочника НСИ `1.2.643.5.1.13.13.11.1520`.
+* `Наименование СЭМД` — это человекочитаемое наименование из `dim_semd_types`, либо payload fallback, если код ещё не заведен в справочнике.
 
 `dim_semd_types.code` соответствует полю `OID` из приложенного файла `1.2.643.5.1.13.13.11.1520_12.48_json.zip`, а `TYPE` хранится отдельно как `type_code`. Обновление справочника ручное: заменить seed-данные в `src/egisz_elt/sql/001_dwh_bootstrap.sql` или обновить строки в `dim_semd_types` напрямую в DWH и затем переимпортировать Metabase.
 
@@ -170,14 +172,14 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 
 Задачи:
 
-1. `bootstrap_dwh` — применяет DWH SQL и восстанавливает/обновляет структуру витрины.
-2. `sync_dimensions` — синхронизирует `JPERSONS` в `dim_organizations`.
-3. `extract_from_proxy` — читает батч `EXCHANGELOG` после `last_log_id`.
-4. `load_to_dwh` — загружает батч в `exchangelog_raw`.
-5. `transform_data` — вызывает `egisz_transform_raw_to_facts(max_log_id)`.
-6. `update_watermark` — фиксирует успешный курсор в `elt_state`.
+1. `bootstrap_dwh` — проверяет контракт DWH и при дрейфе применяет `001_dwh_bootstrap.sql`.
+2. `sync_dimensions` — синхронизирует `dim_organizations` и `dim_licenses`.
+3. `extract_from_proxy` — читает батчи `EXCHANGELOG` и `EGISZ_MESSAGES`, а также добирает связанные сообщения по `MSGID` / `DOCUMENTID`.
+4. `load_to_dwh` — загружает raw-данные в `exchangelog_raw` и `egisz_messages_raw`.
+5. `transform_data` — вызывает `egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`.
+6. `update_watermark` — фиксирует успешные курсоры `LOGID` и `EGMID` в `elt_state`.
 
-Данные между задачами передаются через XCom как JSON-сериализуемые словари. Батч ограничен константой `BATCH_SIZE = 500`.
+Данные между задачами передаются через XCom как JSON-сериализуемые словари. Батч ограничен константой `BATCH_SIZE = 5000`.
 
 ---
 
@@ -196,6 +198,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 Основные представления:
 
 * `v_egisz_transactions_enriched_ui` — главная витрина для Metabase.
+* `v_rpt_documents_no_response_ui` — очередь исходящих сообщений без найденного callback; anti-join строится по нормализованным ключам `message_id` / `relates_to_id` / `local_uid_semd`.
 * `v_rpt_network_errors_detail_ui` — детализация транспортных и сетевых ошибок.
 * `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
 * `v_health_signals_ui` — агрегированные health-сигналы.
