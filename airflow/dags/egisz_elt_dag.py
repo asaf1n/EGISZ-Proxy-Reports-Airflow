@@ -82,12 +82,18 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def sync_dimensions() -> None:
+        log.info("Starting dimension sync from proxy_egisz into dwh_egisz.")
         fb_conn = _proxy_connection()
         pg_conn = _dwh_connection()
         try:
+            log.info("Fetching organizations directory from JPERSONS.")
             organization_rows = fetch_organizations(fb_conn)
-            license_rows = fetch_licenses(fb_conn)
+            log.info("Fetched %s organization row(s); syncing dim_organizations.", len(organization_rows))
             sync_directory(pg_conn, "dim_organizations", organization_rows)
+
+            log.info("Fetching licenses directory from EGISZ_LICENSES.")
+            license_rows = fetch_licenses(fb_conn)
+            log.info("Fetched %s license row(s); syncing dim_licenses.", len(license_rows))
             sync_directory(pg_conn, "dim_licenses", license_rows)
             log.info(
                 "Synced %s organization row(s) and %s license row(s) into DWH dimensions.",

@@ -5,10 +5,14 @@ import pytest
 from egisz_elt.pg_client import (
     BOOTSTRAP_LOCK_TIMEOUT,
     BOOTSTRAP_STATEMENT_TIMEOUT,
+    DIRECTORY_SYNC_LOCK_TIMEOUT,
+    DIRECTORY_SYNC_PAGE_SIZE,
+    DIRECTORY_SYNC_STATEMENT_TIMEOUT,
     _read_bootstrap_sql,
     ensure_tables,
     load_raw_logs,
     normalize_message_id,
+    sync_directory,
     transform_raw_to_facts,
 )
 
@@ -122,3 +126,55 @@ def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors(
     assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
     assert "egisz_error_interpretation_rules" in sql
     assert "v_rpt_error_interpretations_ui" in sql
+    assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
+
+
+class FakeSyncCursor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...] | None]] = []
+
+    def __enter__(self) -> "FakeSyncCursor":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+        self.calls.append((sql, params))
+
+
+class FakeSyncConnection:
+    def __init__(self) -> None:
+        self.cursor_instance = FakeSyncCursor()
+        self.committed = False
+
+    def cursor(self) -> FakeSyncCursor:
+        return self.cursor_instance
+
+    def commit(self) -> None:
+        self.committed = True
+
+
+def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    con = FakeSyncConnection()
+    captured: dict[str, object] = {}
+
+    def fake_execute_values(cursor: object, sql: str, values: list[tuple[object, ...]], page_size: int) -> None:
+        captured["cursor"] = cursor
+        captured["sql"] = sql
+        captured["values"] = values
+        captured["page_size"] = page_size
+
+    monkeypatch.setattr("egisz_elt.pg_client.execute_values", fake_execute_values)
+
+    sync_directory(con, "dim_organizations", [(1, "Clinic", "1234567890", "Address")])
+
+    assert con.cursor_instance.calls == [
+        ("SET LOCAL lock_timeout = %s", (DIRECTORY_SYNC_LOCK_TIMEOUT,)),
+        ("SET LOCAL statement_timeout = %s", (DIRECTORY_SYNC_STATEMENT_TIMEOUT,)),
+    ]
+    assert captured["cursor"] is con.cursor_instance
+    assert "INSERT INTO dim_organizations" in str(captured["sql"])
+    assert captured["values"] == [(1, "Clinic", "1234567890", "Address")]
+    assert captured["page_size"] == DIRECTORY_SYNC_PAGE_SIZE
+    assert con.committed is True

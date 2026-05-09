@@ -375,12 +375,10 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (l
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id ON fact_egisz_transactions (message_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid ON fact_egisz_transactions (local_uid_semd);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid_norm ON fact_egisz_transactions (lower(NULLIF(btrim(local_uid_semd), '')));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_emdr_id ON fact_egisz_transactions (emdr_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to ON fact_egisz_transactions (relates_to_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
 
 CREATE OR REPLACE FUNCTION public.egisz_xml_text(payload text, tag_name text)
 RETURNS text
@@ -419,6 +417,8 @@ AS $$
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid_norm ON egisz_messages_raw (public.egisz_normalize_message_id(msgid));
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
 
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
 RETURNS timestamptz
@@ -653,7 +653,14 @@ BEGIN
     );
     s := regexp_replace(s, '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<uuid>', 'gi');
     s := regexp_replace(s, '\b[0-9a-f]{16,}\b', '<hex>', 'gi');
+    s := regexp_replace(s, '\b\d{3}-\d{3}-\d{3} \d{2}\b', '<snils>', 'gi');
+    s := regexp_replace(s, '\b\d{2}\.\d{2}\.\d{4}\b', '<date>', 'g');
+    s := regexp_replace(s, '№\s*[\w\-/]+', '№ <id>', 'gi');
     s := regexp_replace(s, '\b\d{5,}\b', '<n>', 'g');
+    s := regexp_replace(s, '(?i)[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.', '<ФИО>', 'g');
+    s := regexp_replace(s, '(?i)[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё\-]+', '<ФИО>', 'g');
+    s := regexp_replace(s, '\[[^\]]+\]', '<поле>', 'g');
+    s := regexp_replace(s, '«[^»]+»|"[^"]+"', '<...>', 'g');
     s := regexp_replace(
         s,
         '\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?\b',
@@ -689,14 +696,6 @@ BEGIN
        OR m ~* '(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)'
        OR normalized ~* '(ошибка связи|транспорт)' THEN
         RETURN 'Сетевая ошибка';
-    END IF;
-
-    IF interpreted = '' OR interpreted = m OR interpreted = 'Код: ' || c THEN
-        RETURN 'Ошибка асинхронного ответа РЭМД';
-    END IF;
-
-    IF normalized ~* 'ошибка асинхронного ответа РЭМД' THEN
-        RETURN 'Ошибка асинхронного ответа РЭМД';
     END IF;
 
     RETURN normalized;
@@ -795,7 +794,17 @@ AS $$
     WITH resolved AS (
         SELECT
             NULLIF(btrim(COALESCE(semd_code, '')), '') AS code,
-            d.name AS display_name
+            COALESCE(
+                d.name,
+                CASE
+                    WHEN NULLIF(btrim(COALESCE(semd_name, '')), '') IS NOT NULL
+                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') !~ '^\d+$'
+                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') <> NULLIF(btrim(COALESCE(semd_code, '')), '')
+                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') !~ '[<>]'
+                    THEN NULLIF(btrim(COALESCE(semd_name, '')), '')
+                    ELSE NULL
+                END
+            ) AS display_name
         FROM (SELECT NULLIF(btrim(COALESCE(semd_code, '')), '') AS code) n
         LEFT JOIN dim_semd_types d ON d.code = n.code
     )
@@ -1008,7 +1017,7 @@ SELECT
     public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Подкатегория ошибки (глобально)",
     CASE
         WHEN t.status = 'error' AND t.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN t.status = 'error' THEN 'Ошибки асинхронного ответа РЭМД'
+        WHEN t.status = 'error' THEN public.egisz_error_group_type(t.error_code, t.error_message)
         WHEN t.status = 'success' THEN 'Успешно'
         ELSE COALESCE(t.status, 'unknown')
     END AS "Тип ошибки",
@@ -1019,6 +1028,14 @@ SELECT
     t.semd_code AS "Код СЭМД",
     COALESCE(
         st.name,
+        CASE
+            WHEN NULLIF(btrim(t.semd_name), '') IS NOT NULL
+             AND NULLIF(btrim(t.semd_name), '') !~ '^\d+$'
+             AND NULLIF(btrim(t.semd_name), '') <> NULLIF(btrim(t.semd_code), '')
+             AND NULLIF(btrim(t.semd_name), '') !~ '[<>]'
+            THEN NULLIF(btrim(t.semd_name), '')
+            ELSE NULL
+        END,
         CASE
             WHEN NULLIF(btrim(t.semd_code), '') IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
@@ -1117,8 +1134,8 @@ SELECT
     COALESCE(NULLIF(error_interpretation, ''), '(ошибка без деталей)') AS "Интерпретация ошибки",
     CASE
         WHEN status = 'error' AND error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN status = 'error' THEN 'Ошибки асинхронного ответа РЭМД'
-        ELSE COALESCE(NULLIF(error_type, ''), '(ошибка без деталей)')
+        WHEN status = 'error' THEN COALESCE(NULLIF(error_type, ''), 'Ошибка асинхронного ответа РЭМД')
+        ELSE '(ошибка без деталей)'
     END AS "Тип ошибки",
     ord AS "Порядок ошибки"
 FROM expanded
@@ -1158,46 +1175,55 @@ SELECT
     r.msgid AS journal_msgid,
     m.egmid AS egisz_messages_egmid,
     COALESCE(
-        public.egisz_xml_text(r.msgtext, 'relatesToMessage'),
-        public.egisz_xml_text(r.msgtext, 'relatesTo'),
-        public.egisz_xml_text(r.logtext, 'relatesToMessage')
+        x.relates_to_message_msgtext,
+        x.relates_to_msgtext,
+        x.relates_to_message_logtext
     ) AS relates_to_hint,
     COALESCE(
-        public.egisz_xml_text(r.msgtext, 'localUid'),
-        public.egisz_xml_text(r.msgtext, 'DOCUMENTID'),
+        x.local_uid_msgtext,
+        x.document_id_msgtext,
         m.document_id
     ) AS local_uid_hint,
-    public.egisz_xml_text(r.msgtext, 'emdrId') AS emdr_id_hint,
+    x.emdr_id_msgtext AS emdr_id_hint,
     COALESCE(
-        public.egisz_xml_text(r.msgtext, 'localUid'),
-        public.egisz_xml_text(r.msgtext, 'DOCUMENTID'),
-        public.egisz_xml_text(r.msgtext, 'emdrId'),
-        public.egisz_xml_text(r.msgtext, 'relatesToMessage'),
-        public.egisz_xml_text(r.msgtext, 'relatesTo'),
+        x.local_uid_msgtext,
+        x.document_id_msgtext,
+        x.emdr_id_msgtext,
+        x.relates_to_message_msgtext,
+        x.relates_to_msgtext,
         m.document_id,
         r.msgid,
         r.logid::text
     ) AS document_group_key,
-    COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo')) AS relates_to_id
+    COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext) AS relates_to_id
 FROM exchangelog_raw r
+LEFT JOIN LATERAL (
+    SELECT
+        public.egisz_xml_text(r.msgtext, 'relatesToMessage') AS relates_to_message_msgtext,
+        public.egisz_xml_text(r.msgtext, 'relatesTo') AS relates_to_msgtext,
+        public.egisz_xml_text(r.logtext, 'relatesToMessage') AS relates_to_message_logtext,
+        public.egisz_xml_text(r.msgtext, 'localUid') AS local_uid_msgtext,
+        public.egisz_xml_text(r.msgtext, 'DOCUMENTID') AS document_id_msgtext,
+        public.egisz_xml_text(r.msgtext, 'emdrId') AS emdr_id_msgtext
+) x ON TRUE
 LEFT JOIN LATERAL (
     SELECT em.*
     FROM egisz_messages_raw em
     WHERE lower(NULLIF(btrim(em.document_id), '')) IN (
-            lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'localUid')), '')),
-            lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')), '')),
-            lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'emdrId')), ''))
+            lower(NULLIF(btrim(x.local_uid_msgtext), '')),
+            lower(NULLIF(btrim(x.document_id_msgtext), '')),
+            lower(NULLIF(btrim(x.emdr_id_msgtext), ''))
           )
-       OR public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo')))
+       OR public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext))
        OR public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(r.msgid)
     ORDER BY
         CASE
             WHEN lower(NULLIF(btrim(em.document_id), '')) IN (
-                lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'localUid')), '')),
-                lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')), '')),
-                lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'emdrId')), ''))
+                lower(NULLIF(btrim(x.local_uid_msgtext), '')),
+                lower(NULLIF(btrim(x.document_id_msgtext), '')),
+                lower(NULLIF(btrim(x.emdr_id_msgtext), ''))
             ) THEN 0
-            WHEN public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo'))) THEN 1
+            WHEN public.egisz_normalize_message_id(em.msgid) = public.egisz_normalize_message_id(COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext)) THEN 1
             ELSE 2
         END,
         em.egmid DESC
@@ -1218,7 +1244,7 @@ WITH source_rows AS (
     SELECT
         s.*,
         NULLIF((regexp_match(COALESCE(s.message, ''), 'gost-([0-9]+)', 'i'))[1], '') AS jid_from_text
-    FROM public.v_stg_channel_errors_by_document s
+    FROM public.v_stg_channel_network_errors_by_document s
 )
 SELECT
     s.created_at AS "Дата создания документа",
@@ -1299,6 +1325,14 @@ SELECT
     m.semd_code_resolved AS "Код СЭМД",
     COALESCE(
         st.name,
+        CASE
+            WHEN NULLIF(btrim(m.semd_name_payload), '') IS NOT NULL
+             AND NULLIF(btrim(m.semd_name_payload), '') !~ '^\d+$'
+             AND NULLIF(btrim(m.semd_name_payload), '') <> NULLIF(btrim(m.semd_code_resolved), '')
+             AND NULLIF(btrim(m.semd_name_payload), '') !~ '[<>]'
+            THEN NULLIF(btrim(m.semd_name_payload), '')
+            ELSE NULL
+        END,
         CASE
             WHEN NULLIF(btrim(m.semd_code_resolved), '') IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'

@@ -94,7 +94,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE WHEN \"Статус\" = 'error' AND NULLIF(TRIM(\"Подкатегория ошибки (глобально)\"), '') = 'ошибка асинхронного ответа РЭМД' THEN 'ошибка асинхронного ответа' WHEN \"Статус\" = 'error' THEN 'ошибка (прочие)' ELSE COALESCE(NULLIF(TRIM(\"Статус\"), ''), '(нет)') END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT CASE WHEN \"Статус\" = 'error' AND \"Тип ошибки\" <> 'Сетевая ошибка' THEN 'ошибка асинхронного ответа' WHEN \"Статус\" = 'error' THEN 'ошибка (прочие)' ELSE COALESCE(NULLIF(TRIM(\"Статус\"), ''), '(нет)') END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

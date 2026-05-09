@@ -7,12 +7,18 @@ airflowVersion: "2.11.2"
 
 config:
   core:
-    dags_are_paused_at_creation: "False"
+    dags_are_paused_at_creation: "True"
+  celery:
+    operation_timeout: "30.0"
 
 images:
   airflow:
     repository: egisz-airflow-worker
     tag: latest
+    pullPolicy: IfNotPresent
+  redis:
+    repository: redis
+    tag: 7.2.5-bookworm
     pullPolicy: IfNotPresent
 
 data:

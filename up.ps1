@@ -56,8 +56,8 @@ function Test-KubernetesConnection {
     }
 }
 
-function Ensure-DwhDatabasePrivileges {
-    $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "host.docker.internal"
+function Set-DwhDatabasePrivileges {
+    $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "localhost"
     $env:EGISZ_PG_PORT = Get-EnvOrDefault "EGISZ_PG_PORT" "5432"
     $env:EGISZ_PG_ADMIN_USER = Get-EnvOrDefault "EGISZ_PG_ADMIN_USER" "postgres"
     $env:EGISZ_PG_ADMIN_PASSWORD = Get-EnvOrDefault "EGISZ_PG_ADMIN_PASSWORD" "postgres"
@@ -165,14 +165,14 @@ print(f"DWH privileges OK: {elt_user}@{host}:{port}/{dwh_db} can CREATE in publi
     }
 }
 
-function Ensure-SecretFiles {
+function Initialize-SecretFiles {
     Write-Host "Preparing Kubernetes secrets from examples..."
     if (-not (Test-Path k8s/metabase/metabase-connections-secret.yaml)) {
         Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/metabase-connections-secret.yaml
     }
 }
 
-function Ensure-AirflowInternalMetadataDatabase {
+function Initialize-AirflowInternalMetadataDatabase {
     Write-Host "Ensuring Airflow internal metadata database airflow_db exists when PostgreSQL already has a PVC..."
     $postgresPod = kubectl get pod airflow-postgresql-0 --ignore-not-found -o name
     if ([string]::IsNullOrWhiteSpace($postgresPod)) {
@@ -256,11 +256,8 @@ function Restore-MetabaseAfterDwhBootstrap {
 }
 
 function Install-Airflow {
-    Ensure-SecretFiles
+    Initialize-SecretFiles
     Test-KubernetesConnection
-
-    Write-Host "Ensuring external PostgreSQL DWH privileges for Airflow ELT user..."
-    Ensure-DwhDatabasePrivileges
 
     Write-Host "Applying Airflow connection secrets..."
     Invoke-Checked "Apply Airflow connection secrets" {
@@ -272,11 +269,16 @@ function Install-Airflow {
         docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile .
     }
 
-    Ensure-AirflowInternalMetadataDatabase
+    Initialize-AirflowInternalMetadataDatabase
 
     Write-Host "Installing Airflow..."
     Invoke-Checked "Install Airflow Helm release" {
         helm upgrade --install airflow apache-airflow/airflow -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
+    }
+
+    Write-Host "Waiting for Airflow Redis broker..."
+    Invoke-Checked "Wait for Airflow Redis" {
+        kubectl rollout status statefulset/airflow-redis --timeout=300s
     }
 
     Write-Host "Waiting for Airflow pods to be ready..."
@@ -293,19 +295,56 @@ function Install-Airflow {
         kubectl rollout status statefulset/airflow-triggerer --timeout=300s
     }
 
+    Write-Host "Waiting for Celery worker to connect to the Redis broker..."
+    Invoke-Checked "Wait for Celery worker broker connection" {
+        @'
+import subprocess
+import time
+
+deadline = time.time() + 300
+marker = "ready."
+while time.time() < deadline:
+    result = subprocess.run(
+        ["kubectl", "logs", "airflow-worker-0", "-c", "worker", "--tail=200"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if marker in result.stdout:
+        print("Celery worker is connected to Redis and ready.")
+        raise SystemExit(0)
+    time.sleep(5)
+
+raise SystemExit("Timed out waiting for Celery worker readiness marker in logs.")
+'@ | py -
+    }
+
+    Write-Host "Keeping egisz_elt_dag paused until Airflow broker and DWH bootstrap are ready..."
+    Invoke-Checked "Pause egisz_elt_dag during Airflow warm-up" {
+        kubectl exec deploy/airflow-scheduler -c scheduler -- airflow dags pause egisz_elt_dag
+    }
+
     Write-Host "Bootstrapping external DWH schema through Airflow connection dwh_egisz_pg..."
     $metabaseReplicas = [int](@(Suspend-MetabaseForDwhBootstrap)[-1])
     try {
+        Write-Host "Ensuring external PostgreSQL DWH privileges for Airflow ELT user..."
+        Set-DwhDatabasePrivileges
+
         Invoke-Checked "Bootstrap DWH through Airflow" {
             kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
         }
     } finally {
         Restore-MetabaseAfterDwhBootstrap -Replicas $metabaseReplicas
     }
+
+    Write-Host "Unpausing egisz_elt_dag after Airflow warm-up and DWH bootstrap..."
+    Invoke-Checked "Unpause egisz_elt_dag after Airflow warm-up" {
+        kubectl exec deploy/airflow-scheduler -c scheduler -- airflow dags unpause egisz_elt_dag
+    }
 }
 
 function Install-Metabase {
-    Ensure-SecretFiles
+    Initialize-SecretFiles
     Test-KubernetesConnection
 
     Write-Host "Applying Metabase connection secrets..."

@@ -110,6 +110,9 @@ RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logte
 RAW_MESSAGE_COLUMNS = ("egmid", "jid", "kind", "created_at", "msgid", "reply_to", "document_id", "msgtext")
 BOOTSTRAP_LOCK_TIMEOUT = "30s"
 BOOTSTRAP_STATEMENT_TIMEOUT = "10min"
+DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
+DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
+DIRECTORY_SYNC_PAGE_SIZE = 1000
 
 
 def normalize_message_id(value: Any) -> Any:
@@ -336,6 +339,8 @@ def sync_directory(con: psycopg2.extensions.connection, table_name: str, rows: l
         if column_name not in pk_columns
     )
     with con.cursor() as cur:
+        cur.execute("SET LOCAL lock_timeout = %s", (DIRECTORY_SYNC_LOCK_TIMEOUT,))
+        cur.execute("SET LOCAL statement_timeout = %s", (DIRECTORY_SYNC_STATEMENT_TIMEOUT,))
         if rows:
             execute_values(
                 cur,
@@ -347,6 +352,7 @@ def sync_directory(con: psycopg2.extensions.connection, table_name: str, rows: l
                     updated_at = now()
                 """,
                 rows,
+                page_size=DIRECTORY_SYNC_PAGE_SIZE,
             )
     con.commit()
 
