@@ -84,7 +84,7 @@
               "display-name": "По дате «Обработано IPS»"
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000010",
               "name": "top_semd",
@@ -92,7 +92,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000011",
               "name": "top_clinic",
@@ -100,7 +100,7 @@
               "required": false
             },
             "local_uid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000012",
               "name": "local_uid",
@@ -108,7 +108,7 @@
               "required": false
             },
             "relates_to": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000013",
               "name": "relates_to",
@@ -116,7 +116,7 @@
               "required": false
             },
             "emdr_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000014",
               "name": "emdr_id",
@@ -124,7 +124,7 @@
               "required": false
             },
             "status": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000015",
               "name": "status",
@@ -132,7 +132,7 @@
               "required": false
             },
             "log_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000016",
               "name": "log_id",
@@ -140,7 +140,7 @@
               "required": false
             },
             "egmid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000017",
               "name": "egmid",
@@ -180,7 +180,6 @@
               "enabled": true
             },
             {
-              "name": "Исходный текст ошибки",
               "enabled": true
             },
             {
@@ -378,6 +377,38 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Рег. номер РЭМД (emdrid)"
+        },
+        "status": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
+        },
+        "egmid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
         }
       }
     },
@@ -397,7 +428,7 @@
               "display-name": "По дате «Обработано IPS»"
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000010",
               "name": "top_semd",
@@ -405,7 +436,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000011",
               "name": "top_clinic",
@@ -413,7 +444,7 @@
               "required": false
             },
             "local_uid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000012",
               "name": "local_uid",
@@ -421,7 +452,7 @@
               "required": false
             },
             "relates_to": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000013",
               "name": "relates_to",
@@ -429,7 +460,7 @@
               "required": false
             },
             "emdr_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000014",
               "name": "emdr_id",
@@ -437,7 +468,7 @@
               "required": false
             },
             "status": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000015",
               "name": "status",
@@ -445,7 +476,7 @@
               "required": false
             },
             "log_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000016",
               "name": "log_id",
@@ -453,7 +484,7 @@
               "required": false
             },
             "egmid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000017",
               "name": "egmid",
@@ -493,7 +524,6 @@
               "enabled": true
             },
             {
-              "name": "Исходный текст ошибки",
               "enabled": true
             },
             {
@@ -691,6 +721,38 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Рег. номер РЭМД (emdrid)"
+        },
+        "status": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
+        },
+        "egmid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
         }
       }
     }

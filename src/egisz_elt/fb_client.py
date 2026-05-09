@@ -17,6 +17,21 @@ def connect_fb(conn: Any):
     return connect(database=dsn, user=conn.login, password=conn.password, charset=charset)
 
 
+def _serialize_firebird_text(value: Any) -> Any:
+    """Convert Firebird BLOB/text reader values into plain Python strings."""
+    if value is None or isinstance(value, str):
+        return value
+    read = getattr(value, "read", None)
+    if callable(read):
+        data = read()
+        if isinstance(data, bytes):
+            return data.decode("utf-8", errors="replace")
+        if data is None:
+            return None
+        return str(data)
+    return value
+
+
 def fetch_rows_after_cursor(
     con,
     *,
@@ -109,8 +124,8 @@ def fetch_exchangelog_after_cursor(
                     "createdate": createdate.isoformat() if createdate is not None else None,
                     "msgid": msgid,
                     "logstate": logstate,
-                    "logtext": logtext,
-                    "msgtext": msgtext,
+                    "logtext": _serialize_firebird_text(logtext),
+                    "msgtext": _serialize_firebird_text(msgtext),
                 }
             )
         return rows
@@ -159,7 +174,7 @@ def fetch_egisz_messages_after_cursor(
                     "msgid": msgid,
                     "reply_to": reply_to,
                     "document_id": document_id,
-                    "msgtext": msgtext,
+                    "msgtext": _serialize_firebird_text(msgtext),
                 }
             )
         return rows
@@ -179,7 +194,7 @@ def _serialize_egisz_message_rows(rows: list[tuple[Any, ...]]) -> list[dict[str,
                 "msgid": msgid,
                 "reply_to": reply_to,
                 "document_id": document_id,
-                "msgtext": msgtext,
+                "msgtext": _serialize_firebird_text(msgtext),
             }
         )
     return serialized

@@ -46,7 +46,7 @@
               "id": "f4000001-0001-4001-8001-000000000010",
               "name": "top_semd",
               "display-name": "Код СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "dwh_date": {
@@ -61,7 +61,7 @@
               "id": "f4000001-0001-4001-8001-000000000011",
               "name": "top_clinic",
               "display-name": "JID клиники",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "local_uid": {
@@ -69,7 +69,7 @@
               "id": "f4000001-0001-4001-8001-000000000012",
               "name": "local_uid",
               "display-name": "localUid СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             }
           }
@@ -126,6 +126,18 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
         }
       }
     },
@@ -135,14 +147,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pend_ref AS ( SELECT COALESCE((SELECT MAX(\"Отправлено\") FROM public.v_rpt_documents_no_response_ui), NOW()) AS ref_ts ) SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p CROSS JOIN pend_ref WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_semd": {
               "widget-type": "string/=",
               "id": "f8000001-0001-4001-8001-000000000010",
               "name": "top_semd",
               "display-name": "Код СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "dwh_date": {
@@ -157,7 +169,7 @@
               "id": "f8000001-0001-4001-8001-000000000011",
               "name": "top_clinic",
               "display-name": "JID клиники",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "local_uid": {
@@ -165,7 +177,7 @@
               "id": "f8000001-0001-4001-8001-000000000012",
               "name": "local_uid",
               "display-name": "localUid СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             }
           }
@@ -216,6 +228,18 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
         }
       }
     },
@@ -225,14 +249,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pend_ref AS ( SELECT COALESCE((SELECT MAX(\"Отправлено\") FROM public.v_rpt_documents_no_response_ui), NOW()) AS ref_ts ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p CROSS JOIN pend_ref WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND p.\"Отправлено\" IS NOT NULL GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
           "template-tags": {
             "top_semd": {
               "widget-type": "string/=",
               "id": "f8000002-0002-4002-8002-000000000010",
               "name": "top_semd",
               "display-name": "Код СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "dwh_date": {
@@ -247,7 +271,7 @@
               "id": "f8000002-0002-4002-8002-000000000011",
               "name": "top_clinic",
               "display-name": "JID клиники",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "local_uid": {
@@ -255,7 +279,7 @@
               "id": "f8000002-0002-4002-8002-000000000012",
               "name": "local_uid",
               "display-name": "localUid СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             }
           }
@@ -303,6 +327,18 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
         }
       }
     },
@@ -312,14 +348,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pend_ref AS ( SELECT COALESCE((SELECT MAX(\"Отправлено\") FROM public.v_rpt_documents_no_response_ui), NOW()) AS ref_ts ) SELECT public.egisz_semd_type_report_label(NULLIF(TRIM(p.\"Код СЭМД\"), ''), NULLIF(TRIM(p.\"Наименование СЭМД\"), '')) AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p CROSS JOIN pend_ref WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(p.\"Наименование СЭМД\"), ''), NULLIF(TRIM(p.\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_semd": {
               "widget-type": "string/=",
               "id": "f8000003-0003-4003-8003-000000000010",
               "name": "top_semd",
               "display-name": "Код СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "dwh_date": {
@@ -334,7 +370,7 @@
               "id": "f8000003-0003-4003-8003-000000000011",
               "name": "top_clinic",
               "display-name": "JID клиники",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "local_uid": {
@@ -342,7 +378,7 @@
               "id": "f8000003-0003-4003-8003-000000000012",
               "name": "local_uid",
               "display-name": "localUid СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             }
           }
@@ -352,7 +388,7 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "СЭМД (подпись)"
+          "Наименование СЭМД"
         ],
         "graph.show_values": true,
         "table": {
@@ -369,8 +405,8 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"СЭМД (подпись)\"]": {
-            "column_title": "СЭМД (код или наименование)"
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
@@ -390,6 +426,18 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
         }
       }
     },
@@ -399,14 +447,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pend_ref AS ( SELECT COALESCE((SELECT MAX(\"Отправлено\") FROM public.v_rpt_documents_no_response_ui), NOW()) AS ref_ts ) SELECT \"localUid СЭМД\" AS \"ИД документа\", COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS \"Код СЭМД\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)') AS \"Наименование СЭМД\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Клиника\", \"Отправлено\", CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\" FROM public.v_rpt_documents_no_response_ui p CROSS JOIN pend_ref WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] ORDER BY p.\"Отправлено\" ASC NULLS LAST LIMIT 500",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT \"localUid СЭМД\" AS \"ИД документа\", COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS \"Код СЭМД\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)') AS \"Наименование СЭМД\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Клиника\", \"Отправлено\", CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\" FROM base p CROSS JOIN pend_ref ORDER BY p.\"Отправлено\" ASC NULLS LAST LIMIT 500",
           "template-tags": {
             "top_semd": {
               "widget-type": "string/=",
               "id": "f8000004-0004-4004-8004-000000000010",
               "name": "top_semd",
               "display-name": "Код СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "dwh_date": {
@@ -421,7 +469,7 @@
               "id": "f8000004-0004-4004-8004-000000000011",
               "name": "top_clinic",
               "display-name": "JID клиники",
-              "type": "text",
+              "type": "dimension",
               "required": false
             },
             "local_uid": {
@@ -429,7 +477,7 @@
               "id": "f8000004-0004-4004-8004-000000000012",
               "name": "local_uid",
               "display-name": "localUid СЭМД",
-              "type": "text",
+              "type": "dimension",
               "required": false
             }
           }
@@ -471,6 +519,18 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
         }
       }
     }

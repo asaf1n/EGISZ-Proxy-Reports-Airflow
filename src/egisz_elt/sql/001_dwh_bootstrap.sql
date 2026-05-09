@@ -375,9 +375,12 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (l
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id ON fact_egisz_transactions (message_id);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid ON fact_egisz_transactions (local_uid_semd);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid_norm ON fact_egisz_transactions (lower(NULLIF(btrim(local_uid_semd), '')));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_emdr_id ON fact_egisz_transactions (emdr_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to ON fact_egisz_transactions (relates_to_id);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
 
 CREATE OR REPLACE FUNCTION public.egisz_xml_text(payload text, tag_name text)
 RETURNS text
@@ -476,7 +479,7 @@ VALUES
     ('person_snils', 70, NULL, '(?is)(СНИЛС|SNILS)', 'Ошибка идентификации по СНИЛС: проверьте данные пациента или медработника'),
     ('person_frmr', 71, NULL, '(?is)(ФРМР|медработник|автор|author|должност|speciality)', 'Ошибка данных медработника/автора: проверьте запись в ФРМР и реквизиты автора СЭМД'),
     ('remd_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб)', 'Техническая ошибка на стороне РЭМД: повторите отправку позже или направьте обращение в СТП ЕГИСЗ'),
-    ('transport_network', 90, NULL, '(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)', 'ошибка связи (транспорт)'),
+    ('transport_network', 90, NULL, '(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)', 'Сетевая ошибка'),
     ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'ошибка асинхронного ответа РЭМД')
 ON CONFLICT (rule_code) DO UPDATE SET
     priority = EXCLUDED.priority,
@@ -789,30 +792,17 @@ RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    WITH norm AS (
+    WITH resolved AS (
         SELECT
             NULLIF(btrim(COALESCE(semd_code, '')), '') AS code,
-            NULLIF(btrim(COALESCE(semd_name, '')), '') AS payload_name
-    ),
-    resolved AS (
-        SELECT
-            n.code,
-            COALESCE(
-                d.name,
-                CASE
-                    WHEN n.payload_name IS NOT NULL
-                     AND n.payload_name !~ '^\d+$'
-                     AND n.payload_name <> n.code THEN n.payload_name
-                    ELSE NULL
-                END
-            ) AS display_name
-        FROM norm n
+            d.name AS display_name
+        FROM (SELECT NULLIF(btrim(COALESCE(semd_code, '')), '') AS code) n
         LEFT JOIN dim_semd_types d ON d.code = n.code
     )
     SELECT CASE
         WHEN code IS NULL AND display_name IS NULL THEN '(неизвестно)'
         WHEN code IS NULL THEN display_name
-        WHEN display_name IS NULL THEN code || ' · Наименование СЭМД отсутствует в НСИ 1520'
+        WHEN display_name IS NULL THEN code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
         ELSE code || ' · ' || display_name
     END
     FROM resolved;
@@ -1016,7 +1006,12 @@ SELECT
     COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
     public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Подкатегория ошибки (глобально)",
-    public.egisz_error_group_type(t.error_code, t.error_message) AS "Тип ошибки",
+    CASE
+        WHEN t.status = 'error' AND t.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+        WHEN t.status = 'error' THEN 'Ошибки асинхронного ответа РЭМД'
+        WHEN t.status = 'success' THEN 'Успешно'
+        ELSE COALESCE(t.status, 'unknown')
+    END AS "Тип ошибки",
     COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Интерпретация ошибок",
     COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибки",
     COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибок",
@@ -1025,15 +1020,8 @@ SELECT
     COALESCE(
         st.name,
         CASE
-            WHEN NULLIF(btrim(t.semd_name), '') IS NOT NULL
-             AND NULLIF(btrim(t.semd_name), '') !~ '^\d+$'
-             AND NULLIF(btrim(t.semd_name), '') <> NULLIF(btrim(t.semd_code), '')
-            THEN NULLIF(btrim(t.semd_name), '')
-            ELSE NULL
-        END,
-        CASE
             WHEN NULLIF(btrim(t.semd_code), '') IS NOT NULL
-            THEN 'Наименование СЭМД отсутствует в НСИ 1520'
+            THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
@@ -1061,7 +1049,6 @@ SELECT
     t.emdr_id AS "Регистрационный номер РЭМД",
     t.doc_number AS "DOCUMENTID",
     t.error_code AS "Код ошибки",
-    t.error_message AS "Исходный текст ошибки",
     COALESCE(t.errors_json, '[]'::jsonb) AS "Ошибки JSON",
     t.exchangelog_log_id AS transaction_id,
     COALESCE(t.jid, l.jid) AS clinic_id,
@@ -1127,9 +1114,12 @@ SELECT
     semd_type AS "Тип СЭМД (код · НСИ)",
     status AS "Статус",
     error_code AS "Код ошибки",
-    error_message AS "Исходный текст ошибки",
     COALESCE(NULLIF(error_interpretation, ''), '(ошибка без деталей)') AS "Интерпретация ошибки",
-    COALESCE(NULLIF(error_type, ''), '(ошибка без деталей)') AS "Тип ошибки",
+    CASE
+        WHEN status = 'error' AND error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+        WHEN status = 'error' THEN 'Ошибки асинхронного ответа РЭМД'
+        ELSE COALESCE(NULLIF(error_type, ''), '(ошибка без деталей)')
+    END AS "Тип ошибки",
     ord AS "Порядок ошибки"
 FROM expanded
 WHERE status = 'error'
@@ -1148,7 +1138,6 @@ SELECT
     semd_type AS "Тип СЭМД (код · НСИ)",
     status AS "Статус",
     NULL::text AS "Код ошибки",
-    NULL::text AS "Исходный текст ошибки",
     CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
     CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
@@ -1163,7 +1152,7 @@ SELECT
     CASE WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3' ELSE 'PARSE_ERROR' END AS error_code,
     COALESCE(NULLIF(r.logtext, ''), NULLIF(r.msgtext, ''), '(без текста)') AS message,
     CASE WHEN r.logstate = 3 THEN 'network' ELSE 'async_response' END AS error_top_type,
-    CASE WHEN r.logstate = 3 THEN 'ошибка связи (транспорт)' ELSE 'ошибка асинхронного ответа РЭМД' END AS error_global_subcategory,
+    CASE WHEN r.logstate = 3 THEN 'Сетевая ошибка' ELSE 'ошибка асинхронного ответа РЭМД' END AS error_global_subcategory,
     CASE WHEN r.logstate = 3 THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS error_group_label_ru,
     r.logid AS exchangelog_log_id,
     r.msgid AS journal_msgid,
@@ -1282,8 +1271,26 @@ WITH messages AS (
     SELECT
         m.*,
         COALESCE(public.egisz_xml_text(m.msgtext, 'kind'), m.kind) AS semd_code_resolved,
-        COALESCE(public.egisz_xml_text(m.msgtext, 'documentTypeName'), public.egisz_xml_text(m.msgtext, 'name')) AS semd_name_payload
+        COALESCE(public.egisz_xml_text(m.msgtext, 'documentTypeName'), public.egisz_xml_text(m.msgtext, 'name')) AS semd_name_payload,
+        public.egisz_normalize_message_id(m.msgid) AS msgid_norm,
+        lower(NULLIF(btrim(m.document_id), '')) AS document_id_norm
     FROM egisz_messages_raw m
+),
+fact_message_keys AS (
+    SELECT DISTINCT public.egisz_normalize_message_id(f.message_id) AS message_key
+    FROM fact_egisz_transactions f
+    WHERE NULLIF(public.egisz_normalize_message_id(f.message_id), '') IS NOT NULL
+
+    UNION
+
+    SELECT DISTINCT public.egisz_normalize_message_id(f.relates_to_id) AS message_key
+    FROM fact_egisz_transactions f
+    WHERE NULLIF(public.egisz_normalize_message_id(f.relates_to_id), '') IS NOT NULL
+),
+fact_document_keys AS (
+    SELECT DISTINCT lower(NULLIF(btrim(f.local_uid_semd), '')) AS document_key
+    FROM fact_egisz_transactions f
+    WHERE lower(NULLIF(btrim(f.local_uid_semd), '')) IS NOT NULL
 )
 SELECT
     m.created_at AS "Отправлено",
@@ -1293,15 +1300,8 @@ SELECT
     COALESCE(
         st.name,
         CASE
-            WHEN NULLIF(btrim(m.semd_name_payload), '') IS NOT NULL
-             AND NULLIF(btrim(m.semd_name_payload), '') !~ '^\d+$'
-             AND NULLIF(btrim(m.semd_name_payload), '') <> NULLIF(btrim(m.semd_code_resolved), '')
-            THEN NULLIF(btrim(m.semd_name_payload), '')
-            ELSE NULL
-        END,
-        CASE
             WHEN NULLIF(btrim(m.semd_code_resolved), '') IS NOT NULL
-            THEN 'Наименование СЭМД отсутствует в НСИ 1520'
+            THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
@@ -1314,11 +1314,10 @@ SELECT
 FROM messages m
 LEFT JOIN dim_organizations o ON o.jid = m.jid
 LEFT JOIN dim_semd_types st ON st.code = NULLIF(btrim(m.semd_code_resolved), '')
-LEFT JOIN fact_egisz_transactions f
-       ON public.egisz_normalize_message_id(f.message_id) = public.egisz_normalize_message_id(m.msgid)
-       OR public.egisz_normalize_message_id(f.relates_to_id) = public.egisz_normalize_message_id(m.msgid)
-       OR lower(NULLIF(btrim(f.local_uid_semd), '')) = lower(NULLIF(btrim(m.document_id), ''))
-WHERE f.exchangelog_log_id IS NULL;
+LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
+LEFT JOIN fact_document_keys fd ON fd.document_key = m.document_id_norm
+WHERE fm.message_key IS NULL
+  AND fd.document_key IS NULL;
 
 CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
 SELECT

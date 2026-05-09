@@ -82,6 +82,38 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Рег. номер РЭМД (emdrid)"
+        },
+        "status": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
+        },
+        "egmid": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
         }
       },
       "dataset_query": {
@@ -97,7 +129,7 @@
               "display-name": "По дате «Обработано IPS»"
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000010",
               "name": "top_semd",
@@ -105,7 +137,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000011",
               "name": "top_clinic",
@@ -113,7 +145,7 @@
               "required": false
             },
             "local_uid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000012",
               "name": "local_uid",
@@ -121,7 +153,7 @@
               "required": false
             },
             "relates_to": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000013",
               "name": "relates_to",
@@ -129,7 +161,7 @@
               "required": false
             },
             "emdr_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000014",
               "name": "emdr_id",
@@ -137,7 +169,7 @@
               "required": false
             },
             "status": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000015",
               "name": "status",
@@ -145,7 +177,7 @@
               "required": false
             },
             "log_id": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000016",
               "name": "log_id",
@@ -153,7 +185,7 @@
               "required": false
             },
             "egmid": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000005-0005-4005-8005-000000000017",
               "name": "egmid",
@@ -403,6 +435,14 @@
         "parse_created": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "Дата создания документа"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
@@ -426,7 +466,7 @@
               "required": false
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000004-0004-4004-8004-000000000010",
               "name": "top_semd",
@@ -434,7 +474,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000004-0004-4004-8004-000000000011",
               "name": "top_clinic",
@@ -503,6 +543,14 @@
         "parse_created": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "Дата создания документа"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
@@ -511,7 +559,7 @@
           "query": "WITH per_code_remd AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), per_code_net AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(ошибка связи: тип СЭМД не из колбэка)') AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] GROUP BY 1 ), per_code AS ( SELECT lbl, SUM(cnt)::bigint AS cnt FROM ( SELECT lbl, cnt FROM per_code_remd UNION ALL SELECT lbl, cnt FROM per_code_net ) u GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000003-0003-4003-8003-000000000010",
               "name": "top_semd",
@@ -526,7 +574,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000003-0003-4003-8003-000000000011",
               "name": "top_clinic",
@@ -594,15 +642,23 @@
         "parse_created": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "Дата создания документа"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_err AS ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 52) FROM jsonb_array_elements(COALESCE(\"Ошибки JSON\", '[]'::jsonb)) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net_err AS ( SELECT 'Сетевая ошибка'::text AS err_lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] ), all_err AS ( SELECT err_lbl, cnt FROM per_err UNION ALL SELECT err_lbl, cnt FROM net_err WHERE cnt > 0 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM all_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Количество\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000002-0002-4002-8002-000000000010",
               "name": "top_semd",
@@ -617,7 +673,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000002-0002-4002-8002-000000000011",
               "name": "top_clinic",
@@ -681,6 +737,14 @@
         "parse_created": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "Дата создания документа"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
@@ -689,7 +753,7 @@
           "query": "WITH per_clinic_remd AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), per_clinic_net AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), ''), 24) || ' | ' || COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''), '(нет JID)')) AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"::text), '') = {{top_semd}}]] [[AND COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''))::text = {{top_clinic}}]] GROUP BY 1 ), combined AS ( SELECT lbl, cnt FROM per_clinic_remd UNION ALL SELECT lbl, cnt FROM per_clinic_net ), per_clinic AS ( SELECT lbl, SUM(cnt)::bigint AS cnt FROM combined GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000004-0004-4004-8004-000000000010",
               "name": "top_semd",
@@ -704,7 +768,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "fa000004-0004-4004-8004-000000000011",
               "name": "top_clinic",
@@ -764,6 +828,14 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
@@ -779,7 +851,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000003-0003-4003-8003-000000000010",
               "name": "top_semd",
@@ -787,7 +859,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000003-0003-4003-8003-000000000011",
               "name": "top_clinic",
@@ -845,15 +917,23 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT * FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), with_err AS ( SELECT f.*, COALESCE(ek.err_kind, CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' WHEN f.\"Статус\" = 'unknown' THEN '(неизвестно)' ELSE '(' || COALESCE(f.\"Статус\", '?') || ')' END) AS err_kind FROM filtered f LEFT JOIN LATERAL ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 120) FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_kind WHERE f.\"Статус\" = 'error' ) ek ON TRUE ) SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(\"Исходный текст ошибки\", ''), 500)) AS \"Исходный текст ошибок\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "query": "WITH filtered AS ( SELECT * FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), with_err AS ( SELECT f.*, COALESCE(ek.err_kind, CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' WHEN f.\"Статус\" = 'unknown' THEN '(неизвестно)' ELSE '(' || COALESCE(f.\"Статус\", '?') || ')' END) AS err_kind, ek.json_error_text FROM filtered f LEFT JOIN LATERAL ( SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 120) FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS err_kind, ( SELECT NULLIF(err->>'message', '') FROM jsonb_array_elements( CASE jsonb_typeof(COALESCE(f.\"Ошибки JSON\", '[]'::jsonb)) WHEN 'array' THEN COALESCE(f.\"Ошибки JSON\", '[]'::jsonb) WHEN 'object' THEN jsonb_build_array(COALESCE(f.\"Ошибки JSON\", '{}'::jsonb)) ELSE '[]'::jsonb END ) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL LIMIT 1 ) AS json_error_text WHERE f.\"Статус\" = 'error' ) ek ON TRUE ) SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибок\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
           "template-tags": {
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f9000004-0004-4004-8004-000000000010",
               "name": "top_semd",
@@ -868,7 +948,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f9000004-0004-4004-8004-000000000011",
               "name": "top_clinic",
@@ -976,6 +1056,14 @@
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
           "field_name": "Обработано IPS"
+        },
+        "top_semd": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "JID клиники"
         }
       },
       "dataset_query": {
@@ -991,7 +1079,7 @@
               "display-name": "По дате «Обработано»"
             },
             "top_semd": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000002-0002-4002-8002-000000000010",
               "name": "top_semd",
@@ -999,7 +1087,7 @@
               "required": false
             },
             "top_clinic": {
-              "type": "text",
+              "type": "dimension",
               "widget-type": "string/=",
               "id": "f1000002-0002-4002-8002-000000000011",
               "name": "top_clinic",

@@ -555,7 +555,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE( ( SELECT LEFT(public.egisz_error_group_type(err->>'code', err->>'message'), 72) FROM jsonb_array_elements(COALESCE(\"Ошибки JSON\", '[]'::jsonb)) AS e(err) WHERE NULLIF(err->>'message', '') IS NOT NULL OR NULLIF(err->>'code', '') IS NOT NULL LIMIT 1 ), '(ошибка без деталей)' ) AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -618,7 +618,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] AND \"Статус\" = 'error' GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] AND \"Статус\" = 'error' GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -634,7 +634,7 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Тип СЭМД (код · НСИ)"
+          "Код СЭМД"
         ],
         "graph.show_values": true,
         "table": {
@@ -651,8 +651,8 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
+          "[\"name\",\"Код СЭМД\"]": {
+            "column_title": "Код СЭМД"
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
@@ -744,7 +744,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pend_ref AS ( SELECT COALESCE((SELECT MAX(\"Отправлено\") FROM public.v_rpt_documents_no_response_ui), NOW()) AS ref_ts ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Срок ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p CROSS JOIN pend_ref WHERE 1=1 [[AND {{dwh_date}}]] AND p.\"Отправлено\" IS NOT NULL GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))) NULLS LAST",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Срок ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))) NULLS LAST",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -807,7 +807,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT public.egisz_semd_type_report_label(NULLIF(TRIM(p.\"Код СЭМД\"), ''), NULLIF(TRIM(p.\"Наименование СЭМД\"), '')) AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(p.\"Наименование СЭМД\"), ''), NULLIF(TRIM(p.\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -823,7 +823,7 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Тип СЭМД (код · НСИ)"
+          "Наименование СЭМД"
         ],
         "graph.show_values": true,
         "table": {
@@ -840,8 +840,8 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",

@@ -57,7 +57,7 @@ function Test-KubernetesConnection {
 }
 
 function Ensure-DwhDatabasePrivileges {
-    $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "127.0.0.1"
+    $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "host.docker.internal"
     $env:EGISZ_PG_PORT = Get-EnvOrDefault "EGISZ_PG_PORT" "5432"
     $env:EGISZ_PG_ADMIN_USER = Get-EnvOrDefault "EGISZ_PG_ADMIN_USER" "postgres"
     $env:EGISZ_PG_ADMIN_PASSWORD = Get-EnvOrDefault "EGISZ_PG_ADMIN_PASSWORD" "postgres"
@@ -78,13 +78,24 @@ dwh_db = os.environ["EGISZ_DWH_DB"]
 elt_user = os.environ["EGISZ_DWH_ELT_USER"]
 elt_password = os.environ["EGISZ_DWH_ELT_PASSWORD"]
 
-admin_conn = psycopg2.connect(
-    host=host,
-    port=port,
-    user=admin_user,
-    password=admin_password,
-    database="postgres",
-)
+print(f"Checking external PostgreSQL target for Airflow runtime: {admin_user}@{host}:{port}/{dwh_db}")
+
+def connect_or_fail(database: str):
+    try:
+        return psycopg2.connect(
+            host=host,
+            port=port,
+            user=admin_user,
+            password=admin_password,
+            database=database,
+            connect_timeout=10,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to connect to PostgreSQL as {admin_user}@{host}:{port}/{database}: {exc!r}"
+        ) from exc
+
+admin_conn = connect_or_fail("postgres")
 admin_conn.autocommit = True
 with admin_conn.cursor() as cur:
     cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (elt_user,))
@@ -98,13 +109,7 @@ with admin_conn.cursor() as cur:
         cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dwh_db)))
 admin_conn.close()
 
-dwh_conn = psycopg2.connect(
-    host=host,
-    port=port,
-    user=admin_user,
-    password=admin_password,
-    database=dwh_db,
-)
+dwh_conn = connect_or_fail(dwh_db)
 dwh_conn.autocommit = True
 with dwh_conn.cursor() as cur:
     cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(dwh_db), sql.Identifier(elt_user)))
@@ -155,6 +160,9 @@ dwh_conn.close()
 
 print(f"DWH privileges OK: {elt_user}@{host}:{port}/{dwh_db} can CREATE in public")
 '@ | py -
+    if ($LASTEXITCODE -ne 0) {
+        throw "External PostgreSQL DWH privilege bootstrap failed for ${env:EGISZ_PG_ADMIN_USER}@${env:EGISZ_PG_HOST}:${env:EGISZ_PG_PORT}/${env:EGISZ_DWH_DB}"
+    }
 }
 
 function Ensure-SecretFiles {
@@ -172,9 +180,9 @@ function Ensure-AirflowInternalMetadataDatabase {
         return
     }
 
-    $schedulerDeployment = kubectl get deployment/airflow-scheduler --ignore-not-found -o name
-    if ([string]::IsNullOrWhiteSpace($schedulerDeployment)) {
-        Write-Host "Airflow scheduler is not present yet; Helm will initialize airflow_db on first startup."
+    $schedulerPod = kubectl get pods -l component=scheduler,release=airflow --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if ([string]::IsNullOrWhiteSpace($schedulerPod)) {
+        Write-Host "Airflow scheduler pod is not running yet; Helm will initialize airflow_db on first startup."
         return
     }
 
@@ -197,7 +205,7 @@ with conn.cursor() as cur:
         cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier("airflow_db")))
 conn.close()
 print("Airflow internal metadata database airflow_db is present")
-'@ | kubectl exec -i deploy/airflow-scheduler -c scheduler -- python -
+'@ | kubectl exec -i pod/$schedulerPod -c scheduler -- python -
     }
 }
 
@@ -286,7 +294,7 @@ function Install-Airflow {
     }
 
     Write-Host "Bootstrapping external DWH schema through Airflow connection dwh_egisz_pg..."
-    $metabaseReplicas = Suspend-MetabaseForDwhBootstrap
+    $metabaseReplicas = [int](@(Suspend-MetabaseForDwhBootstrap)[-1])
     try {
         Invoke-Checked "Bootstrap DWH through Airflow" {
             kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01

@@ -116,5 +116,9 @@ def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors(
 
     assert "Не указан адрес пациента" in sql
     assert "Сетевая ошибка: " in sql
+    assert "'Сетевая ошибка'" in sql
+    assert "ошибка связи (транспорт)" not in sql
+    assert "Наименование СЭМД отсутствует в справочнике СЭМД" in sql
+    assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
     assert "egisz_error_interpretation_rules" in sql
     assert "v_rpt_error_interpretations_ui" in sql

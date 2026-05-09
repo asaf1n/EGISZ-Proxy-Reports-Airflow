@@ -1,14 +1,24 @@
 """
-Дополняет metabase-field-filters у native-карточек с template-tag type=dimension.
-
-Логика согласована с metabase/setup-dashboards.sh (resolve_field_id_simple):
-table_ref + field_name должны совпасть с метаданными Metabase после sync_schema.
+Дополняет metabase-field-filters у native-карточек и переводит
+поддерживаемые text template-tags в настоящие dimension field filters.
 """
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
+
+
+DIMENSION_TAGS = {
+    "top_semd",
+    "top_clinic",
+    "local_uid",
+    "relates_to",
+    "emdr_id",
+    "status",
+    "log_id",
+    "egmid",
+    "err_parse_code",
+}
 
 
 def _resolve(
@@ -31,6 +41,55 @@ def _resolve(
             return "public.v_rpt_clinic_connectivity_daily_ui", "День"
         return "public.v_rpt_connectivity_global_daily_ui", "День"
 
+    if tag_name == "top_semd":
+        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
+            return "public.v_rpt_documents_no_response_ui", "Код СЭМД"
+        if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
+            return "public.v_rpt_network_errors_detail_ui", "Код СЭМД"
+        return "public.v_egisz_transactions_enriched_ui", "Код СЭМД"
+
+    if tag_name == "top_clinic":
+        if "v_health_by_clinic_ui" in q:
+            return "public.v_health_by_clinic_ui", "JID клиники"
+        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
+            return "public.v_rpt_documents_no_response_ui", "JID клиники"
+        if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
+            return "public.v_rpt_network_errors_detail_ui", "JID клиники"
+        return "public.v_egisz_transactions_enriched_ui", "JID клиники"
+
+    if tag_name == "local_uid":
+        if "v_stg_channel_errors_by_document" in q:
+            return "public.v_stg_channel_errors_by_document", "local_uid_hint"
+        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
+            return "public.v_rpt_documents_no_response_ui", "localUid СЭМД"
+        return "public.v_egisz_transactions_enriched_ui", "localUid СЭМД"
+
+    if tag_name == "relates_to":
+        if "v_stg_channel_errors_by_document" in q:
+            return "public.v_stg_channel_errors_by_document", "relates_to_id"
+        return "public.v_egisz_transactions_enriched_ui", "Связанное сообщение"
+
+    if tag_name == "emdr_id":
+        if "v_stg_channel_errors_by_document" in q:
+            return "public.v_stg_channel_errors_by_document", "emdr_id_hint"
+        return "public.v_egisz_transactions_enriched_ui", "Рег. номер РЭМД (emdrid)"
+
+    if tag_name == "status":
+        return "public.v_egisz_transactions_enriched_ui", "Статус"
+
+    if tag_name == "log_id":
+        if "v_stg_channel_errors_by_document" in q:
+            return "public.v_stg_channel_errors_by_document", "exchangelog_log_id"
+        return "public.v_egisz_transactions_enriched_ui", "LOGID журнала EXCHANGELOG"
+
+    if tag_name == "egmid":
+        if "v_stg_channel_errors_by_document" in q:
+            return "public.v_stg_channel_errors_by_document", "egisz_messages_egmid"
+        return "public.v_egisz_transactions_enriched_ui", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
+
+    if tag_name == "err_parse_code":
+        return "public.v_stg_channel_errors_by_document", "error_code"
+
     if tag_name != "dwh_date":
         return None
 
@@ -48,11 +107,9 @@ def _resolve(
     if "Обработано IPS" in disp:
         return "public.v_egisz_transactions_enriched_ui", "Обработано IPS"
 
-    # «По дате «Обработано»» и прочие формулировки витрины колбэков
     if "Обработано" in disp and "Отправлено" not in disp:
         return "public.v_egisz_transactions_enriched_ui", "Обработано IPS"
 
-    # Fallback по таблицам в SQL (порядок: узкие витрины раньше)
     if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
         return "public.v_rpt_documents_no_response_ui", "Отправлено"
     if "v_rpt_semd_archive_ui" in q:
@@ -74,13 +131,18 @@ def patch_file(path: Path) -> int:
         tags = native.get("template-tags") or {}
         if not tags:
             continue
+
         ff = dict(card.get("metabase-field-filters") or {})
         changed = False
         for tname, tdef in tags.items():
+            if tname in DIMENSION_TAGS and (tdef or {}).get("type") != "dimension":
+                tdef["type"] = "dimension"
+                changed = True
             if (tdef or {}).get("type") != "dimension":
                 continue
             if tname in ff:
                 continue
+
             resolved = _resolve(tname, tdef, query)
             if not resolved:
                 raise RuntimeError(f"{path.name} / {card.get('name')!r}: cannot resolve dimension {tname!r}")
@@ -88,8 +150,10 @@ def patch_file(path: Path) -> int:
             ff[tname] = {"table_ref": tr, "field_name": fn}
             changed = True
             n += 1
+
         if changed:
             card["metabase-field-filters"] = ff
+
     if n:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return n
