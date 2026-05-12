@@ -449,6 +449,48 @@ AS $$
     );
 $$;
 
+CREATE OR REPLACE FUNCTION public.egisz_extract_jid_from_endpoint(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT NULLIF((regexp_match(COALESCE(p_text, ''), 'gost-([0-9]+)', 'i'))[1], '');
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_clean_text_value(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT NULLIF(
+        btrim(
+            regexp_replace(
+                regexp_replace(COALESCE(p_text, ''), '<[^>]+>', ' ', 'g'),
+                '\s+',
+                ' ',
+                'g'
+            )
+        ),
+        ''
+    );
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_normalize_semd_code(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    WITH normalized AS (
+        SELECT public.egisz_clean_text_value(p_text) AS value
+    )
+    SELECT CASE
+        WHEN value IS NULL THEN NULL
+        WHEN regexp_match(value, '([0-9]+(?:\.[0-9]+)*)') IS NOT NULL THEN (regexp_match(value, '([0-9]+(?:\.[0-9]+)*)'))[1]
+        ELSE split_part(value, ' ', 1)
+    END
+    FROM normalized;
+$$;
+
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.egisz_clean_host(mo_domen));
 
 CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (
@@ -464,23 +506,44 @@ CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (
 INSERT INTO egisz_error_interpretation_rules (rule_code, priority, match_code, match_pattern, interpretation)
 VALUES
     ('schematron_patient_address_type', 10, 'VALIDATION_ERROR', '(?is)(Schematron|схематрон).*patientRole.*addr.*address:Type', 'Не указан адрес пациента'),
-    ('xsd_validation', 20, NULL, '(?is)(\bcvc-|XML_VALIDATION_ERROR|xsd|Invalid content was found|not complete|not valid)', 'Ошибка XSD-валидации XML: проверьте структуру СЭМД по руководству реализации'),
-    ('nsi_dictionary_value', 30, NULL, '(?is)(Справочник OID|codeSystem|codeSystemVersion|верси[яи].*справочник|значени[ея].*НСИ|не соответствует наименованию элемента в НСИ|справочн.*значен)', 'Ошибка справочника НСИ: проверьте OID, версию справочника и значение для вида СЭМД'),
+    ('schematron_org_not_linked_rmis', 11, 'VALIDATION_ERROR', '(?is)не привязана к РМИС', 'Организация не привязана к РМИС'),
+    ('schematron_telecom_missing', 12, 'VALIDATION_ERROR', '(?is)(telecom).*(не пустым значением|@value)|Ошибка заполнения номера телефона', 'Некорректно заполнен телефон'),
+    ('xsd_validation', 20, NULL, '(?is)(\bcvc-|XML_VALIDATION_ERROR|xsd|Invalid content was found|not complete|not valid)', 'Ошибка XSD-валидации XML'),
+    ('document_already_registered', 25, 'NOT_UNIQUE_PROVIDED_ID', '(?is).*', 'Документ уже зарегистрирован в РЭМД'),
+    ('patient_data_gip', 26, 'PATIENT_MPI_MISMATCH', '(?is).*', 'Данные пациента не соответствуют ГИП'),
+    ('doctor_position_frmr', 27, 'PERSON_POST_IN_FRMR_MISMATCH', '(?is).*', 'Должность врача не соответствует данным ФРМР'),
+    ('person_not_found_frmr', 28, 'PERSON_NOT_FOUND', '(?is).*', 'Медработник не найден в ФРМР'),
+    ('staff_data_frmr', 29, 'VALUE_MISMATCH_METADATA_AND_FRMR', '(?is).*', 'Данные медработника не соответствуют ФРМР'),
+    ('signature_metadata_certificate', 30, 'VALUE_MISMATCH_METADATA_AND_CERTIFICATE', '(?is)не найдена актуальная.*карточка МР', 'Подписант из сертификата не найден в ФРМР'),
+    ('signature_metadata_certificate_mismatch', 31, 'VALUE_MISMATCH_METADATA_AND_CERTIFICATE', '(?is).*', 'Данные подписи не соответствуют данным документа'),
+    ('nsi_dictionary_version', 32, 'INVALID_DICTIONARY_OID', '(?is).*', 'Неактуальная версия справочника НСИ'),
+    ('nsi_dictionary_code', 33, 'INVALID_ELEMENT_VALUE_CODE', '(?is).*', 'Код отсутствует в справочнике НСИ'),
+    ('nsi_dictionary_name', 34, 'INVALID_ELEMENT_VALUE_NAME', '(?is).*', 'Наименование не соответствует справочнику НСИ'),
+    ('nsi_dictionary_value', 35, NULL, '(?is)(Справочник OID|codeSystem|codeSystemVersion|верси[яи].*справочник|значени[ея].*НСИ|не соответствует наименованию элемента в НСИ|справочн.*значен)', 'Ошибка справочника НСИ'),
     ('rmis_registration_disabled', 40, 'DISABLED_RMIS', '(?is).*', 'ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС'),
     ('rmis_registration_missing', 41, 'NO_RMIS', '(?is).*', 'ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные'),
     ('document_metadata_mismatch', 50, 'ATTRIBUTE_MISMATCH', '(?is).*', 'Метаописание документа не соответствует зарегистрированному в РЭМД'),
     ('document_provider_unavailable', 51, 'MIS_NOT_AVAILABLE', '(?is).*', 'Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile'),
     ('document_registry_item_missing', 52, 'REGISTRY_ITEM_NOT_FOUND', '(?is).*', 'Запрашиваемая запись ЭМД не найдена в предоставляющей ИС'),
     ('document_file_not_sent', 53, 'FILE_WAS_NOT_SENT', '(?is).*', 'ИС не передала файл ЭМД в ответе getDocumentFile'),
-    ('document_provider_response_error', 54, 'RMIS_ERROR', '(?is).*', 'Ошибка ответа предоставляющей ИС при получении файла ЭМД'),
-    ('document_file_get_error', 55, 'GET_DOCUMENT_FILE_ERROR', '(?is).*', 'Ошибка получения файла ЭМД из предоставляющей ИС'),
-    ('signature_certificate_chain', 60, NULL, '(?is)(CANT_BUILD_CERT_CHAIN|цепочк.*сертификат|аккредитованн.*УЦ)', 'Ошибка цепочки сертификата УКЭП: проверьте сертификат организации и аккредитованный УЦ'),
+    ('document_provider_response_error', 54, 'RMIS_ERROR', '(?is).*', 'Не удалось получить файл ЭМД из предоставляющей ИС'),
+    ('document_file_get_error', 55, 'GET_DOCUMENT_FILE_ERROR', '(?is).*', 'Не удалось получить файл ЭМД из предоставляющей ИС'),
+    ('document_file_runtime_error', 56, NULL, '(?is)(getDocumentFile|получения файла ЭМД|файлового хранилища)', 'Не удалось получить файл ЭМД из предоставляющей ИС'),
+    ('signature_certificate_chain', 60, NULL, '(?is)(CANT_BUILD_CERT_CHAIN|цепочк.*сертификат|аккредитованн.*УЦ)', 'Недействительный сертификат подписи'),
     ('signature_doc_date_mismatch', 61, NULL, '(?is)(DOC_DATE_MISMATCH_CERT_NOT_BEFORE|сертификат.*не действителен.*дат[уы] создания)', 'Сертификат подписи недействителен на дату создания документа'),
-    ('person_snils', 70, NULL, '(?is)(СНИЛС|SNILS)', 'Ошибка идентификации по СНИЛС: проверьте данные пациента или медработника'),
-    ('person_frmr', 71, NULL, '(?is)(ФРМР|медработник|автор|author|должност|speciality)', 'Ошибка данных медработника/автора: проверьте запись в ФРМР и реквизиты автора СЭМД'),
-    ('remd_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб)', 'Техническая ошибка на стороне РЭМД: повторите отправку позже или направьте обращение в СТП ЕГИСЗ'),
+    ('signature_verification_error', 62, 'SIGNATURE_VERIFICATION_ERROR', '(?is).*', 'Не удалось проверить электронную подпись'),
+    ('person_snils', 70, NULL, '(?is)(СНИЛС|SNILS)', 'СНИЛС не найден или не соответствует данным пациента/медработника'),
+    ('doctor_position_frmr_text', 71, NULL, '(?is)(ФРМР|FRMR).*(должност|specialit|специальност)|(должност|specialit|специальност).*(ФРМР|FRMR)|(должност|specialit|специальност).*(не соответств|не совпад|не найден)', 'Должность врача не соответствует данным ФРМР'),
+    ('patient_data_gip_text', 72, NULL, '(?is)(ГИП|GIP).*(пациент|patient)|(пациент|patient).*(ГИП|GIP)|(данн|сведени).*(пациент|patient).*(не соответств|не совпад|не найден)', 'Данные пациента не соответствуют ГИП'),
+    ('person_frmr', 73, NULL, '(?is)(ФРМР|медработник|автор|author)', 'Данные медработника не соответствуют ФРМР'),
+    ('recipient_mismatch', 74, 'RECIPIENT_INFO_MISMATCH', '(?is).*', 'Получатель из запроса не найден в СЭМД'),
+    ('document_kind_not_actual', 75, 'NO_DOCUMENT_KIND_ON_DATE', '(?is).*', 'Вид документа не актуален на дату создания'),
+    ('object_not_found', 76, 'OBJECT_NOT_FOUND', '(?is).*', 'Подразделение или запись справочника не найдены на дату документа'),
+    ('doctor_patronymic_mismatch', 77, 'INVALID_DOCTOR_PATRONYMIC', '(?is).*', 'Отчество врача не соответствует данным СЭМД'),
+    ('runtime_request_processing', 79, 'RUNTIME_ERROR', '(?is)Невозможно обработать запрос', 'РЭМД не смог обработать запрос'),
+    ('remd_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб)', 'Техническая ошибка на стороне РЭМД'),
     ('transport_network', 90, NULL, '(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)', 'Сетевая ошибка'),
-    ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'ошибка асинхронного ответа РЭМД')
+    ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'Ошибка регистрации в РЭМД')
 ON CONFLICT (rule_code) DO UPDATE SET
     priority = EXCLUDED.priority,
     match_code = EXCLUDED.match_code,
@@ -519,6 +582,14 @@ BEGIN
 
     IF t ~* 'patientRole' AND t ~* 'addr' THEN
         RETURN 'Проверьте адрес пациента';
+    END IF;
+
+    IF t ~* '(ФРМР|FRMR)' AND t ~* '(должност|specialit|специальност)' THEN
+        RETURN 'Должность врача не соответствует данным в ФРМР';
+    END IF;
+
+    IF t ~* '(ГИП|GIP)' AND t ~* '(пациент|patient)' THEN
+        RETURN 'Данные пациента не соответствуют ГИП';
     END IF;
 
     IF rid IS NOT NULL THEN
@@ -698,6 +769,10 @@ BEGIN
         RETURN 'Сетевая ошибка';
     END IF;
 
+    IF normalized ~* '(асинхронн.*ответ.*рэмд|ns2status|^remd\b|^рэмд\b)' THEN
+        RETURN 'Ошибка регистрации в РЭМД';
+    END IF;
+
     RETURN normalized;
 END;
 $$;
@@ -718,6 +793,35 @@ AS $$
         SELECT
             o,
             NULLIF(btrim(public.egisz_error_interpretation_item(e->>'code', e->>'message')), '') AS t
+        FROM normalized n
+        CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
+    ),
+    first_pos AS (
+        SELECT t, MIN(o) AS first_o
+        FROM items
+        WHERE t IS NOT NULL
+        GROUP BY t
+    )
+    SELECT NULLIF(string_agg(t, ' · ' ORDER BY first_o), '')
+    FROM first_pos;
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_error_messages_row(p_errors jsonb)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    WITH normalized AS (
+        SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
+            WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
+            WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
+            ELSE '[]'::jsonb
+        END AS payload
+    ),
+    items AS (
+        SELECT
+            o,
+            NULLIF(btrim(e->>'message'), '') AS t
         FROM normalized n
         CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
     ),
@@ -793,19 +897,18 @@ STABLE
 AS $$
     WITH resolved AS (
         SELECT
-            NULLIF(btrim(COALESCE(semd_code, '')), '') AS code,
+            public.egisz_normalize_semd_code(semd_code) AS code,
             COALESCE(
                 d.name,
                 CASE
-                    WHEN NULLIF(btrim(COALESCE(semd_name, '')), '') IS NOT NULL
-                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') !~ '^\d+$'
-                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') <> NULLIF(btrim(COALESCE(semd_code, '')), '')
-                     AND NULLIF(btrim(COALESCE(semd_name, '')), '') !~ '[<>]'
-                    THEN NULLIF(btrim(COALESCE(semd_name, '')), '')
+                    WHEN public.egisz_clean_text_value(semd_name) IS NOT NULL
+                     AND public.egisz_clean_text_value(semd_name) !~ '^\d+$'
+                     AND public.egisz_clean_text_value(semd_name) <> public.egisz_normalize_semd_code(semd_code)
+                    THEN public.egisz_clean_text_value(semd_name)
                     ELSE NULL
                 END
             ) AS display_name
-        FROM (SELECT NULLIF(btrim(COALESCE(semd_code, '')), '') AS code) n
+        FROM (SELECT public.egisz_normalize_semd_code(semd_code) AS code) n
         LEFT JOIN dim_semd_types d ON d.code = n.code
     )
     SELECT CASE
@@ -877,8 +980,8 @@ BEGIN
             r.emdr_id,
             r.doc_number,
             r.org_oid,
-            COALESCE(r.kind_xml, r.kind_upper_xml, m.kind) AS semd_code,
-            r.semd_name,
+            public.egisz_normalize_semd_code(COALESCE(r.kind_xml, r.kind_upper_xml, m.kind)) AS semd_code,
+            public.egisz_clean_text_value(r.semd_name) AS semd_name,
             r.error_code,
             r.xml_message,
             r.raw_status,
@@ -886,7 +989,7 @@ BEGIN
             r.creation_date,
             m.egmid,
             COALESCE(m.jid, m.license_jid) AS message_jid,
-            COALESCE(m.kind, m.license_kind) AS message_kind
+            public.egisz_normalize_semd_code(COALESCE(m.kind, m.license_kind)) AS message_kind
         FROM raw_parsed r
         LEFT JOIN LATERAL (
             SELECT candidate.*
@@ -1017,7 +1120,7 @@ SELECT
     public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Подкатегория ошибки (глобально)",
     CASE
         WHEN t.status = 'error' AND t.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN t.status = 'error' THEN public.egisz_error_group_type(t.error_code, t.error_message)
+        WHEN t.status = 'error' THEN COALESCE(NULLIF(public.egisz_error_group_type(t.error_code, t.error_message), ''), 'Ошибка регистрации в РЭМД')
         WHEN t.status = 'success' THEN 'Успешно'
         ELSE COALESCE(t.status, 'unknown')
     END AS "Тип ошибки",
@@ -1025,25 +1128,24 @@ SELECT
     COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибки",
     COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибок",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
-    t.semd_code AS "Код СЭМД",
+    public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
     COALESCE(
         st.name,
         CASE
-            WHEN NULLIF(btrim(t.semd_name), '') IS NOT NULL
-             AND NULLIF(btrim(t.semd_name), '') !~ '^\d+$'
-             AND NULLIF(btrim(t.semd_name), '') <> NULLIF(btrim(t.semd_code), '')
-             AND NULLIF(btrim(t.semd_name), '') !~ '[<>]'
-            THEN NULLIF(btrim(t.semd_name), '')
+            WHEN public.egisz_clean_text_value(t.semd_name) IS NOT NULL
+             AND public.egisz_clean_text_value(t.semd_name) !~ '^\d+$'
+             AND public.egisz_clean_text_value(t.semd_name) <> public.egisz_normalize_semd_code(t.semd_code)
+            THEN public.egisz_clean_text_value(t.semd_name)
             ELSE NULL
         END,
         CASE
-            WHEN NULLIF(btrim(t.semd_code), '') IS NOT NULL
+            WHEN public.egisz_normalize_semd_code(t.semd_code) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
-    COALESCE(t.jid, l.jid)::text AS "JID клиники",
-    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(t.jid, l.jid)::text) AS "Наименование клиники",
+    COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid)::text AS "JID клиники",
+    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid)::text) AS "Наименование клиники",
     t.jid::text AS "JID из журнала (gost, число)",
     o.name AS "Медицинская организация",
     t.org_oid AS "OID организации",
@@ -1055,8 +1157,8 @@ SELECT
     l.jid::text AS "JID (EGISZ_LICENSES)",
     CASE WHEN t.jid IS NOT NULL AND l.jid IS NOT NULL AND t.jid <> l.jid THEN 'да' ELSE 'нет' END AS "Расхождение источников JID",
     t.creation_date AS "Создание СЭМД",
-    NULL::text AS "JID из gost в REPLYTO",
-    NULL::text AS "Токен gost (REPLYTO)",
+    public.egisz_extract_jid_from_endpoint(m.reply_to) AS "JID из gost в REPLYTO",
+    public.egisz_clean_host(m.reply_to) AS "Токен gost (REPLYTO)",
     t.local_uid_semd AS "localUid СЭМД",
     t.local_uid_semd AS "Идентификатор документа (localUid)",
     t.relates_to_id AS "Связанное сообщение",
@@ -1066,21 +1168,34 @@ SELECT
     t.emdr_id AS "Регистрационный номер РЭМД",
     t.doc_number AS "DOCUMENTID",
     t.error_code AS "Код ошибки",
-    COALESCE(t.errors_json, '[]'::jsonb) AS "Ошибки JSON",
+    COALESCE(public.egisz_error_messages_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Ошибки JSON",
     t.exchangelog_log_id AS transaction_id,
-    COALESCE(t.jid, l.jid) AS clinic_id,
-    t.semd_code AS service_id
+    COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
+    public.egisz_normalize_semd_code(t.semd_code) AS service_id
 FROM fact_egisz_transactions t
+LEFT JOIN egisz_messages_raw m ON m.egmid = t.egmid
 LEFT JOIN LATERAL (
     SELECT dl.*
     FROM dim_licenses dl
     WHERE (t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid)
        OR (t.jid IS NOT NULL AND dl.jid = t.jid)
-    ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
+       OR (public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to))
+       OR (
+            public.egisz_clean_host(m.reply_to) IS NOT NULL
+            AND public.egisz_clean_host(dl.mo_domen) = public.egisz_clean_host(m.reply_to)
+       )
+    ORDER BY
+        CASE
+            WHEN t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid THEN 0
+            WHEN t.jid IS NOT NULL AND dl.jid = t.jid THEN 1
+            WHEN public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to) THEN 2
+            ELSE 3
+        END,
+        dl.modifydate DESC NULLS LAST, dl.id DESC
     LIMIT 1
 ) l ON TRUE
-LEFT JOIN dim_semd_types st ON st.code = NULLIF(btrim(t.semd_code), '')
-LEFT JOIN dim_organizations o ON COALESCE(t.jid, l.jid) = o.jid;
+LEFT JOIN dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
+LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid;
 
 COMMENT ON VIEW public.v_egisz_transactions_enriched_ui IS
 'Основная UI-витрина ответов РЭМД для бизнес-аналитики сервиса интеграции клиник с ЕГИСЗ. Идентификаторы JID, EGMID и LOGID выводятся как текст, чтобы Metabase не суммировал их как метрики.';
@@ -1131,10 +1246,11 @@ SELECT
     semd_type AS "Тип СЭМД (код · НСИ)",
     status AS "Статус",
     error_code AS "Код ошибки",
+    COALESCE(NULLIF(error_message, ''), '(без ns2message)') AS "Текст ошибки",
     COALESCE(NULLIF(error_interpretation, ''), '(ошибка без деталей)') AS "Интерпретация ошибки",
     CASE
         WHEN status = 'error' AND error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN status = 'error' THEN COALESCE(NULLIF(error_type, ''), 'Ошибка асинхронного ответа РЭМД')
+        WHEN status = 'error' THEN COALESCE(NULLIF(error_type, ''), 'Ошибка регистрации в РЭМД')
         ELSE '(ошибка без деталей)'
     END AS "Тип ошибки",
     ord AS "Порядок ошибки"
@@ -1155,6 +1271,7 @@ SELECT
     semd_type AS "Тип СЭМД (код · НСИ)",
     status AS "Статус",
     NULL::text AS "Код ошибки",
+    CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Текст ошибки",
     CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
     CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
@@ -1169,8 +1286,8 @@ SELECT
     CASE WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3' ELSE 'PARSE_ERROR' END AS error_code,
     COALESCE(NULLIF(r.logtext, ''), NULLIF(r.msgtext, ''), '(без текста)') AS message,
     CASE WHEN r.logstate = 3 THEN 'network' ELSE 'async_response' END AS error_top_type,
-    CASE WHEN r.logstate = 3 THEN 'Сетевая ошибка' ELSE 'ошибка асинхронного ответа РЭМД' END AS error_global_subcategory,
-    CASE WHEN r.logstate = 3 THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS error_group_label_ru,
+    CASE WHEN r.logstate = 3 THEN 'Сетевая ошибка' ELSE 'Ошибка регистрации в РЭМД' END AS error_global_subcategory,
+    CASE WHEN r.logstate = 3 THEN 'Ошибка связи' ELSE 'Ошибка регистрации в РЭМД' END AS error_group_label_ru,
     r.logid AS exchangelog_log_id,
     r.msgid AS journal_msgid,
     m.egmid AS egisz_messages_egmid,
@@ -1296,10 +1413,12 @@ CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
 WITH messages AS (
     SELECT
         m.*,
-        COALESCE(public.egisz_xml_text(m.msgtext, 'kind'), m.kind) AS semd_code_resolved,
-        COALESCE(public.egisz_xml_text(m.msgtext, 'documentTypeName'), public.egisz_xml_text(m.msgtext, 'name')) AS semd_name_payload,
+        public.egisz_normalize_semd_code(COALESCE(public.egisz_xml_text(m.msgtext, 'kind'), m.kind)) AS semd_code_resolved,
+        public.egisz_clean_text_value(COALESCE(public.egisz_xml_text(m.msgtext, 'documentTypeName'), public.egisz_xml_text(m.msgtext, 'name'))) AS semd_name_payload,
         public.egisz_normalize_message_id(m.msgid) AS msgid_norm,
-        lower(NULLIF(btrim(m.document_id), '')) AS document_id_norm
+        lower(NULLIF(btrim(m.document_id), '')) AS document_id_norm,
+        NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer AS reply_to_jid,
+        public.egisz_clean_host(m.reply_to) AS reply_to_host
     FROM egisz_messages_raw m
 ),
 fact_message_keys AS (
@@ -1326,28 +1445,42 @@ SELECT
     COALESCE(
         st.name,
         CASE
-            WHEN NULLIF(btrim(m.semd_name_payload), '') IS NOT NULL
-             AND NULLIF(btrim(m.semd_name_payload), '') !~ '^\d+$'
-             AND NULLIF(btrim(m.semd_name_payload), '') <> NULLIF(btrim(m.semd_code_resolved), '')
-             AND NULLIF(btrim(m.semd_name_payload), '') !~ '[<>]'
-            THEN NULLIF(btrim(m.semd_name_payload), '')
+            WHEN public.egisz_clean_text_value(m.semd_name_payload) IS NOT NULL
+             AND public.egisz_clean_text_value(m.semd_name_payload) !~ '^\d+$'
+             AND public.egisz_clean_text_value(m.semd_name_payload) <> public.egisz_normalize_semd_code(m.semd_code_resolved)
+            THEN public.egisz_clean_text_value(m.semd_name_payload)
             ELSE NULL
         END,
         CASE
-            WHEN NULLIF(btrim(m.semd_code_resolved), '') IS NOT NULL
+            WHEN public.egisz_normalize_semd_code(m.semd_code_resolved) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
     public.egisz_semd_type_report_label(m.semd_code_resolved, m.semd_name_payload) AS "Тип СЭМД (код · НСИ)",
-    m.jid::text AS "JID клиники",
-    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || m.jid::text) AS "Наименование клиники",
+    COALESCE(m.jid, m.reply_to_jid, l.jid)::text AS "JID клиники",
+    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.jid, m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
     m.reply_to AS "Связанное сообщение",
     m.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     m.msgid AS "MSGID обмена"
 FROM messages m
-LEFT JOIN dim_organizations o ON o.jid = m.jid
-LEFT JOIN dim_semd_types st ON st.code = NULLIF(btrim(m.semd_code_resolved), '')
+LEFT JOIN LATERAL (
+    SELECT dl.*
+    FROM dim_licenses dl
+    WHERE (m.jid IS NOT NULL AND dl.jid = m.jid)
+       OR (m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid)
+       OR (m.reply_to_host IS NOT NULL AND public.egisz_clean_host(dl.mo_domen) = m.reply_to_host)
+    ORDER BY
+        CASE
+            WHEN m.jid IS NOT NULL AND dl.jid = m.jid THEN 0
+            WHEN m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid THEN 1
+            ELSE 2
+        END,
+        dl.modifydate DESC NULLS LAST, dl.id DESC
+    LIMIT 1
+) l ON TRUE
+LEFT JOIN dim_organizations o ON o.jid = COALESCE(m.jid, m.reply_to_jid, l.jid)
+LEFT JOIN dim_semd_types st ON st.code = public.egisz_normalize_semd_code(m.semd_code_resolved)
 LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
 LEFT JOIN fact_document_keys fd ON fd.document_key = m.document_id_norm
 WHERE fm.message_key IS NULL

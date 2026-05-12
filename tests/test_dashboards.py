@@ -24,3 +24,12 @@ def test_operational_error_types_include_network_slice() -> None:
 
     assert "public.v_stg_channel_network_errors_by_document" in query
     assert "'Сетевая ошибка'::text AS \"Тип ошибки\"" in query
+
+
+def test_error_analytics_use_raw_json_column_for_grouping() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    queries = [card["dataset_query"]["native"]["query"] for card in dashboard["cards"] if card.get("dataset_query", {}).get("type") == "native"]
+
+    assert any("v_rpt_error_interpretations_ui" in query for query in queries)
+    assert all("fact_egisz_transactions" not in query for query in queries)
+    assert all("\"Ошибки JSON raw\"" not in query for query in queries)

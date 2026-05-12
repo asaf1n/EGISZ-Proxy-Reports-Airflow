@@ -113,12 +113,22 @@ def test_bootstrap_sql_uses_semd_identifiers_before_transport_host_fallback() ->
 
     assert document_priority in sql
     assert jid_priority in sql
+    assert "CREATE OR REPLACE FUNCTION public.egisz_normalize_semd_code" in sql
+    assert "public.egisz_extract_jid_from_endpoint(m.reply_to)" in sql
+    assert 'COALESCE(m.jid, m.reply_to_jid, l.jid)::text AS "JID клиники"' in sql
 
 
 def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors() -> None:
     sql = _read_bootstrap_sql()
 
     assert "Не указан адрес пациента" in sql
+    assert "Должность врача не соответствует данным в ФРМР" in sql
+    assert "Данные пациента не соответствуют ГИП" in sql
+    assert "Документ уже зарегистрирован в РЭМД" in sql
+    assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
+    assert "Ошибка регистрации в РЭМД" in sql
+    assert "Отказ РЭМД" not in sql
+    assert "Отказ РЭМД (ns2status: error)" not in sql
     assert "Сетевая ошибка: " in sql
     assert "'Сетевая ошибка'" in sql
     assert "ошибка связи (транспорт)" not in sql
@@ -126,6 +136,8 @@ def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors(
     assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
     assert "egisz_error_interpretation_rules" in sql
     assert "v_rpt_error_interpretations_ui" in sql
+    assert 'AS "Ошибки JSON raw"' not in sql
+    assert "egisz_error_messages_row" in sql
     assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
 
 
