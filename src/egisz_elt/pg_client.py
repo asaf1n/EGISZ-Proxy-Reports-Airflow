@@ -152,16 +152,6 @@ def transform_raw_to_facts(
             (min_log_id, max_log_id, min_egmid, max_egmid),
         )
         transformed = int(cur.fetchone()[0] or 0)
-        cur.execute(
-            """
-            SELECT schemaname, matviewname
-            FROM pg_matviews
-            WHERE schemaname = 'public'
-              AND matviewname LIKE 'mv_egisz_%'
-            """
-        )
-        for schema_name, view_name in cur.fetchall():
-            cur.execute(f"REFRESH MATERIALIZED VIEW {schema_name}.{view_name}")
     con.commit()
     return transformed
 

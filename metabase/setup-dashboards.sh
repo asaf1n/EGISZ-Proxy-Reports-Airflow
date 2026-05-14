@@ -193,6 +193,9 @@ dwh_object_exists() {
           SELECT 1 FROM information_schema.tables
           WHERE table_schema = 'public' AND table_name = '${object}'
         ) OR EXISTS (
+          SELECT 1 FROM pg_matviews
+          WHERE schemaname = 'public' AND matviewname = '${object}'
+        ) OR EXISTS (
           SELECT 1 FROM information_schema.routines
           WHERE specific_schema = 'public' AND routine_name = '${object}'
         ) THEN 'ok' ELSE 'missing' END;"

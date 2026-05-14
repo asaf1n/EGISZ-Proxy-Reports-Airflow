@@ -382,13 +382,12 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
     semd_code text,
     semd_name text,
     error_code text,
-    errors_json jsonb DEFAULT '[]'::jsonb,
     creation_date timestamptz,
     processed_at timestamptz DEFAULT now()
 );
 
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS errors_json jsonb DEFAULT '[]'::jsonb;
+ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS errors_json CASCADE;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_subtype text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
@@ -824,8 +823,50 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
+    c text;
+    m text;
     s text;
+    rule_hit text;
 BEGIN
+    c := upper(btrim(COALESCE(error_code, '')));
+    m := btrim(COALESCE(error_message, ''));
+
+    -- Rule-matched interpretations are already human-readable labels — return them as-is.
+    -- Normalization (FIO/UUID replacement) must only run on raw/schematron fallback text.
+    SELECT r.interpretation INTO rule_hit
+    FROM egisz_error_interpretation_rules r
+    WHERE r.is_active
+      AND (r.match_code IS NULL OR r.match_code = c)
+      AND m ~* r.match_pattern
+    ORDER BY r.priority
+    LIMIT 1;
+
+    IF rule_hit IS NOT NULL AND rule_hit <> 'Не указан адрес пациента' THEN
+        RETURN rule_hit;
+    END IF;
+
+    -- Hardcoded shortcuts that egisz_error_interpretation_item returns as clean labels
+    IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR') THEN
+        RETURN 'Техническая ошибка на стороне РЭМД: повторите отправку позже';
+    END IF;
+    IF c IN ('CA_INACCESSIBILITY', 'CA_UNAVAILABLE') THEN
+        RETURN 'Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже';
+    END IF;
+    IF c IN ('ASYNC_RESPONSE_TIMEOUT', 'TIMEOUT') THEN
+        RETURN 'Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже';
+    END IF;
+    IF c IN ('DISABLED_RMIS', 'NO_RMIS', 'ATTRIBUTE_MISMATCH', 'MIS_NOT_AVAILABLE', 'REGISTRY_ITEM_NOT_FOUND', 'FILE_WAS_NOT_SENT', 'RMIS_ERROR', 'GET_DOCUMENT_FILE_ERROR') THEN
+        SELECT r.interpretation INTO rule_hit
+        FROM egisz_error_interpretation_rules r
+        WHERE r.is_active AND r.match_code = c
+        ORDER BY r.priority
+        LIMIT 1;
+        IF rule_hit IS NOT NULL THEN
+            RETURN rule_hit;
+        END IF;
+    END IF;
+
+    -- Raw/schematron fallback — call item then normalize
     s := btrim(COALESCE(public.egisz_error_interpretation_item(error_code, error_message), ''));
     IF s = '' THEN
         RETURN '(ошибка без деталей)';
@@ -1156,18 +1197,23 @@ BEGIN
                 ELSE p.xml_message
             END AS final_error_message
         FROM parsed p
+    ),
+    with_errors AS (
+        SELECT
+            e.*,
+            public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext) AS built_errors_json
+        FROM enriched e
     )
     INSERT INTO fact_egisz_transactions (
         exchangelog_log_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
         doc_number, org_oid, status, error_message, callback_url, egmid, jid, semd_code,
-        semd_name, error_code, errors_json, creation_date, processed_at,
+        semd_name, error_code, creation_date, processed_at,
         error_subtype, error_type, error_summary, error_json_text
     )
     SELECT
         e.logid, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.final_status, e.final_error_message, e.logtext, e.egmid,
         e.resolved_jid, e.resolved_semd_code, e.semd_name, e.error_code,
-        public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext),
         e.creation_date, now(),
         public.egisz_error_interpretation_type(e.error_code, e.final_error_message),
         CASE
@@ -1176,9 +1222,9 @@ BEGIN
             WHEN e.final_status = 'success' THEN 'Успешно'
             ELSE COALESCE(e.final_status, 'unknown')
         END,
-        public.egisz_error_interpretation_row(public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext)),
-        public.egisz_error_messages_row(public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext))
-    FROM enriched e
+        public.egisz_error_interpretation_row(e.built_errors_json),
+        public.egisz_error_messages_row(e.built_errors_json)
+    FROM with_errors e
     ON CONFLICT (exchangelog_log_id) DO UPDATE SET
         log_date = EXCLUDED.log_date,
         message_id = EXCLUDED.message_id,
@@ -1195,7 +1241,6 @@ BEGIN
         semd_code = EXCLUDED.semd_code,
         semd_name = EXCLUDED.semd_name,
         error_code = EXCLUDED.error_code,
-        errors_json = EXCLUDED.errors_json,
         creation_date = EXCLUDED.creation_date,
         processed_at = now(),
         error_subtype = EXCLUDED.error_subtype,
@@ -1205,13 +1250,6 @@ BEGIN
     GET DIAGNOSTICS affected = ROW_COUNT;
     RETURN affected;
 END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.egisz_transform_raw_to_facts(max_log_id bigint)
-RETURNS integer
-LANGUAGE sql
-AS $$
-    SELECT public.egisz_transform_raw_to_facts(0, max_log_id, 0, 0);
 $$;
 
 UPDATE fact_egisz_transactions
@@ -1230,13 +1268,13 @@ DROP VIEW IF EXISTS public.v_rpt_connectivity_global_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_clinic_connectivity_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_network_errors_detail_ui;
 DROP VIEW IF EXISTS public.v_stg_channel_network_errors_by_document;
-DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document CASCADE;
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_stg_channel_errors_by_document;
 DROP VIEW IF EXISTS public.v_rpt_error_interpretations_ui;
 DROP VIEW IF EXISTS public.v_rpt_semd_archive_ui;
 DROP VIEW IF EXISTS public.v_rpt_documents_no_response_ui;
-DROP VIEW IF EXISTS public.v_egisz_transactions_full CASCADE;
-DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE;
+DROP VIEW IF EXISTS public.v_egisz_transactions_full;
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
 
 CREATE MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui AS
@@ -1253,7 +1291,6 @@ SELECT
     t.error_type AS "Тип ошибки",
     t.error_summary AS "Интерпретация ошибок",
     t.error_summary AS "Сводка ошибки",
-    t.error_summary AS "Сводка ошибок",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
     COALESCE(
@@ -1278,7 +1315,6 @@ SELECT
     t.org_oid AS "OID организации",
     l.mo_uid AS "OID клиники",
     public.egisz_clean_host(t.callback_url) AS "Хост клиники (VPN ГОСТ)",
-    public.egisz_clean_host(t.callback_url) AS "Токен gost (LOGTEXT)",
     o.inn AS "ИНН клиники",
     l.mo_domen AS "Токен gost (нецифр., для отображения)",
     l.jid::text AS "JID (EGISZ_LICENSES)",
@@ -1340,9 +1376,6 @@ CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("loc
 CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
 CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
 
-CREATE VIEW public.v_egisz_transactions_full AS
-SELECT * FROM public.v_egisz_transactions_enriched_ui;
-
 CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
 SELECT
     t.log_date AS "Обработано IPS",
@@ -1397,7 +1430,7 @@ SELECT
     CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
-WHERE t.status <> 'error' OR t.errors_json IS NULL OR jsonb_array_length(t.errors_json) = 0;
+WHERE t.status <> 'error' OR t.error_summary IS NULL;
 
 CREATE MATERIALIZED VIEW public.v_stg_channel_errors_by_document AS
 SELECT
