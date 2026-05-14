@@ -19,9 +19,7 @@ from egisz_elt.fb_client import (
 )
 from egisz_elt.pg_client import (
     connect_pg,
-    ensure_tables,
     get_cursors,
-    list_missing_dwh_objects,
     load_raw_messages,
     load_raw_logs,
     sync_directory,
@@ -67,19 +65,6 @@ def _xml_text_values(payload: str | None, tag_name: str) -> set[str]:
     tags=["egisz", "elt", "dwh"],
 )
 def egisz_elt_pipeline() -> None:
-    @task
-    def bootstrap_dwh() -> None:
-        pg_conn = _dwh_connection()
-        try:
-            missing_or_incompatible = sorted(list_missing_dwh_objects(pg_conn))
-            if not missing_or_incompatible:
-                log.info("DWH contract is already satisfied; skipping schema bootstrap.")
-                return
-            log.warning("DWH contract drift detected: %s. Applying schema bootstrap.", missing_or_incompatible)
-            ensure_tables(pg_conn)
-        finally:
-            pg_conn.close()
-
     @task
     def sync_dimensions() -> None:
         log.info("Starting dimension sync from proxy_egisz into dwh_egisz.")
@@ -229,6 +214,22 @@ def egisz_elt_pipeline() -> None:
         return {**load_info, "transformed": transformed}
 
     @task
+    def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
+        if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
+            return load_info
+
+        pg_conn = _dwh_connection()
+        try:
+            with pg_conn.cursor() as cur:
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_transactions_enriched_ui")
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_stg_channel_errors_by_document")
+            pg_conn.commit()
+            log.info("Refreshed materialized views v_egisz_transactions_enriched_ui and v_stg_channel_errors_by_document.")
+        finally:
+            pg_conn.close()
+        return load_info
+
+    @task
     def update_watermark(load_info: dict[str, Any]) -> None:
         if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
             return
@@ -245,14 +246,14 @@ def egisz_elt_pipeline() -> None:
         finally:
             pg_conn.close()
 
-    initialized = bootstrap_dwh()
     dimensions = sync_dimensions()
     extraction = extract_from_proxy()
     loading = load_to_dwh(extraction)
     transformed = transform_data(loading)
-    watermark = update_watermark(transformed)
+    refreshed = refresh_materialized_views(transformed)
+    watermark = update_watermark(refreshed)
 
-    initialized >> dimensions >> extraction >> loading >> transformed >> watermark
+    dimensions >> extraction >> loading >> transformed >> refreshed >> watermark
 
 
 egisz_elt_pipeline()

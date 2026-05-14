@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config *)",
+      "Bash(kubectl logs *)",
+      "Bash(kubectl exec *)",
+      "Bash(kubectl get *)",
+      "Bash(kubectl apply *)",
+      "Bash(kubectl rollout *)",
+      "PowerShell(kubectl exec deploy/metabase -- bash /app/setup-dashboards.sh 2>&1)",
+      "PowerShell(helm uninstall airflow 2>&1)",
+      "PowerShell(kubectl delete -f k8s/metabase/metabase.yaml --ignore-not-found 2>&1)",
+      "PowerShell(kubectl get pvc 2>&1)",
+      "PowerShell(kubectl delete pvc data-airflow-postgresql-0 data-metabase-postgres-0 logs-airflow-triggerer-0 logs-airflow-worker-0 redis-db-airflow-redis-0 2>&1)",
+      "PowerShell(kubectl get all 2>&1)",
+      "PowerShell(.\\\\up.ps1 2>&1)",
+      "Bash(python -)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\artem\\\\EGISZ-Proxy-Reports-Airflow\\\\src\\\\egisz_elt\\\\sql\\\\001_dwh_bootstrap.sql\" -Force)",
+      "Bash(python -c ' *)",
+      "Bash(jq '{name, width, cards_count: \\(.cards | length\\)}' c:/Users/artem/EGISZ-Proxy-Reports-Airflow/metabase_dashboards/*.json)",
+      "PowerShell(kubectl exec deploy/metabase -- curl -s http://localhost:3000/api/health 2>&1)",
+      "PowerShell(kubectl get pods -l app=metabase 2>&1)",
+      "PowerShell(kubectl exec deploy/metabase -- psql -h host.docker.internal -U postgres -d dwh_egisz -c \"SELECT column_name, data_type FROM information_schema.columns WHERE table_name='fact_egisz_transactions' AND column_name IN \\('error_subtype','error_type','error_summary','error_json_text','errors_json'\\) ORDER BY column_name\" 2>&1)",
+      "PowerShell(kubectl exec deploy/metabase -- psql -h host.docker.internal -U postgres -d dwh_egisz -c $q 2>&1)",
+      "PowerShell($q = \"SELECT COALESCE\\(NULLIF\\(TRIM\\(`\"��� ���� \\(��� � ���\\)`\"\\), ''\\), '\\(����\\)'\\) AS t, COUNT\\(DISTINCT `\"���㬥�� \\(���� ����\\)`\"\\) AS cnt FROM public.v_egisz_transactions_enriched_ui GROUP BY 1 ORDER BY 2 DESC LIMIT 5\")",
+      "PowerShell($token = \\(kubectl exec deploy/metabase -- curl -s -X POST http://localhost:3000/api/session -H 'Content-Type: application/json' -d '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null | ConvertFrom-Json\\).id; Write-Host \"Token: $token\")",
+      "PowerShell(kubectl exec deploy/metabase -- curl -s -X POST http://localhost:3000/api/session -H 'Content-Type: application/json' -d '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null)",
+      "PowerShell(kubectl exec deploy/metabase -- curl -s -X POST 'http://localhost:3000/api/session' -H 'Content-Type: application/json' '--data-raw' '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null)"
+    ]
+  }
+}

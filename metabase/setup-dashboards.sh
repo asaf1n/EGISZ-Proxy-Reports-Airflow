@@ -414,6 +414,8 @@ create_or_update_dashboard() {
     api_request PUT "/api/dashboard/${dashboard_id}" "${payload}" >/dev/null
   else
     dashboard_id="$(api_request POST "/api/dashboard" "${payload}" | jq -r '.id')"
+    # POST ignores width in Metabase v0.60 — apply via PUT after creation
+    api_request PUT "/api/dashboard/${dashboard_id}" "${payload}" >/dev/null
   fi
   [ -n "${dashboard_id}" ] && [ "${dashboard_id}" != "null" ] || fail "cannot create or update dashboard from ${file}"
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from importlib import resources
 from typing import Any
 
 import psycopg2
@@ -18,102 +17,9 @@ DIRECTORY_PK_COLUMNS = {
     "dim_organizations": ("jid",),
     "dim_licenses": ("id",),
 }
-REQUIRED_DWH_OBJECTS = {
-    "elt_state",
-    "exchangelog_raw",
-    "egisz_messages_raw",
-    "dim_organizations",
-    "dim_licenses",
-    "dim_semd_types",
-    "egisz_error_interpretation_rules",
-    "fact_egisz_transactions",
-    "egisz_xml_text",
-    "egisz_normalize_message_id",
-    "safe_cast_timestamptz",
-    "egisz_clean_host",
-    "egisz_extract_jid_from_endpoint",
-    "egisz_clean_text_value",
-    "egisz_normalize_semd_code",
-    "egisz_transform_raw_to_facts",
-    "egisz_semd_type_report_label",
-    "egisz_error_interpretation_schematron_chunk",
-    "egisz_error_interpretation_item",
-    "egisz_error_interpretation_type",
-    "egisz_error_interpretation_row",
-    "egisz_error_messages_row",
-    "egisz_xml_error_items",
-    "egisz_build_errors_json",
-    "v_egisz_transactions_enriched_ui",
-    "v_egisz_transactions_full",
-    "v_rpt_error_interpretations_ui",
-    "v_rpt_documents_no_response_ui",
-    "v_rpt_semd_archive_ui",
-    "v_rpt_network_errors_detail_ui",
-    "v_rpt_connectivity_global_daily_ui",
-    "v_rpt_clinic_connectivity_daily_ui",
-    "v_stg_channel_errors_by_document",
-    "v_stg_channel_network_errors_by_document",
-    "v_health_by_clinic_ui",
-    "v_health_proxy_db_ui",
-    "v_health_signals_ui",
-}
-
-REQUIRED_TABLE_COLUMNS = {
-    "exchangelog_raw": {"logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext", "loaded_at"},
-    "egisz_messages_raw": {"egmid", "jid", "kind", "created_at", "msgid", "reply_to", "document_id", "msgtext", "loaded_at"},
-    "dim_organizations": {"jid", "name", "inn", "address", "updated_at"},
-    "dim_licenses": {"id", "service_type", "jid", "mo_uid", "mo_domen", "bdate", "fdate", "kind", "modifydate"},
-    "dim_semd_types": {
-        "code",
-        "type_code",
-        "name",
-        "level",
-        "format_code",
-        "start_date",
-        "end_date",
-        "implementation_guide",
-        "git_link",
-        "oid",
-        "version",
-        "source_url",
-        "updated_at",
-    },
-    "egisz_error_interpretation_rules": {
-        "rule_code",
-        "priority",
-        "match_code",
-        "match_pattern",
-        "interpretation",
-        "is_active",
-        "updated_at",
-    },
-    "fact_egisz_transactions": {
-        "exchangelog_log_id",
-        "log_date",
-        "message_id",
-        "relates_to_id",
-        "local_uid_semd",
-        "emdr_id",
-        "doc_number",
-        "org_oid",
-        "status",
-        "error_message",
-        "callback_url",
-        "egmid",
-        "jid",
-        "semd_code",
-        "semd_name",
-        "error_code",
-        "errors_json",
-        "creation_date",
-        "processed_at",
-    },
-}
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
 RAW_MESSAGE_COLUMNS = ("egmid", "jid", "kind", "created_at", "msgid", "reply_to", "document_id", "msgtext")
-BOOTSTRAP_LOCK_TIMEOUT = "30s"
-BOOTSTRAP_STATEMENT_TIMEOUT = "10min"
 DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 1000
@@ -141,76 +47,6 @@ def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
         password=conn_params.password,
         database=conn_params.schema,
     )
-
-
-def _read_bootstrap_sql() -> str:
-    return resources.files("egisz_elt.sql").joinpath("001_dwh_bootstrap.sql").read_text(encoding="utf-8")
-
-
-def list_missing_dwh_objects(con: psycopg2.extensions.connection) -> set[str]:
-    """Return missing or incompatible DWH metadata for the external warehouse."""
-    with con.cursor() as cur:
-        cur.execute(
-            """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-
-            UNION
-
-            SELECT routine_name
-            FROM information_schema.routines
-            WHERE routine_schema = 'public'
-              AND routine_type = 'FUNCTION'
-            """
-        )
-        existing = {str(row[0]) for row in cur.fetchall()}
-        issues = {f"missing:{name}" for name in REQUIRED_DWH_OBJECTS - existing}
-
-        for table_name, required_columns in REQUIRED_TABLE_COLUMNS.items():
-            if table_name not in existing:
-                continue
-            cur.execute(
-                """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = %s
-                """,
-                (table_name,),
-            )
-            existing_columns = {str(row[0]) for row in cur.fetchall()}
-            issues.update(f"missing_column:{table_name}.{name}" for name in required_columns - existing_columns)
-
-        if "fact_egisz_transactions" in existing:
-            cur.execute(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM pg_index i
-                    JOIN pg_class t ON t.oid = i.indrelid
-                    JOIN pg_namespace n ON n.oid = t.relnamespace
-                    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
-                    WHERE n.nspname = 'public'
-                      AND t.relname = 'fact_egisz_transactions'
-                      AND i.indisprimary
-                      AND a.attname = 'exchangelog_log_id'
-                )
-                """
-            )
-            if not bool(cur.fetchone()[0]):
-                issues.add("incompatible_pk:fact_egisz_transactions")
-
-    return issues
-
-
-def ensure_tables(con: psycopg2.extensions.connection) -> None:
-    """Initialize or heal DWH tables, SQL functions, and Metabase-facing views."""
-    with con.cursor() as cur:
-        cur.execute("SET LOCAL lock_timeout = %s", (BOOTSTRAP_LOCK_TIMEOUT,))
-        cur.execute("SET LOCAL statement_timeout = %s", (BOOTSTRAP_STATEMENT_TIMEOUT,))
-        cur.execute(_read_bootstrap_sql())
-    con.commit()
 
 
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> tuple[int, int]:

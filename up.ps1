@@ -9,19 +9,6 @@ $ImageTag = Get-Date -Format "yyyyMMddHHmmss"
 $AirflowImage = "egisz-airflow-worker:${ImageTag}"
 $MetabaseImage = "egisz-metabase:${ImageTag}"
 
-function Get-EnvOrDefault {
-    param(
-        [string]$Name,
-        [string]$DefaultValue
-    )
-
-    $value = [Environment]::GetEnvironmentVariable($Name)
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        return $DefaultValue
-    }
-    return $value
-}
-
 function Invoke-Checked {
     param(
         [string]$Description,
@@ -53,115 +40,6 @@ function Test-KubernetesConnection {
     }
     if ($LASTEXITCODE -ne 0) {
         throw "Kubernetes cluster '${context}' is not reachable. Check Docker Desktop Kubernetes or kubeconfig."
-    }
-}
-
-function Set-DwhDatabasePrivileges {
-    $env:EGISZ_PG_HOST = Get-EnvOrDefault "EGISZ_PG_HOST" "localhost"
-    $env:EGISZ_PG_PORT = Get-EnvOrDefault "EGISZ_PG_PORT" "5432"
-    $env:EGISZ_PG_ADMIN_USER = Get-EnvOrDefault "EGISZ_PG_ADMIN_USER" "postgres"
-    $env:EGISZ_PG_ADMIN_PASSWORD = Get-EnvOrDefault "EGISZ_PG_ADMIN_PASSWORD" "postgres"
-    $env:EGISZ_DWH_DB = Get-EnvOrDefault "EGISZ_DWH_DB" "dwh_egisz"
-    $env:EGISZ_DWH_ELT_USER = Get-EnvOrDefault "EGISZ_DWH_ELT_USER" "egisz"
-    $env:EGISZ_DWH_ELT_PASSWORD = Get-EnvOrDefault "EGISZ_DWH_ELT_PASSWORD" "egisz"
-
-    @'
-import os
-import psycopg2
-from psycopg2 import sql
-
-host = os.environ["EGISZ_PG_HOST"]
-port = int(os.environ["EGISZ_PG_PORT"])
-admin_user = os.environ["EGISZ_PG_ADMIN_USER"]
-admin_password = os.environ["EGISZ_PG_ADMIN_PASSWORD"]
-dwh_db = os.environ["EGISZ_DWH_DB"]
-elt_user = os.environ["EGISZ_DWH_ELT_USER"]
-elt_password = os.environ["EGISZ_DWH_ELT_PASSWORD"]
-
-print(f"Checking external PostgreSQL target for Airflow runtime: {admin_user}@{host}:{port}/{dwh_db}")
-
-def connect_or_fail(database: str):
-    try:
-        return psycopg2.connect(
-            host=host,
-            port=port,
-            user=admin_user,
-            password=admin_password,
-            database=database,
-            connect_timeout=10,
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to connect to PostgreSQL as {admin_user}@{host}:{port}/{database}: {exc!r}"
-        ) from exc
-
-admin_conn = connect_or_fail("postgres")
-admin_conn.autocommit = True
-with admin_conn.cursor() as cur:
-    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (elt_user,))
-    if cur.fetchone() is None:
-        cur.execute(
-            sql.SQL("CREATE ROLE {} LOGIN PASSWORD %s").format(sql.Identifier(elt_user)),
-            (elt_password,),
-        )
-    cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (dwh_db,))
-    if cur.fetchone() is None:
-        cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(dwh_db)))
-admin_conn.close()
-
-dwh_conn = connect_or_fail(dwh_db)
-dwh_conn.autocommit = True
-with dwh_conn.cursor() as cur:
-    cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(dwh_db), sql.Identifier(elt_user)))
-    cur.execute(sql.SQL("GRANT USAGE, CREATE ON SCHEMA public TO {}").format(sql.Identifier(elt_user)))
-    cur.execute(
-        """
-        SELECT n.nspname, c.relname, c.relkind
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
-        ORDER BY c.relkind, c.relname
-        """,
-    )
-    for schema_name, object_name, relkind in cur.fetchall():
-        if relkind in ("r", "p"):
-            command = sql.SQL("ALTER TABLE {}.{} OWNER TO {}")
-        elif relkind == "v":
-            command = sql.SQL("ALTER VIEW {}.{} OWNER TO {}")
-        elif relkind == "m":
-            command = sql.SQL("ALTER MATERIALIZED VIEW {}.{} OWNER TO {}")
-        elif relkind == "S":
-            command = sql.SQL("ALTER SEQUENCE {}.{} OWNER TO {}")
-        else:
-            continue
-        cur.execute(command.format(sql.Identifier(schema_name), sql.Identifier(object_name), sql.Identifier(elt_user)))
-
-    cur.execute(
-        """
-        SELECT p.oid::regprocedure::text AS signature
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public'
-        ORDER BY p.proname
-        """
-    )
-    for (signature,) in cur.fetchall():
-        cur.execute(sql.SQL("ALTER FUNCTION {} OWNER TO {}").format(sql.SQL(signature), sql.Identifier(elt_user)))
-
-    cur.execute(
-        "SELECT has_schema_privilege(%s, 'public', 'CREATE'), has_schema_privilege(%s, 'public', 'USAGE')",
-        (elt_user, elt_user),
-    )
-    can_create, can_usage = cur.fetchone()
-    if not (can_create and can_usage):
-        raise RuntimeError(f"{elt_user} is still missing public schema privileges in {dwh_db}")
-dwh_conn.close()
-
-print(f"DWH privileges OK: {elt_user}@{host}:{port}/{dwh_db} can CREATE in public")
-'@ | py -
-    if ($LASTEXITCODE -ne 0) {
-        throw "External PostgreSQL DWH privilege bootstrap failed for ${env:EGISZ_PG_ADMIN_USER}@${env:EGISZ_PG_HOST}:${env:EGISZ_PG_PORT}/${env:EGISZ_DWH_DB}"
     }
 }
 
@@ -206,52 +84,6 @@ with conn.cursor() as cur:
 conn.close()
 print("Airflow internal metadata database airflow_db is present")
 '@ | kubectl exec -i pod/$schedulerPod -c scheduler -- python -
-    }
-}
-
-function Suspend-MetabaseForDwhBootstrap {
-    Write-Host "Checking whether Metabase must be paused before DWH bootstrap..."
-    $deployment = kubectl get deployment/metabase --ignore-not-found -o name
-    if ([string]::IsNullOrWhiteSpace($deployment)) {
-        Write-Host "Metabase deployment is not present; no BI queries can block DWH bootstrap."
-        return 0
-    }
-
-    $replicasText = kubectl get deployment/metabase -o jsonpath='{.spec.replicas}'
-    if ([string]::IsNullOrWhiteSpace($replicasText)) {
-        $replicasText = "1"
-    }
-    $replicas = [int]$replicasText
-    if ($replicas -le 0) {
-        Write-Host "Metabase is already paused."
-        return 0
-    }
-
-    Write-Host "Pausing Metabase (${replicas} replica(s)) so dashboard queries do not hold DWH DDL locks..."
-    Invoke-Checked "Pause Metabase before DWH bootstrap" {
-        kubectl scale deployment/metabase --replicas=0
-    }
-    Invoke-Checked "Wait for Metabase pause" {
-        kubectl rollout status deployment/metabase --timeout=120s
-    }
-    return $replicas
-}
-
-function Restore-MetabaseAfterDwhBootstrap {
-    param(
-        [int]$Replicas
-    )
-
-    if ($Replicas -le 0) {
-        return
-    }
-
-    Write-Host "Restoring Metabase to ${Replicas} replica(s)..."
-    Invoke-Checked "Restore Metabase after DWH bootstrap" {
-        kubectl scale deployment/metabase --replicas=$Replicas
-    }
-    Invoke-Checked "Wait for Metabase restore" {
-        kubectl rollout status deployment/metabase --timeout=300s
     }
 }
 
@@ -319,28 +151,7 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 '@ | py -
     }
 
-    Write-Host "Keeping egisz_elt_dag paused until Airflow broker and DWH bootstrap are ready..."
-    Invoke-Checked "Pause egisz_elt_dag during Airflow warm-up" {
-        kubectl exec deploy/airflow-scheduler -c scheduler -- airflow dags pause egisz_elt_dag
-    }
-
-    Write-Host "Bootstrapping external DWH schema through Airflow connection dwh_egisz_pg..."
-    $metabaseReplicas = [int](@(Suspend-MetabaseForDwhBootstrap)[-1])
-    try {
-        Write-Host "Ensuring external PostgreSQL DWH privileges for Airflow ELT user..."
-        Set-DwhDatabasePrivileges
-
-        Invoke-Checked "Bootstrap DWH through Airflow" {
-            kubectl exec deploy/airflow-scheduler -- airflow tasks test egisz_elt_dag bootstrap_dwh 2026-01-01
-        }
-    } finally {
-        Restore-MetabaseAfterDwhBootstrap -Replicas $metabaseReplicas
-    }
-
-    Write-Host "Unpausing egisz_elt_dag after Airflow warm-up and DWH bootstrap..."
-    Invoke-Checked "Unpause egisz_elt_dag after Airflow warm-up" {
-        kubectl exec deploy/airflow-scheduler -c scheduler -- airflow dags unpause egisz_elt_dag
-    }
+    Write-Host "Airflow is ready. Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' to initialize the DWH, then unpause egisz_elt_dag."
 }
 
 function Install-Metabase {
@@ -357,10 +168,16 @@ function Install-Metabase {
         docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile .
     }
 
-    Write-Host "Starting Metabase..."
+    Write-Host "Starting Metabase PostgreSQL and Metabase..."
     Invoke-Checked "Apply Metabase deployment" {
         kubectl apply -f k8s/metabase/metabase.yaml
     }
+
+    Write-Host "Waiting for Metabase PostgreSQL to be ready..."
+    Invoke-Checked "Wait for Metabase PostgreSQL" {
+        kubectl rollout status statefulset/metabase-postgres --timeout=120s
+    }
+
     Invoke-Checked "Set Metabase image" {
         kubectl set image deployment/metabase metabase=$MetabaseImage
     }

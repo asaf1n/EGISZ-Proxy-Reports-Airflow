@@ -1,3 +1,29 @@
+\encoding UTF8
+-- DWH initialization script for EGISZ proxy reports.
+-- Run once (and re-run safely on updates) as PostgreSQL superuser against dwh_egisz.
+--
+-- Prerequisites — execute as superuser against the 'postgres' database:
+--   CREATE ROLE egisz LOGIN PASSWORD 'egisz';
+--   CREATE DATABASE dwh_egisz;
+--
+-- Usage:
+--   psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+
+SET lock_timeout = '30s';
+SET statement_timeout = '10min';
+
+-- Idempotent role creation
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'egisz') THEN
+        EXECUTE format('CREATE ROLE egisz LOGIN PASSWORD %L', 'egisz');
+    END IF;
+END;
+$$;
+
+GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
+GRANT USAGE, CREATE ON SCHEMA public TO egisz;
+
 CREATE TABLE IF NOT EXISTS elt_state (
     pipeline text PRIMARY KEY,
     last_log_id bigint DEFAULT 0,
@@ -73,9 +99,8 @@ CREATE TABLE IF NOT EXISTS dim_semd_types (
     end_date date,
     implementation_guide text,
     git_link text,
-    oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1520',
-    version text NOT NULL DEFAULT '12.48',
-    source_url text NOT NULL DEFAULT 'C:\Users\artem\Downloads\1.2.643.5.1.13.13.11.1520_12.48_json.zip',
+    oid text,
+    version text,
     updated_at timestamptz DEFAULT now()
 );
 
@@ -86,10 +111,14 @@ ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS start_date date;
 ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS end_date date;
 ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS implementation_guide text;
 ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS git_link text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1520';
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS version text NOT NULL DEFAULT '12.48';
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS source_url text NOT NULL DEFAULT 'C:\Users\artem\Downloads\1.2.643.5.1.13.13.11.1520_12.48_json.zip';
+ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS oid text;
+ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS version text;
 ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+ALTER TABLE dim_semd_types ALTER COLUMN oid DROP NOT NULL;
+ALTER TABLE dim_semd_types ALTER COLUMN oid DROP DEFAULT;
+ALTER TABLE dim_semd_types ALTER COLUMN version DROP NOT NULL;
+ALTER TABLE dim_semd_types ALTER COLUMN version DROP DEFAULT;
+ALTER TABLE dim_semd_types DROP COLUMN IF EXISTS source_url;
 
 INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)
 VALUES
@@ -334,9 +363,6 @@ ON CONFLICT (code) DO UPDATE SET
     end_date = EXCLUDED.end_date,
     implementation_guide = EXCLUDED.implementation_guide,
     git_link = EXCLUDED.git_link,
-    oid = EXCLUDED.oid,
-    version = EXCLUDED.version,
-    source_url = EXCLUDED.source_url,
     updated_at = now();
 
 CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
@@ -364,6 +390,10 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS errors_json jsonb DEFAULT '[]'::jsonb;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
+ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_subtype text;
+ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
+ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_summary text;
+ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_json_text text;
 
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
@@ -379,6 +409,10 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid ON fact_egisz_transactions (
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid_norm ON fact_egisz_transactions (lower(NULLIF(btrim(local_uid_semd), '')));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_emdr_id ON fact_egisz_transactions (emdr_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to ON fact_egisz_transactions (relates_to_id);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_error_type ON fact_egisz_transactions (error_type);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_egmid ON fact_egisz_transactions (egmid);
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
 
 CREATE OR REPLACE FUNCTION public.egisz_xml_text(payload text, tag_name text)
 RETURNS text
@@ -542,6 +576,40 @@ VALUES
     ('doctor_patronymic_mismatch', 77, 'INVALID_DOCTOR_PATRONYMIC', '(?is).*', 'Отчество врача не соответствует данным СЭМД'),
     ('runtime_request_processing', 79, 'RUNTIME_ERROR', '(?is)Невозможно обработать запрос', 'РЭМД не смог обработать запрос'),
     ('remd_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб)', 'Техническая ошибка на стороне РЭМД'),
+    -- Schematron VALIDATION_ERROR — уточнённые паттерны по полям CDA
+    ('schematron_author_specialty', 13, 'VALIDATION_ERROR', '(?is)(assignedAuthor.*code.*codeSystem|assignedAuthor.*specialit|специальност.*автор|автор.*специальност)', 'Специальность врача не соответствует справочнику НСИ'),
+    ('schematron_author_snils', 14, 'VALIDATION_ERROR', '(?is)(assignedAuthor.*(SNILS|СНИЛС|snils)|author.*(СНИЛС|snils))', 'СНИЛС автора (врача) не заполнен или некорректен'),
+    ('schematron_patient_birth', 15, 'VALIDATION_ERROR', '(?is)(patientRole.*birthTime|birthTime.*patient)', 'Дата рождения пациента не заполнена или некорректна'),
+    ('schematron_patient_name', 16, 'VALIDATION_ERROR', '(?is)(patientRole.*(name|given|family)|(given|family).*patientRole)', 'ФИО пациента не заполнено или некорректно'),
+    ('schematron_patient_snils', 17, 'VALIDATION_ERROR', '(?is)(patientRole.*(SNILS|СНИЛС)|patient.*(SNILS|СНИЛС))', 'СНИЛС пациента не заполнен или некорректен'),
+    ('schematron_legal_auth', 18, 'VALIDATION_ERROR', '(?is)legalAuthenticator', 'Данные заверителя документа не заполнены или некорректны'),
+    ('schematron_creation_time', 19, 'VALIDATION_ERROR', '(?is)(creationTime.*(не заполнен|некорректн|не указан|обязател))', 'Дата/время создания документа не заполнены или некорректны'),
+    ('schematron_doc_code', 21, 'VALIDATION_ERROR', '(?is)(ClinicalDocument/code|тип документа.*(справочник|OID|codeSystem))', 'Код типа документа не соответствует справочнику НСИ'),
+    ('schematron_custodian', 22, 'VALIDATION_ERROR', '(?is)(custodian|representedCustodianOrganization)', 'Данные хранителя документа не заполнены'),
+    ('schematron_org_repr', 23, 'VALIDATION_ERROR', '(?is)(assignedAuthor.*representedOrganization|representedOrganization.*author)', 'Данные организации автора документа не заполнены'),
+    -- Ошибки регистрации/поиска документов в РЭМД
+    ('document_not_found_remd', 36, 'DOCUMENT_NOT_FOUND', '(?is).*', 'Документ не найден в РЭМД'),
+    ('invalid_emdr_id', 37, 'INVALID_EMDR_ID', '(?is).*', 'Неверный идентификатор документа РЭМД'),
+    ('organization_not_found', 38, 'ORGANIZATION_NOT_FOUND', '(?is).*', 'Организация не найдена в реестре РЭМД'),
+    ('access_denied_remd', 39, 'ACCESS_DENIED', '(?is).*', 'Доступ к операции запрещён в РЭМД'),
+    ('duplicate_request', 42, 'DUPLICATE_REQUEST', '(?is).*', 'Дублирующий запрос'),
+    ('unsupported_document_type', 43, 'UNSUPPORTED_DOCUMENT_TYPE', '(?is).*', 'Неподдерживаемый тип СЭМД в РЭМД'),
+    ('invalid_request_format', 44, 'INVALID_REQUEST_FORMAT', '(?is).*', 'Неверный формат запроса'),
+    ('organization_license_not_found', 45, 'ORGANIZATION_LICENSE_NOT_FOUND', '(?is).*', 'Лицензия организации не найдена'),
+    ('invalid_snils_code', 46, 'INVALID_SNILS', '(?is).*', 'Неверный формат или контрольная сумма СНИЛС'),
+    ('organization_not_registered', 47, 'ORGANIZATION_NOT_REGISTERED', '(?is).*', 'Организация не зарегистрирована в РЭМД'),
+    -- Ошибки сертификата и подписи
+    ('certificate_expired', 57, NULL, '(?is)(сертификат.*истёк|истекш.*сертификат|срок.*действи.*сертификат.*истёк|certificate.*expired)', 'Сертификат ЭП истёк'),
+    ('certificate_revoked', 58, NULL, '(?is)(сертификат.*отозван|certificate.*revoked|revoked.*certificate)', 'Сертификат ЭП отозван'),
+    ('crl_unavailable', 63, NULL, '(?is)(CRL|список.*отозванн|OCSP|сервис.*проверк.*сертификат)', 'Недоступен сервис проверки статуса сертификата (CRL/OCSP)'),
+    -- Таймаут и УЦ (code-based, дополнение к уже существующим)
+    ('async_response_timeout_code', 64, 'ASYNC_RESPONSE_TIMEOUT', '(?is).*', 'Таймаут асинхронной обработки на стороне РЭМД'),
+    ('ca_unavailable_code', 65, 'CA_UNAVAILABLE', '(?is).*', 'Недоступен сервис проверки подписи (УЦ) на стороне РЭМД'),
+    ('ca_inaccessibility_code', 66, 'CA_INACCESSIBILITY', '(?is).*', 'Недоступен сервис проверки подписи (УЦ) на стороне РЭМД'),
+    -- Аннулирование, текстовые паттерны
+    ('document_revoked_text', 67, NULL, '(?is)(аннулирован.*документ|документ.*аннулирован)', 'Документ аннулирован'),
+    ('xml_parse_error', 68, NULL, '(?is)(SAXParseException|org\.xml|ParseError|XML.*parse.*error)', 'Ошибка разбора XML-структуры документа'),
+    ('snils_invalid_text', 69, NULL, '(?is)(СНИЛС.*неверн|неверн.*СНИЛС|СНИЛС.*контрольн|контрольн.*СНИЛС)', 'Неверный формат или контрольная сумма СНИЛС'),
     ('transport_network', 90, NULL, '(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)', 'Сетевая ошибка'),
     ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'Ошибка регистрации в РЭМД')
 ON CONFLICT (rule_code) DO UPDATE SET
@@ -568,35 +636,83 @@ BEGIN
 
     rid := (regexp_match(t, 'У[0-9]+(?:[.-][0-9A-Za-z.]+)*'))[1];
 
+    -- Адрес пациента
     IF t ~* 'address:Type' AND t ~* 'patientRole' AND t ~* 'addr' THEN
         RETURN 'Не указан адрес пациента';
     END IF;
+    IF t ~* 'patientRole' AND t ~* 'addr' THEN
+        RETURN 'Адрес пациента не заполнен или некорректен';
+    END IF;
 
+    -- ДУЛ (документ, удостоверяющий личность)
     IF t ~* 'identity:IssueDate' OR (t ~* 'IdentityDoc' AND t ~* 'IssueDate') THEN
         RETURN 'ДУЛ: не заполнена дата выдачи документа';
     END IF;
-
     IF t ~* 'IdentityCardType' THEN
         RETURN 'ДУЛ: проверьте тип документа / реквизиты удостоверения';
     END IF;
 
-    IF t ~* 'patientRole' AND t ~* 'addr' THEN
-        RETURN 'Проверьте адрес пациента';
+    -- Данные пациента
+    IF t ~* 'patientRole' AND t ~* 'birthTime' THEN
+        RETURN 'Дата рождения пациента не заполнена или некорректна';
+    END IF;
+    IF t ~* 'patientRole' AND t ~* '(name|given|family)' THEN
+        RETURN 'ФИО пациента не заполнено или некорректно';
+    END IF;
+    IF t ~* 'patientRole' AND t ~* '(SNILS|СНИЛС)' THEN
+        RETURN 'СНИЛС пациента не заполнен или некорректен';
     END IF;
 
+    -- ФРМР / автор / должность
     IF t ~* '(ФРМР|FRMR)' AND t ~* '(должност|specialit|специальност)' THEN
         RETURN 'Должность врача не соответствует данным в ФРМР';
     END IF;
+    IF t ~* 'assignedAuthor' AND t ~* '(SNILS|СНИЛС)' THEN
+        RETURN 'СНИЛС автора (врача) не заполнен или некорректен';
+    END IF;
+    IF t ~* 'assignedAuthor' AND t ~* '(specialit|code.*codeSystem|специальност)' THEN
+        RETURN 'Специальность врача не соответствует справочнику НСИ';
+    END IF;
+    IF t ~* 'assignedAuthor' AND t ~* 'representedOrganization' THEN
+        RETURN 'Данные организации автора документа не заполнены';
+    END IF;
 
+    -- ГИП / пациент
     IF t ~* '(ГИП|GIP)' AND t ~* '(пациент|patient)' THEN
         RETURN 'Данные пациента не соответствуют ГИП';
     END IF;
 
-    IF rid IS NOT NULL THEN
-        RETURN 'Правило ' || rid || ': ' || left(t, 200) || CASE WHEN length(t) > 200 THEN '...' ELSE '' END;
+    -- Заверитель (legalAuthenticator)
+    IF t ~* 'legalAuthenticator' THEN
+        RETURN 'Данные заверителя документа не заполнены или некорректны';
     END IF;
 
-    RETURN 'Проверка схемы: ' || left(t, 220) || CASE WHEN length(t) > 220 THEN '...' ELSE '' END;
+    -- Хранитель (custodian)
+    IF t ~* 'custodian' THEN
+        RETURN 'Данные хранителя документа не заполнены';
+    END IF;
+
+    -- Дата создания
+    IF t ~* 'creationTime' THEN
+        RETURN 'Дата/время создания документа не заполнены или некорректны';
+    END IF;
+
+    -- Код типа документа
+    IF t ~* 'ClinicalDocument/code' THEN
+        RETURN 'Код типа документа не соответствует справочнику НСИ';
+    END IF;
+
+    -- НСИ / справочник
+    IF t ~* '(codeSystem|codeSystemVersion|OID.*справочник|справочник.*OID)' THEN
+        RETURN 'Ошибка справочника НСИ в элементе документа';
+    END IF;
+
+    -- Fallback: группируем по номеру правила без сырого текста
+    IF rid IS NOT NULL THEN
+        RETURN 'Ошибка Schematron-валидации (правило ' || rid || ')';
+    END IF;
+
+    RETURN 'Ошибка Schematron-валидации (прочие требования)';
 END;
 $$;
 
@@ -909,7 +1025,7 @@ AS $$
                 END
             ) AS display_name
         FROM (SELECT public.egisz_normalize_semd_code(semd_code) AS code) n
-        LEFT JOIN dim_semd_types d ON d.code = n.code
+        LEFT JOIN public.dim_semd_types d ON d.code = n.code
     )
     SELECT CASE
         WHEN code IS NULL AND display_name IS NULL THEN '(неизвестно)'
@@ -1044,14 +1160,24 @@ BEGIN
     INSERT INTO fact_egisz_transactions (
         exchangelog_log_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
         doc_number, org_oid, status, error_message, callback_url, egmid, jid, semd_code,
-        semd_name, error_code, errors_json, creation_date, processed_at
+        semd_name, error_code, errors_json, creation_date, processed_at,
+        error_subtype, error_type, error_summary, error_json_text
     )
     SELECT
         e.logid, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.final_status, e.final_error_message, e.logtext, e.egmid,
         e.resolved_jid, e.resolved_semd_code, e.semd_name, e.error_code,
         public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext),
-        e.creation_date, now()
+        e.creation_date, now(),
+        public.egisz_error_interpretation_type(e.error_code, e.final_error_message),
+        CASE
+            WHEN e.final_status = 'error' AND e.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+            WHEN e.final_status = 'error' THEN COALESCE(NULLIF(public.egisz_error_group_type(e.error_code, e.final_error_message), ''), 'Ошибка регистрации в РЭМД')
+            WHEN e.final_status = 'success' THEN 'Успешно'
+            ELSE COALESCE(e.final_status, 'unknown')
+        END,
+        public.egisz_error_interpretation_row(public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext)),
+        public.egisz_error_messages_row(public.egisz_build_errors_json(e.final_status, e.error_code, e.final_error_message, e.msgtext))
     FROM enriched e
     ON CONFLICT (exchangelog_log_id) DO UPDATE SET
         log_date = EXCLUDED.log_date,
@@ -1071,7 +1197,11 @@ BEGIN
         error_code = EXCLUDED.error_code,
         errors_json = EXCLUDED.errors_json,
         creation_date = EXCLUDED.creation_date,
-        processed_at = now();
+        processed_at = now(),
+        error_subtype = EXCLUDED.error_subtype,
+        error_type = EXCLUDED.error_type,
+        error_summary = EXCLUDED.error_summary,
+        error_json_text = EXCLUDED.error_json_text;
     GET DIAGNOSTICS affected = ROW_COUNT;
     RETURN affected;
 END;
@@ -1100,14 +1230,16 @@ DROP VIEW IF EXISTS public.v_rpt_connectivity_global_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_clinic_connectivity_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_network_errors_detail_ui;
 DROP VIEW IF EXISTS public.v_stg_channel_network_errors_by_document;
-DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document;
+DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS public.v_stg_channel_errors_by_document;
 DROP VIEW IF EXISTS public.v_rpt_error_interpretations_ui;
 DROP VIEW IF EXISTS public.v_rpt_semd_archive_ui;
 DROP VIEW IF EXISTS public.v_rpt_documents_no_response_ui;
-DROP VIEW IF EXISTS public.v_egisz_transactions_full;
-DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
+DROP VIEW IF EXISTS public.v_egisz_transactions_full CASCADE;
+DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
 
-CREATE OR REPLACE VIEW public.v_egisz_transactions_enriched_ui AS
+CREATE MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui AS
 SELECT
     t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
     t.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
@@ -1117,16 +1249,11 @@ SELECT
     t.log_date::date AS "День (тренд)",
     COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
-    public.egisz_error_interpretation_type(t.error_code, t.error_message) AS "Подкатегория ошибки (глобально)",
-    CASE
-        WHEN t.status = 'error' AND t.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN t.status = 'error' THEN COALESCE(NULLIF(public.egisz_error_group_type(t.error_code, t.error_message), ''), 'Ошибка регистрации в РЭМД')
-        WHEN t.status = 'success' THEN 'Успешно'
-        ELSE COALESCE(t.status, 'unknown')
-    END AS "Тип ошибки",
-    COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Интерпретация ошибок",
-    COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибки",
-    COALESCE(public.egisz_error_interpretation_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Сводка ошибок",
+    t.error_subtype AS "Подкатегория ошибки (глобально)",
+    t.error_type AS "Тип ошибки",
+    t.error_summary AS "Интерпретация ошибок",
+    t.error_summary AS "Сводка ошибки",
+    t.error_summary AS "Сводка ошибок",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
     COALESCE(
@@ -1168,118 +1295,111 @@ SELECT
     t.emdr_id AS "Регистрационный номер РЭМД",
     t.doc_number AS "DOCUMENTID",
     t.error_code AS "Код ошибки",
-    COALESCE(public.egisz_error_messages_row(t.errors_json), CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END) AS "Ошибки JSON",
+    t.error_json_text AS "Ошибки JSON",
     t.exchangelog_log_id AS transaction_id,
     COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
     public.egisz_normalize_semd_code(t.semd_code) AS service_id
 FROM fact_egisz_transactions t
 LEFT JOIN egisz_messages_raw m ON m.egmid = t.egmid
 LEFT JOIN LATERAL (
-    SELECT dl.*
-    FROM dim_licenses dl
-    WHERE (t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid)
-       OR (t.jid IS NOT NULL AND dl.jid = t.jid)
-       OR (public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to))
-       OR (
-            public.egisz_clean_host(m.reply_to) IS NOT NULL
-            AND public.egisz_clean_host(dl.mo_domen) = public.egisz_clean_host(m.reply_to)
-       )
-    ORDER BY
-        CASE
-            WHEN t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid THEN 0
-            WHEN t.jid IS NOT NULL AND dl.jid = t.jid THEN 1
-            WHEN public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to) THEN 2
-            ELSE 3
-        END,
-        dl.modifydate DESC NULLS LAST, dl.id DESC
+    SELECT candidate.*
+    FROM (
+        (SELECT dl.*, 0 AS _prio
+         FROM dim_licenses dl
+         WHERE t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid
+         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
+        UNION ALL
+        (SELECT dl.*, 1 AS _prio
+         FROM dim_licenses dl
+         WHERE t.jid IS NOT NULL AND dl.jid = t.jid
+         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
+        UNION ALL
+        (SELECT dl.*, 2 AS _prio
+         FROM dim_licenses dl
+         WHERE public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL
+           AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to)
+         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
+        UNION ALL
+        (SELECT dl.*, 3 AS _prio
+         FROM dim_licenses dl
+         WHERE public.egisz_clean_host(m.reply_to) IS NOT NULL
+           AND public.egisz_clean_host(dl.mo_domen) = public.egisz_clean_host(m.reply_to)
+         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
+    ) candidate
+    ORDER BY _prio, modifydate DESC NULLS LAST, id DESC
     LIMIT 1
 ) l ON TRUE
-LEFT JOIN dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
+LEFT JOIN public.dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
 LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid;
 
-COMMENT ON VIEW public.v_egisz_transactions_enriched_ui IS
-'Основная UI-витрина ответов РЭМД для бизнес-аналитики сервиса интеграции клиник с ЕГИСЗ. Идентификаторы JID, EGMID и LOGID выводятся как текст, чтобы Metabase не суммировал их как метрики.';
+CREATE UNIQUE INDEX ON public.v_egisz_transactions_enriched_ui (transaction_id);
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("День");
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("JID клиники");
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("Статус");
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("localUid СЭМД"), '')));
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
+CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
 
-CREATE OR REPLACE VIEW public.v_egisz_transactions_full AS
+CREATE VIEW public.v_egisz_transactions_full AS
 SELECT * FROM public.v_egisz_transactions_enriched_ui;
 
 CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
-WITH facts AS (
-    SELECT
-        t.exchangelog_log_id,
-        t.log_date,
-        COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS document_key,
-        t.local_uid_semd,
-        t.emdr_id,
-        t.relates_to_id,
-        t.jid,
-        public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS semd_type,
-        t.status,
-        CASE jsonb_typeof(COALESCE(t.errors_json, '[]'::jsonb))
-            WHEN 'array' THEN COALESCE(t.errors_json, '[]'::jsonb)
-            WHEN 'object' THEN jsonb_build_array(COALESCE(t.errors_json, '{}'::jsonb))
-            ELSE '[]'::jsonb
-        END AS errors_payload
-    FROM fact_egisz_transactions t
-),
-expanded AS (
-    SELECT
-        f.*,
-        elem.ord,
-        elem.err->>'code' AS error_code,
-        elem.err->>'message' AS error_message,
-        public.egisz_error_interpretation_item(elem.err->>'code', elem.err->>'message') AS error_interpretation,
-        public.egisz_error_interpretation_type(elem.err->>'code', elem.err->>'message') AS error_subtype,
-        public.egisz_error_group_type(elem.err->>'code', elem.err->>'message') AS error_type
-    FROM facts f
-    CROSS JOIN LATERAL jsonb_array_elements(f.errors_payload) WITH ORDINALITY AS elem(err, ord)
-)
 SELECT
-    log_date AS "Обработано IPS",
-    log_date::date AS "День (тренд)",
-    exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    document_key AS "Документ (ключ учёта)",
-    local_uid_semd AS "localUid СЭМД",
-    emdr_id AS "Рег. номер РЭМД (emdrid)",
-    relates_to_id AS "Связанное сообщение",
-    jid::text AS "JID клиники",
-    semd_type AS "Тип СЭМД (код · НСИ)",
-    status AS "Статус",
-    error_code AS "Код ошибки",
-    COALESCE(NULLIF(error_message, ''), '(без ns2message)') AS "Текст ошибки",
-    COALESCE(NULLIF(error_interpretation, ''), '(ошибка без деталей)') AS "Интерпретация ошибки",
+    t.log_date AS "Обработано IPS",
+    t.log_date::date AS "День (тренд)",
+    t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
+    COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
+    t.local_uid_semd AS "localUid СЭМД",
+    t.emdr_id AS "Рег. номер РЭМД (emdrid)",
+    t.relates_to_id AS "Связанное сообщение",
+    t.jid::text AS "JID клиники",
+    public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
+    t.status AS "Статус",
     CASE
-        WHEN status = 'error' AND error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        WHEN status = 'error' THEN COALESCE(NULLIF(error_type, ''), 'Ошибка регистрации в РЭМД')
-        ELSE '(ошибка без деталей)'
+        WHEN t.status = 'error' THEN t.error_code
+        ELSE NULL
+    END AS "Код ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_json_text, ''), '(без ns2message)')
+        ELSE ''
+    END AS "Текст ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), '(ошибка без деталей)')
+        ELSE ''
+    END AS "Интерпретация ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'error' THEN t.error_type
+        ELSE ''
     END AS "Тип ошибки",
-    ord AS "Порядок ошибки"
-FROM expanded
-WHERE status = 'error'
+    1::bigint AS "Порядок ошибки"
+FROM fact_egisz_transactions t
+WHERE t.status = 'error'
 
 UNION ALL
 
 SELECT
-    log_date AS "Обработано IPS",
-    log_date::date AS "День (тренд)",
-    exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    document_key AS "Документ (ключ учёта)",
-    local_uid_semd AS "localUid СЭМД",
-    emdr_id AS "Рег. номер РЭМД (emdrid)",
-    relates_to_id AS "Связанное сообщение",
-    jid::text AS "JID клиники",
-    semd_type AS "Тип СЭМД (код · НСИ)",
-    status AS "Статус",
+    t.log_date AS "Обработано IPS",
+    t.log_date::date AS "День (тренд)",
+    t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
+    COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
+    t.local_uid_semd AS "localUid СЭМД",
+    t.emdr_id AS "Рег. номер РЭМД (emdrid)",
+    t.relates_to_id AS "Связанное сообщение",
+    t.jid::text AS "JID клиники",
+    public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
+    t.status AS "Статус",
     NULL::text AS "Код ошибки",
-    CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Текст ошибки",
-    CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
-    CASE WHEN status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
+    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Текст ошибки",
+    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
+    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
-FROM facts
-WHERE status <> 'error'
-   OR jsonb_array_length(errors_payload) = 0;
+FROM fact_egisz_transactions t
+WHERE t.status <> 'error' OR t.errors_json IS NULL OR jsonb_array_length(t.errors_json) = 0;
 
-CREATE OR REPLACE VIEW public.v_stg_channel_errors_by_document AS
+CREATE MATERIALIZED VIEW public.v_stg_channel_errors_by_document AS
 SELECT
     r.logid AS id,
     COALESCE(r.createdate, r.loaded_at) AS created_at,
@@ -1350,6 +1470,12 @@ WHERE r.logstate = 3
    OR COALESCE(r.msgtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%ошиб%';
+
+CREATE UNIQUE INDEX ON public.v_stg_channel_errors_by_document (id);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (error_top_type);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (document_group_key);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (journal_msgid);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (created_at);
 
 CREATE OR REPLACE VIEW public.v_stg_channel_network_errors_by_document AS
 SELECT *
@@ -1631,3 +1757,74 @@ SELECT * FROM (
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Ключ документа (группировка)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'EXCHANGELOG LOGSTATE=3 и журнал ошибок', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
+
+-- Очистка исторических placeholder-значений '???????' в колонках интерпретации ошибок.
+-- Эти значения были записаны старой версией egisz_transform_raw_to_facts и не несут смысла.
+-- Новая версия функции записывает NULL для строк без ошибок.
+-- Очистка исторических placeholder-значений '???????' и артефактов 'Успешно' в error-колонках.
+-- Для строк без ошибок (success/unknown) error_summary и error_json_text должны быть NULL.
+UPDATE public.fact_egisz_transactions
+SET
+    error_summary   = NULL,
+    error_json_text = NULL,
+    error_type      = CASE WHEN status = 'success' THEN 'Успешно' ELSE NULLIF(error_type, '???????') END,
+    error_subtype   = NULLIF(error_subtype, '???????')
+WHERE error_summary   IN ('???????', 'Успешно') OR
+      error_json_text IN ('???????', 'Успешно') OR
+      error_type      = '???????' OR
+      error_subtype   = '???????';
+
+-- Transfer ownership of all public-schema objects to egisz so it can run DDL independently
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    FOR r IN
+        SELECT c.relname, c.relkind
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+    LOOP
+        IF r.relkind IN ('r', 'p') THEN
+            EXECUTE format('ALTER TABLE public.%I OWNER TO egisz', r.relname);
+        ELSIF r.relkind = 'v' THEN
+            EXECUTE format('ALTER VIEW public.%I OWNER TO egisz', r.relname);
+        ELSIF r.relkind = 'm' THEN
+            EXECUTE format('ALTER MATERIALIZED VIEW public.%I OWNER TO egisz', r.relname);
+        ELSIF r.relkind = 'S' THEN
+            EXECUTE format('ALTER SEQUENCE public.%I OWNER TO egisz', r.relname);
+        END IF;
+    END LOOP;
+
+    FOR r IN
+        SELECT p.oid::regprocedure::text AS sig
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+    LOOP
+        EXECUTE format('ALTER FUNCTION %s OWNER TO egisz', r.sig);
+    END LOOP;
+END;
+$$;
+
+DO $$
+DECLARE
+    can_create boolean;
+    can_usage  boolean;
+BEGIN
+    SELECT
+        has_schema_privilege('egisz', 'public', 'CREATE'),
+        has_schema_privilege('egisz', 'public', 'USAGE')
+    INTO can_create, can_usage;
+
+    IF NOT (can_create AND can_usage) THEN
+        RAISE EXCEPTION 'egisz is still missing public schema privileges';
+    END IF;
+END;
+$$;
+
+REFRESH MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui;
+REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document;
+
+\echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'
