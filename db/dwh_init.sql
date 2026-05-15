@@ -10,7 +10,7 @@
 --   psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 SET lock_timeout = '30s';
-SET statement_timeout = '10min';
+SET statement_timeout = '60min';
 
 -- Idempotent role creation
 DO $$
@@ -388,7 +388,9 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
 ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS errors_json CASCADE;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_subtype text;
+-- error_subtype упразднён: его роль теперь играет плоский error_type
+-- (см. egisz_error_classify). Колонка удаляется идемпотентно.
+ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS error_subtype;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_json_text text;
@@ -428,9 +430,15 @@ BEGIN
     IF safe_tag = '' THEN
         RETURN NULL;
     END IF;
+    -- NB: inner capture uses `[^<]*` rather than `(.*?)`. In PostgreSQL ARE the
+    -- greediness of the entire regex is locked by the FIRST quantifier; the
+    -- optional `:?` prefix makes that one greedy and silently turns the
+    -- nominally non-greedy `.*?` greedy too, which spilled `<ns2:code>VALIDATION_ERROR</ns2:code>...`
+    -- across siblings into a single match. `[^<]*` cannot cross a tag boundary,
+    -- so the first matching pair is always returned.
     match := regexp_match(
         payload,
-        '<(?:[A-Za-z0-9_]+:)?' || safe_tag || '(?:\s[^>]*)?>(.*?)</(?:[A-Za-z0-9_]+:)?' || safe_tag || '>',
+        '<(?:[A-Za-z0-9_]+:)?' || safe_tag || '(?:\s[^>]*)?>([^<]*)</(?:[A-Za-z0-9_]+:)?' || safe_tag || '>',
         'is'
     );
     IF match IS NULL THEN
@@ -618,7 +626,12 @@ VALUES
     ('dul_patient_text', 78, NULL, '(?is)ДУЛ[^А-Яа-я]|реквизит.*удостоверени', 'Документ, удостоверяющий личность пациента: некорректные реквизиты'),
     ('patient_birth_text', 15, NULL, '(?is)Дата рождения пациента|birthTime', 'Дата рождения пациента не заполнена или некорректна'),
     ('remd_runtime_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб|невозможно обработать)', 'Техническая ошибка на стороне РЭМД'),
-    ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'Ошибка регистрации в РЭМД')
+    -- Сертификат организации: специальный case для распознанного кода РЭМД
+    ('cert_org_validity_expired', 56, 'CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT', '(?is).*', 'Срок действия сертификата организации истек'),
+    -- Несоответствие данных организации в ФРМО (ОГРН и подобные)
+    ('org_ogrn_frmo_mismatch', 11, NULL, '(?is)(ОГРН|ОКПО|КПП|ИНН).*(СЭМД|ФРМО).*(не совпада|не соответств)|ОГРН МО.*не совпада|ФРМО.*(не совпада|не соответств).*организац', 'Несоответствие данных организации в ФРМО'),
+    -- Generic fallback для прочих организационных ошибок
+    ('org_generic_fallback', 95, NULL, '(?is)(организаци|ОГРН|ФРМО|лицензи)', 'Ошибки организации')
 ON CONFLICT (rule_code) DO UPDATE SET
     priority = EXCLUDED.priority,
     match_code = EXCLUDED.match_code,
@@ -626,6 +639,13 @@ ON CONFLICT (rule_code) DO UPDATE SET
     interpretation = EXCLUDED.interpretation,
     is_active = true,
     updated_at = now();
+
+-- Деактивируем generic-фолбэк, который раньше отдавал «Ошибка регистрации в РЭМД».
+-- При отсутствии конкретного типа теперь подставляется «Неизвестная ошибка»
+-- в egisz_error_classify (см. ниже).
+UPDATE egisz_error_interpretation_rules
+SET is_active = false, updated_at = now()
+WHERE rule_code = 'remd_async_response';
 
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_schematron_chunk(p_chunk text)
 RETURNS text
@@ -757,7 +777,7 @@ BEGIN
     ORDER BY r.priority
     LIMIT 1;
 
-    IF interpreted IS NOT NULL AND interpreted <> 'Не указан адрес пациента' THEN
+    IF interpreted IS NOT NULL THEN
         RETURN interpreted;
     END IF;
 
@@ -831,188 +851,63 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    c text;
-    m text;
-    s text;
-    rule_hit text;
+    label text;
 BEGIN
-    c := upper(btrim(COALESCE(error_code, '')));
-    m := btrim(COALESCE(error_message, ''));
-    -- Strip XML tags so contaminated messages match rules cleanly.
-    -- Cyrillic placeholders <ФИО>/<поле> survive because [a-zA-Z] won't match them.
-    m := regexp_replace(m, '</?[a-zA-Z][a-zA-Z0-9:]*(?:\s[^>]*)?>?', ' ', 'g');
-    m := btrim(regexp_replace(m, '\s+', ' ', 'g'));
-
-    -- Rule-matched interpretations are already human-readable labels — return them as-is.
-    -- Normalization (FIO/UUID replacement) must only run on raw/schematron fallback text.
-    SELECT r.interpretation INTO rule_hit
-    FROM egisz_error_interpretation_rules r
-    WHERE r.is_active
-      AND (r.match_code IS NULL OR r.match_code = c)
-      AND m ~* r.match_pattern
-    ORDER BY r.priority
-    LIMIT 1;
-
-    IF rule_hit IS NOT NULL AND rule_hit <> 'Не указан адрес пациента' THEN
-        RETURN rule_hit;
+    -- egisz_error_interpretation_item возвращает уже канонические лейблы
+    -- (правило из egisz_error_interpretation_rules ИЛИ название из
+    -- schematron-chunk). Нормализация ФИО/UUID/<...> здесь не нужна и
+    -- даже вредна: «case-insensitive» регэксп 3-слов случайно матчит
+    -- «Не указан адрес» и калечит лейбл в «<ФИО> пациента». Поэтому
+    -- просто обрезаем длину и возвращаем как есть.
+    label := btrim(COALESCE(public.egisz_error_interpretation_item(error_code, error_message), ''));
+    IF label = '' THEN
+        RETURN 'Неизвестная ошибка';
     END IF;
-
-    -- Hardcoded shortcuts that egisz_error_interpretation_item returns as clean labels
-    IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR') THEN
-        RETURN 'Техническая ошибка на стороне РЭМД: повторите отправку позже';
-    END IF;
-    IF c IN ('CA_INACCESSIBILITY', 'CA_UNAVAILABLE') THEN
-        RETURN 'Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже';
-    END IF;
-    IF c IN ('ASYNC_RESPONSE_TIMEOUT', 'TIMEOUT') THEN
-        RETURN 'Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже';
-    END IF;
-    IF c IN ('DISABLED_RMIS', 'NO_RMIS', 'ATTRIBUTE_MISMATCH', 'MIS_NOT_AVAILABLE', 'REGISTRY_ITEM_NOT_FOUND', 'FILE_WAS_NOT_SENT', 'RMIS_ERROR', 'GET_DOCUMENT_FILE_ERROR') THEN
-        SELECT r.interpretation INTO rule_hit
-        FROM egisz_error_interpretation_rules r
-        WHERE r.is_active AND r.match_code = c
-        ORDER BY r.priority
-        LIMIT 1;
-        IF rule_hit IS NOT NULL THEN
-            RETURN rule_hit;
-        END IF;
-    END IF;
-
-    -- Raw/schematron fallback — call item then normalize
-    s := btrim(COALESCE(public.egisz_error_interpretation_item(error_code, error_message), ''));
-    IF s = '' THEN
-        RETURN '(ошибка без деталей)';
-    END IF;
-
-    -- Strip XML tags before normalization (Cyrillic placeholders <ФИО>/<поле> survive).
-    s := regexp_replace(s, '</?[a-zA-Z][a-zA-Z0-9:]*(?:\s[^>]*)?>?', ' ', 'g');
-    s := btrim(regexp_replace(s, '\s+', ' ', 'g'));
-    IF s = '' THEN RETURN '(ошибка без деталей)'; END IF;
-
-    s := regexp_replace(s, '\bhttps?://[^\s<>"\)]+', '<url>', 'gi');
-    s := regexp_replace(
-        s,
-        '\b(?:(?:gost-[a-z0-9_-]+\.infoclinica\.lan)|(?:\d{1,3}(?:\.\d{1,3}){3})(?::\d{1,5})?)\b',
-        '<host>',
-        'gi'
-    );
-    s := regexp_replace(s, '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', '<uuid>', 'gi');
-    s := regexp_replace(s, '\b[0-9a-f]{16,}\b', '<hex>', 'gi');
-    s := regexp_replace(s, '\b\d{3}-\d{3}-\d{3} \d{2}\b', '<snils>', 'gi');
-    s := regexp_replace(s, '\b\d{2}\.\d{2}\.\d{4}\b', '<date>', 'g');
-    s := regexp_replace(s, '№\s*[\w\-/]+', '№ <id>', 'gi');
-    s := regexp_replace(s, '\b\d{5,}\b', '<n>', 'g');
-    s := regexp_replace(s, '(?i)[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.', '<ФИО>', 'g');
-    s := regexp_replace(s, '(?i)[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё\-]+\s+[А-ЯЁ][а-яё\-]+', '<ФИО>', 'g');
-    s := regexp_replace(s, '\[[^\]]+\]', '<поле>', 'g');
-    s := regexp_replace(s, '«[^»]+»|"[^"]+"', '<...>', 'g');
-    s := regexp_replace(
-        s,
-        '\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?\b',
-        '<dt>',
-        'g'
-    );
-    s := regexp_replace(s, '\s+', ' ', 'g');
-    RETURN left(btrim(s), 220);
+    RETURN left(label, 220);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_group_type(error_code text, error_message text)
+-- Плоская таксономия error_type. Каждый <ns2:item> в асинхронном ответе РЭМД
+-- классифицируется через egisz_error_interpretation_type (правила из
+-- egisz_error_interpretation_rules); уникальные типы дедуплицируются и
+-- объединяются через ' · '. Если ни один item не дал интерпретации —
+-- возвращается 'Неизвестная ошибка'.
+CREATE OR REPLACE FUNCTION public.egisz_error_classify(p_errors jsonb)
 RETURNS text
-LANGUAGE plpgsql
+LANGUAGE sql
 STABLE
 AS $$
-DECLARE
-    c text;
-    normalized text;
-BEGIN
-    c := upper(btrim(COALESCE(error_code, '')));
-    normalized := btrim(COALESCE(public.egisz_error_interpretation_type(error_code, error_message), ''));
-
-    IF normalized = '' OR normalized = '(ошибка без деталей)' THEN
-        RETURN '(ошибка без деталей)';
-    END IF;
-
-    -- File retrieval checked before network to avoid misclassification
-    IF normalized ~* '(не удалось получить файл|getdocumentfile|файл.*(эмд|semd).*предоставляющ)' THEN
-        RETURN 'Не удалось получить файл ЭМД';
-    END IF;
-
-    -- Transport / connection layer errors
-    IF c IN ('INTEGRATION_LOGSTATE_3', 'NETWORK', 'CONNECTION', 'TIMEOUT')
-       OR normalized ~* '(сетевая ошибка|ошибка связи|сокет|socket|tcp|timed out|connection|transport)' THEN
-        RETURN 'Сетевая ошибка';
-    END IF;
-
-    -- NSI / reference-data errors
-    IF normalized ~* '(справочник.*(нси|oid)|версия.*справочника|код.*справочн|наименование.*справочн|подразделение.*(справочн|не найден)|запись.*справочника|вид.*документа.*актуал)' THEN
-        RETURN 'Ошибки справочников НСИ';
-    END IF;
-
-    -- XSD / Schematron XML validation
-    IF normalized ~* '(xsd.*(валидац|валид)|валидац.*xml|schematron|схематрон|валидации schematron)' THEN
-        RETURN 'Ошибки XML-валидации';
-    END IF;
-
-    -- ФРМР / medical-staff data mismatches
-    IF normalized ~* '(фрмр|снилс|должность.*врач|данные медработника|подписант.*сертификат|данные подписи.*документ|электронн.*подпис)' THEN
-        RETURN 'Несоответствие данных ФРМР';
-    END IF;
-
-    -- Patient / beneficiary data
-    IF normalized ~* '(пациент.*(гип|соответств)|гип.*пациент|получател.*запрос.*сэмд|запрос.*получател)' THEN
-        RETURN 'Ошибки данных пациента';
-    END IF;
-
-    -- Organization / РМИС
-    IF normalized ~* '(организаци.*рмис|рмис.*организаци)' THEN
-        RETURN 'Ошибки организации';
-    END IF;
-
-    -- Duplicate registration
-    IF normalized ~* 'уже зарегистрирован' THEN
-        RETURN 'Документ уже зарегистрирован в РЭМД';
-    END IF;
-
-    -- Technical errors on REMD side
-    IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR')
-       OR normalized ~* '(техническая ошибка.*рэмд|внутренн.*ошибк|непредвиденн.*ошибк|невозможно обработать)' THEN
-        RETURN 'Техническая ошибка на стороне РЭМД';
-    END IF;
-
-    -- Signature / certificate problems are grouped as "ФРМР"-bucket because they signal
-    -- problems with the signer's identity, which is sourced from ФРМР.
-    IF normalized ~* '(сертификат|подпис|crl|ocsp|уц )' THEN
-        RETURN 'Несоответствие данных ФРМР';
-    END IF;
-
-    -- File retrieval already handled above; remaining REMD-side validation/contract
-    -- errors fall into the generic registration-error bucket.
-    -- Hard fallback: if the normalized text still contains placeholders or raw
-    -- payload fragments (cvc-*, generic uppercase codes), classify as generic.
-    IF normalized ~ '<' OR normalized ~* 'cvc-' OR normalized ~* '^[A-Z_]+$' THEN
-        RETURN 'Ошибка регистрации в РЭМД';
-    END IF;
-
-    -- Whitelist of canonical categories — anything else is the generic bucket.
-    IF normalized IN (
-        'Не удалось получить файл ЭМД',
-        'Сетевая ошибка',
-        'Ошибки справочников НСИ',
-        'Ошибки XML-валидации',
-        'Несоответствие данных ФРМР',
-        'Ошибки данных пациента',
-        'Ошибки организации',
-        'Документ уже зарегистрирован в РЭМД',
-        'Техническая ошибка на стороне РЭМД',
-        'Ошибка регистрации в РЭМД'
-    ) THEN
-        RETURN normalized;
-    END IF;
-
-    RETURN 'Ошибка регистрации в РЭМД';
-END;
+    WITH normalized AS (
+        SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
+            WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
+            WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
+            ELSE '[]'::jsonb
+        END AS payload
+    ),
+    items AS (
+        SELECT
+            o,
+            NULLIF(btrim(public.egisz_error_interpretation_type(e->>'code', e->>'message')), '') AS t
+        FROM normalized n
+        CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
+    ),
+    first_pos AS (
+        SELECT t, MIN(o) AS first_o
+        FROM items
+        WHERE t IS NOT NULL AND t <> 'Неизвестная ошибка'
+        GROUP BY t
+    ),
+    aggregated AS (
+        SELECT string_agg(t, ' · ' ORDER BY first_o) AS types
+        FROM first_pos
+    )
+    SELECT COALESCE(NULLIF(types, ''), 'Неизвестная ошибка') FROM aggregated;
 $$;
+
+-- Старая функция-бакетатор egisz_error_group_type убрана: десятка bucket-категорий
+-- заменена плоской таксономией (см. egisz_error_classify). Возможные внешние
+-- ссылки на неё уже переписаны в этом же файле.
+DROP FUNCTION IF EXISTS public.egisz_error_group_type(text, text);
 
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_row(p_errors jsonb)
 RETURNS text
@@ -1314,17 +1209,16 @@ BEGIN
         exchangelog_log_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
         doc_number, org_oid, status, error_message, callback_url, egmid, jid, semd_code,
         semd_name, error_code, creation_date, processed_at,
-        error_subtype, error_type, error_summary, error_json_text
+        error_type, error_summary, error_json_text
     )
     SELECT
         e.logid, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.final_status, e.final_error_message, e.logtext, e.egmid,
         e.resolved_jid, e.resolved_semd_code, e.semd_name, e.error_code,
         e.creation_date, now(),
-        public.egisz_error_interpretation_type(e.error_code, e.final_error_message),
         CASE
             WHEN e.final_status = 'error' AND e.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-            WHEN e.final_status = 'error' THEN COALESCE(NULLIF(public.egisz_error_group_type(e.error_code, e.final_error_message), ''), 'Ошибка регистрации в РЭМД')
+            WHEN e.final_status = 'error' THEN public.egisz_error_classify(e.built_errors_json)
             WHEN e.final_status = 'success' THEN 'Успешно'
             ELSE COALESCE(e.final_status, 'unknown')
         END,
@@ -1349,7 +1243,6 @@ BEGIN
         error_code = EXCLUDED.error_code,
         creation_date = EXCLUDED.creation_date,
         processed_at = now(),
-        error_subtype = EXCLUDED.error_subtype,
         error_type = EXCLUDED.error_type,
         error_summary = EXCLUDED.error_summary,
         error_json_text = EXCLUDED.error_json_text;
@@ -1390,7 +1283,6 @@ SELECT
     t.log_date::date AS "День (тренд)",
     COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
-    t.error_subtype AS "Подкатегория ошибки",
     t.error_type AS "Тип ошибки",
     t.error_summary AS "Сводка ошибки",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
@@ -1496,7 +1388,7 @@ SELECT
     END AS "Исходный текст ошибки",
     CASE
         WHEN t.status = 'success' THEN 'Успешно'
-        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), '(ошибка без деталей)')
+        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), 'Неизвестная ошибка')
         ELSE ''
     END AS "Интерпретация ошибки",
     CASE
@@ -1535,8 +1427,8 @@ SELECT
     CASE WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3' ELSE 'PARSE_ERROR' END AS error_code,
     COALESCE(NULLIF(r.logtext, ''), NULLIF(r.msgtext, ''), '(без текста)') AS message,
     CASE WHEN r.logstate = 3 THEN 'network' ELSE 'async_response' END AS error_top_type,
-    CASE WHEN r.logstate = 3 THEN 'Сетевая ошибка' ELSE 'Ошибка регистрации в РЭМД' END AS error_global_subcategory,
-    CASE WHEN r.logstate = 3 THEN 'Ошибка связи' ELSE 'Ошибка регистрации в РЭМД' END AS error_group_label_ru,
+    CASE WHEN r.logstate = 3 THEN 'Сетевая ошибка' ELSE 'Неизвестная ошибка' END AS error_global_subcategory,
+    CASE WHEN r.logstate = 3 THEN 'Ошибка связи' ELSE 'Неизвестная ошибка' END AS error_group_label_ru,
     r.logid AS exchangelog_log_id,
     r.msgid AS journal_msgid,
     m.egmid AS egisz_messages_egmid,
@@ -1925,17 +1817,47 @@ SELECT * FROM (
          'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
 
--- Backfill error_type for already-loaded facts after rule/fallback updates (A3 from audit).
--- This is idempotent: re-running yields the same canonical category per record.
-UPDATE public.fact_egisz_transactions
+-- Backfill error_code и error_type для уже загруженных фактов после смены
+-- парсинга и таксономии.
+--   1) Если error_code засорён XML-фрагментом (например, '<' в значении) —
+--      повторно извлекаем код из msgtext исправленной egisz_xml_text.
+--   2) Перекалькулируем error_type по новой плоской классификации
+--      (см. egisz_error_classify); error_summary и error_json_text
+--      перестраиваем заодно из freshly-rebuilt errors_json.
+-- Идемпотентно: повторный прогон даёт тот же результат.
+UPDATE public.fact_egisz_transactions f
+SET error_code = COALESCE(
+        public.egisz_xml_text(r.msgtext, 'errorCode'),
+        public.egisz_xml_text(r.msgtext, 'code'),
+        f.error_code
+    )
+FROM public.exchangelog_raw r
+WHERE r.logid = f.exchangelog_log_id
+  AND f.error_code IS NOT NULL
+  AND f.error_code LIKE '%<%';
+
+-- Backfill error_type только для строк, ещё НЕ классифицированных
+-- (новые строки после миграции 2026-05-15 заполняются upsert-ом самой
+-- egisz_transform_raw_to_facts; этот UPDATE — safety-net для re-init.)
+-- Большие исторические пересчёты делаются отдельной миграцией с батчами,
+-- чтобы не упереться в statement_timeout этого скрипта.
+UPDATE public.fact_egisz_transactions f
 SET error_type = CASE
-        WHEN error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-        ELSE COALESCE(
-            NULLIF(public.egisz_error_group_type(error_code, error_message), ''),
-            'Ошибка регистрации в РЭМД'
+        WHEN f.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+        ELSE public.egisz_error_classify(
+            public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
         )
-    END
-WHERE status = 'error';
+    END,
+    error_summary = public.egisz_error_interpretation_row(
+        public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
+    ),
+    error_json_text = public.egisz_error_messages_row(
+        public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
+    )
+FROM public.exchangelog_raw r
+WHERE r.logid = f.exchangelog_log_id
+  AND f.status = 'error'
+  AND f.error_type IS NULL;
 
 -- Transfer ownership of all public-schema objects to egisz so it can run DDL independently
 DO $$

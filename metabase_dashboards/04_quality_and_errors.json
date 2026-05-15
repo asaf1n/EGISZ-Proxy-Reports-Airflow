@@ -320,11 +320,11 @@
     },
     {
       "name": "04 · Топ причин отказов ЕГИСЗ",
-      "description": "Рейтинг причин ошибок: тип ошибки (высокий уровень) + подкатегория. COUNT(DISTINCT «Документ (ключ учёта)»). Без привязки к конкретным записям.",
+      "description": "Рейтинг причин ошибок по плоскому типу. COUNT(DISTINCT «Документ (ключ учёта)»). Без привязки к конкретным записям.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(ошибка без деталей)') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(\"Подкатегория ошибки\"), ''), '(ошибка без деталей)') AS \"Сводка ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -339,9 +339,6 @@
       },
       "display": "row",
       "visualization_settings": {
-        "graph.dimensions": [
-          "Сводка ошибки"
-        ],
         "graph.show_values": true,
         "table": {
           "columns": {
@@ -360,16 +357,13 @@
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
           },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Подкатегория"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "number_separators": ".",
             "decimals": 0
           }
         },
-        "graph.dimensions": ["Тип ошибки", "Сводка ошибки"],
+        "graph.dimensions": ["Тип ошибки"],
         "graph.metrics": [
           "Документов"
         ]
@@ -391,7 +385,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\", \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS semd_name FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_summary, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), per_doc AS ( SELECT f.\"JID клиники\", f.\"Наименование клиники\", f.semd_name, COALESCE(NULLIF(TRIM(e.err_summary), ''), '(ошибка без деталей)') AS err_summary, e.json_error_text, f.\"Документ (ключ учёта)\" FROM filtered f LEFT JOIN first_err e ON e.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ), remd_agg AS ( SELECT \"JID клиники\", \"Наименование клиники\", semd_name AS \"Наименование СЭМД\", err_summary AS \"Сводка ошибки\", LEFT(string_agg(DISTINCT json_error_text, ' | ') FILTER (WHERE json_error_text IS NOT NULL), 800) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM per_doc GROUP BY 1, 2, 3, 4 ), net AS ( SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''), '(нет JID)') AS \"JID клиники\", MAX(COALESCE(NULLIF(TRIM(\"Медицинская организация\"::text), ''), NULLIF(TRIM(\"Клиника (транспорт)\"::text), ''), '')) AS \"Наименование клиники\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(тип СЭМД не из колбэка)') AS \"Наименование СЭМД\", 'Сетевая ошибка'::text AS \"Сводка ошибки\", NULL::text AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1, 3 ) SELECT * FROM remd_agg UNION ALL SELECT * FROM net ORDER BY 6 DESC LIMIT 50",
+          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\", \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS semd_name FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_summary, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), per_doc AS ( SELECT f.\"JID клиники\", f.\"Наименование клиники\", f.semd_name, COALESCE(NULLIF(TRIM(e.err_summary), ''), 'Неизвестная ошибка') AS err_summary, e.json_error_text, f.\"Документ (ключ учёта)\" FROM filtered f LEFT JOIN first_err e ON e.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ), remd_agg AS ( SELECT \"JID клиники\", \"Наименование клиники\", semd_name AS \"Наименование СЭМД\", err_summary AS \"Сводка ошибки\", LEFT(string_agg(DISTINCT json_error_text, ' | ') FILTER (WHERE json_error_text IS NOT NULL), 800) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM per_doc GROUP BY 1, 2, 3, 4 ), net AS ( SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''), '(нет JID)') AS \"JID клиники\", MAX(COALESCE(NULLIF(TRIM(\"Медицинская организация\"::text), ''), NULLIF(TRIM(\"Клиника (транспорт)\"::text), ''), '')) AS \"Наименование клиники\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(тип СЭМД не из колбэка)') AS \"Наименование СЭМД\", 'Сетевая ошибка'::text AS \"Сводка ошибки\", NULL::text AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1, 3 ) SELECT * FROM remd_agg UNION ALL SELECT * FROM net ORDER BY 6 DESC LIMIT 50",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -746,7 +740,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ) SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(ошибка без деталей)') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM first_err GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ) SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM first_err GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -931,11 +925,11 @@
     },
     {
       "name": "04 · Матрица: тип тип СЭМД × тип ошибки",
-      "description": "Pivot-таблица: по оси Y — подпись СЭМД (как в рейтингах), по оси X — подготовленный тип ошибки по **каждому** элементу `v_rpt_error_interpretations_ui`. **Документов** — число уникальных «Документ (ключ учёта)» в ячейке по **всем клиникам**; один документ с несколькими разными ошибками попадает в несколько ячеек. Пустой/бессодержательный набор — строка «(ошибка без деталей)».",
+      "description": "Pivot-таблица: по оси Y — подпись СЭМД (как в рейтингах), по оси X — подготовленный тип ошибки по **каждому** элементу `v_rpt_error_interpretations_ui`. **Документов** — число уникальных «Документ (ключ учёта)» в ячейке по **всем клиникам**; один документ с несколькими разными ошибками попадает в несколько ячеек. Пустой/бессодержательный набор — строка «Неизвестная ошибка».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), expanded AS ( SELECT f.\"Документ (ключ учёта)\", f.semd_lbl, COALESCE(NULLIF(TRIM(r.\"Тип ошибки\"), ''), '(ошибка без деталей)') AS err_lbl FROM filtered f JOIN public.v_rpt_error_interpretations_ui r ON r.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" AND r.\"Статус\" = 'error' UNION ALL SELECT f.\"Документ (ключ учёта)\", f.semd_lbl, '(ошибка без деталей)'::text FROM filtered f WHERE NOT EXISTS ( SELECT 1 FROM public.v_rpt_error_interpretations_ui r WHERE r.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" AND r.\"Статус\" = 'error' ) ) SELECT semd_lbl AS \"Тип СЭМД\", err_lbl AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM expanded GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
+          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), expanded AS ( SELECT f.\"Документ (ключ учёта)\", f.semd_lbl, COALESCE(NULLIF(TRIM(r.\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl FROM filtered f JOIN public.v_rpt_error_interpretations_ui r ON r.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" AND r.\"Статус\" = 'error' UNION ALL SELECT f.\"Документ (ключ учёта)\", f.semd_lbl, 'Неизвестная ошибка'::text FROM filtered f WHERE NOT EXISTS ( SELECT 1 FROM public.v_rpt_error_interpretations_ui r WHERE r.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" AND r.\"Статус\" = 'error' ) ) SELECT semd_lbl AS \"Тип СЭМД\", err_lbl AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM expanded GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
