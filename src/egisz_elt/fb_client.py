@@ -149,13 +149,10 @@ def fetch_egisz_messages_after_cursor(
             """
             SELECT
                 EGMID,
-                CAST(NULL AS INTEGER) AS JID,
-                CAST(NULL AS VARCHAR(64)) AS KIND,
                 CREATEDATE,
                 MSGID,
                 REPLYTO,
-                DOCUMENTID,
-                CAST(NULL AS VARCHAR(8191)) AS MSGTEXT
+                DOCUMENTID
             FROM EGISZ_MESSAGES
             WHERE EGMID > ?
             ORDER BY EGMID
@@ -163,38 +160,21 @@ def fetch_egisz_messages_after_cursor(
             """,
             (int(after_egmid or 0), int(limit)),
         )
-        rows: list[dict[str, Any]] = []
-        for egmid, jid, kind, created, msgid, reply_to, document_id, msgtext in cur.fetchall():
-            rows.append(
-                {
-                    "egmid": int(egmid),
-                    "jid": int(jid) if jid is not None else None,
-                    "kind": kind,
-                    "created_at": created.isoformat() if created is not None else None,
-                    "msgid": msgid,
-                    "reply_to": reply_to,
-                    "document_id": document_id,
-                    "msgtext": _serialize_firebird_text(msgtext),
-                }
-            )
-        return rows
+        return _serialize_egisz_message_rows(cur.fetchall())
     finally:
         cur.close()
 
 
 def _serialize_egisz_message_rows(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
     serialized: list[dict[str, Any]] = []
-    for egmid, jid, kind, created, msgid, reply_to, document_id, msgtext in rows:
+    for egmid, created, msgid, reply_to, document_id in rows:
         serialized.append(
             {
                 "egmid": int(egmid),
-                "jid": int(jid) if jid is not None else None,
-                "kind": kind,
                 "created_at": created.isoformat() if created is not None else None,
                 "msgid": msgid,
                 "reply_to": reply_to,
                 "document_id": document_id,
-                "msgtext": _serialize_firebird_text(msgtext),
             }
         )
     return serialized
@@ -233,13 +213,10 @@ def fetch_egisz_messages_by_identifiers(
                 f"""
                 SELECT
                     EGMID,
-                    CAST(NULL AS INTEGER) AS JID,
-                    CAST(NULL AS VARCHAR(64)) AS KIND,
                     CREATEDATE,
                     MSGID,
                     REPLYTO,
-                    DOCUMENTID,
-                    CAST(NULL AS VARCHAR(8191)) AS MSGTEXT
+                    DOCUMENTID
                 FROM EGISZ_MESSAGES
                 WHERE {' OR '.join(clauses)}
                 """,

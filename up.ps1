@@ -93,7 +93,7 @@ function Install-Airflow {
 
     Write-Host "Applying Airflow connection secrets..."
     Invoke-Checked "Apply Airflow connection secrets" {
-        kubectl apply -f k8s/airflow/airflow-connections-configmap.yaml
+        kubectl apply -f k8s/airflow/airflow-connections-secret.yaml
     }
 
     Write-Host "Building Airflow image with current DAG and egisz_elt package..."

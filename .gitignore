@@ -11,3 +11,7 @@ dist/
 # Local secrets
 k8s/**/**secret*.yaml
 !k8s/**/**.example.yaml
+
+# Ad-hoc verification files (psql -o output, temp SQL)
+tmp_*.txt
+tmp_*.sql

@@ -38,7 +38,7 @@ Always use `@dag` and `@task`. Never use legacy `PythonOperator`, `BashOperator`
 ### Task pipeline (in order)
 
 ```
-sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> update_watermark
+sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> refresh_materialized_views >> update_watermark
 ```
 
 | Task | Responsibility |
@@ -46,7 +46,8 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> update
 | `sync_dimensions` | Full reload of `dim_organizations` (from `JPERSONS`) and `dim_licenses` (from `EGISZ_LICENSES`) via UPSERT |
 | `extract_from_proxy` | Read current watermarks from `elt_state`; fetch `EXCHANGELOG` by `LOGID` and `EGISZ_MESSAGES` by `EGMID`; resolve cross-referenced messages from XML payload; return XCom dict |
 | `load_to_dwh` | UPSERT fetched rows into `exchangelog_raw` and `egisz_messages_raw`; pass XCom dict downstream |
-| `transform_data` | Call `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`; refresh all `mv_egisz_*` materialized views |
+| `transform_data` | Call `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function does not refresh materialized views; refresh is a separate task. |
+| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document` |
 | `update_watermark` | UPSERT `elt_state` using `GREATEST(current, new)` for both `last_log_id` and `last_egmid` |
 
 ### Batch size and schedule
@@ -144,7 +145,7 @@ Both Airflow and Metabase run in Kubernetes (Docker Desktop by default).
 
 | Component | Manifests | Image |
 |---|---|---|
-| Airflow | `k8s/airflow/values.yaml` (Helm), `k8s/airflow/airflow-connections-configmap.yaml` | `egisz-airflow-worker:latest` |
+| Airflow | `k8s/airflow/values.yaml` (Helm), `k8s/airflow/airflow-connections-secret.yaml` | `egisz-airflow-worker:latest` |
 | Metabase | `k8s/metabase/metabase.yaml`, `k8s/metabase/metabase-connections-secret.yaml` | `egisz-metabase:latest` |
 
 Deploy everything with:

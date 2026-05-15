@@ -39,8 +39,14 @@
 
 Процесс построен как ELT: Python-слой только извлекает и загружает данные, а смысловая трансформация выполняется в PostgreSQL.
 
-1. **Bootstrap DWH**
-   Airflow выполняет SQL из `src/egisz_elt/sql/001_dwh_bootstrap.sql`: создаёт таблицы, функции парсинга и базовые представления.
+1. **Bootstrap DWH** *(вне DAG, разово)*
+   DWH-схема, функции парсинга, фактовые таблицы и представления создаются скриптом `db/dwh_init.sql`. Его нужно прогнать одним суперпользователем PostgreSQL до первого включения DAG:
+
+   ```bash
+   psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+   ```
+
+   Скрипт идемпотентен — повторный запуск безопасен и применяет обновления (`CREATE ... IF NOT EXISTS`, `ALTER TABLE ... ADD/DROP COLUMN IF EXISTS`, `CREATE OR REPLACE`). Этот же файл повторно прогоняется при обновлении DWH-модели.
 
 2. **Синхронизация справочников**
    Из Firebird-таблицы `JPERSONS` выбираются `JID`, `JNAME`, `JINN`, `JADDR`; в DWH они загружаются как `jid`, `name`, `inn`, `address` в `dim_organizations`. Параллельно синхронизируется `dim_licenses` из `EGISZ_LICENSES` для привязки `mo_uid` / `JID` и обогащения колбэков. Пустые значения ИНН или адреса сохраняются как `NULL`. Загрузка обеих размерностей идемпотентна и выполняется через `ON CONFLICT`.
@@ -62,9 +68,12 @@
    Сырые строки журнала сохраняются в `exchangelog_raw`, а сообщения из `EGISZ_MESSAGES` — в `egisz_messages_raw`. Первичные ключи — `logid` и `egmid`; повторная загрузка безопасна, потому что используется `INSERT ... ON CONFLICT DO UPDATE`. `EXCHANGELOG.LOGDATE` хранится как сервисная дата журнала и не используется для аналитики сообщений.
 
 5. **SQL-трансформация**
-   Функция `public.egisz_transform_raw_to_facts(max_log_id)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`.
+   Функция `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`. Кандидатами для обработки идут строки журнала, попавшие в LOGID-окно текущего батча, и старые строки `exchangelog_raw`, к которым в EGMID-окне пришёл поздний callback из `egisz_messages_raw`.
 
-6. **Обновление watermark**
+6. **Refresh materialized views**
+   Отдельная задача `refresh_materialized_views` обновляет mat-view'ы `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document` через `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+
+7. **Обновление watermark**
    После успешной трансформации DAG сохраняет оба курсора в `elt_state`: `last_log_id` и `last_egmid`.
 
 ---
@@ -174,12 +183,14 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 
 Задачи:
 
-1. `bootstrap_dwh` — проверяет контракт DWH и при дрейфе применяет `001_dwh_bootstrap.sql`.
-2. `sync_dimensions` — синхронизирует `dim_organizations` и `dim_licenses`.
-3. `extract_from_proxy` — читает батчи `EXCHANGELOG` и `EGISZ_MESSAGES`, а также добирает связанные сообщения по `MSGID` / `DOCUMENTID`.
-4. `load_to_dwh` — загружает raw-данные в `exchangelog_raw` и `egisz_messages_raw`.
-5. `transform_data` — вызывает `egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`.
+1. `sync_dimensions` — синхронизирует `dim_organizations` и `dim_licenses`.
+2. `extract_from_proxy` — читает батчи `EXCHANGELOG` и `EGISZ_MESSAGES`, а также добирает связанные сообщения по `MSGID` / `DOCUMENTID`.
+3. `load_to_dwh` — загружает raw-данные в `exchangelog_raw` и `egisz_messages_raw`.
+4. `transform_data` — вызывает `egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`.
+5. `refresh_materialized_views` — обновляет `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document` через `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
 6. `update_watermark` — фиксирует успешные курсоры `LOGID` и `EGMID` в `elt_state`.
+
+DWH-схема создаётся отдельным скриптом `db/dwh_init.sql` (см. секцию «Логика выгрузки и хранения»), а не задачей DAG.
 
 Данные между задачами передаются через XCom как JSON-сериализуемые словари. Батч ограничен константой `BATCH_SIZE = 5000`.
 
@@ -203,7 +214,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 * `v_rpt_documents_no_response_ui` — очередь исходящих сообщений без найденного callback; anti-join строится по нормализованным ключам `message_id` / `relates_to_id` / `local_uid_semd`.
 * `v_rpt_network_errors_detail_ui` — детализация транспортных и сетевых ошибок.
 * `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
-* `v_health_signals_ui` — агрегированные health-сигналы.
+* `v_health_signals_ui` — агрегированные health-сигналы. Включает динамический сигнал `data_freshness` (зелёный/жёлтый/красный в зависимости от возраста последнего факта: ≤1 ч, ≤24 ч, >24 ч), который позволяет отслеживать отставание ELT-пайплайна.
 
 ---
 
@@ -240,7 +251,7 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 Что настроить:
 
 * Airflow metadata DB `airflow_db` создаётся встроенным PostgreSQL Helm chart в Kubernetes PVC.
-* `k8s/airflow/airflow-connections-configmap.yaml` — Airflow Connections `dwh_egisz_pg` и `proxy_egisz_fb`.
+* `k8s/airflow/airflow-connections-secret.yaml` — Airflow Connections `dwh_egisz_pg` и `proxy_egisz_fb`.
 * `k8s/metabase/metabase-connections-secret.yaml` — служебная БД Metabase (`metabase_app`) и BI-доступ к `dwh_egisz`.
 
 Пример локального доступа из контейнеров Docker Desktop:
@@ -254,8 +265,8 @@ Kubernetes-манифесты в репозитории не задают отд
 
 | Часть | Где находится runtime / данные | Основной конфиг |
 | :--- | :--- | :--- |
-| Firebird source `proxy_egisz` | Внешняя БД, не поднимается этим проектом. Для локального Docker Desktop ожидается `host.docker.internal:3050`, база/alias `proxy_egisz`. | `k8s/airflow/airflow-connections-configmap.yaml`, ключ `AIRFLOW_CONN_PROXY_EGISZ_FB`. |
-| PostgreSQL DWH `dwh_egisz` | Внешняя PostgreSQL-БД, не контейнер этого проекта. Airflow пишет пользователем `egisz`, Metabase читает BI-пользователем `postgres`. | Airflow: `k8s/airflow/airflow-connections-configmap.yaml`, ключ `AIRFLOW_CONN_DWH_EGISZ_PG`. Metabase: `k8s/metabase/metabase-connections-secret.yaml`, ключи `DWH_DB_*` и `DWH_BI_*`. Bootstrap прав доступа в `up.ps1` читает `EGISZ_PG_*`, `EGISZ_DWH_*`. |
+| Firebird source `proxy_egisz` | Внешняя БД, не поднимается этим проектом. Для локального Docker Desktop ожидается `host.docker.internal:3050`, база/alias `proxy_egisz`. | `k8s/airflow/airflow-connections-secret.yaml`, ключ `AIRFLOW_CONN_PROXY_EGISZ_FB`. |
+| PostgreSQL DWH `dwh_egisz` | Внешняя PostgreSQL-БД, не контейнер этого проекта. Airflow пишет пользователем `egisz`, Metabase читает BI-пользователем `postgres`. | Airflow: `k8s/airflow/airflow-connections-secret.yaml`, ключ `AIRFLOW_CONN_DWH_EGISZ_PG`. Metabase: `k8s/metabase/metabase-connections-secret.yaml`, ключи `DWH_DB_*` и `DWH_BI_*`. Bootstrap прав доступа в `up.ps1` читает `EGISZ_PG_*`, `EGISZ_DWH_*`. |
 | Airflow metadata DB `airflow_db` | PostgreSQL Helm chart внутри Kubernetes-кластера, pod/statefulset `airflow-postgresql-0`, данные в Kubernetes PVC. Это служебная БД Airflow, не DWH. | `k8s/airflow/values.yaml`, блоки `data.metadataConnection` и `postgresql`. |
 | Airflow сервисы | Kubernetes/Helm release `airflow`: `airflow-webserver`, `airflow-scheduler`, `airflow-worker`, `airflow-triggerer`. Образ собирается локально как `egisz-airflow-worker:<tag>`. | `k8s/airflow/values.yaml`, `k8s/airflow/Dockerfile`, `airflow/dags/egisz_elt_dag.py`, `src/egisz_elt/`. Установка через `up.ps1 -Component Airflow`. |
 | Metabase application DB `metabase_app` | Внешняя PostgreSQL-БД для внутренних таблиц Metabase. DWH `dwh_egisz` для этого не используется. | `k8s/metabase/metabase-connections-secret.yaml`, ключи `METABASE_DB_*`. |

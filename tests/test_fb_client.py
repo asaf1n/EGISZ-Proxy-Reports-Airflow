@@ -58,7 +58,7 @@ def test_fetch_organizations_preserves_empty_legal_entity_values() -> None:
 
 def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
     con = FakeConnection(
-        [(42, 10, "1", None, "<urn:uuid:msg>", "urn:uuid:reply", "doc-1", "<xml/>")],
+        [(42, None, "<urn:uuid:msg>", "urn:uuid:reply", "doc-1")],
     )
 
     rows = fetch_egisz_messages_after_cursor(con, after_egmid=41, limit=500)
@@ -66,13 +66,10 @@ def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
     assert rows == [
         {
             "egmid": 42,
-            "jid": 10,
-            "kind": "1",
             "created_at": None,
             "msgid": "<urn:uuid:msg>",
             "reply_to": "urn:uuid:reply",
             "document_id": "doc-1",
-            "msgtext": "<xml/>",
         }
     ]
     assert con.cursor_instance.params == (41, 500)

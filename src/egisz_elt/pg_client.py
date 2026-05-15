@@ -19,7 +19,7 @@ DIRECTORY_PK_COLUMNS = {
 }
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
-RAW_MESSAGE_COLUMNS = ("egmid", "jid", "kind", "created_at", "msgid", "reply_to", "document_id", "msgtext")
+RAW_MESSAGE_COLUMNS = ("egmid", "created_at", "msgid", "reply_to", "document_id")
 DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 1000
@@ -120,16 +120,13 @@ def load_raw_messages(con: psycopg2.extensions.connection, rows: list[dict[str, 
         execute_values(
             cur,
             """
-            INSERT INTO egisz_messages_raw (egmid, jid, kind, created_at, msgid, reply_to, document_id, msgtext)
+            INSERT INTO egisz_messages_raw (egmid, created_at, msgid, reply_to, document_id)
             VALUES %s
             ON CONFLICT (egmid) DO UPDATE SET
-                jid = EXCLUDED.jid,
-                kind = EXCLUDED.kind,
                 created_at = EXCLUDED.created_at,
                 msgid = EXCLUDED.msgid,
                 reply_to = EXCLUDED.reply_to,
                 document_id = EXCLUDED.document_id,
-                msgtext = EXCLUDED.msgtext,
                 loaded_at = now()
             """,
             values,

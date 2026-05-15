@@ -42,6 +42,8 @@ def _resolve(
         return "public.v_rpt_connectivity_global_daily_ui", "День"
 
     if tag_name == "top_semd":
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "Код СЭМД"
         if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
             return "public.v_rpt_documents_no_response_ui", "Код СЭМД"
         if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
@@ -51,6 +53,8 @@ def _resolve(
     if tag_name == "top_clinic":
         if "v_health_by_clinic_ui" in q:
             return "public.v_health_by_clinic_ui", "JID клиники"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "JID клиники"
         if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
             return "public.v_rpt_documents_no_response_ui", "JID клиники"
         if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
@@ -60,6 +64,8 @@ def _resolve(
     if tag_name == "local_uid":
         if "v_stg_channel_errors_by_document" in q:
             return "public.v_stg_channel_errors_by_document", "local_uid_hint"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "localUid СЭМД"
         if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
             return "public.v_rpt_documents_no_response_ui", "localUid СЭМД"
         return "public.v_egisz_transactions_enriched_ui", "localUid СЭМД"
@@ -67,24 +73,34 @@ def _resolve(
     if tag_name == "relates_to":
         if "v_stg_channel_errors_by_document" in q:
             return "public.v_stg_channel_errors_by_document", "relates_to_id"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "Связанное сообщение"
         return "public.v_egisz_transactions_enriched_ui", "Связанное сообщение"
 
     if tag_name == "emdr_id":
         if "v_stg_channel_errors_by_document" in q:
             return "public.v_stg_channel_errors_by_document", "emdr_id_hint"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "Рег. номер РЭМД"
         return "public.v_egisz_transactions_enriched_ui", "Рег. номер РЭМД (emdrid)"
 
     if tag_name == "status":
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "Статус"
         return "public.v_egisz_transactions_enriched_ui", "Статус"
 
     if tag_name == "log_id":
         if "v_stg_channel_errors_by_document" in q:
             return "public.v_stg_channel_errors_by_document", "exchangelog_log_id"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "LOGID журнала EXCHANGELOG"
         return "public.v_egisz_transactions_enriched_ui", "LOGID журнала EXCHANGELOG"
 
     if tag_name == "egmid":
         if "v_stg_channel_errors_by_document" in q:
             return "public.v_stg_channel_errors_by_document", "egisz_messages_egmid"
+        if "v_rpt_semd_archive_ui" in q:
+            return "public.v_rpt_semd_archive_ui", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
         return "public.v_egisz_transactions_enriched_ui", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
 
     if tag_name == "err_parse_code":

@@ -9,7 +9,7 @@ x-airflow-env: &airflow-env
   AIRFLOW__WEBSERVER__DAG_DEFAULT_VIEW: grid
   AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
   AIRFLOW_CONN_DWH_EGISZ_PG: ${AIRFLOW_CONN_DWH_EGISZ_PG:-postgres://egisz:egisz@host.docker.internal:5432/dwh_egisz?sslmode=disable}
-  AIRFLOW_CONN_PROXY_EGISZ_FB: ${AIRFLOW_CONN_PROXY_EGISZ_FB:-drizzle://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251}
+  AIRFLOW_CONN_PROXY_EGISZ_FB: ${AIRFLOW_CONN_PROXY_EGISZ_FB:-firebird://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251}
 
 x-airflow-common: &airflow-common
   build:

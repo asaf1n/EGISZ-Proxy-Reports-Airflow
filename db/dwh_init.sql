@@ -56,17 +56,16 @@ ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
 
 CREATE TABLE IF NOT EXISTS egisz_messages_raw (
     egmid bigint PRIMARY KEY,
-    jid integer,
-    kind text,
     created_at timestamptz,
     msgid text,
     reply_to text,
     document_id text,
-    msgtext text,
     loaded_at timestamptz DEFAULT now()
 );
 
 ALTER TABLE egisz_messages_raw ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
+-- Columns jid/kind/msgtext were always NULL (not present in Firebird EGISZ_MESSAGES);
+-- they are dropped after DROP VIEW block below to avoid breaking mat-view dependencies.
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,
@@ -610,6 +609,15 @@ VALUES
     ('xml_parse_error', 68, NULL, '(?is)(SAXParseException|org\.xml|ParseError|XML.*parse.*error)', 'Ошибка разбора XML-структуры документа'),
     ('snils_invalid_text', 69, NULL, '(?is)(СНИЛС.*неверн|неверн.*СНИЛС|СНИЛС.*контрольн|контрольн.*СНИЛС)', 'Неверный формат или контрольная сумма СНИЛС'),
     ('transport_network', 90, NULL, '(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)', 'Сетевая ошибка'),
+    -- Additional canonical mappings to suppress raw-text leakage in error_type
+    ('cvc_datatype_extended', 24, NULL, '(?is)cvc-datatype-valid|cvc-pattern-valid|cvc-type|cvc-complex-type|cvc-attribute|cvc-elt|cvc-identity-constraint|cvc-particle|cvc-enumeration-valid', 'Ошибка XSD-валидации XML'),
+    ('attribute_not_found_code', 50, 'ATTRIBUTE_NOT_FOUND', '(?is).*', 'Метаописание документа не соответствует зарегистрированному в РЭМД'),
+    ('role_occurrence_mismatch_code', 31, 'ROLE_OCCURRENCE_MISMATCH', '(?is).*', 'Подпись роли не соответствует требованиям РЭМД'),
+    ('object_not_found_text_extra', 76, NULL, '(?is)Подразделение.*(идентификатор|не найден)|подразделение.*не найден', 'Подразделение или запись справочника не найдены на дату документа'),
+    ('recipient_text_extra', 74, NULL, '(?is)RECIPIENT_INFO_MISMATCH|Получатель.*не найден', 'Получатель из запроса не найден в СЭМД'),
+    ('dul_patient_text', 78, NULL, '(?is)ДУЛ[^А-Яа-я]|реквизит.*удостоверени', 'Документ, удостоверяющий личность пациента: некорректные реквизиты'),
+    ('patient_birth_text', 15, NULL, '(?is)Дата рождения пациента|birthTime', 'Дата рождения пациента не заполнена или некорректна'),
+    ('remd_runtime_internal', 80, NULL, '(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб|невозможно обработать)', 'Техническая ошибка на стороне РЭМД'),
     ('remd_async_response', 100, NULL, '(?is)(remd|рэмд)', 'Ошибка регистрации в РЭМД')
 ON CONFLICT (rule_code) DO UPDATE SET
     priority = EXCLUDED.priority,
@@ -830,6 +838,10 @@ DECLARE
 BEGIN
     c := upper(btrim(COALESCE(error_code, '')));
     m := btrim(COALESCE(error_message, ''));
+    -- Strip XML tags so contaminated messages match rules cleanly.
+    -- Cyrillic placeholders <ФИО>/<поле> survive because [a-zA-Z] won't match them.
+    m := regexp_replace(m, '</?[a-zA-Z][a-zA-Z0-9:]*(?:\s[^>]*)?>?', ' ', 'g');
+    m := btrim(regexp_replace(m, '\s+', ' ', 'g'));
 
     -- Rule-matched interpretations are already human-readable labels — return them as-is.
     -- Normalization (FIO/UUID replacement) must only run on raw/schematron fallback text.
@@ -872,6 +884,11 @@ BEGIN
         RETURN '(ошибка без деталей)';
     END IF;
 
+    -- Strip XML tags before normalization (Cyrillic placeholders <ФИО>/<поле> survive).
+    s := regexp_replace(s, '</?[a-zA-Z][a-zA-Z0-9:]*(?:\s[^>]*)?>?', ' ', 'g');
+    s := btrim(regexp_replace(s, '\s+', ' ', 'g'));
+    IF s = '' THEN RETURN '(ошибка без деталей)'; END IF;
+
     s := regexp_replace(s, '\bhttps?://[^\s<>"\)]+', '<url>', 'gi');
     s := regexp_replace(
         s,
@@ -907,30 +924,93 @@ STABLE
 AS $$
 DECLARE
     c text;
-    m text;
-    interpreted text;
     normalized text;
 BEGIN
     c := upper(btrim(COALESCE(error_code, '')));
-    m := btrim(COALESCE(error_message, ''));
-    interpreted := btrim(COALESCE(public.egisz_error_interpretation_item(error_code, error_message), ''));
     normalized := btrim(COALESCE(public.egisz_error_interpretation_type(error_code, error_message), ''));
 
     IF normalized = '' OR normalized = '(ошибка без деталей)' THEN
         RETURN '(ошибка без деталей)';
     END IF;
 
+    -- File retrieval checked before network to avoid misclassification
+    IF normalized ~* '(не удалось получить файл|getdocumentfile|файл.*(эмд|semd).*предоставляющ)' THEN
+        RETURN 'Не удалось получить файл ЭМД';
+    END IF;
+
+    -- Transport / connection layer errors
     IF c IN ('INTEGRATION_LOGSTATE_3', 'NETWORK', 'CONNECTION', 'TIMEOUT')
-       OR m ~* '(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)'
-       OR normalized ~* '(ошибка связи|транспорт)' THEN
+       OR normalized ~* '(сетевая ошибка|ошибка связи|сокет|socket|tcp|timed out|connection|transport)' THEN
         RETURN 'Сетевая ошибка';
     END IF;
 
-    IF normalized ~* '(асинхронн.*ответ.*рэмд|ns2status|^remd\b|^рэмд\b)' THEN
+    -- NSI / reference-data errors
+    IF normalized ~* '(справочник.*(нси|oid)|версия.*справочника|код.*справочн|наименование.*справочн|подразделение.*(справочн|не найден)|запись.*справочника|вид.*документа.*актуал)' THEN
+        RETURN 'Ошибки справочников НСИ';
+    END IF;
+
+    -- XSD / Schematron XML validation
+    IF normalized ~* '(xsd.*(валидац|валид)|валидац.*xml|schematron|схематрон|валидации schematron)' THEN
+        RETURN 'Ошибки XML-валидации';
+    END IF;
+
+    -- ФРМР / medical-staff data mismatches
+    IF normalized ~* '(фрмр|снилс|должность.*врач|данные медработника|подписант.*сертификат|данные подписи.*документ|электронн.*подпис)' THEN
+        RETURN 'Несоответствие данных ФРМР';
+    END IF;
+
+    -- Patient / beneficiary data
+    IF normalized ~* '(пациент.*(гип|соответств)|гип.*пациент|получател.*запрос.*сэмд|запрос.*получател)' THEN
+        RETURN 'Ошибки данных пациента';
+    END IF;
+
+    -- Organization / РМИС
+    IF normalized ~* '(организаци.*рмис|рмис.*организаци)' THEN
+        RETURN 'Ошибки организации';
+    END IF;
+
+    -- Duplicate registration
+    IF normalized ~* 'уже зарегистрирован' THEN
+        RETURN 'Документ уже зарегистрирован в РЭМД';
+    END IF;
+
+    -- Technical errors on REMD side
+    IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR')
+       OR normalized ~* '(техническая ошибка.*рэмд|внутренн.*ошибк|непредвиденн.*ошибк|невозможно обработать)' THEN
+        RETURN 'Техническая ошибка на стороне РЭМД';
+    END IF;
+
+    -- Signature / certificate problems are grouped as "ФРМР"-bucket because they signal
+    -- problems with the signer's identity, which is sourced from ФРМР.
+    IF normalized ~* '(сертификат|подпис|crl|ocsp|уц )' THEN
+        RETURN 'Несоответствие данных ФРМР';
+    END IF;
+
+    -- File retrieval already handled above; remaining REMD-side validation/contract
+    -- errors fall into the generic registration-error bucket.
+    -- Hard fallback: if the normalized text still contains placeholders or raw
+    -- payload fragments (cvc-*, generic uppercase codes), classify as generic.
+    IF normalized ~ '<' OR normalized ~* 'cvc-' OR normalized ~* '^[A-Z_]+$' THEN
         RETURN 'Ошибка регистрации в РЭМД';
     END IF;
 
-    RETURN normalized;
+    -- Whitelist of canonical categories — anything else is the generic bucket.
+    IF normalized IN (
+        'Не удалось получить файл ЭМД',
+        'Сетевая ошибка',
+        'Ошибки справочников НСИ',
+        'Ошибки XML-валидации',
+        'Несоответствие данных ФРМР',
+        'Ошибки данных пациента',
+        'Ошибки организации',
+        'Документ уже зарегистрирован в РЭМД',
+        'Техническая ошибка на стороне РЭМД',
+        'Ошибка регистрации в РЭМД'
+    ) THEN
+        RETURN normalized;
+    END IF;
+
+    RETURN 'Ошибка регистрации в РЭМД';
 END;
 $$;
 
@@ -1090,10 +1170,33 @@ DECLARE
     affected integer := 0;
 BEGIN
     WITH candidate_log_ids AS (
+        -- LOG-id window: rows in the freshly extracted EXCHANGELOG batch
         SELECT r.logid
         FROM exchangelog_raw r
         WHERE r.logid > min_log_id
           AND r.logid <= max_log_id
+
+        UNION
+
+        -- EGMID window: re-process EXCHANGELOG rows whose linked EGISZ_MESSAGES row
+        -- arrived in the current batch (late callback to an older request).
+        SELECT DISTINCT r.logid
+        FROM exchangelog_raw r
+        JOIN egisz_messages_raw em
+          ON em.egmid > min_egmid
+         AND em.egmid <= max_egmid
+         AND (
+              public.egisz_normalize_message_id(em.msgid) IN (
+                  public.egisz_normalize_message_id(r.msgid),
+                  public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'messageId')),
+                  public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'relatesToMessage')),
+                  public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'relatesTo'))
+              )
+              OR lower(NULLIF(btrim(em.document_id), '')) IN (
+                  lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'localUid')), '')),
+                  lower(NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')), ''))
+              )
+         )
     ),
     raw_parsed AS (
         SELECT
@@ -1137,7 +1240,7 @@ BEGIN
             r.emdr_id,
             r.doc_number,
             r.org_oid,
-            public.egisz_normalize_semd_code(COALESCE(r.kind_xml, r.kind_upper_xml, m.kind)) AS semd_code,
+            public.egisz_normalize_semd_code(COALESCE(r.kind_xml, r.kind_upper_xml)) AS semd_code,
             public.egisz_clean_text_value(r.semd_name) AS semd_name,
             r.error_code,
             r.xml_message,
@@ -1145,13 +1248,14 @@ BEGIN
             r.jid_from_payload,
             r.creation_date,
             m.egmid,
-            COALESCE(m.jid, m.license_jid) AS message_jid,
-            public.egisz_normalize_semd_code(COALESCE(m.kind, m.license_kind)) AS message_kind
+            m.license_jid AS message_jid,
+            public.egisz_normalize_semd_code(m.license_kind) AS message_kind
         FROM raw_parsed r
         LEFT JOIN LATERAL (
             SELECT candidate.*
             FROM (
-                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 0 AS priority
+                SELECT em.egmid, em.created_at, em.msgid, em.reply_to, em.document_id,
+                       l.jid AS license_jid, l.kind AS license_kind, 0 AS priority
                 FROM egisz_messages_raw em
                 LEFT JOIN dim_licenses l
                   ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
@@ -1163,7 +1267,8 @@ BEGIN
 
                 UNION ALL
 
-                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 1 AS priority
+                SELECT em.egmid, em.created_at, em.msgid, em.reply_to, em.document_id,
+                       l.jid AS license_jid, l.kind AS license_kind, 1 AS priority
                 FROM egisz_messages_raw em
                 LEFT JOIN dim_licenses l
                   ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
@@ -1171,7 +1276,8 @@ BEGIN
 
                 UNION ALL
 
-                SELECT em.*, l.jid AS license_jid, l.kind AS license_kind, 2 AS priority
+                SELECT em.egmid, em.created_at, em.msgid, em.reply_to, em.document_id,
+                       l.jid AS license_jid, l.kind AS license_kind, 2 AS priority
                 FROM egisz_messages_raw em
                 LEFT JOIN dim_licenses l
                   ON public.egisz_clean_host(l.mo_domen) = public.egisz_clean_host(em.reply_to)
@@ -1252,15 +1358,6 @@ BEGIN
 END;
 $$;
 
-UPDATE fact_egisz_transactions
-SET
-    message_id = public.egisz_normalize_message_id(message_id),
-    relates_to_id = public.egisz_normalize_message_id(relates_to_id)
-WHERE message_id LIKE 'urn:uuid:%'
-   OR message_id LIKE '<urn:uuid:%>'
-   OR relates_to_id LIKE 'urn:uuid:%'
-   OR relates_to_id LIKE '<urn:uuid:%>';
-
 DROP VIEW IF EXISTS public.v_health_by_clinic_ui;
 DROP VIEW IF EXISTS public.v_health_signals_ui;
 DROP VIEW IF EXISTS public.v_health_proxy_db_ui;
@@ -1272,10 +1369,16 @@ DO $$ BEGIN DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.v_stg_channel_errors_by_document;
 DROP VIEW IF EXISTS public.v_rpt_error_interpretations_ui;
 DROP VIEW IF EXISTS public.v_rpt_semd_archive_ui;
-DROP VIEW IF EXISTS public.v_rpt_documents_no_response_ui;
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_rpt_documents_no_response_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
+DROP MATERIALIZED VIEW IF EXISTS public.v_rpt_documents_no_response_ui;  -- in case it was previously created as MV
 DROP VIEW IF EXISTS public.v_egisz_transactions_full;
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
+
+-- Drop legacy columns after dependent views are gone.
+ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid;
+ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind;
+ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext;
 
 CREATE MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui AS
 SELECT
@@ -1287,9 +1390,8 @@ SELECT
     t.log_date::date AS "День (тренд)",
     COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
-    t.error_subtype AS "Подкатегория ошибки (глобально)",
+    t.error_subtype AS "Подкатегория ошибки",
     t.error_type AS "Тип ошибки",
-    t.error_summary AS "Интерпретация ошибок",
     t.error_summary AS "Сводка ошибки",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
@@ -1330,8 +1432,7 @@ SELECT
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     t.emdr_id AS "Регистрационный номер РЭМД",
     t.doc_number AS "DOCUMENTID",
-    t.error_code AS "Код ошибки",
-    t.error_json_text AS "Ошибки JSON",
+    t.error_json_text AS "Исходный текст ошибки",
     t.exchangelog_log_id AS transaction_id,
     COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
     public.egisz_normalize_semd_code(t.semd_code) AS service_id
@@ -1389,14 +1490,10 @@ SELECT
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",
     CASE
-        WHEN t.status = 'error' THEN t.error_code
-        ELSE NULL
-    END AS "Код ошибки",
-    CASE
         WHEN t.status = 'success' THEN 'Успешно'
-        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_json_text, ''), '(без ns2message)')
+        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_json_text, ''), '(нет текста)')
         ELSE ''
-    END AS "Текст ошибки",
+    END AS "Исходный текст ошибки",
     CASE
         WHEN t.status = 'success' THEN 'Успешно'
         WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), '(ошибка без деталей)')
@@ -1424,8 +1521,7 @@ SELECT
     t.jid::text AS "JID клиники",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",
-    NULL::text AS "Код ошибки",
-    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Текст ошибки",
+    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Исходный текст ошибки",
     CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
     CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
@@ -1571,14 +1667,33 @@ COMMENT ON VIEW public.v_rpt_network_errors_detail_ui IS
 CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
 WITH messages AS (
     SELECT
-        m.*,
-        public.egisz_normalize_semd_code(COALESCE(public.egisz_xml_text(m.msgtext, 'kind'), m.kind)) AS semd_code_resolved,
-        public.egisz_clean_text_value(COALESCE(public.egisz_xml_text(m.msgtext, 'documentTypeName'), public.egisz_xml_text(m.msgtext, 'name'))) AS semd_name_payload,
+        m.egmid,
+        m.created_at,
+        m.msgid,
+        m.reply_to,
+        m.document_id,
+        public.egisz_normalize_semd_code(
+            COALESCE(public.egisz_xml_text(r.msgtext, 'kind'),
+                     public.egisz_xml_text(r.msgtext, 'KIND'))
+        ) AS semd_code_resolved,
+        public.egisz_clean_text_value(
+            COALESCE(public.egisz_xml_text(r.msgtext, 'documentTypeName'),
+                     public.egisz_xml_text(r.msgtext, 'name'),
+                     public.egisz_xml_text(r.msgtext, 'documentName'))
+        ) AS semd_name_payload,
         public.egisz_normalize_message_id(m.msgid) AS msgid_norm,
         lower(NULLIF(btrim(m.document_id), '')) AS document_id_norm,
         NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer AS reply_to_jid,
         public.egisz_clean_host(m.reply_to) AS reply_to_host
     FROM egisz_messages_raw m
+    LEFT JOIN LATERAL (
+        SELECT er.msgtext
+        FROM exchangelog_raw er
+        WHERE er.msgid IS NOT NULL
+          AND public.egisz_normalize_message_id(er.msgid) = public.egisz_normalize_message_id(m.msgid)
+        ORDER BY er.logid DESC
+        LIMIT 1
+    ) r ON TRUE
 ),
 fact_message_keys AS (
     SELECT DISTINCT public.egisz_normalize_message_id(f.message_id) AS message_key
@@ -1617,8 +1732,8 @@ SELECT
         END
     ) AS "Наименование СЭМД",
     public.egisz_semd_type_report_label(m.semd_code_resolved, m.semd_name_payload) AS "Тип СЭМД (код · НСИ)",
-    COALESCE(m.jid, m.reply_to_jid, l.jid)::text AS "JID клиники",
-    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.jid, m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
+    COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники",
+    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
     m.reply_to AS "Связанное сообщение",
     m.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     m.msgid AS "MSGID обмена"
@@ -1626,19 +1741,17 @@ FROM messages m
 LEFT JOIN LATERAL (
     SELECT dl.*
     FROM dim_licenses dl
-    WHERE (m.jid IS NOT NULL AND dl.jid = m.jid)
-       OR (m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid)
+    WHERE (m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid)
        OR (m.reply_to_host IS NOT NULL AND public.egisz_clean_host(dl.mo_domen) = m.reply_to_host)
     ORDER BY
         CASE
-            WHEN m.jid IS NOT NULL AND dl.jid = m.jid THEN 0
-            WHEN m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid THEN 1
-            ELSE 2
+            WHEN m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid THEN 0
+            ELSE 1
         END,
         dl.modifydate DESC NULLS LAST, dl.id DESC
     LIMIT 1
 ) l ON TRUE
-LEFT JOIN dim_organizations o ON o.jid = COALESCE(m.jid, m.reply_to_jid, l.jid)
+LEFT JOIN dim_organizations o ON o.jid = COALESCE(m.reply_to_jid, l.jid)
 LEFT JOIN dim_semd_types st ON st.code = public.egisz_normalize_semd_code(m.semd_code_resolved)
 LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
 LEFT JOIN fact_document_keys fd ON fd.document_key = m.document_id_norm
@@ -1737,14 +1850,20 @@ FROM public.v_rpt_clinic_connectivity_daily_ui
 GROUP BY 1;
 
 CREATE OR REPLACE VIEW public.v_health_by_clinic_ui AS
-WITH fact_24h AS (
+WITH anchor AS (
+    -- Use the latest observed fact as the reference point so the "last 24h" window
+    -- works on stale / archival data, not only on real-time pipelines.
+    SELECT COALESCE(MAX("Обработано IPS"), now()) AS ref_ts
+    FROM public.v_egisz_transactions_enriched_ui
+),
+fact_24h AS (
     SELECT
         "JID клиники",
         MAX("Наименование клиники") AS clinic_name,
         COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS docs_cnt,
         COUNT(DISTINCT "Документ (ключ учёта)") FILTER (WHERE "Статус" = 'error')::bigint AS err_cnt
-    FROM public.v_egisz_transactions_enriched_ui
-    WHERE "Обработано IPS" >= now() - INTERVAL '24 hours'
+    FROM public.v_egisz_transactions_enriched_ui, anchor
+    WHERE "Обработано IPS" >= anchor.ref_ts - INTERVAL '24 hours'
     GROUP BY 1
 ),
 queue AS (
@@ -1783,29 +1902,40 @@ SELECT
     (SELECT COUNT(DISTINCT "Документ (ключ учёта)") FROM public.v_egisz_transactions_enriched_ui)::bigint AS "Всего документов";
 
 CREATE OR REPLACE VIEW public.v_health_signals_ui AS
+WITH anchor AS (
+    SELECT MAX(log_date) AS last_fact_ts FROM fact_egisz_transactions
+)
 SELECT * FROM (
     VALUES
         ('raw_rows', 'Raw-строки proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM exchangelog_raw), 'строк', 'exchangelog_raw', 'Контроль поступления журнала EXCHANGELOG'),
         ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT "localUid СЭМД")::numeric FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" < now() - INTERVAL '24 hours'), 'документов', 'egisz_messages_raw без callback-факта', 'Проверить клиники с зависшими документами и транспортный канал'),
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Ключ документа (группировка)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'EXCHANGELOG LOGSTATE=3 и журнал ошибок', 'Разобрать top формулировок и последние события в дашборде 02'),
-        ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05')
+        ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
+        ('data_freshness',
+         'Свежесть данных (последний факт)',
+         CASE
+             WHEN (SELECT last_fact_ts FROM anchor) IS NULL THEN 'red'
+             WHEN (SELECT last_fact_ts FROM anchor) >= now() - INTERVAL '1 hour'  THEN 'green'
+             WHEN (SELECT last_fact_ts FROM anchor) >= now() - INTERVAL '24 hours' THEN 'yellow'
+             ELSE 'red'
+         END,
+         ROUND(EXTRACT(EPOCH FROM (now() - COALESCE((SELECT last_fact_ts FROM anchor), now()))) / 60.0, 1)::numeric,
+         'минут с последнего факта',
+         'fact_egisz_transactions.log_date',
+         'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
 
--- Очистка исторических placeholder-значений '???????' в колонках интерпретации ошибок.
--- Эти значения были записаны старой версией egisz_transform_raw_to_facts и не несут смысла.
--- Новая версия функции записывает NULL для строк без ошибок.
--- Очистка исторических placeholder-значений '???????' и артефактов 'Успешно' в error-колонках.
--- Для строк без ошибок (success/unknown) error_summary и error_json_text должны быть NULL.
+-- Backfill error_type for already-loaded facts after rule/fallback updates (A3 from audit).
+-- This is idempotent: re-running yields the same canonical category per record.
 UPDATE public.fact_egisz_transactions
-SET
-    error_summary   = NULL,
-    error_json_text = NULL,
-    error_type      = CASE WHEN status = 'success' THEN 'Успешно' ELSE NULLIF(error_type, '???????') END,
-    error_subtype   = NULLIF(error_subtype, '???????')
-WHERE error_summary   IN ('???????', 'Успешно') OR
-      error_json_text IN ('???????', 'Успешно') OR
-      error_type      = '???????' OR
-      error_subtype   = '???????';
+SET error_type = CASE
+        WHEN error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+        ELSE COALESCE(
+            NULLIF(public.egisz_error_group_type(error_code, error_message), ''),
+            'Ошибка регистрации в РЭМД'
+        )
+    END
+WHERE status = 'error';
 
 -- Transfer ownership of all public-schema objects to egisz so it can run DDL independently
 DO $$

@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path
+
 from egisz_elt.pg_client import (
-    BOOTSTRAP_LOCK_TIMEOUT,
-    BOOTSTRAP_STATEMENT_TIMEOUT,
     DIRECTORY_SYNC_LOCK_TIMEOUT,
     DIRECTORY_SYNC_PAGE_SIZE,
     DIRECTORY_SYNC_STATEMENT_TIMEOUT,
-    _read_bootstrap_sql,
-    ensure_tables,
     load_raw_logs,
     normalize_message_id,
     sync_directory,
     transform_raw_to_facts,
 )
+
+DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
+
+
+def _read_dwh_init_sql() -> str:
+    return DWH_INIT_SQL_PATH.read_text(encoding="utf-8")
 
 
 class FakeConnection:
@@ -78,20 +82,6 @@ class FakeTransformConnection:
         self.committed = True
 
 
-def test_ensure_tables_sets_bounded_bootstrap_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
-    con = FakeTransformConnection()
-    monkeypatch.setattr("egisz_elt.pg_client._read_bootstrap_sql", lambda: "CREATE TABLE example(id int);")
-
-    ensure_tables(con)
-
-    assert con.cursor_instance.calls == [
-        ("SET LOCAL lock_timeout = %s", (BOOTSTRAP_LOCK_TIMEOUT,)),
-        ("SET LOCAL statement_timeout = %s", (BOOTSTRAP_STATEMENT_TIMEOUT,)),
-        ("CREATE TABLE example(id int);", None),
-    ]
-    assert con.committed is True
-
-
 def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
     con = FakeTransformConnection()
 
@@ -105,8 +95,8 @@ def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
     assert con.committed is True
 
 
-def test_bootstrap_sql_uses_semd_identifiers_before_transport_host_fallback() -> None:
-    sql = _read_bootstrap_sql()
+def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> None:
+    sql = _read_dwh_init_sql()
 
     document_priority = "COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id"
     jid_priority = "COALESCE(p.message_jid, p.jid_from_payload) AS resolved_jid"
@@ -115,14 +105,13 @@ def test_bootstrap_sql_uses_semd_identifiers_before_transport_host_fallback() ->
     assert jid_priority in sql
     assert "CREATE OR REPLACE FUNCTION public.egisz_normalize_semd_code" in sql
     assert "public.egisz_extract_jid_from_endpoint(m.reply_to)" in sql
-    assert 'COALESCE(m.jid, m.reply_to_jid, l.jid)::text AS "JID клиники"' in sql
+    assert 'COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники"' in sql
 
 
-def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors() -> None:
-    sql = _read_bootstrap_sql()
+def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors() -> None:
+    sql = _read_dwh_init_sql()
 
     assert "Не указан адрес пациента" in sql
-    assert "Должность врача не соответствует данным в ФРМР" in sql
     assert "Данные пациента не соответствуют ГИП" in sql
     assert "Документ уже зарегистрирован в РЭМД" in sql
     assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
@@ -139,6 +128,21 @@ def test_bootstrap_sql_interprets_patient_address_schematron_and_network_errors(
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "egisz_error_messages_row" in sql
     assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
+
+
+def test_dwh_init_sql_drops_unused_egisz_messages_columns() -> None:
+    sql = _read_dwh_init_sql()
+
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid" in sql
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind" in sql
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext" in sql
+
+    create_table_marker = "CREATE TABLE IF NOT EXISTS egisz_messages_raw"
+    idx = sql.find(create_table_marker)
+    assert idx != -1
+    create_block = sql[idx : idx + sql[idx:].find(");") + 2]
+    for forbidden in ("jid integer", "kind text,", "msgtext text"):
+        assert forbidden not in create_block
 
 
 class FakeSyncCursor:
