@@ -19,3 +19,9 @@ k8s/**/**secret*.yaml
 # Ad-hoc verification files (psql -o output, temp SQL)
 tmp_*.txt
 tmp_*.sql
+
+# Local runtime/build artifacts
+*.log
+.airflow-image-tag
+.metabase-image-tag
+.dwh-init.last.log
