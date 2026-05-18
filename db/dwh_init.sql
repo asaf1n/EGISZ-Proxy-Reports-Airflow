@@ -598,6 +598,7 @@ END
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid_norm ON exchangelog_raw (public.egisz_normalize_message_id(msgid));
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid ON egisz_messages_raw (msgid);
