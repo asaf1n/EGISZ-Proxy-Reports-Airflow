@@ -1,145 +1,93 @@
 """
 Дополняет metabase-field-filters у native-карточек и переводит
 поддерживаемые text template-tags в настоящие dimension field filters.
+
+Правила маппинга tag → (table_ref, field_name) живут в
+metabase_dashboards/field_filter_defaults.yaml. Скрипт — резолвер,
+а не носитель бизнес-логики.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Iterable
+
+import yaml
 
 
-DIMENSION_TAGS = {
-    "top_semd",
-    "top_clinic",
-    "local_uid",
-    "relates_to",
-    "emdr_id",
-    "status",
-    "log_id",
-    "egmid",
-    "err_parse_code",
-}
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_DASHBOARDS_DIR = _PROJECT_ROOT / "metabase_dashboards"
+_RULES_PATH = _DASHBOARDS_DIR / "field_filter_defaults.yaml"
+
+
+def _load_rules() -> dict[str, list[dict[str, Any]]]:
+    raw = yaml.safe_load(_RULES_PATH.read_text(encoding="utf-8")) or {}
+    version = raw.get("version")
+    if version != 2:
+        raise RuntimeError(
+            f"{_RULES_PATH.name}: expected version 2, got {version!r}. "
+            "Update the resolver or migrate the YAML."
+        )
+
+    tags = raw.get("tags") or {}
+    normalized: dict[str, list[dict[str, Any]]] = {}
+    for tag_name, body in tags.items():
+        rules = (body or {}).get("rules") or []
+        if not isinstance(rules, list) or not rules:
+            raise RuntimeError(f"{_RULES_PATH.name}: tag {tag_name!r} has no rules")
+        for index, rule in enumerate(rules):
+            if "table_ref" not in rule or "field_name" not in rule:
+                raise RuntimeError(
+                    f"{_RULES_PATH.name}: tag {tag_name!r} rule #{index} is missing table_ref/field_name"
+                )
+        normalized[tag_name] = rules
+    return normalized
+
+
+def _all_present(haystack: str, needles: Iterable[str]) -> bool:
+    return all(needle in haystack for needle in needles)
+
+
+def _none_present(haystack: str, needles: Iterable[str]) -> bool:
+    return all(needle not in haystack for needle in needles)
+
+
+def _rule_matches(rule: dict[str, Any], display_name: str, query: str) -> bool:
+    display_lower = display_name.lower()
+    if not _all_present(query, rule.get("query_contains") or []):
+        return False
+    if not _none_present(query, rule.get("query_not_contains") or []):
+        return False
+    if not _all_present(display_name, rule.get("display_name_contains") or []):
+        return False
+    if not _none_present(display_name, rule.get("display_name_not_contains") or []):
+        return False
+    if not _all_present(display_lower, [s.lower() for s in (rule.get("display_name_contains_lower") or [])]):
+        return False
+    return True
 
 
 def _resolve(
     tag_name: str,
-    tag_def: dict,
+    tag_def: dict[str, Any],
     query: str,
+    rules_by_tag: dict[str, list[dict[str, Any]]],
 ) -> tuple[str, str] | None:
-    disp = (tag_def or {}).get("display-name") or ""
-    q = query or ""
-
-    if tag_name in ("parse_date", "parse_created"):
-        if "v_rpt_network_errors_detail_ui" in q:
-            return "public.v_rpt_network_errors_detail_ui", "Дата создания документа"
-        if "v_stg_channel_network_errors_by_document" in q:
-            return "public.v_stg_channel_network_errors_by_document", "created_at"
-        return "public.v_stg_channel_errors_by_document", "created_at"
-
-    if tag_name == "connectivity_day":
-        if "v_rpt_clinic_connectivity_daily_ui" in q:
-            return "public.v_rpt_clinic_connectivity_daily_ui", "День"
-        return "public.v_rpt_connectivity_global_daily_ui", "День"
-
-    if tag_name == "top_semd":
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "Код СЭМД"
-        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-            return "public.v_rpt_documents_no_response_ui", "Код СЭМД"
-        if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-            return "public.v_rpt_network_errors_detail_ui", "Код СЭМД"
-        return "public.v_egisz_transactions_enriched_ui", "Код СЭМД"
-
-    if tag_name == "top_clinic":
-        if "v_health_by_clinic_ui" in q:
-            return "public.v_health_by_clinic_ui", "JID клиники"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "JID клиники"
-        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-            return "public.v_rpt_documents_no_response_ui", "JID клиники"
-        if "v_rpt_network_errors_detail_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-            return "public.v_rpt_network_errors_detail_ui", "JID клиники"
-        return "public.v_egisz_transactions_enriched_ui", "JID клиники"
-
-    if tag_name == "local_uid":
-        if "v_stg_channel_errors_by_document" in q:
-            return "public.v_stg_channel_errors_by_document", "local_uid_hint"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "localUid СЭМД"
-        if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-            return "public.v_rpt_documents_no_response_ui", "localUid СЭМД"
-        return "public.v_egisz_transactions_enriched_ui", "localUid СЭМД"
-
-    if tag_name == "relates_to":
-        if "v_stg_channel_errors_by_document" in q:
-            return "public.v_stg_channel_errors_by_document", "relates_to_id"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "Связанное сообщение"
-        return "public.v_egisz_transactions_enriched_ui", "Связанное сообщение"
-
-    if tag_name == "emdr_id":
-        if "v_stg_channel_errors_by_document" in q:
-            return "public.v_stg_channel_errors_by_document", "emdr_id_hint"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "Рег. номер РЭМД"
-        return "public.v_egisz_transactions_enriched_ui", "Рег. номер РЭМД (emdrid)"
-
-    if tag_name == "status":
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "Статус"
-        return "public.v_egisz_transactions_enriched_ui", "Статус"
-
-    if tag_name == "log_id":
-        if "v_stg_channel_errors_by_document" in q:
-            return "public.v_stg_channel_errors_by_document", "exchangelog_log_id"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "LOGID журнала EXCHANGELOG"
-        return "public.v_egisz_transactions_enriched_ui", "LOGID журнала EXCHANGELOG"
-
-    if tag_name == "egmid":
-        if "v_stg_channel_errors_by_document" in q:
-            return "public.v_stg_channel_errors_by_document", "egisz_messages_egmid"
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
-        return "public.v_egisz_transactions_enriched_ui", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
-
-    if tag_name == "err_parse_code":
-        return "public.v_stg_channel_errors_by_document", "error_code"
-
-    if tag_name != "dwh_date":
+    rules = rules_by_tag.get(tag_name)
+    if not rules:
         return None
-
-    if "Отправлено" in disp or "очередь" in disp.lower():
-        return "public.v_rpt_documents_no_response_ui", "Отправлено"
-
-    if "День (тренд)" in disp:
-        if "v_rpt_semd_archive_ui" in q:
-            return "public.v_rpt_semd_archive_ui", "День (тренд)"
-        return "public.v_egisz_transactions_enriched_ui", "День (тренд)"
-
-    if "Дата обработки" in disp:
-        return "public.v_rpt_semd_archive_ui", "Дата обработки"
-
-    if "Обработано IPS" in disp:
-        return "public.v_egisz_transactions_enriched_ui", "Обработано IPS"
-
-    if "Обработано" in disp and "Отправлено" not in disp:
-        return "public.v_egisz_transactions_enriched_ui", "Обработано IPS"
-
-    if "v_rpt_documents_no_response_ui" in q and "v_egisz_transactions_enriched_ui" not in q:
-        return "public.v_rpt_documents_no_response_ui", "Отправлено"
-    if "v_rpt_semd_archive_ui" in q:
-        return "public.v_rpt_semd_archive_ui", "Дата обработки"
-    if "v_egisz_transactions_enriched_ui" in q:
-        return "public.v_egisz_transactions_enriched_ui", "Обработано IPS"
-
+    display = (tag_def or {}).get("display-name") or ""
+    for rule in rules:
+        if _rule_matches(rule, display, query or ""):
+            return rule["table_ref"], rule["field_name"]
     return None
 
 
-def patch_file(path: Path) -> int:
+def patch_file(path: Path, rules_by_tag: dict[str, list[dict[str, Any]]]) -> int:
     raw = path.read_text(encoding="utf-8")
     data = json.loads(raw)
     n = 0
+    dimension_tags = set(rules_by_tag.keys())
     for card in data.get("cards", []):
         dq = card.get("dataset_query") or {}
         native = dq.get("native") or {}
@@ -151,7 +99,7 @@ def patch_file(path: Path) -> int:
         ff = dict(card.get("metabase-field-filters") or {})
         changed = False
         for tname, tdef in tags.items():
-            if tname in DIMENSION_TAGS and (tdef or {}).get("type") != "dimension":
+            if tname in dimension_tags and (tdef or {}).get("type") != "dimension":
                 tdef["type"] = "dimension"
                 changed = True
             if (tdef or {}).get("type") != "dimension":
@@ -159,7 +107,7 @@ def patch_file(path: Path) -> int:
             if tname in ff:
                 continue
 
-            resolved = _resolve(tname, tdef, query)
+            resolved = _resolve(tname, tdef, query, rules_by_tag)
             if not resolved:
                 raise RuntimeError(f"{path.name} / {card.get('name')!r}: cannot resolve dimension {tname!r}")
             tr, fn = resolved
@@ -176,10 +124,10 @@ def patch_file(path: Path) -> int:
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parents[1] / "metabase_dashboards"
+    rules_by_tag = _load_rules()
     total = 0
-    for f in sorted(root.glob("*.json")):
-        total += patch_file(f)
+    for f in sorted(_DASHBOARDS_DIR.glob("*.json")):
+        total += patch_file(f, rules_by_tag)
     print(f"Patched {total} dimension bindings across metabase_dashboards/*.json")
 
 

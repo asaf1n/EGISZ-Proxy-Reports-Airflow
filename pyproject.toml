@@ -10,11 +10,13 @@ authors = [{ name = "EGISZ" }]
 dependencies = [
   "firebird-driver>=1.10.0,<2.0.0",
   "psycopg2-binary>=2.9.9",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "apache-airflow==2.11.2",
+  "pytest>=7.0",
 ]
 
 [tool.pytest.ini_options]

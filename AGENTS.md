@@ -93,13 +93,29 @@ All tasks must be idempotent. PostgreSQL writes use `INSERT ... ON CONFLICT DO U
 
 ### Schema initialization
 
-All DDL lives in **`db/dwh_init.sql`**. Run it as:
+All DDL lives in **`db/dwh_init.sql`** (thin collector) plus ordered modules under **`db/parts/`**. Run as:
 
 ```bash
 psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 ```
 
-The script is idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). When adding new tables or columns, extend `db/dwh_init.sql` in the same style.
+Module order (matters — views depend on functions which depend on tables):
+
+```
+db/parts/00_bootstrap.sql                  — role + grants
+db/parts/10_tables.sql                     — tables, dim_semd_types seed, fact + indexes
+db/parts/20_functions_parsing.sql          — xml_text, normalize_message_id, clean_host, ...
+db/parts/30_error_rules.sql                — egisz_error_interpretation_rules table + seed
+db/parts/40_functions_errors.sql           — error classify / interpretation / build_errors_json / semd_type_report_label
+db/parts/50_transform.sql                  — egisz_transform_raw_to_facts
+db/parts/60_drop_dependents.sql            — DROP dependent views and legacy columns before re-creating views
+db/parts/70_views_core.sql                 — v_egisz_transactions_enriched_ui (MV) + v_rpt_error_interpretations_ui
+db/parts/75_views_stg.sql                  — v_stg_channel_errors_by_document (MV) + network alias
+db/parts/80_views_rpt.sql                  — v_rpt_* report views (network errors, no_response, semd_archive, connectivity)
+db/parts/90_views_health_and_finalize.sql  — v_health_* views + GRANT verification + REFRESH MVs
+```
+
+Every module is individually idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, `ALTER TABLE ... IF EXISTS`, `INSERT ... ON CONFLICT`). When adding a new table, column, function, or view: edit the matching `db/parts/*.sql` module in the same idempotent style. **Do not create migration files** — there is no `migrations/` directory, and `db/dwh_init.sql` + `db/parts/` is the single source of truth for DWH schema. New dev DWHs are bootstrapped by a single `psql -f db/dwh_init.sql` run.
 
 ### Transform function
 
