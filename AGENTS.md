@@ -20,7 +20,7 @@ Do not invent names. Follow this exact taxonomy:
 | Dimension: licenses | `dim_licenses` | Source: Firebird `EGISZ_LICENSES` |
 | Dimension: SEMD types | `dim_semd_types` | Static reference table |
 | Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()` |
-| Materialized views | `mv_egisz_*` | Auto-refreshed after each transform |
+| Materialized views | `v_*` | Physical MV names in this repo include `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`; they are refreshed by a separate Airflow task |
 | Watermark table | `elt_state` | Tracks `last_log_id` and `last_egmid` per pipeline |
 
 **NEVER** use the legacy term `proxy_reports` in any variable, class, file, or SQL object name.
@@ -119,13 +119,13 @@ Every module is individually idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE O
 
 ### Transform function
 
-Data transformation happens **during DAG execution**, inside the `transform_data` Airflow task. The task calls a PostgreSQL stored function that does all the real work — parsing SOAP/XML payloads, enriching rows, writing to `fact_egisz_transactions`, and refreshing `mv_egisz_*` materialized views:
+Data transformation happens **during DAG execution**, inside the `transform_data` Airflow task. The task calls a PostgreSQL stored function that does all the real work — parsing SOAP/XML payloads, enriching rows, and writing to `fact_egisz_transactions`:
 
 ```sql
 SELECT public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)
 ```
 
-The Python task only invokes this function; **all transformation logic lives in SQL, not Python**. Do not implement row-level transformation in Python (e.g., iterating rows and mutating them before writing). `normalize.py` is a compatibility stub — it contains no active logic.
+The Python task only invokes this function; **all transformation logic lives in SQL, not Python**. Materialized view refresh stays in the separate `refresh_materialized_views` Airflow task and must not be duplicated inside `egisz_transform_raw_to_facts()`. Do not implement row-level transformation in Python (e.g., iterating rows and mutating them before writing). `normalize.py` is a compatibility stub — it contains no active logic.
 
 Transformation is **not** deferred to dashboard query time. By the time Metabase reads the data, `fact_egisz_transactions` and materialized views are already populated.
 
