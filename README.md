@@ -70,8 +70,8 @@
 5. **SQL-трансформация**
    Функция `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)` парсит `MSGTEXT`, нормализует статусы и обновляет `fact_egisz_transactions`. Кандидатами для обработки идут строки журнала, попавшие в LOGID-окно текущего батча, и старые строки `exchangelog_raw`, к которым в EGMID-окне пришёл поздний callback из `egisz_messages_raw`.
 
-6. **Refresh materialized views**
-   Отдельная задача `refresh_materialized_views` обновляет mat-view'ы `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document` через `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+6. **Refresh reporting views**
+   Задача `refresh_materialized_views` сохранена как совместимый шаг DAG: если `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document` развёрнуты как materialized view, она делает `REFRESH MATERIALIZED VIEW CONCURRENTLY`; если это обычные view, задача быстро завершается без полного пересчёта.
 
 7. **Обновление watermark**
    После успешной трансформации DAG сохраняет оба курсора в `elt_state`: `last_log_id` и `last_egmid`.
@@ -238,7 +238,7 @@ COALESCE(local_uid_semd, emdr_id, relates_to_id, doc_number, message_id, exchang
 * `Код СЭМД` — это `OID` из справочника НСИ `1.2.643.5.1.13.13.11.1520`.
 * `Наименование СЭМД` — это человекочитаемое наименование из `dim_semd_types`, либо payload fallback, если код ещё не заведен в справочнике.
 
-`dim_semd_types.code` соответствует полю `OID` из приложенного файла `1.2.643.5.1.13.13.11.1520_12.48_json.zip`, а `TYPE` хранится отдельно как `type_code`. Обновление справочника ручное: заменить seed-данные в `src/egisz_elt/sql/001_dwh_bootstrap.sql` или обновить строки в `dim_semd_types` напрямую в DWH и затем переимпортировать Metabase.
+`dim_semd_types.code` соответствует полю `OID` из приложенного файла `1.2.643.5.1.13.13.11.1520_12.48_json.zip`, а `TYPE` хранится отдельно как `type_code`. Обновление справочника ручное: заменить seed-данные в `db/dwh_init.sql` или обновить строки в `dim_semd_types` напрямую в DWH и затем переимпортировать Metabase.
 
 ---
 
@@ -255,7 +255,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 2. `extract_from_proxy` — читает батчи `EXCHANGELOG` и `EGISZ_MESSAGES`, а также добирает связанные сообщения по `MSGID` / `DOCUMENTID`.
 3. `load_to_dwh` — загружает raw-данные в `exchangelog_raw` и `egisz_messages_raw`.
 4. `transform_data` — вызывает `egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`.
-5. `refresh_materialized_views` — обновляет `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document` через `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+5. `refresh_materialized_views` — compatibility-step для `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document`: refresh только для materialized view, skip для обычных view.
 6. `update_watermark` — фиксирует успешные курсоры `LOGID` и `EGMID` в `elt_state`.
 
 DWH-схема создаётся отдельным скриптом `db/dwh_init.sql` (см. секцию «Логика выгрузки и хранения»), а не задачей DAG.
@@ -280,6 +280,7 @@ DWH-схема создаётся отдельным скриптом `db/dwh_in
 Основные представления:
 
 * `v_egisz_transactions_enriched_ui` — главная витрина для Metabase.
+  В текущем bootstrap она создаётся как обычное view, чтобы избежать полного refresh всей витрины на каждом цикле DAG.
 * `v_rpt_documents_no_response_ui` — очередь исходящих сообщений без найденного callback; anti-join строится по нормализованным ключам `message_id` / `relates_to_id` / `local_uid_semd`.
 * `v_rpt_network_errors_detail_ui` — детализация транспортных и сетевых ошибок.
 * `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
@@ -287,7 +288,7 @@ DWH-схема создаётся отдельным скриптом `db/dwh_in
 
 ### Аналитический слой (миграция 004)
 
-Поверх `fact_egisz_transactions` построен набор аналитических представлений, обслуживающих дашборды A–F (см. ниже). Все view с суффиксом `_ui` доступны Metabase и переcоздаются миграцией `migrations/004_full_analytics.sql` (и/или повторным прогоном `db/dwh_init.sql`):
+Поверх `fact_egisz_transactions` построен набор аналитических представлений, обслуживающих дашборды A–F (см. ниже). Все view с суффиксом `_ui` доступны Metabase и переcоздаются повторным прогоном `db/dwh_init.sql`:
 
 | View | Назначение | Окно |
 | :--- | :--- | :--- |
@@ -306,11 +307,9 @@ DWH-схема создаётся отдельным скриптом `db/dwh_in
 
 Внутренний хелпер: `public.egisz_doc_key(local_uid, emdr_id, doc_number, message_id, log_id)` — однозначное вычисление ключа учёта документа (`COALESCE` приоритет: `localUid` → `emdrId` → `doc_number` → `MSGID` → `LOGID::text`).
 
-Применение миграции 004 (идемпотентно, повторный запуск безопасен):
+Применение (идемпотентно, повторный запуск безопасен):
 
 ```bash
-psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f migrations/004_full_analytics.sql
-# или (то же самое в составе полного bootstrap):
 psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 ```
 
@@ -433,7 +432,7 @@ kubectl delete deployment/metabase service/metabase
 
 * `airflow/dags/` — DAG `egisz_elt_dag.py`.
 * `src/egisz_elt/` — Python-клиенты Firebird/PostgreSQL и загрузочная логика.
-* `src/egisz_elt/sql/` — DWH schema, функции парсинга и представления.
+* `db/dwh_init.sql` — DWH schema, функции парсинга и представления (единственный источник DDL).
 * `metabase/` — Dockerfile, entrypoint и provisioning-скрипты Metabase.
 * `metabase_dashboards/` — JSON-дашборды.
 * `k8s/` — Kubernetes manifests и Helm values.
