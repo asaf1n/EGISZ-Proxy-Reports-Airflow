@@ -2,38 +2,21 @@
 set -euo pipefail
 
 METABASE_URL="${METABASE_URL:-${MB_URL:-http://localhost:3000}}"
-ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_USER:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}"
 DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
 METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
 DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
 
-APP_DB_HOST="${APP_DB_HOST:-${DWH_HOST:-host.docker.internal}}"
-APP_DB_PORT="${APP_DB_PORT:-${DWH_PORT:-5432}}"
-APP_DB_NAME="${APP_DB_NAME:-${DWH_NAME:-dwh_egisz}}"
-APP_DB_USER="${APP_DB_USER:-${DWH_USER:-postgres}}"
-APP_DB_PASSWORD="${APP_DB_PASSWORD:-${DWH_PASSWORD:-postgres}}"
+APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
+APP_DB_PORT="${APP_DB_PORT:-5432}"
+APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
+APP_DB_USER="${APP_DB_USER:-postgres}"
+APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
 DB_METADATA_FILE=""
-
-# Аналитические представления, которые ДОЛЖНЫ существовать перед импортом
-# дашбордов A–F. Скрипт также автоматически добирает все public.* объекты,
-# упомянутые в JSON; этот список — явная страховка для миграции 004.
-REQUIRED_ANALYTICS_VIEWS=(
-  "v_doc_registry_ui"
-  "v_doc_timeline_ui"
-  "v_stat_semd_types_ui"
-  "v_stat_errors_ui"
-  "v_stat_orgs_ui"
-  "v_stat_daily_ui"
-  "v_stat_hourly_ui"
-  "v_docs_no_response_ui"
-  "v_service_health_ui"
-  "v_kpi_summary_ui"
-  "etl_run_log"
-)
 
 if [ -f "/app/include/mb_list.sh" ]; then
   # shellcheck source=/app/include/mb_list.sh
@@ -218,30 +201,10 @@ dwh_object_exists() {
         ) THEN 'ok' ELSE 'missing' END;"
 }
 
-# check_view_exists — публичный helper для явной проверки одного представления.
-# Возвращает 0, если объект существует; 1 — иначе. Логирует осмысленный текст.
-check_view_exists() {
-  local view_name="$1"
-  if [ "$(dwh_object_exists "${view_name}")" = "ok" ]; then
-    return 0
-  fi
-  log_info "DWH object missing: public.${view_name}"
-  return 1
-}
-
 validate_dwh_contract() {
   log_info "Checking DWH contract in ${APP_DB_HOST}:${APP_DB_PORT}/${APP_DB_NAME}"
   local missing=()
   local object status
-
-  # 1. Явный список обязательных аналитических view — safety-net миграции 004.
-  for object in "${REQUIRED_ANALYTICS_VIEWS[@]}"; do
-    if ! check_view_exists "${object}"; then
-      missing+=("public.${object}")
-    fi
-  done
-
-  # 2. Автодискавер всех public.* объектов, упомянутых в JSON-дашбордах.
   while IFS= read -r object; do
     [ -n "${object}" ] || continue
     status=$(dwh_object_exists "${object}")
@@ -251,10 +214,9 @@ validate_dwh_contract() {
   done < <(required_public_objects)
 
   if [ "${#missing[@]}" -gt 0 ]; then
-    printf '%s\n' "${missing[@]}" | sort -u >&2
-    fail "DWH is missing $(printf '%s\n' "${missing[@]}" | sort -u | wc -l | tr -d ' ') object(s) required by dashboard SQL — run migrations/004_full_analytics.sql"
+    printf '%s\n' "${missing[@]}" >&2
+    fail "DWH is missing ${#missing[@]} object(s) required by dashboard SQL"
   fi
-  log_info "DWH contract OK: ${#REQUIRED_ANALYTICS_VIEWS[@]} required view(s) present"
 }
 
 sync_metabase_schema() {

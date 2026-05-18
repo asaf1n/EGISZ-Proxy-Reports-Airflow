@@ -1,0 +1,538 @@
+{
+  "name": "03 Документы без ответа",
+  "width": "full",
+  "description": "Очередь исходящих **СЭМД** без callback: единица учёта — **`localUid СЭМД`** (исходящая запись в РЭМД), это **не** то же самое, что **relatesToMessage** из колбэка. Построчный список, топ клиник, возраст ожидания, срез по типу СЭМД. Field filter по **«Отправлено»**; **Код СЭМД** / **JID** — `top_semd_filter` / `top_clinic_filter` (как на **01**).",
+  "parameters": [
+    {
+      "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",
+      "name": "Период по «Отправлено» (очередь)",
+      "slug": "dwh_date_filter",
+      "type": "date/all-options",
+      "sectionId": "date"
+    },
+    {
+      "id": "f4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a2",
+      "name": "Код СЭМД",
+      "slug": "top_semd_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a3",
+      "name": "JID клиники",
+      "slug": "top_clinic_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a4",
+      "name": "localUid СЭМД",
+      "slug": "local_uid_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "03 · Очередь без ответа (список)",
+      "description": "Строки v_rpt_documents_no_response_ui (подписи из dim_column_display_labels).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] ORDER BY \"Отправлено\" DESC NULLS LAST LIMIT 100",
+          "template-tags": {
+            "top_semd": {
+              "widget-type": "string/=",
+              "id": "f4000001-0001-4001-8001-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "type": "dimension",
+              "required": false
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f4000001-0001-4001-8001-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Отправлено»",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "id": "f4000001-0001-4001-8001-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "type": "dimension",
+              "required": false
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "id": "f4000001-0001-4001-8001-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"localUid СЭМД\"]": {
+            "column_title": "localUid СЭМД"
+          },
+          "[\"name\",\"Код СЭМД\"]": {
+            "column_title": "Код СЭМД"
+          },
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
+          },
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Хост клиники (VPN ГОСТ)\"]": {
+            "column_title": "Хост клиники (VPN ГОСТ)"
+          },
+          "[\"name\",\"Отправлено\"]": {
+            "column_title": "Отправлено",
+            "date_style": "D MMMM, YYYY",
+            "date_abbreviate": true,
+            "time_style": "HH:mm"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 0,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
+        }
+      }
+    },
+    {
+      "name": "03 · Топ клиник с зависшими документами",
+      "description": "Клиники с наибольшим количеством документов без ответа; JID как текст (без суммирования в сводках Metabase).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "template-tags": {
+            "top_semd": {
+              "widget-type": "string/=",
+              "id": "f8000001-0001-4001-8001-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "type": "dimension",
+              "required": false
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f8000001-0001-4001-8001-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Отправлено»",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "id": "f8000001-0001-4001-8001-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "type": "dimension",
+              "required": false
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "id": "f8000001-0001-4001-8001-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Наименование клиники"
+        ],
+        "graph.show_values": true,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 10,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
+        }
+      }
+    },
+    {
+      "name": "03 · Возраст зависших документов",
+      "description": "Распределение по времени ожидания; «сейчас» для расчёта — момент последней «Отправлено» в снимке.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
+          "template-tags": {
+            "top_semd": {
+              "widget-type": "string/=",
+              "id": "f8000002-0002-4002-8002-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "type": "dimension",
+              "required": false
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f8000002-0002-4002-8002-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Отправлено»",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "id": "f8000002-0002-4002-8002-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "type": "dimension",
+              "required": false
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "id": "f8000002-0002-4002-8002-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Время ожидания"
+        ],
+        "graph.show_values": true,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Время ожидания\"]": {
+            "column_title": "Время ожидания"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 10,
+      "col": 12,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
+        }
+      }
+    },
+    {
+      "name": "03 · Зависшие по типам СЭМД",
+      "description": "Распределение документов без ответа по подписи СЭМД (код или наименование).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(NULLIF(TRIM(p.\"Наименование СЭМД\"), ''), NULLIF(TRIM(p.\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "template-tags": {
+            "top_semd": {
+              "widget-type": "string/=",
+              "id": "f8000003-0003-4003-8003-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "type": "dimension",
+              "required": false
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f8000003-0003-4003-8003-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Отправлено»",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "id": "f8000003-0003-4003-8003-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "type": "dimension",
+              "required": false
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "id": "f8000003-0003-4003-8003-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Наименование СЭМД"
+        ],
+        "graph.show_values": true,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "number_separators": ".",
+            "decimals": 0
+          }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
+      },
+      "sizeX": 24,
+      "sizeY": 8,
+      "row": 18,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
+        }
+      }
+    },
+    {
+      "name": "03 · Зависшие — детализация",
+      "description": "До 500 строк: ИД документа (localUid), код и наименование СЭМД, клиника (JID как текст), дата отправки (24-ч формат в настройках колонки) и корзина возраста.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT \"localUid СЭМД\" AS \"ИД документа\", COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS \"Код СЭМД\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)') AS \"Наименование СЭМД\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Клиника\", \"Отправлено\", CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\" FROM base p CROSS JOIN pend_ref ORDER BY p.\"Отправлено\" ASC NULLS LAST LIMIT 500",
+          "template-tags": {
+            "top_semd": {
+              "widget-type": "string/=",
+              "id": "f8000004-0004-4004-8004-000000000010",
+              "name": "top_semd",
+              "display-name": "Код СЭМД",
+              "type": "dimension",
+              "required": false
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "f8000004-0004-4004-8004-000000000001",
+              "name": "dwh_date",
+              "display-name": "По дате «Отправлено»",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "id": "f8000004-0004-4004-8004-000000000011",
+              "name": "top_clinic",
+              "display-name": "JID клиники",
+              "type": "dimension",
+              "required": false
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "id": "f8000004-0004-4004-8004-000000000012",
+              "name": "local_uid",
+              "display-name": "localUid СЭМД",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Отправлено\"]": {
+            "column_title": "Отправлено",
+            "date_style": "D MMMM, YYYY",
+            "date_abbreviate": true,
+            "time_style": "HH:mm"
+          },
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 26,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Отправлено"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_no_response_ui",
+          "field_name": "localUid СЭМД"
+        }
+      }
+    }
+  ]
+}
