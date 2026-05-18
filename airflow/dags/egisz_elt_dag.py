@@ -197,9 +197,11 @@ def egisz_elt_pipeline() -> None:
     @task
     def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
         if load_info["max_id"] <= 0 and load_info.get("message_count", 0) <= 0:
-            return {**load_info, "transformed": 0}
+            return {**load_info, "transformed": 0, "duration_ms": 0, "errors_count": 0}
 
         pg_conn = _dwh_connection()
+        started_at = time.monotonic()
+        errors_count = 0
         try:
             transformed = transform_raw_to_facts(
                 pg_conn,
@@ -209,9 +211,28 @@ def egisz_elt_pipeline() -> None:
                 max_egmid=int(load_info.get("max_egmid", 0)),
             )
             log.info("Transformed %s row(s) into fact_egisz_transactions.", transformed)
+            # Count error rows in the current batch range to feed etl_run_log.
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)::int
+                    FROM public.fact_egisz_transactions
+                    WHERE exchangelog_log_id BETWEEN %s AND %s
+                      AND status = 'error'
+                    """,
+                    (int(load_info.get("last_log_id", 0)), int(load_info["max_id"])),
+                )
+                row = cur.fetchone()
+                errors_count = int(row[0]) if row and row[0] is not None else 0
         finally:
             pg_conn.close()
-        return {**load_info, "transformed": transformed}
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        return {
+            **load_info,
+            "transformed": transformed,
+            "duration_ms": duration_ms,
+            "errors_count": errors_count,
+        }
 
     @task
     def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
@@ -243,6 +264,28 @@ def egisz_elt_pipeline() -> None:
                 load_info["max_id"],
                 load_info.get("max_egmid", 0),
             )
+            # Записываем строку в etl_run_log для часовой динамики пайплайна
+            # (используется v_service_health_ui и потенциальными графиками).
+            with pg_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO public.etl_run_log
+                        (run_ts, docs_processed, errors_count, duration_ms,
+                         batch_min_id, batch_max_id, batch_min_egmid, batch_max_egmid)
+                    VALUES (now(), %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_ts) DO NOTHING
+                    """,
+                    (
+                        int(load_info.get("transformed", 0) or 0),
+                        int(load_info.get("errors_count", 0) or 0),
+                        int(load_info.get("duration_ms", 0) or 0),
+                        int(load_info.get("last_log_id", 0) or 0),
+                        int(load_info.get("max_id", 0) or 0),
+                        int(load_info.get("last_egmid", 0) or 0),
+                        int(load_info.get("max_egmid", 0) or 0),
+                    ),
+                )
+            pg_conn.commit()
         finally:
             pg_conn.close()
 

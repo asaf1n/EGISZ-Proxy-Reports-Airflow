@@ -1,0 +1,175 @@
+{
+  "name": "D · Типы СЭМД",
+  "width": "full",
+  "description": "Анализ покрытия и проблем по видам документов: какие типы СЭМД активны, с каким качеством регистрируются, какие клиники их используют. Источник: `v_stat_semd_types_ui`.",
+  "parameters": [
+    {
+      "id": "d0001000-1000-4000-8000-000000000001",
+      "name": "Код СЭМД",
+      "slug": "semd_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "D · Типов СЭМД в обороте",
+      "description": "Сколько разных типов СЭМД проходило через сервис за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_semd_types_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Типов СЭМД"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "D · Типов с ошибками",
+      "description": "Сколько типов СЭМД хотя бы раз сталкивались с ошибкой регистрации за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_semd_types_ui WHERE \"С ошибкой\" > 0",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "С ошибками"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 6
+    },
+    {
+      "name": "D · Самый частый СЭМД",
+      "description": "Тип СЭМД, по которому за 30 дней прошло больше всего документов.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Самый частый СЭМД\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Самый частый"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 12
+    },
+    {
+      "name": "D · Среднее попыток на документ",
+      "description": "Среднее число попыток отправки одного документа (включая ретраи).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Среднее попыток на документ\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Ср. попыток", "decimals": 2}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 18
+    },
+    {
+      "name": "D · Объём по типам СЭМД (топ-15)",
+      "description": "Гистограмма по числу уникальных документов: топ-15 типов СЭМД за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Тип СЭМД\", \"Уникальных документов\" FROM public.v_stat_semd_types_ui ORDER BY \"Уникальных документов\" DESC NULLS LAST LIMIT 15",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": ["Тип СЭМД"],
+        "graph.metrics": ["Уникальных документов"]
+      },
+      "sizeX": 24,
+      "sizeY": 9,
+      "row": 3,
+      "col": 0
+    },
+    {
+      "name": "D · Реестр типов СЭМД",
+      "description": "Полная таблица типов СЭМД за 30 дней с метриками качества: объём, % успеха, среднее попыток, клиник использует, топ-ошибка.",
+      "metabase-field-filters": {
+        "semd_filter": {
+          "table_ref": "public.v_stat_semd_types_ui",
+          "field_name": "Код СЭМД"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Код СЭМД\", \"Тип СЭМД\", \"Транзакций\", \"Уникальных документов\", \"% успеха\", \"С ошибкой\", \"Среднее попыток\", \"Клиник использует\", \"Топ ошибки\" FROM public.v_stat_semd_types_ui WHERE 1=1 [[AND {{semd_filter}}]] ORDER BY \"Уникальных документов\" DESC NULLS LAST",
+          "template-tags": {
+            "semd_filter": {
+              "type": "dimension",
+              "widget-type": "string/=",
+              "id": "d0001010-1010-4010-8010-000000000001",
+              "name": "semd_filter",
+              "display-name": "Код СЭМД",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {"decimals": 1},
+          "[\"name\",\"Среднее попыток\"]": {"decimals": 2}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 12,
+      "col": 0
+    },
+    {
+      "name": "D · Клиники для выбранного типа СЭМД",
+      "description": "Какие клиники отправляют документы выбранного типа СЭМД и с каким качеством. Параметр — код СЭМД.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(o.name, 'Клиника JID: ' || f.jid::text) AS \"Клиника\", COUNT(*)::bigint AS \"Транзакций\", COUNT(DISTINCT public.egisz_doc_key(f.local_uid_semd, f.emdr_id, f.doc_number, f.message_id, f.exchangelog_log_id))::bigint AS \"Документов\", ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / NULLIF(COUNT(*), 0), 1)::numeric AS \"% успеха\", MAX(CASE WHEN status = 'error' THEN error_type END) AS \"Пример типа ошибки\" FROM public.fact_egisz_transactions f LEFT JOIN public.dim_organizations o ON o.jid = f.jid WHERE public.egisz_normalize_semd_code(f.semd_code) = {{semd_filter}} AND f.log_date >= now() - INTERVAL '30 days' GROUP BY 1 ORDER BY 2 DESC",
+          "template-tags": {
+            "semd_filter": {
+              "type": "text",
+              "id": "d0001020-1020-4020-8020-000000000002",
+              "name": "semd_filter",
+              "display-name": "Код СЭМД",
+              "required": true
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {"[\"name\",\"% успеха\"]": {"decimals": 1}}
+      },
+      "sizeX": 24,
+      "sizeY": 9,
+      "row": 22,
+      "col": 0
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "name": "E · Архив СЭМД",
+  "width": "full",
+  "description": "Поиск и расследование конкретного документа: реестр всех ЭМД (одна строка на документ), полная история транзакций для выбранного `doc_key`. Источники: `v_doc_registry_ui`, `v_doc_timeline_ui`.",
+  "parameters": [
+    {
+      "id": "e0001000-1000-4000-8000-000000000001",
+      "name": "Поиск по ID документа",
+      "slug": "doc_id_filter",
+      "type": "string/contains",
+      "sectionId": "string"
+    },
+    {
+      "id": "e0001000-1000-4000-8000-000000000002",
+      "name": "Клиника",
+      "slug": "org_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e0001000-1000-4000-8000-000000000003",
+      "name": "Код СЭМД",
+      "slug": "semd_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e0001000-1000-4000-8000-000000000004",
+      "name": "Итоговый статус",
+      "slug": "status_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "e0001000-1000-4000-8000-000000000005",
+      "name": "Период (Дата создания)",
+      "slug": "date_filter",
+      "type": "date/all-options",
+      "sectionId": "date"
+    },
+    {
+      "id": "e0001000-1000-4000-8000-000000000006",
+      "name": "Точный doc_key (для истории)",
+      "slug": "doc_key_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "E · Найдено документов",
+      "description": "Сколько документов попадает под текущий фильтр поиска.",
+      "metabase-field-filters": {
+        "org_filter":    {"table_ref": "public.v_doc_registry_ui", "field_name": "JID клиники"},
+        "semd_filter":   {"table_ref": "public.v_doc_registry_ui", "field_name": "Код СЭМД"},
+        "status_filter": {"table_ref": "public.v_doc_registry_ui", "field_name": "Итоговый статус"},
+        "date_filter":   {"table_ref": "public.v_doc_registry_ui", "field_name": "Дата создания документа"}
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_doc_registry_ui WHERE 1=1 [[AND (\"Идентификатор документа\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"Локальный UID СЭМД\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"ID в РЭМД\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"Номер документа\" ILIKE '%' || {{doc_id_filter}} || '%')]] [[AND {{org_filter}}]] [[AND {{semd_filter}}]] [[AND {{status_filter}}]] [[AND {{date_filter}}]]",
+          "template-tags": {
+            "doc_id_filter": {"type": "text", "id": "e0001100-1100-4100-8100-000000000001", "name": "doc_id_filter", "display-name": "Поиск по ID", "required": false},
+            "org_filter":    {"type": "dimension", "widget-type": "string/=", "id": "e0001100-1100-4100-8100-000000000002", "name": "org_filter", "display-name": "Клиника", "required": false},
+            "semd_filter":   {"type": "dimension", "widget-type": "string/=", "id": "e0001100-1100-4100-8100-000000000003", "name": "semd_filter", "display-name": "Код СЭМД", "required": false},
+            "status_filter": {"type": "dimension", "widget-type": "string/=", "id": "e0001100-1100-4100-8100-000000000004", "name": "status_filter", "display-name": "Итоговый статус", "required": false},
+            "date_filter":   {"type": "dimension", "widget-type": "date/all-options", "id": "e0001100-1100-4100-8100-000000000005", "name": "date_filter", "display-name": "Период"}
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Документов"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "E · Реестр документов (поиск)",
+      "description": "Таблица всех ЭМД с фильтрами по идентификатору, клинике, типу СЭМД, статусу и периоду. Одна строка = один документ. Используется специалистом для расследования инцидентов.",
+      "metabase-field-filters": {
+        "org_filter":    {"table_ref": "public.v_doc_registry_ui", "field_name": "JID клиники"},
+        "semd_filter":   {"table_ref": "public.v_doc_registry_ui", "field_name": "Код СЭМД"},
+        "status_filter": {"table_ref": "public.v_doc_registry_ui", "field_name": "Итоговый статус"},
+        "date_filter":   {"table_ref": "public.v_doc_registry_ui", "field_name": "Дата создания документа"}
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Идентификатор документа\", \"Тип СЭМД\", \"Клиника\", \"Дата создания документа\", \"Первая отправка\", \"Последняя отправка\", \"Попыток отправки\", \"Итоговый статус\", \"Описание ошибки\", \"Дней в обработке\", \"Зарегистрирован в РЭМД\" FROM public.v_doc_registry_ui WHERE 1=1 [[AND (\"Идентификатор документа\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"Локальный UID СЭМД\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"ID в РЭМД\" ILIKE '%' || {{doc_id_filter}} || '%' OR \"Номер документа\" ILIKE '%' || {{doc_id_filter}} || '%')]] [[AND {{org_filter}}]] [[AND {{semd_filter}}]] [[AND {{status_filter}}]] [[AND {{date_filter}}]] ORDER BY \"Дата последней попытки (сорт.)\" DESC NULLS LAST LIMIT 500",
+          "template-tags": {
+            "doc_id_filter": {"type": "text", "id": "e0001200-1200-4200-8200-000000000001", "name": "doc_id_filter", "display-name": "Поиск по ID", "required": false},
+            "org_filter":    {"type": "dimension", "widget-type": "string/=", "id": "e0001200-1200-4200-8200-000000000002", "name": "org_filter", "display-name": "Клиника", "required": false},
+            "semd_filter":   {"type": "dimension", "widget-type": "string/=", "id": "e0001200-1200-4200-8200-000000000003", "name": "semd_filter", "display-name": "Код СЭМД", "required": false},
+            "status_filter": {"type": "dimension", "widget-type": "string/=", "id": "e0001200-1200-4200-8200-000000000004", "name": "status_filter", "display-name": "Итоговый статус", "required": false},
+            "date_filter":   {"type": "dimension", "widget-type": "date/all-options", "id": "e0001200-1200-4200-8200-000000000005", "name": "date_filter", "display-name": "Период"}
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Дней в обработке\"]": {"decimals": 2}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 12,
+      "row": 3,
+      "col": 0
+    },
+    {
+      "name": "E · История транзакций документа",
+      "description": "Все попытки отправки выбранного документа в хронологии. Параметр — точный `doc_key` (Идентификатор документа из реестра выше). Включает текст ошибки для диагностики.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Время записи\", \"Статус\", \"Тип ошибки\", \"Сводка ошибки\", LEFT(COALESCE(\"Исходный текст ошибки\", ''), 1000) AS \"Текст ошибки\", \"MSGID обмена\", \"Связанное сообщение\", \"LOGID\" FROM public.v_doc_timeline_ui WHERE \"Идентификатор документа\" = {{doc_key_filter}} ORDER BY \"Время записи\" ASC",
+          "template-tags": {
+            "doc_key_filter": {
+              "type": "text",
+              "id": "e0001300-1300-4300-8300-000000000001",
+              "name": "doc_key_filter",
+              "display-name": "doc_key документа",
+              "required": true
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {},
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 15,
+      "col": 0
+    }
+  ]
+}
