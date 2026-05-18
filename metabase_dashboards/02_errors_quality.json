@@ -1,0 +1,168 @@
+{
+  "name": "B · Ошибки и качество",
+  "width": "full",
+  "description": "Анализ ошибок для специалиста сопровождения: топ типов, доля от общего, тренд (растущие/убывающие), затронутые клиники. Источники: `v_stat_errors_ui`, `v_stat_orgs_ui`. Период анализа — 30 дней (захардкоден в view); тренд — два смежных 7-дневных окна.",
+  "parameters": [
+    {
+      "id": "f0a01010-1010-4010-8010-000000000001",
+      "name": "Клиника (JID)",
+      "slug": "org_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "B · Всего ошибок (30д)",
+      "description": "Сумма всех вхождений ошибок за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT SUM(\"Всего вхождений\")::bigint AS value FROM public.v_stat_errors_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Всего ошибок"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "B · Уникальных типов ошибок",
+      "description": "Сколько разных канонических типов ошибок наблюдалось за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_errors_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Типов ошибок"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 6
+    },
+    {
+      "name": "B · Клиник с ошибками",
+      "description": "Сколько клиник столкнулось хотя бы с одной ошибкой за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(DISTINCT jid)::bigint AS value FROM public.fact_egisz_transactions WHERE status = 'error' AND log_date >= now() - INTERVAL '30 days'",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Клиник с ошибками"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 12
+    },
+    {
+      "name": "B · Растущих ошибок",
+      "description": "Сколько типов ошибок выросло по числу вхождений за последние 7 дней по сравнению с предыдущими 7.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_errors_ui WHERE \"Растёт\"",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Растущих"}}},
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 0,
+      "col": 18
+    },
+    {
+      "name": "B · Топ-15 ошибок по объёму",
+      "description": "Гистограмма топ-15 типов ошибок по числу вхождений за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT LEFT(\"Описание ошибки\", 60) AS \"Ошибка\", \"Всего вхождений\" FROM public.v_stat_errors_ui ORDER BY \"Всего вхождений\" DESC LIMIT 15",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": ["Ошибка"],
+        "graph.metrics": ["Всего вхождений"]
+      },
+      "sizeX": 24,
+      "sizeY": 8,
+      "row": 3,
+      "col": 0
+    },
+    {
+      "name": "B · Реестр ошибок",
+      "description": "Полная таблица ошибок: описание, число вхождений, уникальных документов, клиник, доля от всех ошибок, динамика 7д vs предыдущие 7д.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Описание ошибки\", \"Всего вхождений\", \"Уникальных документов\", \"Клиник затронуто\", \"% от всех ошибок\", \"За последние 7 дней\" AS \"7д сейчас\", \"За предыдущие 7 дней\" AS \"7д ранее\", \"Дельта 7д\", \"Растёт\", \"Последнее появление\" FROM public.v_stat_errors_ui ORDER BY \"Всего вхождений\" DESC LIMIT 100",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% от всех ошибок\"]": {"decimals": 1}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 11,
+      "col": 0
+    },
+    {
+      "name": "B · Ошибки по клиникам",
+      "description": "Топ-30 клиник с топ-ошибкой за 30 дней. Используется специалистом для адресной работы.",
+      "metabase-field-filters": {
+        "org_filter": {
+          "table_ref": "public.v_stat_orgs_ui",
+          "field_name": "JID клиники"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиника\", \"С ошибкой\", \"% ошибок\", \"Топ ошибки (описание)\" FROM public.v_stat_orgs_ui WHERE \"С ошибкой\" > 0 [[AND {{org_filter}}]] ORDER BY \"С ошибкой\" DESC LIMIT 30",
+          "template-tags": {
+            "org_filter": {
+              "type": "dimension",
+              "widget-type": "string/=",
+              "id": "f0a01020-1020-4020-8020-000000000001",
+              "name": "org_filter",
+              "display-name": "Клиника (JID)",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% ошибок\"]": {"decimals": 1}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 9,
+      "row": 21,
+      "col": 0
+    }
+  ]
+}

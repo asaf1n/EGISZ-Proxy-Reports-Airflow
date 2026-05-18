@@ -285,27 +285,71 @@ DWH-схема создаётся отдельным скриптом `db/dwh_in
 * `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
 * `v_health_signals_ui` — агрегированные health-сигналы. Включает динамический сигнал `data_freshness` (зелёный/жёлтый/красный в зависимости от возраста последнего факта: ≤1 ч, ≤24 ч, >24 ч), который позволяет отслеживать отставание ELT-пайплайна.
 
+### Аналитический слой (миграция 004)
+
+Поверх `fact_egisz_transactions` построен набор аналитических представлений, обслуживающих дашборды A–F (см. ниже). Все view с суффиксом `_ui` доступны Metabase и переcоздаются миграцией `migrations/004_full_analytics.sql` (и/или повторным прогоном `db/dwh_init.sql`):
+
+| View | Назначение | Окно |
+| :--- | :--- | :--- |
+| `v_doc_registry_ui` | Реестр документов — одна строка на `doc_key` (агрегация всех попыток). | Всё время |
+| `v_doc_timeline_ui` | Все попытки отправки конкретного документа в хронологии. | Всё время |
+| `v_stat_semd_types_ui` | Метрики качества по типам СЭМД (объём, % успеха, среднее попыток, топ-ошибка). | 30 дней |
+| `v_stat_errors_ui` | Паттерны ошибок: вхождения, уникальные документы, клиники, % от всех, тренд 7д vs предыдущие 7д. | 30 дней |
+| `v_stat_orgs_ui` | Сводка по клиникам со светофором (`CRITICAL` / `WARNING` / `OK`), `% успеха`, `Ошибок за 24ч/7д`, `Дней с последнего успеха`, `Документов без ответа`. | 30 дней (плюс 24ч/7д подметрики) |
+| `v_stat_daily_ui` | Дневная динамика сервиса. | 90 дней |
+| `v_stat_hourly_ui` | Часовая динамика сервиса для оперативного мониторинга. | 48 часов |
+| `v_docs_no_response_ui` | Документы без ответа РЭМД, с категорией срочности (`CRITICAL` >24ч / `WARNING` 4–24ч / `PENDING` <4ч). | Всё время |
+| `v_service_health_ui` | Здоровье сервиса (одна строка): свежесть пайплайна, объём/% ошибок за час, клиники в CRITICAL, документов без ответа >24ч. | — |
+| `v_kpi_summary_ui` | Сводные KPI за 30 дней (одна строка) для executive-плиток дашборда A. | 30 дней |
+
+Также добавлена таблица `etl_run_log` (`run_ts`, `docs_processed`, `errors_count`, `duration_ms`, `batch_*_id/egmid`) — DAG-задача `update_watermark` пишет в неё запись после каждого батча. Эти данные использует `v_service_health_ui` (свежесть пайплайна) и могут служить основой для графика производительности ELT.
+
+Внутренний хелпер: `public.egisz_doc_key(local_uid, emdr_id, doc_number, message_id, log_id)` — однозначное вычисление ключа учёта документа (`COALESCE` приоритет: `localUid` → `emdrId` → `doc_number` → `MSGID` → `LOGID::text`).
+
+Применение миграции 004 (идемпотентно, повторный запуск безопасен):
+
+```bash
+psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f migrations/004_full_analytics.sql
+# или (то же самое в составе полного bootstrap):
+psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+```
+
 ---
 
 ## Metabase и дашборды
 
-Дашборды хранятся как код в `metabase_dashboards/`:
+Дашборды хранятся как код в `metabase_dashboards/` и собраны вокруг ЭМД как центральной сущности отдела интеграции. Все 6 дашбордов автоматически попадают в коллекцию «Интеграция с ЕГИСЗ»:
 
-* `01_operational.json` — оперативный мониторинг и динамика.
-* `02_service.json` — сервис, healthcheck и сбои канала.
-* `03_documents_no_response.json` — документы без ответа.
-* `04_quality_and_errors.json` — ошибки и качество данных.
-* `05_executive.json` — сводная статистика сервиса интеграции.
-* `06_semd_archive.json` — архив СЭМД.
+| Файл | Дашборд | Аудитория | Ключевые источники |
+| :--- | :--- | :--- | :--- |
+| `01_overview.json`        | **A · Общая картина сервиса**     | Руководитель отдела          | `v_kpi_summary_ui`, `v_stat_daily_ui`, `v_stat_orgs_ui`, `v_stat_semd_types_ui` |
+| `02_errors_quality.json`  | **B · Ошибки и качество**         | Специалист сопровождения     | `v_stat_errors_ui`, `v_stat_orgs_ui` |
+| `03_orgs.json`            | **C · Клиники**                   | Аккаунт-менеджер, специалист | `v_stat_orgs_ui` + drill-down в `fact_egisz_transactions` |
+| `04_semd_types.json`      | **D · Типы СЭМД**                 | Специалист                   | `v_stat_semd_types_ui` + drill-down в `fact_egisz_transactions` |
+| `05_semd_archive.json`    | **E · Архив СЭМД**                | Специалист (расследование)   | `v_doc_registry_ui`, `v_doc_timeline_ui` |
+| `06_operational.json`     | **F · Оперативный мониторинг**    | Дежурный специалист          | `v_service_health_ui`, `v_stat_hourly_ui`, `v_docs_no_response_ui` |
 
 Скрипт `metabase/setup-dashboards.sh`:
 
 * создаёт коллекцию «Интеграция с ЕГИСЗ»;
 * регистрирует DWH в Metabase;
-* проверяет наличие DWH-объектов, которые используются в SQL карточек;
+* проверяет наличие DWH-объектов перед импортом, включая явный список `REQUIRED_ANALYTICS_VIEWS` (миграция 004) и автоматический discover всех `public.*` объектов из JSON-дашбордов через `check_view_exists` / `dwh_object_exists`;
 * запускает sync schema;
 * подставляет реальные field id для Field Filters;
 * импортирует JSON-дашборды.
+
+Параметризация скрипта через environment-переменные (поддерживаются альтернативные имена, типичные для CI/CD):
+
+```bash
+METABASE_URL=http://localhost:3000
+METABASE_USER=admin@egisz.local      # или ADMIN_EMAIL
+METABASE_PASSWORD=egisz              # или ADMIN_PASSWORD
+DWH_HOST=host.docker.internal        # или APP_DB_HOST
+DWH_PORT=5432                        # или APP_DB_PORT
+DWH_NAME=dwh_egisz                   # или APP_DB_NAME
+DWH_USER=postgres                    # или APP_DB_USER
+DWH_PASSWORD=postgres                # или APP_DB_PASSWORD
+```
 
 ---
 

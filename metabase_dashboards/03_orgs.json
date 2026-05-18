@@ -1,0 +1,220 @@
+{
+  "name": "C · Клиники",
+  "width": "full",
+  "description": "Аналитика по клиникам для аккаунт-менеджера и специалиста сопровождения. Светофор, % ошибок, документы без ответа, drill-down детализация по выбранной клинике. Источники: `v_stat_orgs_ui`, `v_stat_errors_ui`, `v_stat_semd_types_ui`, `v_stat_daily_ui`.",
+  "parameters": [
+    {
+      "id": "c0001000-1000-4000-8000-000000000001",
+      "name": "Состояние",
+      "slug": "health_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "c0001000-1000-4000-8000-000000000002",
+      "name": "JID клиники",
+      "slug": "org_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "cards": [
+    {
+      "name": "C · CRITICAL",
+      "description": "Клиники в состоянии CRITICAL.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_orgs_ui WHERE \"Состояние\" = 'CRITICAL'",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "CRITICAL"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "C · WARNING",
+      "description": "Клиники в состоянии WARNING.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_orgs_ui WHERE \"Состояние\" = 'WARNING'",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "WARNING"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 4
+    },
+    {
+      "name": "C · OK",
+      "description": "Клиники в состоянии OK.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(*)::bigint AS value FROM public.v_stat_orgs_ui WHERE \"Состояние\" = 'OK'",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "OK"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 8
+    },
+    {
+      "name": "C · Топ-15 клиник по % ошибок",
+      "description": "Клиники с наибольшим процентом отказов РЭМД за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиника\", \"% ошибок\" FROM public.v_stat_orgs_ui WHERE \"% ошибок\" IS NOT NULL ORDER BY \"% ошибок\" DESC NULLS LAST LIMIT 15",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": ["Клиника"],
+        "graph.metrics": ["% ошибок"]
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 0,
+      "col": 12
+    },
+    {
+      "name": "C · Полная таблица клиник",
+      "description": "Все клиники сервиса со светофором, объёмом, % успеха/ошибок, ошибками за 24ч, шириной интеграции (число типов СЭМД), документами без ответа и днями с последнего успеха.",
+      "metabase-field-filters": {
+        "health_filter": {
+          "table_ref": "public.v_stat_orgs_ui",
+          "field_name": "Состояние"
+        }
+      },
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиника\", \"Состояние\", \"Транзакций за 30д\", \"% успеха\", \"% ошибок\", \"Ошибок за 24ч\", \"Разных типов СЭМД\", \"Документов без ответа\", \"Топ ошибки (описание)\", \"Дней с последнего успеха\", \"Последний успех\" FROM public.v_stat_orgs_ui WHERE 1=1 [[AND {{health_filter}}]] ORDER BY \"Состояние (сорт.)\" ASC, \"% ошибок\" DESC NULLS LAST",
+          "template-tags": {
+            "health_filter": {
+              "type": "dimension",
+              "widget-type": "string/=",
+              "id": "c0001010-1010-4010-8010-000000000001",
+              "name": "health_filter",
+              "display-name": "Состояние",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {"decimals": 1},
+          "[\"name\",\"% ошибок\"]": {"decimals": 1},
+          "[\"name\",\"Дней с последнего успеха\"]": {"decimals": 1}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 7,
+      "col": 0
+    },
+    {
+      "name": "C · Динамика выбранной клиники",
+      "description": "Дневной тренд транзакций и % успеха для выбранной клиники (параметр JID клиники). Без выбора — пусто.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT date_trunc('day', log_date)::date AS \"День\", COUNT(*)::bigint AS \"Транзакций\", ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / NULLIF(COUNT(*), 0), 1)::numeric AS \"% успеха\" FROM public.fact_egisz_transactions WHERE jid::text = {{org_filter}} AND log_date >= now() - INTERVAL '90 days' GROUP BY 1 ORDER BY 1",
+          "template-tags": {
+            "org_filter": {
+              "type": "text",
+              "id": "c0001020-1020-4020-8020-000000000002",
+              "name": "org_filter",
+              "display-name": "JID клиники",
+              "required": true
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": ["День"],
+        "graph.metrics": ["Транзакций", "% успеха"]
+      },
+      "sizeX": 24,
+      "sizeY": 7,
+      "row": 17,
+      "col": 0
+    },
+    {
+      "name": "C · Ошибки выбранной клиники",
+      "description": "Топ типов ошибок для выбранной клиники за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT error_type AS \"Тип ошибки\", MAX(error_summary) AS \"Описание\", COUNT(*)::bigint AS \"Вхождений\", COUNT(DISTINCT public.egisz_doc_key(local_uid_semd, emdr_id, doc_number, message_id, exchangelog_log_id))::bigint AS \"Документов\" FROM public.fact_egisz_transactions WHERE jid::text = {{org_filter}} AND status = 'error' AND NULLIF(btrim(error_type), '') IS NOT NULL AND log_date >= now() - INTERVAL '30 days' GROUP BY 1 ORDER BY 3 DESC LIMIT 30",
+          "template-tags": {
+            "org_filter": {
+              "type": "text",
+              "id": "c0001030-1030-4030-8030-000000000003",
+              "name": "org_filter",
+              "display-name": "JID клиники",
+              "required": true
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {},
+      "sizeX": 12,
+      "sizeY": 9,
+      "row": 24,
+      "col": 0
+    },
+    {
+      "name": "C · Типы СЭМД выбранной клиники",
+      "description": "Какие типы СЭМД отправляет выбранная клиника и с каким % успеха.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT public.egisz_normalize_semd_code(semd_code) AS \"Код СЭМД\", COALESCE(MAX(st.name), public.egisz_normalize_semd_code(semd_code), '(неизвестно)') AS \"Тип СЭМД\", COUNT(*)::bigint AS \"Транзакций\", COUNT(DISTINCT public.egisz_doc_key(local_uid_semd, emdr_id, doc_number, message_id, exchangelog_log_id))::bigint AS \"Документов\", ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / NULLIF(COUNT(*), 0), 1)::numeric AS \"% успеха\" FROM public.fact_egisz_transactions f LEFT JOIN public.dim_semd_types st ON st.code = public.egisz_normalize_semd_code(f.semd_code) WHERE jid::text = {{org_filter}} AND log_date >= now() - INTERVAL '30 days' GROUP BY 1 ORDER BY 3 DESC LIMIT 30",
+          "template-tags": {
+            "org_filter": {
+              "type": "text",
+              "id": "c0001040-1040-4040-8040-000000000004",
+              "name": "org_filter",
+              "display-name": "JID клиники",
+              "required": true
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {"[\"name\",\"% успеха\"]": {"decimals": 1}}
+      },
+      "sizeX": 12,
+      "sizeY": 9,
+      "row": 24,
+      "col": 12
+    }
+  ]
+}

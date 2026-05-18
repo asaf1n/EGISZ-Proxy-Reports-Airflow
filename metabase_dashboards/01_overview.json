@@ -1,0 +1,203 @@
+{
+  "name": "A · Общая картина сервиса",
+  "width": "full",
+  "description": "Сводный обзор работы сервиса интеграции ЕГИСЗ для руководителя отдела. KPI-плитки за 30 дней, дневной тренд успешности и объёма, разбивка по типам СЭМД и клиникам, светофор клиник. Базовые источники: `v_kpi_summary_ui`, `v_stat_daily_ui`, `v_stat_semd_types_ui`, `v_stat_orgs_ui`.",
+  "parameters": [],
+  "cards": [
+    {
+      "name": "A · Всего клиник (30д)",
+      "description": "Общее число клиник, обрабатываемых сервисом за последние 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Всего клиник\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Всего клиник"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "A · Клиник CRITICAL",
+      "description": "Клиники со светофором CRITICAL: error_rate>=50% или нет успеха >=3 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиник CRITICAL\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "CRITICAL"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 4
+    },
+    {
+      "name": "A · Клиник WARNING",
+      "description": "Клиники со светофором WARNING: error_rate>=20% или ошибок>=10 за 24ч.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиник WARNING\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "WARNING"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 8
+    },
+    {
+      "name": "A · Документов за 30д",
+      "description": "Количество уникальных СЭМД, прошедших через сервис за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Документов за 30д\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Документов 30д"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 12
+    },
+    {
+      "name": "A · % успеха (30д)",
+      "description": "Доля успешных регистраций РЭМД среди всех транзакций за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"% успеха за 30д\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "% успеха", "decimals": 1}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 16
+    },
+    {
+      "name": "A · Без ответа",
+      "description": "Документы, отправленные в РЭМД и не получившие ответа. См. подробнее в дашборде F.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Документов без ответа\" AS value FROM public.v_kpi_summary_ui",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {"column_settings": {"[\"name\",\"value\"]": {"column_title": "Без ответа"}}},
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 0,
+      "col": 20
+    },
+    {
+      "name": "A · Динамика успешности по дням",
+      "description": "Линейный график: % успеха и объём документов по календарным дням за 90 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"День\", \"Транзакций\", \"% успеха\" FROM public.v_stat_daily_ui ORDER BY \"День\"",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": ["День"],
+        "graph.metrics": ["% успеха", "Транзакций"],
+        "graph.show_values": false
+      },
+      "sizeX": 24,
+      "sizeY": 7,
+      "row": 3,
+      "col": 0
+    },
+    {
+      "name": "A · Топ типов СЭМД по объёму",
+      "description": "Топ-10 типов СЭМД по числу уникальных документов за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Тип СЭМД\", \"Уникальных документов\" FROM public.v_stat_semd_types_ui ORDER BY \"Уникальных документов\" DESC NULLS LAST LIMIT 10",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": ["Тип СЭМД"],
+        "graph.metrics": ["Уникальных документов"]
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 10,
+      "col": 0
+    },
+    {
+      "name": "A · Клиники по объёму",
+      "description": "Топ-10 клиник по числу уникальных документов за 30 дней.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиника\", \"Документов за 30д\" FROM public.v_stat_orgs_ui ORDER BY \"Документов за 30д\" DESC NULLS LAST LIMIT 10",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": ["Клиника"],
+        "graph.metrics": ["Документов за 30д"]
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 10,
+      "col": 12
+    },
+    {
+      "name": "A · Сводка по клиникам",
+      "description": "Полная таблица клиник со светофором, объёмом, % успеха, ошибками за 24ч и топ-ошибкой. Сортировка по состоянию (CRITICAL первыми).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT \"Клиника\", \"Состояние\", \"Транзакций за 30д\", \"% успеха\", \"Ошибок за 24ч\", \"Топ ошибки (описание)\", \"Дней с последнего успеха\" FROM public.v_stat_orgs_ui ORDER BY \"Состояние (сорт.)\" ASC, \"Ошибок за 24ч\" DESC LIMIT 100",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {"decimals": 1, "number_separators": ".·"},
+          "[\"name\",\"Дней с последнего успеха\"]": {"decimals": 1}
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 9,
+      "row": 17,
+      "col": 0
+    }
+  ]
+}
