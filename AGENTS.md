@@ -20,7 +20,8 @@ Do not invent names. Follow this exact taxonomy:
 | Dimension: licenses | `dim_licenses` | Source: Firebird `EGISZ_LICENSES` |
 | Dimension: SEMD types | `dim_semd_types` | Static reference table |
 | Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()` |
-| Materialized views | `mv_egisz_*` | Auto-refreshed after each transform |
+| Reporting views | `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document`, `v_docs_no_response_ui` | Exposed to Metabase under stable names; `refresh_materialized_views` refreshes only if they are materialized in a given deployment |
+| Analytics views | `v_*_ui` (regular, not materialized) | Built on top of `fact_egisz_transactions`; no refresh needed |
 | Watermark table | `elt_state` | Tracks `last_log_id` and `last_egmid` per pipeline |
 
 **NEVER** use the legacy term `proxy_reports` in any variable, class, file, or SQL object name.
@@ -46,9 +47,9 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> refres
 | `sync_dimensions` | Full reload of `dim_organizations` (from `JPERSONS`) and `dim_licenses` (from `EGISZ_LICENSES`) via UPSERT |
 | `extract_from_proxy` | Read current watermarks from `elt_state`; fetch `EXCHANGELOG` by `LOGID` and `EGISZ_MESSAGES` by `EGMID`; resolve cross-referenced messages from XML payload; return XCom dict |
 | `load_to_dwh` | UPSERT fetched rows into `exchangelog_raw` and `egisz_messages_raw`; pass XCom dict downstream |
-| `transform_data` | Call `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function does not refresh materialized views; refresh is a separate task. |
-| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document` |
-| `update_watermark` | UPSERT `elt_state` using `GREATEST(current, new)` for both `last_log_id` and `last_egmid` |
+| `transform_data` | Call `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function does not refresh reporting views; that is handled separately. |
+| `refresh_materialized_views` | Compatibility step for `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document`, and `v_docs_no_response_ui`: refreshes only when they are materialized, otherwise exits quickly |
+| `update_watermark` | UPSERT `elt_state` using `GREATEST(current, new)` for both `last_log_id` and `last_egmid`; also append a row to `etl_run_log` for pipeline health monitoring |
 
 ### Batch size and schedule
 
@@ -103,15 +104,17 @@ The script is idempotent (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COL
 
 ### Transform function
 
-Data transformation happens **during DAG execution**, inside the `transform_data` Airflow task. The task calls a PostgreSQL stored function that does all the real work — parsing SOAP/XML payloads, enriching rows, writing to `fact_egisz_transactions`, and refreshing `mv_egisz_*` materialized views:
+Data transformation happens **during DAG execution**, inside the `transform_data` Airflow task. The task calls a PostgreSQL stored function that parses SOAP/XML payloads, enriches rows, and writes to `fact_egisz_transactions`:
 
 ```sql
 SELECT public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)
 ```
 
-The Python task only invokes this function; **all transformation logic lives in SQL, not Python**. Do not implement row-level transformation in Python (e.g., iterating rows and mutating them before writing). `normalize.py` is a compatibility stub — it contains no active logic.
+The function does **not** refresh reporting views — that is the responsibility of the separate `refresh_materialized_views` compatibility task (see DAG pipeline above).
 
-Transformation is **not** deferred to dashboard query time. By the time Metabase reads the data, `fact_egisz_transactions` and materialized views are already populated.
+The Python task only invokes this function; **all transformation logic lives in SQL, not Python**. Do not implement row-level transformation in Python (e.g., iterating rows and mutating them before writing).
+
+Transformation is **not** deferred to Python row-processing time. Metabase reads from stable SQL views on top of the populated DWH objects.
 
 ### Firebird-specific serialization
 
@@ -129,13 +132,10 @@ Contains SEMD document type reference data seeded directly in `db/dwh_init.sql`.
 ## 5. BI & Metabase Integration
 
 - Metabase version: **v0.60.2.5**, deployed in Kubernetes (`k8s/metabase/`).
-- Dashboard JSON files are in `metabase_dashboards/` (6 dashboards: operational, service, documents, quality, executive, SEMD archive).
-- Dashboards are imported at container startup via `metabase/setup-dashboards.sh`.
-- Field filter defaults are in `metabase_dashboards/field_filter_defaults.yaml`; they are applied by `scripts/apply_metabase_field_filters.py`.
+- Dashboard JSON files are in `metabase_dashboards/` (6 dashboards: A overview, B errors/quality, C orgs, D SEMD types, E SEMD archive, F operational).
+- Dashboards are imported at container startup via `metabase/setup-dashboards.sh`. The script discovers all `public.*` objects referenced by JSON, verifies they exist in DWH, and binds Metabase field-filter dimensions from the explicit `metabase-field-filters` blocks inside each card.
 - Metabase uses its own PostgreSQL database (`metabase_app`). Do not mix it with `dwh_egisz` or `airflow_db`.
-- When altering the DWH schema, verify compatibility with:
-  1. Field filters in `scripts/apply_metabase_field_filters.py`
-  2. Dashboard JSON definitions in `metabase_dashboards/`
+- When altering the DWH schema, verify compatibility with dashboard JSON definitions in `metabase_dashboards/` — both the SQL queries and the `metabase-field-filters` table/field references.
 
 ---
 

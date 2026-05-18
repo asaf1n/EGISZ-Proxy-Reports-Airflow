@@ -52,7 +52,19 @@ CREATE TABLE IF NOT EXISTS exchangelog_raw (
     loaded_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'exchangelog_raw'
+          AND column_name = 'createdate'
+    ) THEN
+        ALTER TABLE exchangelog_raw ADD COLUMN createdate timestamptz;
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS egisz_messages_raw (
     egmid bigint PRIMARY KEY,
@@ -63,7 +75,19 @@ CREATE TABLE IF NOT EXISTS egisz_messages_raw (
     loaded_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE egisz_messages_raw ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'egisz_messages_raw'
+          AND column_name = 'loaded_at'
+    ) THEN
+        ALTER TABLE egisz_messages_raw ADD COLUMN loaded_at timestamptz DEFAULT now();
+    END IF;
+END
+$$;
 -- Columns jid/kind/msgtext were always NULL (not present in Firebird EGISZ_MESSAGES);
 -- they are dropped after DROP VIEW block below to avoid breaking mat-view dependencies.
 
@@ -103,21 +127,123 @@ CREATE TABLE IF NOT EXISTS dim_semd_types (
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS type_code text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS level text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS format_code text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS start_date date;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS end_date date;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS implementation_guide text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS git_link text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS oid text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS version text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-ALTER TABLE dim_semd_types ALTER COLUMN oid DROP NOT NULL;
-ALTER TABLE dim_semd_types ALTER COLUMN oid DROP DEFAULT;
-ALTER TABLE dim_semd_types ALTER COLUMN version DROP NOT NULL;
-ALTER TABLE dim_semd_types ALTER COLUMN version DROP DEFAULT;
-ALTER TABLE dim_semd_types DROP COLUMN IF EXISTS source_url;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'type_code'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN type_code text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'level'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN level text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'format_code'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN format_code text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'start_date'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN start_date date;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'end_date'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN end_date date;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'implementation_guide'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN implementation_guide text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'git_link'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN git_link text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'oid'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN oid text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'version'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN version text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'dim_semd_types' AND column_name = 'updated_at'
+    ) THEN
+        ALTER TABLE dim_semd_types ADD COLUMN updated_at timestamptz DEFAULT now();
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'dim_semd_types'
+          AND column_name = 'oid'
+          AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE dim_semd_types ALTER COLUMN oid DROP NOT NULL;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'dim_semd_types'
+          AND column_name = 'oid'
+          AND column_default IS NOT NULL
+    ) THEN
+        ALTER TABLE dim_semd_types ALTER COLUMN oid DROP DEFAULT;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'dim_semd_types'
+          AND column_name = 'version'
+          AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE dim_semd_types ALTER COLUMN version DROP NOT NULL;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'dim_semd_types'
+          AND column_name = 'version'
+          AND column_default IS NOT NULL
+    ) THEN
+        ALTER TABLE dim_semd_types ALTER COLUMN version DROP DEFAULT;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'dim_semd_types'
+          AND column_name = 'source_url'
+    ) THEN
+        ALTER TABLE dim_semd_types DROP COLUMN source_url;
+    END IF;
+END
+$$;
 
 INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)
 VALUES
@@ -385,15 +511,91 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
     processed_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
-ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS errors_json CASCADE;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'egmid'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions ADD COLUMN egmid bigint;
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'errors_json'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions DROP COLUMN errors_json CASCADE;
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'creation_date'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions ADD COLUMN creation_date timestamptz;
+    END IF;
+END
+$$;
 -- error_subtype упразднён: его роль теперь играет плоский error_type
 -- (см. egisz_error_classify). Колонка удаляется идемпотентно.
-ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS error_subtype;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_summary text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_json_text text;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'error_subtype'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions DROP COLUMN error_subtype;
+    END IF;
+END
+$$;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'error_type'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions ADD COLUMN error_type text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'error_summary'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions ADD COLUMN error_summary text;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'fact_egisz_transactions'
+          AND column_name = 'error_json_text'
+    ) THEN
+        ALTER TABLE fact_egisz_transactions ADD COLUMN error_json_text text;
+    END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
@@ -1269,9 +1471,37 @@ DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
 
 -- Drop legacy columns after dependent views are gone.
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid;
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind;
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'egisz_messages_raw'
+          AND column_name = 'jid'
+    ) THEN
+        ALTER TABLE egisz_messages_raw DROP COLUMN jid;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'egisz_messages_raw'
+          AND column_name = 'kind'
+    ) THEN
+        ALTER TABLE egisz_messages_raw DROP COLUMN kind;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'egisz_messages_raw'
+          AND column_name = 'msgtext'
+    ) THEN
+        ALTER TABLE egisz_messages_raw DROP COLUMN msgtext;
+    END IF;
+END
+$$;
 
 CREATE MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui AS
 SELECT
@@ -1361,13 +1591,20 @@ LEFT JOIN LATERAL (
 LEFT JOIN public.dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
 LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid;
 
-CREATE UNIQUE INDEX ON public.v_egisz_transactions_enriched_ui (transaction_id);
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("День");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("JID клиники");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("Статус");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("localUid СЭМД"), '')));
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_transaction_id
+    ON public.v_egisz_transactions_enriched_ui (transaction_id);
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_day
+    ON public.v_egisz_transactions_enriched_ui ("День");
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_jid
+    ON public.v_egisz_transactions_enriched_ui ("JID клиники");
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_status
+    ON public.v_egisz_transactions_enriched_ui ("Статус");
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_localuid_norm
+    ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("localUid СЭМД"), '')));
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_emdrid_norm
+    ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
+CREATE INDEX IF NOT EXISTS idx_v_egisz_transactions_enriched_ui_relates_to_norm
+    ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
 
 CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
 SELECT
@@ -1420,7 +1657,7 @@ SELECT
 FROM fact_egisz_transactions t
 WHERE t.status <> 'error' OR t.error_summary IS NULL;
 
-CREATE MATERIALIZED VIEW public.v_stg_channel_errors_by_document AS
+CREATE OR REPLACE VIEW public.v_stg_channel_errors_by_document AS
 SELECT
     r.logid AS id,
     COALESCE(r.createdate, r.loaded_at) AS created_at,
@@ -1491,12 +1728,6 @@ WHERE r.logstate = 3
    OR COALESCE(r.msgtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%ошиб%';
-
-CREATE UNIQUE INDEX ON public.v_stg_channel_errors_by_document (id);
-CREATE INDEX ON public.v_stg_channel_errors_by_document (error_top_type);
-CREATE INDEX ON public.v_stg_channel_errors_by_document (document_group_key);
-CREATE INDEX ON public.v_stg_channel_errors_by_document (journal_msgid);
-CREATE INDEX ON public.v_stg_channel_errors_by_document (created_at);
 
 CREATE OR REPLACE VIEW public.v_stg_channel_network_errors_by_document AS
 SELECT *
@@ -1906,7 +2137,10 @@ DROP VIEW IF EXISTS public.v_stat_errors_ui      CASCADE;
 DROP VIEW IF EXISTS public.v_stat_orgs_ui        CASCADE;
 DROP VIEW IF EXISTS public.v_stat_daily_ui       CASCADE;
 DROP VIEW IF EXISTS public.v_stat_hourly_ui      CASCADE;
-DROP VIEW IF EXISTS public.v_docs_no_response_ui CASCADE;
+-- v_docs_no_response_ui used to be a regular view; the new schema makes it a matview,
+-- so drop both shapes idempotently when upgrading an existing DWH.
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_docs_no_response_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
+DROP MATERIALIZED VIEW IF EXISTS public.v_docs_no_response_ui CASCADE;
 
 CREATE OR REPLACE VIEW public.v_doc_registry_ui AS
 WITH per_tx AS (
@@ -2116,7 +2350,7 @@ LEFT JOIN trend_7d t7      ON t7.error_type = a.error_type
 LEFT JOIN trend_prev_7d tp ON tp.error_type = a.error_type
 ORDER BY a.error_count DESC;
 
-CREATE OR REPLACE VIEW public.v_docs_no_response_ui AS
+CREATE MATERIALIZED VIEW public.v_docs_no_response_ui AS
 WITH messages AS (
     SELECT
         m.egmid, m.created_at, m.msgid, m.reply_to, m.document_id,
@@ -2196,6 +2430,17 @@ LEFT JOIN LATERAL (
 ) l ON TRUE
 LEFT JOIN public.dim_organizations o ON o.jid = COALESCE(c.reply_to_jid, l.jid)
 LEFT JOIN public.dim_semd_types st   ON st.code = c.semd_code_resolved;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_v_docs_no_response_ui_egmid
+    ON public.v_docs_no_response_ui ("EGMID");
+CREATE INDEX IF NOT EXISTS idx_v_docs_no_response_ui_urgency_sort
+    ON public.v_docs_no_response_ui ("Срочность (сорт.)");
+CREATE INDEX IF NOT EXISTS idx_v_docs_no_response_ui_wait_hours
+    ON public.v_docs_no_response_ui ("Часов ожидания");
+CREATE INDEX IF NOT EXISTS idx_v_docs_no_response_ui_jid
+    ON public.v_docs_no_response_ui ("JID клиники");
+CREATE INDEX IF NOT EXISTS idx_v_docs_no_response_ui_sent_at
+    ON public.v_docs_no_response_ui ("Отправлено");
 
 CREATE OR REPLACE VIEW public.v_stat_orgs_ui AS
 WITH per_tx AS (
@@ -2392,19 +2637,24 @@ WITH org_summary AS (
         COUNT(*) FILTER (WHERE "Состояние" = 'OK')::bigint        AS orgs_ok
     FROM public.v_stat_orgs_ui
 ),
-tx_30d AS (
+tx_30d_raw AS MATERIALIZED (
     SELECT
-        COUNT(*)::bigint AS total_sent,
-        COUNT(DISTINCT public.egisz_doc_key(local_uid_semd, emdr_id, doc_number, message_id, exchangelog_log_id))::bigint AS total_docs,
-        COUNT(*) FILTER (WHERE status = 'error')::bigint AS total_errors,
-        ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / NULLIF(COUNT(*), 0), 1)::numeric AS success_rate_pct
+        status,
+        public.egisz_doc_key(local_uid_semd, emdr_id, doc_number, message_id, exchangelog_log_id) AS doc_key
     FROM public.fact_egisz_transactions
     WHERE log_date >= now() - INTERVAL '30 days'
 ),
+tx_30d AS (
+    SELECT
+        COUNT(*)::bigint                                                                       AS total_sent,
+        COUNT(DISTINCT doc_key)::bigint                                                        AS total_docs,
+        COUNT(*) FILTER (WHERE status = 'error')::bigint                                       AS total_errors,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'success') / NULLIF(COUNT(*), 0), 1)::numeric AS success_rate_pct
+    FROM tx_30d_raw
+),
 attempts_per_doc AS (
     SELECT AVG(cnt)::numeric(10,2) AS avg_attempts FROM (
-        SELECT public.egisz_doc_key(local_uid_semd, emdr_id, doc_number, message_id, exchangelog_log_id) AS dk, COUNT(*) AS cnt
-        FROM public.fact_egisz_transactions WHERE log_date >= now() - INTERVAL '30 days' GROUP BY 1
+        SELECT doc_key, COUNT(*) AS cnt FROM tx_30d_raw GROUP BY doc_key
     ) x
 ),
 top_err AS (
@@ -2414,7 +2664,7 @@ top_err AS (
     GROUP BY error_type ORDER BY cnt DESC LIMIT 1
 ),
 top_semd AS (
-    SELECT COALESCE(st.name, code, '(неизвестно)') AS name, cnt
+    SELECT COALESCE(st.name, x.code, '(неизвестно)') AS name, x.cnt
     FROM (
         SELECT public.egisz_normalize_semd_code(semd_code) AS code, COUNT(*) AS cnt
         FROM public.fact_egisz_transactions WHERE log_date >= now() - INTERVAL '30 days'
@@ -2509,7 +2759,35 @@ BEGIN
 END;
 $$;
 
-REFRESH MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui;
-REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_matviews
+        WHERE schemaname = 'public'
+          AND matviewname = 'v_egisz_transactions_enriched_ui'
+    ) THEN
+        EXECUTE 'REFRESH MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_matviews
+        WHERE schemaname = 'public'
+          AND matviewname = 'v_stg_channel_errors_by_document'
+    ) THEN
+        EXECUTE 'REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_matviews
+        WHERE schemaname = 'public'
+          AND matviewname = 'v_docs_no_response_ui'
+    ) THEN
+        EXECUTE 'REFRESH MATERIALIZED VIEW public.v_docs_no_response_ui';
+    END IF;
+END;
+$$;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

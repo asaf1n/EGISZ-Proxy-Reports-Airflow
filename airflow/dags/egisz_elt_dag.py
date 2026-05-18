@@ -237,15 +237,46 @@ def egisz_elt_pipeline() -> None:
     @task
     def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
         if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
+            log.info("Skipping reporting view refresh: no new rows ingested.")
             return load_info
 
         pg_conn = _dwh_connection()
         try:
+            refreshed: list[str] = []
+            skipped: list[str] = []
             with pg_conn.cursor() as cur:
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_transactions_enriched_ui")
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_stg_channel_errors_by_document")
+                cur.execute(
+                    """
+                    SELECT c.relname, c.relkind
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public'
+                      AND c.relname IN ('v_egisz_transactions_enriched_ui', 'v_stg_channel_errors_by_document', 'v_docs_no_response_ui')
+                    """
+                )
+                relation_kinds = {name: kind for name, kind in cur.fetchall()}
+
+                for view_name in (
+                    "v_egisz_transactions_enriched_ui",
+                    "v_stg_channel_errors_by_document",
+                    "v_docs_no_response_ui",
+                ):
+                    relkind = relation_kinds.get(view_name)
+                    if relkind == "m":
+                        cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY public.{view_name}")
+                        refreshed.append(view_name)
+                    elif relkind == "v":
+                        skipped.append(view_name)
+                    else:
+                        raise RuntimeError(f"Expected public.{view_name} to exist as a view or materialized view, got {relkind!r}")
             pg_conn.commit()
-            log.info("Refreshed materialized views v_egisz_transactions_enriched_ui and v_stg_channel_errors_by_document.")
+            if refreshed:
+                log.info("Refreshed materialized view(s): %s.", ", ".join(refreshed))
+            if skipped:
+                log.info(
+                    "Skipped refresh for regular view(s): %s. db/dwh_init.sql now keeps these Metabase-facing relations live without full refresh.",
+                    ", ".join(skipped),
+                )
         finally:
             pg_conn.close()
         return load_info
@@ -264,8 +295,6 @@ def egisz_elt_pipeline() -> None:
                 load_info["max_id"],
                 load_info.get("max_egmid", 0),
             )
-            # Записываем строку в etl_run_log для часовой динамики пайплайна
-            # (используется v_service_health_ui и потенциальными графиками).
             with pg_conn.cursor() as cur:
                 cur.execute(
                     """

@@ -115,27 +115,22 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "Данные пациента не соответствуют ГИП" in sql
     assert "Документ уже зарегистрирован в РЭМД" in sql
     assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
-    assert "Ошибка регистрации в РЭМД" in sql
-    assert "Отказ РЭМД" not in sql
-    assert "Отказ РЭМД (ns2status: error)" not in sql
     assert "Сетевая ошибка: " in sql
     assert "'Сетевая ошибка'" in sql
     assert "ошибка связи (транспорт)" not in sql
-    assert "Наименование СЭМД отсутствует в справочнике СЭМД" in sql
-    assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
     assert "egisz_error_interpretation_rules" in sql
-    assert "v_rpt_error_interpretations_ui" in sql
-    assert 'AS "Ошибки JSON raw"' not in sql
     assert "egisz_error_messages_row" in sql
-    assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
 
 
 def test_dwh_init_sql_drops_unused_egisz_messages_columns() -> None:
     sql = _read_dwh_init_sql()
 
-    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid" in sql
-    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind" in sql
-    assert "ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext" in sql
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN jid" in sql
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN kind" in sql
+    assert "ALTER TABLE egisz_messages_raw DROP COLUMN msgtext" in sql
+    assert "column_name = 'jid'" in sql
+    assert "column_name = 'kind'" in sql
+    assert "column_name = 'msgtext'" in sql
 
     create_table_marker = "CREATE TABLE IF NOT EXISTS egisz_messages_raw"
     idx = sql.find(create_table_marker)

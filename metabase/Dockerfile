@@ -16,9 +16,10 @@ COPY --chown=1500:1500 metabase/entrypoint.sh /app/entrypoint.sh
 COPY --chown=1500:1500 metabase/provision.sh /app/provision.sh
 COPY --chown=1500:1500 metabase/setup-dashboards.sh /app/setup-dashboards.sh
 COPY --chown=1500:1500 metabase/smoke-metabase-ui.sh /app/smoke-metabase-ui.sh
+COPY --chown=1500:1500 metabase/verify-cards.sh /app/verify-cards.sh
 COPY --chown=1500:1500 metabase_dashboards/ /app/metabase_dashboards/
 
-RUN chmod +x /app/entrypoint.sh /app/provision.sh /app/setup-dashboards.sh /app/smoke-metabase-ui.sh /app/include/mb_list.sh \
+RUN chmod +x /app/entrypoint.sh /app/provision.sh /app/setup-dashboards.sh /app/smoke-metabase-ui.sh /app/verify-cards.sh /app/include/mb_list.sh \
     && find /app/metabase_dashboards -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort | xargs sha256sum | sha256sum > /app/metabase_dashboards/.manifest.sha256 || true
 
 USER 1500:1500

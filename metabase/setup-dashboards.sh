@@ -20,7 +20,8 @@ DB_METADATA_FILE=""
 
 # Аналитические представления, которые ДОЛЖНЫ существовать перед импортом
 # дашбордов A–F. Скрипт также автоматически добирает все public.* объекты,
-# упомянутые в JSON; этот список — явная страховка для миграции 004.
+# упомянутые в JSON; этот список — явная страховка контракта между Metabase
+# и db/dwh_init.sql.
 REQUIRED_ANALYTICS_VIEWS=(
   "v_doc_registry_ui"
   "v_doc_timeline_ui"
@@ -252,7 +253,7 @@ validate_dwh_contract() {
 
   if [ "${#missing[@]}" -gt 0 ]; then
     printf '%s\n' "${missing[@]}" | sort -u >&2
-    fail "DWH is missing $(printf '%s\n' "${missing[@]}" | sort -u | wc -l | tr -d ' ') object(s) required by dashboard SQL — run migrations/004_full_analytics.sql"
+    fail "DWH is missing $(printf '%s\n' "${missing[@]}" | sort -u | wc -l | tr -d ' ') object(s) required by dashboard SQL - apply db/dwh_init.sql to dwh_egisz"
   fi
   log_info "DWH contract OK: ${#REQUIRED_ANALYTICS_VIEWS[@]} required view(s) present"
 }

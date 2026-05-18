@@ -43,6 +43,63 @@ function Test-KubernetesConnection {
     }
 }
 
+function Get-KubernetesSecretDecodedValue {
+    param(
+        [string]$SecretName,
+        [string]$Key
+    )
+
+    $encoded = kubectl get secret $SecretName -o "jsonpath={.data.$Key}"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encoded)) {
+        throw "Cannot read key '$Key' from Kubernetes secret '$SecretName'."
+    }
+
+    return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encoded))
+}
+
+function Get-DwhMissingMetabaseObjects {
+    param(
+        [string]$DbHost,
+        [string]$DbPort,
+        [string]$DbName,
+        [string]$DbUser,
+        [string]$Password
+    )
+
+    $requiredObjects = @(
+        @{ Name = "v_doc_registry_ui"; Kind = "v" },
+        @{ Name = "v_doc_timeline_ui"; Kind = "v" },
+        @{ Name = "v_stat_semd_types_ui"; Kind = "v" },
+        @{ Name = "v_stat_errors_ui"; Kind = "v" },
+        @{ Name = "v_stat_orgs_ui"; Kind = "v" },
+        @{ Name = "v_stat_daily_ui"; Kind = "v" },
+        @{ Name = "v_stat_hourly_ui"; Kind = "v" },
+        @{ Name = "v_docs_no_response_ui"; Kind = "m" },
+        @{ Name = "v_service_health_ui"; Kind = "v" },
+        @{ Name = "v_kpi_summary_ui"; Kind = "v" },
+        @{ Name = "v_egisz_transactions_enriched_ui"; Kind = "m" },
+        @{ Name = "v_stg_channel_errors_by_document"; Kind = "v" },
+        @{ Name = "etl_run_log"; Kind = "r" }
+    )
+
+    $quotedObjects = ($requiredObjects | ForEach-Object { "('$($_.Name)','$($_.Kind)')" }) -join ", "
+    $sql = "WITH required(name, expected_kind) AS (SELECT * FROM (VALUES $quotedObjects) AS v(name, expected_kind)) SELECT name || ':' || expected_kind || ':' || COALESCE(c.relkind::text, '?') FROM required LEFT JOIN pg_class c ON c.oid = to_regclass('public.' || name) WHERE c.oid IS NULL OR c.relkind <> expected_kind ORDER BY name;"
+
+    # Pipe SQL via stdin and pass PGPASSWORD as an argv element so the password
+    # never enters a /bin/sh -c string (quote/$/backslash in the password would
+    # otherwise break the command or run arbitrary shell inside the pod).
+    $missing = $sql | kubectl exec -i statefulset/metabase-postgres -c postgres -- env "PGPASSWORD=$Password" psql -h $DbHost -p $DbPort -U $DbUser -d $DbName -AtX -v ON_ERROR_STOP=1 -f -
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query DWH contract before Metabase provisioning."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($missing)) {
+        return @()
+    }
+
+    return @($missing -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Initialize-SecretFiles {
     Write-Host "Preparing Kubernetes secrets from examples..."
     if (-not (Test-Path k8s/metabase/metabase-connections-secret.yaml)) {
@@ -178,6 +235,37 @@ function Install-Metabase {
         kubectl rollout status statefulset/metabase-postgres --timeout=120s
     }
 
+    $dwhHost = Get-KubernetesSecretDecodedValue -SecretName "metabase-connections" -Key "DWH_DB_HOST"
+    $dwhPort = Get-KubernetesSecretDecodedValue -SecretName "metabase-connections" -Key "DWH_DB_PORT"
+    $dwhName = Get-KubernetesSecretDecodedValue -SecretName "metabase-connections" -Key "DWH_DB_NAME"
+    $dwhUser = Get-KubernetesSecretDecodedValue -SecretName "metabase-connections" -Key "DWH_BI_USER"
+    $dwhPassword = Get-KubernetesSecretDecodedValue -SecretName "metabase-connections" -Key "DWH_BI_PASSWORD"
+    $dwhInitSqlInPod = "/tmp/dwh_init.sql"
+
+    $missingDwhObjects = Get-DwhMissingMetabaseObjects -DbHost $dwhHost -DbPort $dwhPort -DbName $dwhName -DbUser $dwhUser -Password $dwhPassword
+    if ($missingDwhObjects.Count -gt 0) {
+        Write-Host "Applying db/dwh_init.sql to dwh_egisz before Metabase provisioning..."
+        Write-Host "DWH objects requiring bootstrap: $($missingDwhObjects -join ', ')"
+        Invoke-Checked "Scale Metabase deployment down for DWH bootstrap" {
+            kubectl scale deployment/metabase --replicas=0
+        }
+        Invoke-Checked "Wait for Metabase deployment to scale down" {
+            kubectl rollout status deployment/metabase --timeout=300s
+        }
+        Invoke-Checked "Copy DWH bootstrap SQL into Metabase PostgreSQL pod" {
+            kubectl cp db/dwh_init.sql metabase-postgres-0:${dwhInitSqlInPod} -c postgres
+        }
+        Invoke-Checked "Bootstrap DWH schema for Metabase" {
+            # argv form keeps the password out of any /bin/sh -c string
+            kubectl exec statefulset/metabase-postgres -c postgres -- env "PGPASSWORD=$dwhPassword" psql -h $dwhHost -p $dwhPort -U $dwhUser -d $dwhName -v ON_ERROR_STOP=1 -f $dwhInitSqlInPod
+        }
+        Invoke-Checked "Scale Metabase deployment back up after DWH bootstrap" {
+            kubectl scale deployment/metabase --replicas=1
+        }
+    } else {
+        Write-Host "DWH contract already satisfies Metabase requirements; skipping db/dwh_init.sql bootstrap."
+    }
+
     Invoke-Checked "Set Metabase image" {
         kubectl set image deployment/metabase metabase=$MetabaseImage
     }
@@ -190,6 +278,11 @@ function Install-Metabase {
     Write-Host "Provisioning Metabase dashboards..."
     Invoke-Checked "Provision Metabase dashboards" {
         kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh
+    }
+
+    Write-Host "Verifying Metabase cards..."
+    Invoke-Checked "Verify Metabase cards" {
+        kubectl exec deploy/metabase -- /bin/bash /app/verify-cards.sh
     }
 }
 

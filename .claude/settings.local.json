@@ -25,7 +25,8 @@
       "PowerShell($q = \"SELECT COALESCE\\(NULLIF\\(TRIM\\(`\"��� ���� \\(��� � ���\\)`\"\\), ''\\), '\\(����\\)'\\) AS t, COUNT\\(DISTINCT `\"���㬥�� \\(���� ����\\)`\"\\) AS cnt FROM public.v_egisz_transactions_enriched_ui GROUP BY 1 ORDER BY 2 DESC LIMIT 5\")",
       "PowerShell($token = \\(kubectl exec deploy/metabase -- curl -s -X POST http://localhost:3000/api/session -H 'Content-Type: application/json' -d '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null | ConvertFrom-Json\\).id; Write-Host \"Token: $token\")",
       "PowerShell(kubectl exec deploy/metabase -- curl -s -X POST http://localhost:3000/api/session -H 'Content-Type: application/json' -d '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null)",
-      "PowerShell(kubectl exec deploy/metabase -- curl -s -X POST 'http://localhost:3000/api/session' -H 'Content-Type: application/json' '--data-raw' '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null)"
+      "PowerShell(kubectl exec deploy/metabase -- curl -s -X POST 'http://localhost:3000/api/session' -H 'Content-Type: application/json' '--data-raw' '{\"username\":\"admin@egisz.local\",\"password\":\"egisz\"}' 2>$null)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

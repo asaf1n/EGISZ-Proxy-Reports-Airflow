@@ -255,7 +255,7 @@ DAG `egisz_elt_dag` использует только Airflow Connections:
 2. `extract_from_proxy` — читает батчи `EXCHANGELOG` и `EGISZ_MESSAGES`, а также добирает связанные сообщения по `MSGID` / `DOCUMENTID`.
 3. `load_to_dwh` — загружает raw-данные в `exchangelog_raw` и `egisz_messages_raw`.
 4. `transform_data` — вызывает `egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`.
-5. `refresh_materialized_views` — compatibility-step для `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document`: refresh только для materialized view, skip для обычных view.
+5. `refresh_materialized_views` — compatibility-step для `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document` и `v_docs_no_response_ui`: refresh только для materialized view, skip для обычных view.
 6. `update_watermark` — фиксирует успешные курсоры `LOGID` и `EGMID` в `elt_state`.
 
 DWH-схема создаётся отдельным скриптом `db/dwh_init.sql` (см. секцию «Логика выгрузки и хранения»), а не задачей DAG.
@@ -279,14 +279,11 @@ DWH-схема создаётся отдельным скриптом `db/dwh_in
 
 Основные представления:
 
-* `v_egisz_transactions_enriched_ui` — главная витрина для Metabase.
-  В текущем bootstrap она создаётся как обычное view, чтобы избежать полного refresh всей витрины на каждом цикле DAG.
-* `v_rpt_documents_no_response_ui` — очередь исходящих сообщений без найденного callback; anti-join строится по нормализованным ключам `message_id` / `relates_to_id` / `local_uid_semd`.
-* `v_rpt_network_errors_detail_ui` — детализация транспортных и сетевых ошибок.
-* `v_health_proxy_db_ui` — техническая сводка raw-слоя и фактов.
-* `v_health_signals_ui` — агрегированные health-сигналы. Включает динамический сигнал `data_freshness` (зелёный/жёлтый/красный в зависимости от возраста последнего факта: ≤1 ч, ≤24 ч, >24 ч), который позволяет отслеживать отставание ELT-пайплайна.
+* `v_egisz_transactions_enriched_ui` — главная витрина для Metabase, materialized view; обновляется задачей `refresh_materialized_views` после каждого батча.
+* `v_stg_channel_errors_by_document` — сводка ошибок по документу, обычное view.
+* `v_docs_no_response_ui` — документы без ответа РЭМД, materialized view; обновляется задачей `refresh_materialized_views`.
 
-### Аналитический слой (миграция 004)
+### Аналитический слой
 
 Поверх `fact_egisz_transactions` построен набор аналитических представлений, обслуживающих дашборды A–F (см. ниже). Все view с суффиксом `_ui` доступны Metabase и переcоздаются повторным прогоном `db/dwh_init.sql`:
 
