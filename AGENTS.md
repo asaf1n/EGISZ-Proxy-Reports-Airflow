@@ -38,7 +38,7 @@ Always use `@dag` and `@task`. Never use legacy `PythonOperator`, `BashOperator`
 ### Task pipeline (in order)
 
 ```
-sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> refresh_materialized_views >> update_watermark
+sync_dimensions >> extract_from_proxy >> load_to_dwh >> analyze_raw_tables >> transform_data >> refresh_materialized_views >> update_watermark
 ```
 
 | Task | Responsibility |
@@ -46,6 +46,7 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> transform_data >> refres
 | `sync_dimensions` | Full reload of `dim_organizations` (from `JPERSONS`) and `dim_licenses` (from `EGISZ_LICENSES`) via UPSERT |
 | `extract_from_proxy` | Read current watermarks from `elt_state`; fetch `EXCHANGELOG` by `LOGID` and `EGISZ_MESSAGES` by `EGMID`; resolve cross-referenced messages from XML payload; return XCom dict |
 | `load_to_dwh` | UPSERT fetched rows into `exchangelog_raw` and `egisz_messages_raw`; pass XCom dict downstream |
+| `analyze_raw_tables` | `ANALYZE public.exchangelog_raw` / `public.egisz_messages_raw` (only for tables that actually got rows in this batch). Runs in autocommit. Required: without it the planner uses stale `pg_class.reltuples=0` after the initial bulk COPY and picks seq-scan over `exchangelog_raw` (~1.2 GB) instead of the functional `msgid_norm` / `document_id_norm` indexes — Metabase queries then hang for 8–16 minutes. Autovacuum won't ANALYZE soon enough on a quiet pipeline. Cheap (~1s) per batch. |
 | `transform_data` | Call `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function does not refresh materialized views; refresh is a separate task. |
 | `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document` |
 | `update_watermark` | UPSERT `elt_state` using `GREATEST(current, new)` for both `last_log_id` and `last_egmid` |

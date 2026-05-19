@@ -195,6 +195,35 @@ def egisz_elt_pipeline() -> None:
         return extraction_result
 
     @task
+    def analyze_raw_tables(load_info: dict[str, Any]) -> dict[str, Any]:
+        """Освежает planner-статистику для raw-таблиц после bulk-загрузки.
+
+        Без этого PostgreSQL planner использует pg_class.reltuples=0 после первичного
+        COPY и выбирает seq-scan по exchangelog_raw / egisz_messages_raw даже когда
+        функциональные индексы (msgid_norm, document_id_norm) уже существуют.
+        Autovacuum не запустит ANALYZE, пока не накопится достаточно изменений после
+        bulk-загрузки — на спокойном пайплайне это могут быть дни, и к тому моменту
+        запросы Metabase уже виснут на 8-16 минут. Свежий ANALYZE на каждом батче
+        дешёвый (~1с sample scan) и гарантирует адекватные планы.
+        """
+        if load_info["count"] <= 0 and load_info.get("message_count", 0) <= 0:
+            return load_info
+
+        pg_conn = _dwh_connection()
+        try:
+            # ANALYZE нельзя выполнять внутри транзакции — выходим в autocommit.
+            pg_conn.set_session(autocommit=True)
+            with pg_conn.cursor() as cur:
+                if load_info["count"] > 0:
+                    cur.execute("ANALYZE public.exchangelog_raw")
+                if load_info.get("message_count", 0) > 0:
+                    cur.execute("ANALYZE public.egisz_messages_raw")
+            log.info("ANALYZE done for raw tables touched in this batch.")
+        finally:
+            pg_conn.close()
+        return load_info
+
+    @task
     def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
         if load_info["max_id"] <= 0 and load_info.get("message_count", 0) <= 0:
             return {**load_info, "transformed": 0}
@@ -249,11 +278,12 @@ def egisz_elt_pipeline() -> None:
     dimensions = sync_dimensions()
     extraction = extract_from_proxy()
     loading = load_to_dwh(extraction)
-    transformed = transform_data(loading)
+    analyzed = analyze_raw_tables(loading)
+    transformed = transform_data(analyzed)
     refreshed = refresh_materialized_views(transformed)
     watermark = update_watermark(refreshed)
 
-    dimensions >> extraction >> loading >> transformed >> refreshed >> watermark
+    dimensions >> extraction >> loading >> analyzed >> transformed >> refreshed >> watermark
 
 
 egisz_elt_pipeline()
