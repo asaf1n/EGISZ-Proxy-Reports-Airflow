@@ -1,0 +1,19 @@
+# Force LF line endings for all text files in the repo.
+# Without this, git on Windows (core.autocrlf=true) converts LF→CRLF on checkout,
+# which breaks shell script shebangs inside Docker/Kubernetes containers.
+
+* text=auto eol=lf
+
+# Explicitly mark binary formats so git never touches them.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.zip  binary
+*.gz   binary
+*.tar  binary
