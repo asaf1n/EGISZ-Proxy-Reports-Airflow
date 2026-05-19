@@ -2,7 +2,7 @@
 # Without this, git on Windows (core.autocrlf=true) converts LF→CRLF on checkout,
 # which breaks shell script shebangs inside Docker/Kubernetes containers.
 
-* text=auto eol=lf
+* text eol=lf
 
 # Explicitly mark binary formats so git never touches them.
 *.png  binary
