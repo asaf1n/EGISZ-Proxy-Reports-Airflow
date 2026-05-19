@@ -1,12 +1,12 @@
 # Cервис эксплуатационной аналитики обмена с ЕГИСЗ
 
-Metabase
-логин: admin@egisz.local
-пароль: egisz
+| Metabase |
+| логин: | admin@egisz.local |
+| пароль: | egisz |
 
-Airflow
-логин: admin
-пароль: admin
+| Airflow |
+| логин: | admin |
+| пароль: | admin |
 
 ---
 
