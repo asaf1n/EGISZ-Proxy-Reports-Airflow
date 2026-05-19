@@ -16,6 +16,7 @@ DROP VIEW IF EXISTS public.v_stg_channel_network_errors_by_document;
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_stg_channel_errors_by_document CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_stg_channel_errors_by_document;
 DROP VIEW IF EXISTS public.v_rpt_error_interpretations_ui;
+DROP VIEW IF EXISTS public.v_rpt_error_category_breakdown_ui;
 DROP VIEW IF EXISTS public.v_rpt_semd_archive_ui;
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_rpt_documents_no_response_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_rpt_documents_no_response_ui;  -- in case it was previously created as MV

@@ -59,6 +59,9 @@ tags:
 
   top_semd:
     rules:
+      - query_contains: [v_rpt_error_category_breakdown_ui]
+        table_ref: public.v_rpt_error_category_breakdown_ui
+        field_name: Код СЭМД
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Код СЭМД
@@ -75,6 +78,9 @@ tags:
 
   top_clinic:
     rules:
+      - query_contains: [v_rpt_error_category_breakdown_ui]
+        table_ref: public.v_rpt_error_category_breakdown_ui
+        field_name: JID клиники
       - query_contains: [v_health_by_clinic_ui]
         table_ref: public.v_health_by_clinic_ui
         field_name: JID клиники
@@ -168,6 +174,9 @@ tags:
   # а не только от подстрок в query.
   dwh_date:
     rules:
+      - query_contains: [v_rpt_error_category_breakdown_ui]
+        table_ref: public.v_rpt_error_category_breakdown_ui
+        field_name: Обработано IPS
       - display_name_contains: [Отправлено]
         table_ref: public.v_rpt_documents_no_response_ui
         field_name: Отправлено

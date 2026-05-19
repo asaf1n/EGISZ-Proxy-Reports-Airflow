@@ -226,6 +226,50 @@ BEGIN
 END;
 $$;
 
+-- Возвращает категорию (~10 групп) для одиночной интерпретации ошибки.
+-- Сначала ищет точное совпадение interpretation в таблице правил (с error_category),
+-- затем падает на паттерн-матчинг для schematron-chunk текстов и прочих краевых случаев.
+CREATE OR REPLACE FUNCTION public.egisz_error_category(p_interpretation text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    cat text;
+    t   text;
+BEGIN
+    t := btrim(COALESCE(p_interpretation, ''));
+    IF t = '' OR t = 'Неизвестная ошибка' THEN
+        RETURN 'Прочие';
+    END IF;
+
+    SELECT r.error_category INTO cat
+    FROM egisz_error_interpretation_rules r
+    WHERE r.is_active AND r.interpretation = t
+    ORDER BY r.priority
+    LIMIT 1;
+
+    IF cat IS NOT NULL THEN
+        RETURN cat;
+    END IF;
+
+    -- Паттерн-матчинг для schematron-chunk текстов и прочих неканонических строк
+    RETURN CASE
+        WHEN t ~* '(сетевая ошибка|network error)' THEN 'Ошибки связи'
+        WHEN t ~* '(техническая ошибка.*рэмд|рэмд не смог|таймаут.*рэмд|внутренн.*ошибка|невозможно обработать)' THEN 'Технические ошибки РЭМД'
+        WHEN t ~* '(xsd|xml.*валид|xml.*parse|разбора xml|схематрон|schematron|хранитель|заверитель|дата.*создания документа|телефон|привязана.*рмис|организ.*автор|код.*типа документа)' THEN 'Ошибки структуры и валидации'
+        WHEN t ~* '(справочник|нси.*код|нси.*версия|codeSystem)' THEN 'Ошибки справочника НСИ'
+        WHEN t ~* '(подпис|сертификат|crl|ocsp|УЦ.*рэмд|рэмд.*УЦ|ЭП истёк|ЭП отозван)' THEN 'Ошибки ЭП и сертификатов'
+        WHEN t ~* '(организаци.*рэмд|рмис|лицензи|фрмо|огрн|зарегистрирована в рэмд)' THEN 'Ошибки организации / ИС'
+        WHEN t ~* '(файл эмд|предоставляющей ис|getDocumentFile|запись эмд не найдена)' THEN 'Ошибки получения файла ЭМД'
+        WHEN t ~* '(зарегистрирован в рэмд|метаописание|идентификатор.*рэмд|вид документа не актуален|дублирующий запрос|неверный формат запроса|аннулирован|доступ.*запрещ|тип сэмд.*рэмд)' THEN 'Ошибки регистрации в РЭМД'
+        WHEN t ~* '(медработник|врач.*фрмр|фрмр.*врач|должность.*врач|отчество.*врач|автор.*снилс|автор.*специальн|автор.*организ|frmr)' THEN 'Данные медработника'
+        WHEN t ~* '(пациент|patient|ГИП|GIP|ДУЛ|СНИЛС|snils|рождения|имя.*пациент|получатель)' THEN 'Данные пациента'
+        ELSE 'Прочие'
+    END;
+END;
+$$;
+
 -- Плоская таксономия error_type. Каждый <ns2:item> в асинхронном ответе РЭМД
 -- классифицируется через egisz_error_interpretation_type (правила из
 -- egisz_error_interpretation_rules); уникальные типы дедуплицируются и

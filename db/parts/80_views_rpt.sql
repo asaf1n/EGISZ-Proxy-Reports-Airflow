@@ -6,6 +6,65 @@
 -- CREATE OR REPLACE, ALTER ... IF EXISTS).
 -- ============================================================================
 
+-- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
+-- Unnest'ит составной error_type (разделитель ' · ') → одна строка = один вид ошибки.
+-- Сетевые ошибки из v_stg_channel_network_errors_by_document добавляются отдельно:
+-- их created_at маппится в "Обработано IPS" для единого date-фильтра дашборда.
+CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
+WITH remd_errors AS (
+    SELECT
+        t.log_date                                                                    AS "Обработано IPS",
+        t.log_date::date                                                              AS "День (тренд)",
+        COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id,
+                 t.doc_number, t.message_id, t.exchangelog_log_id::text)              AS "Документ (ключ учёта)",
+        t.jid::text                                                                   AS "JID клиники",
+        public.egisz_normalize_semd_code(t.semd_code)                                AS "Код СЭМД",
+        trim(err_item)                                                                AS "Тип ошибки"
+    FROM fact_egisz_transactions t
+    CROSS JOIN LATERAL unnest(
+        string_to_array(
+            COALESCE(NULLIF(trim(t.error_type), ''), 'Неизвестная ошибка'),
+            ' · '
+        )
+    ) AS err_item
+    WHERE t.status = 'error'
+      AND trim(err_item) <> ''
+),
+network_errors AS (
+    SELECT
+        n.created_at                AS "Обработано IPS",
+        n.created_at::date          AS "День (тренд)",
+        n.document_group_key        AS "Документ (ключ учёта)",
+        NULL::text                  AS "JID клиники",
+        NULL::text                  AS "Код СЭМД",
+        'Сетевая ошибка'::text      AS "Тип ошибки"
+    FROM public.v_stg_channel_network_errors_by_document n
+)
+SELECT
+    "Обработано IPS",
+    "День (тренд)",
+    "Документ (ключ учёта)",
+    "JID клиники",
+    "Код СЭМД",
+    "Тип ошибки",
+    public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
+FROM remd_errors
+UNION ALL
+SELECT
+    "Обработано IPS",
+    "День (тренд)",
+    "Документ (ключ учёта)",
+    "JID клиники",
+    "Код СЭМД",
+    "Тип ошибки",
+    'Ошибки связи'::text AS "Категория ошибки"
+FROM network_errors;
+
+COMMENT ON VIEW public.v_rpt_error_category_breakdown_ui IS
+'Разбивка ошибок EGISZ-прокси: один ряд = один вид ошибки на документ.
+Сетевые ошибки (created_at) и РЭМД-ошибки (log_date) унифицированы в "Обработано IPS"
+для единого дашборд-фильтра. Используется картой «Категории ошибок» и «Ошибки по типу».';
+
 CREATE OR REPLACE VIEW public.v_rpt_network_errors_detail_ui AS
 WITH source_rows AS (
     SELECT
