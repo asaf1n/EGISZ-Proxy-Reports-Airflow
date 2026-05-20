@@ -290,7 +290,7 @@ existing_card_id() {
 }
 
 expected_card_names() {
-  jq -r '.cards[]?.name' "${DASHBOARDS_DIR}"/*.json | sort -u
+  jq -r '.cards[]? | select((.display // "") != "text" and .name != null) | .name' "${DASHBOARDS_DIR}"/*.json | sort -u
 }
 
 archive_stale_collection_cards() {
@@ -427,79 +427,92 @@ create_or_update_dashboard() {
   num_cards="$(jq '.cards | length' "${file}")"
   if [ "${num_cards}" -gt 0 ]; then
     for i in $(seq 0 $((num_cards - 1))); do
-      local card_file card_id size_x size_y row col mappings dashcard_id dashcard
+      local card_file card_id card_id_json viz_settings size_x size_y row col mappings dashcard_id dashcard
       card_file="$(mktemp)"
       jq -c ".cards[${i}]" "${file}" > "${card_file}"
-      card_id="$(create_or_update_card "${card_file}")"
+
+      if [ "$(jq -r '.display // empty' "${card_file}")" = "text" ]; then
+        card_id_json="null"
+        viz_settings="$(jq -c '{
+          virtual_card: {name: null, display: "text", dataset_query: {}, visualization_settings: {}},
+          text: (.text // "")
+        }' "${card_file}")"
+        mappings="[]"
+      else
+        card_id="$(create_or_update_card "${card_file}")"
+        card_id_json="${card_id}"
+        viz_settings="{}"
+        mappings="$(
+          jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" --slurpfile meta_file "${DB_METADATA_FILE}" '
+            def field_id($table_ref; $field_name):
+              ($table_ref | sub("^public\\."; "")) as $table_name
+              | [
+                  $meta_file[0].tables[]?
+                  | select((.schema // "public") == "public" and .name == $table_name)
+                  | .fields[]?
+                  | select(.name == $field_name or .display_name == $field_name)
+                  | .id
+                ][0];
+
+            (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
+            | (.cards[$cardIndex]["metabase-field-filters"] // {}) as $fieldFilters
+            | ($tags | keys) as $tagKeys
+            | [
+                $dashParams[] as $param
+                | (
+                    if (($param.slug // "") | endswith("_filter")) then
+                      ($param.slug | sub("_filter$"; ""))
+                    else
+                      ($param.slug // "")
+                    end
+                  ) as $tagName
+                | select(($tagKeys | index($tagName)) != null)
+                | ($tags[$tagName].type // "") as $tagType
+                | ($fieldFilters[$tagName] // {}) as $fieldFilter
+                | ($fieldFilter.table_ref // "") as $tableRef
+                | ($fieldFilter.field_name // "") as $fieldName
+                | (
+                    if $tableRef != "" and $fieldName != "" then
+                      field_id($tableRef; $fieldName)
+                    else
+                      null
+                    end
+                  ) as $fieldId
+                | {
+                    parameter_id: $param.id,
+                    card_id: $cardDbId,
+                    target: (
+                      if $tagType == "dimension" and $fieldId != null then
+                        ["dimension", ["field", $fieldId, null]]
+                      elif $tagType == "dimension" then
+                        ["dimension", ["template-tag", $tagName]]
+                      else
+                        ["variable", ["template-tag", $tagName]]
+                      end
+                    )
+                  }
+              ]
+          ' "${file}"
+        )"
+      fi
       rm -f "${card_file}" >/dev/null 2>&1 || true
 
       size_x="$(jq -r ".cards[${i}].sizeX // .cards[${i}].size_x // 4" "${file}")"
       size_y="$(jq -r ".cards[${i}].sizeY // .cards[${i}].size_y // 4" "${file}")"
       row="$(jq -r ".cards[${i}].row // 0" "${file}")"
       col="$(jq -r ".cards[${i}].col // 0" "${file}")"
-      mappings="$(
-        jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" --slurpfile meta_file "${DB_METADATA_FILE}" '
-          def field_id($table_ref; $field_name):
-            ($table_ref | sub("^public\\."; "")) as $table_name
-            | [
-                $meta_file[0].tables[]?
-                | select((.schema // "public") == "public" and .name == $table_name)
-                | .fields[]?
-                | select(.name == $field_name or .display_name == $field_name)
-                | .id
-              ][0];
-
-          (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
-          | (.cards[$cardIndex]["metabase-field-filters"] // {}) as $fieldFilters
-          | ($tags | keys) as $tagKeys
-          | [
-              $dashParams[] as $param
-              | (
-                  if (($param.slug // "") | endswith("_filter")) then
-                    ($param.slug | sub("_filter$"; ""))
-                  else
-                    ($param.slug // "")
-                  end
-                ) as $tagName
-              | select(($tagKeys | index($tagName)) != null)
-              | ($tags[$tagName].type // "") as $tagType
-              | ($fieldFilters[$tagName] // {}) as $fieldFilter
-              | ($fieldFilter.table_ref // "") as $tableRef
-              | ($fieldFilter.field_name // "") as $fieldName
-              | (
-                  if $tableRef != "" and $fieldName != "" then
-                    field_id($tableRef; $fieldName)
-                  else
-                    null
-                  end
-                ) as $fieldId
-              | {
-                  parameter_id: $param.id,
-                  card_id: $cardDbId,
-                  target: (
-                    if $tagType == "dimension" and $fieldId != null then
-                      ["dimension", ["field", $fieldId, null]]
-                    elif $tagType == "dimension" then
-                      ["dimension", ["template-tag", $tagName]]
-                    else
-                      ["variable", ["template-tag", $tagName]]
-                    end
-                  )
-                }
-            ]
-        ' "${file}"
-      )"
 
       dashcard_id=$((-(i + 1)))
       dashcard="$(
         jq -n \
           --argjson dashcardId "${dashcard_id}" \
-          --argjson cardId "${card_id}" \
+          --argjson cardId "${card_id_json}" \
           --argjson sizeX "${size_x}" \
           --argjson sizeY "${size_y}" \
           --argjson row "${row}" \
           --argjson col "${col}" \
           --argjson mappings "${mappings}" \
+          --argjson vizSettings "${viz_settings}" \
           '{
             id: $dashcardId,
             card_id: $cardId,
@@ -511,7 +524,7 @@ create_or_update_dashboard() {
             col: $col,
             parameter_mappings: $mappings,
             series: [],
-            visualization_settings: {}
+            visualization_settings: $vizSettings
           }'
       )"
       cards="$(jq -n --argjson existing "${cards}" --argjson card "${dashcard}" '$existing + [$card]')"
