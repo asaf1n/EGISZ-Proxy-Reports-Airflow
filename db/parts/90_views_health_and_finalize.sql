@@ -124,6 +124,26 @@ WHERE r.logid = f.exchangelog_log_id
   AND f.status = 'error'
   AND f.error_type IS NULL;
 
+-- Перекалькулировать строки, где error_type содержит переменные данные пациента
+-- (имя/фамилия/отчество/пол в квадратных скобках просочились как сырой текст до добавления правил).
+UPDATE public.fact_egisz_transactions f
+SET error_type = CASE
+        WHEN f.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
+        ELSE public.egisz_error_classify(
+            public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
+        )
+    END,
+    error_summary = public.egisz_error_interpretation_row(
+        public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
+    ),
+    error_json_text = public.egisz_error_messages_row(
+        public.egisz_build_errors_json(f.status, f.error_code, f.error_message, r.msgtext)
+    )
+FROM public.exchangelog_raw r
+WHERE r.logid = f.exchangelog_log_id
+  AND f.status = 'error'
+  AND f.error_type ~* '(Имя|Фамилия|Отчество|Пол) пациента в ЭМД \[';
+
 -- Transfer ownership of all public-schema objects to egisz so it can run DDL independently
 DO $$
 DECLARE

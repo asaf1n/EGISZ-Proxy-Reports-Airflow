@@ -1,7 +1,7 @@
 {
   "name": "04 Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)** (`egisz_document_identity_key`). Проверки JID/OID, полнота полей. **Отказы РЭМД:** рейтинги по «Исходный текст ошибки», матрица тип СЭМД × тип ошибки. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
+  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)** (`egisz_document_identity_key`). **Единый пул ошибок**: перед группировкой по любому измерению документ дедублицируется через DISTINCT ON (берётся последняя транзакция периода), поэтому итог во всех разрезах совпадает с карточкой «Итоги по ошибкам». Проверки JID/OID, полнота полей. **Отказы РЭМД:** рейтинги по «Исходный текст ошибки», матрица тип СЭМД × тип ошибки. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
@@ -320,11 +320,11 @@
     },
     {
       "name": "04 · Топ причин отказов ЕГИСЗ",
-      "description": "Рейтинг причин ошибок по плоскому типу. COUNT(DISTINCT «Документ (ключ учёта)»). Без привязки к конкретным записям.",
+      "description": "Рейтинг причин ошибок — топ-20 типов. Единый пул: DISTINCT ON по документу (последняя транзакция периода), поэтому итог совпадает с «Итоги по ошибкам». Один документ — один тип ошибки.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_type FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT err_type AS \"Тип ошибки\", COUNT(*)::bigint AS \"Документов\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -363,7 +363,9 @@
             "decimals": 0
           }
         },
-        "graph.dimensions": ["Тип ошибки"],
+        "graph.dimensions": [
+          "Тип ошибки"
+        ],
         "graph.metrics": [
           "Документов"
         ]
@@ -455,7 +457,7 @@
     },
     {
       "name": "04 · Итоги по ошибкам за период",
-      "description": "За период: число документов со статусом error, число уникальных кодов СЭМД и уникальных JID клиник среди этих документов.",
+      "description": "За период: число документов со статусом error, число уникальных кодов СЭМД и уникальных JID клиник среди этих документов. **Это эталонное число** — все разрезные карточки (пироги и рейтинги) показывают тот же итог.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -483,8 +485,8 @@
           ]
         },
         "column_settings": {
-          "[\"name\",\"Транзакций с ошибкой\"]": {
-            "column_title": "Транзакций с ошибкой",
+          "[\"name\",\"Документов с ошибкой\"]": {
+            "column_title": "Документов с ошибкой",
             "number_separators": ".",
             "decimals": 0
           },
@@ -513,11 +515,11 @@
     },
     {
       "name": "04 · Ошибки по типу",
-      "description": "Круговая диаграмма: до 8 срезов по типу отказа (первый значимый элемент «Исходный текст ошибки» на документ); прочие объединены в «Остальные (N)». Расширенный список — карточка «04 · Рейтинг типов ошибок (топ-25)». Значение «Итого» в легенде — все документы со статусом error за выбранный период.",
+      "description": "Круговая диаграмма: до 8 срезов по типу отказа. **Единый пул**: DISTINCT ON по документу (последняя транзакция периода) — один документ учитывается ровно в одном срезе. «Итого» совпадает с карточкой «Итоги по ошибкам».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_type AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_type ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_type AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_type), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -572,51 +574,12 @@
       }
     },
     {
-      "name": "04 · Все типы ошибок (полный список)",
-      "description": "Полный рейтинг типов ошибок без группировки в «Остальные» — для детального просмотра малых категорий.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC",
-          "template-tags": {
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "id": "fb000001-0001-4001-8001-000000000099",
-              "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "number_separators": ".",
-            "decimals": 0
-          }
-        }
-      },
-      "sizeX": 4,
-      "sizeY": 5,
-      "row": 25,
-      "col": 8,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        }
-      }
-    },
-    {
       "name": "04 · Доля ошибок по СЭМД",
-      "description": "Доля ошибок по **группе СЭМД** (унификация кодов с одним наименованием): топ-10 по числу документов со статусом error; остальные — «Остальные (N)».",
+      "description": "Доля ошибок по **типу СЭМД**: топ-10 по числу документов со статусом error; остальные — «Остальные (N)». **Единый пул**: DISTINCT ON по документу — «Итого» совпадает с «Итогами по ошибкам».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_code AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -676,11 +639,11 @@
     },
     {
       "name": "04 · Доля ошибок по клиникам",
-      "description": "Доля ошибок по клиникам: топ-10 по числу документов со статусом error; остальные — «Остальные (N)». «Итого» — сумма всех таких документов за период.",
+      "description": "Доля ошибок по клиникам: топ-10 по числу документов со статусом error; остальные — «Остальные (N)». «Итого» совпадает с «Итогами по ошибкам». **Единый пул**: DISTINCT ON по документу; клиники без JID отображаются как «(нет JID)».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 24) || ' | ' || COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_clinic AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -736,11 +699,11 @@
     },
     {
       "name": "04 · Рейтинг типов ошибок (топ-25)",
-      "description": "Горизонтальные столбцы: до 25 типов ошибок регистрации по первой подготовленной ELT-интерпретации на документ, COUNT(DISTINCT «Документ (ключ учёта)»).",
+      "description": "Горизонтальные столбцы: до 25 типов ошибок. **Единый пул**: DISTINCT ON по документу (последняя транзакция периода) — итог совпадает с «Итогами по ошибкам».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ) SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM first_err GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_type FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT err_type AS \"Тип ошибки\", COUNT(*)::bigint AS \"Документов\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -786,7 +749,7 @@
           "Документов"
         ]
       },
-      "sizeX": 12,
+      "sizeX": 10,
       "sizeY": 7,
       "row": 30,
       "col": 0,
@@ -798,12 +761,51 @@
       }
     },
     {
-      "name": "04 · Рейтинг СЭМД по числу ошибок",
-      "description": "До 25 СЭМД с наибольшим числом документов со статусом error (подпись: код и наименование).",
+      "name": "04 · Все типы ошибок (полный список)",
+      "description": "Полный рейтинг типов ошибок без ограничения — для детального просмотра малых категорий. Единый пул (DISTINCT ON по документу).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"СЭМД (подпись)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS err_type FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT err_type AS \"Тип ошибки\", COUNT(*)::bigint AS \"Документов\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "id": "fb000001-0001-4001-8001-000000000099",
+              "name": "dwh_date",
+              "display-name": "По дате «Обработано»",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "number_separators": ".",
+            "decimals": 0
+          }
+        }
+      },
+      "sizeX": 4,
+      "sizeY": 7,
+      "row": 30,
+      "col": 10,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
+    },
+    {
+      "name": "04 · Рейтинг СЭМД по числу ошибок",
+      "description": "До 25 СЭМД с наибольшим числом документов со статусом error. **Единый пул**: DISTINCT ON по документу — итог совпадает с «Итогами по ошибкам».",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_label FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT semd_label AS \"СЭМД (подпись)\", COUNT(*)::bigint AS \"Ошибок\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -849,10 +851,10 @@
           "Ошибок"
         ]
       },
-      "sizeX": 12,
+      "sizeX": 10,
       "sizeY": 7,
       "row": 30,
-      "col": 12,
+      "col": 14,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_egisz_transactions_enriched_ui",
@@ -862,11 +864,11 @@
     },
     {
       "name": "04 · Рейтинг клиник по ошибкам",
-      "description": "До 25 клиник с наибольшим числом документов со статусом error (короткое наименование и JID).",
+      "description": "До 25 клиник с наибольшим числом документов со статусом error (короткое наименование и JID). **Единый пул**: DISTINCT ON по документу; клиники без JID отображаются как «(нет JID)».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 32) || ' | JID ' || \"JID клиники\"::text) AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 32) || ' | JID ' || COALESCE(NULLIF(\"JID клиники\"::text, ''), '(нет JID)') AS clinic_label FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND (NULLIF(TRIM(\"Наименование клиники\"), '') IS NOT NULL OR NULLIF(\"JID клиники\"::text, '') IS NOT NULL) AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT clinic_label AS \"Клиника\", COUNT(*)::bigint AS \"Ошибок\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

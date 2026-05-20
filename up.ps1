@@ -1,6 +1,6 @@
 param(
-    [ValidateSet("All", "Airflow", "Metabase")]
-    [string]$Component = "All"
+    [ValidateSet("Start", "Stop", "Airflow", "Metabase", "Stop-Airflow", "Stop-Metabase")]
+    [string]$Action = "Start"
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,9 +87,22 @@ print("Airflow internal metadata database airflow_db is present")
     }
 }
 
+function Initialize-EgiszEltNamespace {
+    Write-Host "Ensuring namespace egisz-elt exists..."
+    $existing = kubectl get namespace egisz-elt --ignore-not-found -o name
+    if ([string]::IsNullOrWhiteSpace($existing)) {
+        Invoke-Checked "Create namespace egisz-elt" {
+            kubectl create namespace egisz-elt
+        }
+    } else {
+        Write-Host "Namespace egisz-elt already exists, skipping."
+    }
+}
+
 function Install-Airflow {
     Initialize-SecretFiles
     Test-KubernetesConnection
+    Initialize-EgiszEltNamespace
 
     Write-Host "Applying Airflow connection secrets..."
     Invoke-Checked "Apply Airflow connection secrets" {
@@ -193,12 +206,60 @@ function Install-Metabase {
     }
 }
 
-if ($Component -in @("All", "Airflow")) {
+function Stop-Airflow {
+    Test-KubernetesConnection
+
+    Write-Host "Scaling down Airflow components without deleting releases or PVCs..."
+    Invoke-Checked "Scale Airflow webserver to 0" {
+        kubectl scale deployment/airflow-webserver --replicas=0
+    }
+    Invoke-Checked "Scale Airflow scheduler to 0" {
+        kubectl scale deployment/airflow-scheduler --replicas=0
+    }
+    Invoke-Checked "Scale Airflow worker to 0" {
+        kubectl scale statefulset/airflow-worker --replicas=0
+    }
+    Invoke-Checked "Scale Airflow triggerer to 0" {
+        kubectl scale statefulset/airflow-triggerer --replicas=0
+    }
+    Invoke-Checked "Scale Airflow Redis to 0" {
+        kubectl scale statefulset/airflow-redis --replicas=0
+    }
+    Invoke-Checked "Scale Airflow PostgreSQL to 0" {
+        kubectl scale statefulset/airflow-postgresql --replicas=0
+    }
+}
+
+function Stop-Metabase {
+    Test-KubernetesConnection
+
+    Write-Host "Scaling down Metabase components without deleting the metabase_app database PVC..."
+    Invoke-Checked "Scale Metabase deployment to 0" {
+        kubectl scale deployment/metabase --replicas=0
+    }
+    Invoke-Checked "Scale Metabase PostgreSQL to 0" {
+        kubectl scale statefulset/metabase-postgres --replicas=0
+    }
+}
+
+if ($Action -in @("Start", "Airflow")) {
     Install-Airflow
 }
 
-if ($Component -in @("All", "Metabase")) {
+if ($Action -in @("Start", "Metabase")) {
     Install-Metabase
 }
 
-Write-Host "Done. Airflow: http://localhost:8080, Metabase: http://localhost:3000"
+if ($Action -in @("Stop", "Stop-Airflow")) {
+    Stop-Airflow
+}
+
+if ($Action -in @("Stop", "Stop-Metabase")) {
+    Stop-Metabase
+}
+
+if ($Action -eq "Start") {
+    Write-Host "Done. Airflow: http://localhost:8080, Metabase: http://localhost:3000"
+} else {
+    Write-Host "Done. Selected Kubernetes components were scaled down to zero; PVC-backed data was preserved."
+}
