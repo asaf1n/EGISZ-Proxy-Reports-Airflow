@@ -43,11 +43,34 @@ def extract_query_and_tags(card: dict) -> tuple[str, dict]:
     return query, clean_template_tags(tags)
 
 
+def load_existing_field_filters(path: Path | None) -> dict[str, dict]:
+    """Map card name -> metabase-field-filters block from a previously-saved JSON."""
+    if not path or not path.exists():
+        return {}
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, dict] = {}
+    for c in existing.get("cards") or []:
+        name = c.get("name")
+        ff = c.get("metabase-field-filters")
+        if name and ff:
+            result[name] = ff
+    return result
+
+
 def export_dashboard(dash_id: int, keep_params_from: Path | None) -> dict:
     dashboard = api_get(f"/api/dashboard/{dash_id}")
     dashcards = dashboard.get("dashcards") or dashboard.get("ordered_cards") or []
+    existing_field_filters = load_existing_field_filters(keep_params_from)
 
-    # Fetch all unique cards
+    def is_text_dc(dc: dict) -> bool:
+        viz = dc.get("visualization_settings") or {}
+        virtual = viz.get("virtual_card") or {}
+        return virtual.get("display") == "text"
+
+    # Fetch all unique SQL cards
     card_cache: dict[int, dict] = {}
     for dc in dashcards:
         if dc.get("card") and dc["card"].get("id"):
@@ -56,17 +79,33 @@ def export_dashboard(dash_id: int, keep_params_from: Path | None) -> dict:
                 card_cache[cid] = api_get(f"/api/card/{cid}")
                 print(f"  Fetched card {cid}: {card_cache[cid]['name']}", file=sys.stderr)
 
-    # Sort dashcards by (row, col)
-    valid_dcs = [dc for dc in dashcards if dc.get("card") and dc["card"].get("id")]
+    # Sort dashcards by (row, col); keep SQL cards and text dashcards
+    valid_dcs = [
+        dc for dc in dashcards
+        if (dc.get("card") and dc["card"].get("id")) or is_text_dc(dc)
+    ]
     valid_dcs.sort(key=lambda dc: (dc.get("row", 0), dc.get("col", 0)))
 
     cards = []
     for dc in valid_dcs:
+        if is_text_dc(dc) and not (dc.get("card") and dc["card"].get("id")):
+            viz = dc.get("visualization_settings") or {}
+            card_obj = {
+                "display": "text",
+                "text": viz.get("text", ""),
+                "sizeX": dc.get("size_x", 12),
+                "sizeY": dc.get("size_y", 6),
+                "row": dc.get("row", 0),
+                "col": dc.get("col", 0),
+            }
+            cards.append(card_obj)
+            continue
+
         cid = dc["card"]["id"]
         card = card_cache[cid]
         query, tags = extract_query_and_tags(card)
 
-        card_obj: dict = {
+        card_obj = {
             "name": card["name"],
             "description": card.get("description"),
             "dataset_query": {
@@ -84,6 +123,11 @@ def export_dashboard(dash_id: int, keep_params_from: Path | None) -> dict:
             "row": dc.get("row", 0),
             "col": dc.get("col", 0),
         }
+        prior_ff = existing_field_filters.get(card["name"])
+        if prior_ff:
+            ff = {k: v for k, v in prior_ff.items() if k in tags}
+            if ff:
+                card_obj["metabase-field-filters"] = ff
         cards.append(card_obj)
 
     # Use existing parameters if requested, else use from Metabase dashboard

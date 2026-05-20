@@ -36,9 +36,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Отправлено» (очередь)",
               "id": "f9000001-0001-4001-8001-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Отправлено» (очередь)",
               "type": "dimension"
             }
           }
@@ -61,19 +61,19 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Обработано за последний день в данных\"]": {
-            "column_title": "Обработано (последний день в БД)",
-            "number_separators": ".",
-            "decimals": 0
-          },
           "[\"name\",\"% ошибок за этот день\"]": {
             "column_title": "% ошибок за этот день",
             "decimals": 2
           },
           "[\"name\",\"Документов в очереди\"]": {
             "column_title": "Очередь в окне фильтра",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Обработано за последний день в данных\"]": {
+            "column_title": "Обработано (последний день в БД)",
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -98,9 +98,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f90000c1-c001-4001-8001-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -109,9 +109,9 @@
       },
       "display": "pie",
       "visualization_settings": {
+        "pie.percent_visibility": "inside",
         "pie.show_legend": true,
         "pie.show_total": true,
-        "pie.percent_visibility": "inside",
         "pie.slice_threshold": 0,
         "table": {
           "columns": {
@@ -128,13 +128,13 @@
         },
         "version": 2,
         "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": "."
+          },
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
-          },
-          "[\"name\",\"Документов\"]": {
-            "number_separators": ".",
-            "decimals": 0,
-            "column_title": "Документов"
           }
         }
       },
@@ -150,6 +150,66 @@
       }
     },
     {
+      "name": "05 · Топ причин ошибок (ЕГИСЗ, доля)",
+      "description": "До 8 наиболее частых **видов ошибок** (атомарных, из `v_rpt_error_category_breakdown_ui`); хвост — «Остальные (N)». Метрика — COUNT(DISTINCT «Документ (ключ учёта)») на вид; один документ с N разными видами учитывается в N сегментах. Соответствует карточке «Топ видов ошибок» на дашборде 04.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_err AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Вид ошибки\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f90000c2-c002-4002-8002-000000000001",
+              "name": "dwh_date",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.percent_visibility": "inside",
+        "pie.show_legend": true,
+        "pie.show_total": true,
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "version": 2,
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Вид ошибки\"]": {
+            "column_title": "Вид ошибки"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 5,
+      "row": 3,
+      "col": 8,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_error_category_breakdown_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
+    },
+    {
       "name": "05 · Ошибка связи (доля)",
       "description": "Ошибки связи/транспорта (LOGSTATE=3 и др.): `v_rpt_network_errors_detail_ui`, **COUNT(DISTINCT …)** по ключу группировки (как на **01**), период — **«Дата создания документа»**. Не смешивать с отказами регистрации в XML ответа РЭМД.",
       "dataset_query": {
@@ -159,9 +219,9 @@
           "template-tags": {
             "parse_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "id": "f90000d1-d001-4001-8001-000000000001",
               "name": "parse_date",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "type": "dimension"
             }
           }
@@ -170,19 +230,19 @@
       },
       "display": "pie",
       "visualization_settings": {
+        "pie.percent_visibility": "inside",
         "pie.show_legend": true,
         "pie.show_total": true,
-        "pie.percent_visibility": "inside",
         "pie.slice_threshold": 0,
         "version": 2,
         "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": "."
+          },
           "[\"name\",\"Тип\"]": {
             "column_title": "Тип"
-          },
-          "[\"name\",\"Документов\"]": {
-            "number_separators": ".",
-            "decimals": 0,
-            "column_title": "Документов"
           }
         }
       },
@@ -198,126 +258,6 @@
       }
     },
     {
-      "name": "05 · Топ причин ошибок (ЕГИСЗ, доля)",
-      "description": "До 8 наиболее частых текстов по первому элементу «Исходный текст ошибки»; хвост — «Остальные (N)», N = число **документов** вне топ‑8. «Итого» = все error за период (DISTINCT «Документ (ключ учёта)»).",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH filtered AS ( SELECT \"Документ (ключ учёта)\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(r.\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), per_err AS ( SELECT err_lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM first_err GROUP BY 1 ), ranked AS ( SELECT err_lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_err ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.err_lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
-          "template-tags": {
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "id": "f90000c2-c002-4002-8002-000000000001",
-              "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "pie",
-      "visualization_settings": {
-        "pie.show_legend": true,
-        "pie.show_total": true,
-        "pie.percent_visibility": "inside",
-        "pie.slice_threshold": 0,
-        "table": {
-          "columns": {
-            "[\"name\",\"clinic_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"service_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"transaction_id\"]": {
-              "display_as": null
-            }
-          }
-        },
-        "version": 2,
-        "column_settings": {
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки"
-          },
-          "[\"name\",\"Количество\"]": {
-            "number_separators": ".",
-            "decimals": 0
-          }
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 5,
-      "row": 3,
-      "col": 8,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        }
-      }
-    },
-    {
-      "name": "05 · Ошибки по СЭМД (доля)",
-      "description": "Круговая диаграмма по коду СЭМД для error (топ 10 + «Остальные (N)»; «Итого» = все error).",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH per_code AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] AND \"Статус\" = 'error' GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип СЭМД (код · НСИ)\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
-          "template-tags": {
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "id": "f90000c3-c003-4003-8003-000000000001",
-              "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "pie",
-      "visualization_settings": {
-        "pie.show_legend": true,
-        "pie.show_total": true,
-        "pie.percent_visibility": "inside",
-        "pie.slice_threshold": 0,
-        "table": {
-          "columns": {
-            "[\"name\",\"clinic_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"service_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"transaction_id\"]": {
-              "display_as": null
-            }
-          }
-        },
-        "version": 2,
-        "column_settings": {
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Код СЭМД"
-          },
-          "[\"name\",\"Количество\"]": {
-            "number_separators": ".",
-            "decimals": 0
-          }
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 5,
-      "row": 25,
-      "col": 16,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        }
-      }
-    },
-    {
       "name": "05 · Объём по СЭМД и клиникам",
       "description": "Объём **документов** (DISTINCT «Документ (ключ учёта)») с разрезом по типу СЭМД и клинике. Фильтр — по дате «Обработано».",
       "dataset_query": {
@@ -327,9 +267,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000002-0002-4002-8002-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -341,25 +281,25 @@
         "table": {
           "columns": [
             {
-              "name": "Связанное сообщение",
-              "enabled": false
+              "enabled": false,
+              "name": "Связанное сообщение"
             }
           ]
         },
         "column_settings": {
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
-          },
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Количество",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Наименование клиники"
           },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД (код · НСИ)"
           }
         }
       },
@@ -384,9 +324,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000003-0003-4003-8003-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -411,8 +351,8 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -437,9 +377,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000004-0004-4004-8004-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -451,37 +391,37 @@
         "table": {
           "columns": [
             {
-              "name": "Связанное сообщение",
-              "enabled": false
+              "enabled": false,
+              "name": "Связанное сообщение"
             }
           ]
         },
         "column_settings": {
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
-          },
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники"
           },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "СЭМД в срезе (все статусы)",
-            "number_separators": ".",
-            "decimals": 0
-          },
-          "[\"name\",\"Ошибок\"]": {
-            "column_title": "Ошибок",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок в срезе",
             "decimals": 2
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Наименование клиники"
+          },
+          "[\"name\",\"Ошибок\"]": {
+            "column_title": "Ошибок",
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД (код · НСИ)"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки"
           }
         }
       },
@@ -506,9 +446,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Отправлено»",
               "id": "f9000005-0005-4005-8005-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Отправлено»",
               "type": "dimension"
             }
           }
@@ -533,8 +473,8 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -550,18 +490,18 @@
       }
     },
     {
-      "name": "05 · Рейтинг формулировок ошибок ЕГИСЗ",
-      "description": "По первому элементу «Исходный текст ошибки» **на документ** (`egisz_error_group_type`). Фильтр по дате «Обработано».",
+      "name": "05 · Рейтинг видов ошибок ЕГИСЗ",
+      "description": "Атомарные **виды ошибок** (70+ из `egisz_error_interpretation_rules`) с COUNT(DISTINCT «Документ (ключ учёта)»). Источник — `v_rpt_error_category_breakdown_ui`. Документ с N разными видами учитывается N раз; общая логика подсчёта соответствует «Топ видов ошибок» на дашборде 04 и «Ошибки по типу» на дашборде 01.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '(неизвестно)') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Вид ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000006-0006-4006-8006-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -571,7 +511,7 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Тип ошибки"
+          "Вид ошибки"
         ],
         "graph.show_values": true,
         "table": {
@@ -588,13 +528,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки"
-          },
           "[\"name\",\"Документов\"]": {
-            "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Вид ошибки\"]": {
+            "column_title": "Вид ошибки"
           }
         },
         "graph.metrics": [
@@ -607,7 +547,7 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_error_category_breakdown_ui",
           "field_name": "Обработано IPS"
         }
       }
@@ -622,9 +562,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000007-0007-4007-8007-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -651,13 +591,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Код СЭМД\"]": {
-            "column_title": "Код СЭМД"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Код СЭМД\"]": {
+            "column_title": "Код СЭМД"
           }
         },
         "graph.metrics": [
@@ -685,9 +625,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f9000008-0008-4008-8008-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
               "type": "dimension"
             }
           }
@@ -714,13 +654,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника (коротко)"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника (коротко)"
           }
         },
         "graph.metrics": [
@@ -748,9 +688,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Отправлено»",
               "id": "f9000009-0009-4009-8009-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Отправлено»",
               "type": "dimension"
             }
           }
@@ -777,13 +717,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Срок ожидания\"]": {
-            "column_title": "Срок ожидания"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Срок ожидания\"]": {
+            "column_title": "Срок ожидания"
           }
         },
         "graph.metrics": [
@@ -811,9 +751,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Отправлено»",
               "id": "f900000a-000a-400a-800a-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Отправлено»",
               "type": "dimension"
             }
           }
@@ -840,13 +780,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Наименование СЭМД\"]": {
-            "column_title": "Наименование СЭМД"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД"
           }
         },
         "graph.metrics": [
@@ -874,9 +814,9 @@
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
+              "display-name": "По дате «Отправлено»",
               "id": "f900000b-000b-400b-800b-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Отправлено»",
               "type": "dimension"
             }
           }
@@ -903,13 +843,13 @@
           }
         },
         "column_settings": {
-          "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника (коротко)"
-          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника (коротко)"
           }
         },
         "graph.metrics": [
@@ -924,6 +864,66 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_no_response_ui",
           "field_name": "Отправлено"
+        }
+      }
+    },
+    {
+      "name": "05 · Ошибки по СЭМД (доля)",
+      "description": "Круговая диаграмма по коду СЭМД для error (топ 10 + «Остальные (N)»; «Итого» = все error).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_code AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] AND \"Статус\" = 'error' GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип СЭМД (код · НСИ)\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f90000c3-c003-4003-8003-000000000001",
+              "name": "dwh_date",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.percent_visibility": "inside",
+        "pie.show_legend": true,
+        "pie.show_total": true,
+        "pie.slice_threshold": 0,
+        "table": {
+          "columns": {
+            "[\"name\",\"clinic_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"service_id\"]": {
+              "display_as": null
+            },
+            "[\"name\",\"transaction_id\"]": {
+              "display_as": null
+            }
+          }
+        },
+        "version": 2,
+        "column_settings": {
+          "[\"name\",\"Количество\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Код СЭМД"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 5,
+      "row": 25,
+      "col": 16,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     }

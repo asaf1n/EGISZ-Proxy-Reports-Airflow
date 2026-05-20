@@ -84,11 +84,11 @@
           "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', e.\"Дата создания документа\") AS \"Час\", COUNT(DISTINCT e.\"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui e CROSS JOIN b WHERE e.\"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "id": "f3a00004-0004-4004-8004-000000099001",
               "name": "parse_created",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -135,11 +135,11 @@
           "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', e.created_at) AS \"Час\", COUNT(DISTINCT e.document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document e CROSS JOIN b WHERE e.created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате created_at (healthcheck)",
               "id": "f3a00002-0002-4002-8002-000000099002",
               "name": "parse_created",
-              "display-name": "По дате created_at (healthcheck)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -205,11 +205,11 @@
           "query": "SELECT CASE WHEN COALESCE(NULLIF(error_top_type, ''), 'async_response') = 'network' THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS \"Тип\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов\" FROM public.v_stg_channel_errors_by_document WHERE NOT ( (error_top_type = 'network' OR UPPER(COALESCE(error_code::text, '')) IN ('NETWORK_ERROR', 'INTEGRATION_LOGSTATE_3')) AND NULLIF(TRIM(relates_to_id::text), '') IS NULL AND NULLIF(TRIM(relates_to_hint::text), '') IS NULL AND NULLIF(TRIM(local_uid_hint::text), '') IS NULL AND NULLIF(TRIM(emdr_id_hint::text), '') IS NULL ) [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате created_at (healthcheck)",
               "id": "f3a00003-0003-4003-8003-000000099001",
               "name": "parse_created",
-              "display-name": "По дате created_at (healthcheck)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -222,24 +222,24 @@
         "pie.dimension": "Тип",
         "pie.rows": [
           {
-            "key": "Ошибка в асинхронном ответе РЭМД",
-            "name": "Ошибка в асинхронном ответе РЭМД",
-            "originalName": "Ошибка в асинхронном ответе РЭМД",
             "color": "#51528D",
             "defaultColor": false,
             "enabled": true,
             "hidden": false,
-            "isOther": false
+            "isOther": false,
+            "key": "Ошибка в асинхронном ответе РЭМД",
+            "name": "Ошибка в асинхронном ответе РЭМД",
+            "originalName": "Ошибка в асинхронном ответе РЭМД"
           },
           {
-            "key": "Ошибка связи",
-            "name": "Ошибка связи",
-            "originalName": "Ошибка связи",
             "color": "#ED8535",
             "defaultColor": false,
             "enabled": true,
             "hidden": false,
-            "isOther": false
+            "isOther": false,
+            "key": "Ошибка связи",
+            "name": "Ошибка связи",
+            "originalName": "Ошибка связи"
           }
         ],
         "pie.metric": "Уникальных документов",
@@ -344,25 +344,25 @@
           "query": "WITH d AS ( SELECT date_trunc('day', v.\"Обработано IPS\")::date AS day, COALESCE(NULLIF(TRIM(v.\"Наименование клиники\"), ''), 'JID ' || v.\"JID клиники\"::text) AS clinic, COUNT(DISTINCT v.\"Документ (ключ учёта)\") AS cnt, COUNT(DISTINCT v.\"Документ (ключ учёта)\") FILTER (WHERE v.\"Статус\" = 'error') AS err FROM public.v_egisz_transactions_enriched_ui v WHERE NULLIF(TRIM(v.\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(v.\"Код СЭМД\"), '') = {{top_semd}}]] [[AND v.\"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
               "id": "h1100002-1001-4101-8101-000000000010",
               "name": "top_clinic",
-              "display-name": "JID клиники",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f2000007-0007-4007-8007-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             },
             "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
               "id": "f2000007-0007-4007-8007-000000000010",
               "name": "top_semd",
-              "display-name": "Код СЭМД",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             }
           }
         },
@@ -427,11 +427,11 @@
           "query": "SELECT \"Наименование клиники\" AS \"Наименование клиники\", \"Доля ошибок, %\" AS \"Доля ошибок, %\", \"Документов за 24ч\" AS \"Документов за 24ч\", \"В очереди (документов)\" AS \"В очереди (документов)\", \"Уровень здоровья\" AS \"Уровень здоровья\" FROM public.v_health_by_clinic_ui WHERE \"Документов за 24ч\" >= 20 [[AND \"JID клиники\"::text = {{top_clinic}}]] ORDER BY \"Доля ошибок, %\" DESC NULLS LAST, \"Документов за 24ч\" DESC LIMIT 15",
           "template-tags": {
             "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
               "id": "h1100001-1001-4101-8101-000000000010",
               "name": "top_clinic",
-              "display-name": "JID клиники",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             }
           }
         },
@@ -480,25 +480,25 @@
           "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
               "id": "f2000002-0002-4002-8002-000000000011",
               "name": "top_clinic",
-              "display-name": "JID клиники",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f2000002-0002-4002-8002-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             },
             "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
               "id": "f2000002-0002-4002-8002-000000000010",
               "name": "top_semd",
-              "display-name": "Код СЭМД",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             }
           }
         },
@@ -631,25 +631,25 @@
           "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
               "id": "f2000001-0001-4001-8001-000000000011",
               "name": "top_clinic",
-              "display-name": "JID клиники",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
               "id": "f2000001-0001-4001-8001-000000000001",
               "name": "dwh_date",
-              "display-name": "По дате «Обработано»",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             },
             "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
               "id": "f2000001-0001-4001-8001-000000000010",
               "name": "top_semd",
-              "display-name": "Код СЭМД",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             }
           }
         },
@@ -793,18 +793,18 @@
           "query": "SELECT COUNT(*)::bigint AS \"Строк в stg_channel_errors\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]]",
           "template-tags": {
             "err_parse_code": {
+              "widget-type": "string/=",
+              "display-name": "Код ошибки парсинга",
               "id": "f3000000-0001-4001-8001-000000000010",
               "name": "err_parse_code",
-              "display-name": "Код ошибки парсинга",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате created_at (healthcheck)",
               "id": "f3a00001-0001-4001-8001-000000099001",
               "name": "parse_created",
-              "display-name": "По дате created_at (healthcheck)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -845,53 +845,53 @@
           "query": "SELECT id AS \"Номер записи\", error_code AS \"Код ошибки\", LEFT(message, 200) AS \"Сообщение\", created_at AS \"Создано\", relates_to_hint AS \"relatesToMessage (из текста журнала)\", local_uid_hint AS \"localUid (из текста)\", emdr_id_hint AS \"emdrId (из текста)\", exchangelog_log_id AS \"EXCHANGELOG.LOGID\", journal_msgid AS \"EXCHANGELOG.MSGID\", egisz_messages_egmid AS \"EGISZ_MESSAGES.EGMID\", document_group_key AS \"Ключ документа (группировка)\", relates_to_id AS \"relates_to_id (если есть)\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]] [[AND NULLIF(TRIM(local_uid_hint::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(relates_to_hint::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(emdr_id_hint::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(exchangelog_log_id::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(egisz_messages_egmid::text), '') = {{egmid}}]] ORDER BY id DESC LIMIT 100",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате created_at (healthcheck)",
               "id": "f3a00001-0001-4001-8001-000000099001",
               "name": "parse_created",
-              "display-name": "По дате created_at (healthcheck)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             },
             "egmid": {
+              "widget-type": "string/=",
+              "display-name": "EGMID сообщения EGISZ_MESSAGES",
               "id": "f3000001-0001-4001-8001-000000000017",
               "name": "egmid",
-              "display-name": "EGMID сообщения EGISZ_MESSAGES",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
               "id": "f3000001-0001-4001-8001-000000000014",
               "name": "emdr_id",
-              "display-name": "Рег. номер РЭМД (emdrid)",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "err_parse_code": {
+              "widget-type": "string/=",
+              "display-name": "Код ошибки парсинга",
               "id": "f3000001-0001-4001-8001-000000000010",
               "name": "err_parse_code",
-              "display-name": "Код ошибки парсинга",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
               "id": "f3000001-0001-4001-8001-000000000012",
               "name": "local_uid",
-              "display-name": "localUid СЭМД",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
               "id": "f3000001-0001-4001-8001-000000000016",
               "name": "log_id",
-              "display-name": "LOGID журнала EXCHANGELOG",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             },
             "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
               "id": "f3000001-0001-4001-8001-000000000013",
               "name": "relates_to",
-              "display-name": "Связанное сообщение (relatesToMessage)",
-              "type": "dimension",
-              "widget-type": "string/="
+              "type": "dimension"
             }
           }
         },
@@ -969,11 +969,11 @@
           "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 140) AS \"Сетевая ошибка\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 50",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "id": "f3a00002-0002-4002-8002-000000099001",
               "name": "parse_created",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -1012,11 +1012,11 @@
           "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 160) AS \"Сообщение (норм.)\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "id": "f3a00005-0005-4005-8005-000000099001",
               "name": "parse_created",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
@@ -1058,11 +1058,11 @@
           "query": "SELECT \"Дата создания документа\" AS \"Создано\", \"Подтип ошибки канала\" AS \"Подтип\", LEFT(\"Текст сетевой ошибки\", 220) AS \"Сообщение\", \"LOGID журнала (сетевая ошибка)\" AS \"EXCHANGELOG.LOGID\", \"MSGID обмена\" AS \"EXCHANGELOG.MSGID\", \"EGMID сообщения (строка журнала)\" AS \"EGISZ_MESSAGES.EGMID\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC LIMIT 100",
           "template-tags": {
             "parse_created": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Дата создания документа» (ошибки связи)",
               "id": "f3a00006-0006-4006-8006-000000099001",
               "name": "parse_created",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "type": "dimension",
-              "widget-type": "date/all-options"
+              "type": "dimension"
             }
           }
         },
