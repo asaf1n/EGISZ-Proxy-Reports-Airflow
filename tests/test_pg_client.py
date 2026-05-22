@@ -18,7 +18,15 @@ DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
 
 
 def _read_dwh_init_sql() -> str:
-    return DWH_INIT_SQL_PATH.read_text(encoding="utf-8")
+    # Находим папку db/parts
+    parts_dir = DWH_INIT_SQL_PATH.parent / "parts"
+    sql_contents = []
+    
+    # Читаем все SQL-файлы и склеиваем их
+    for sql_file in sorted(parts_dir.glob("*.sql")):
+        sql_contents.append(sql_file.read_text(encoding="utf-8"))
+        
+    return "\n".join(sql_contents)
 
 
 class FakeConnection:

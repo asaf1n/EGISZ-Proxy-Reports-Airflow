@@ -514,6 +514,10 @@
           },
           {
             "enabled": true,
+            "name": "Хост клиники (VPN ГОСТ)"
+          },
+          {
+            "enabled": true,
             "name": "localUid СЭМД"
           },
           {

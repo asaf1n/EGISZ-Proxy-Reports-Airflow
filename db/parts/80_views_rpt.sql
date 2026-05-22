@@ -188,9 +188,10 @@ SELECT
     public.egisz_semd_type_report_label(m.semd_code_resolved, m.semd_name_payload) AS "Тип СЭМД (код · НСИ)",
     COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники",
     COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
-    m.reply_to AS "Связанное сообщение",
+    NULL::text AS "Связанное сообщение",
     m.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
-    m.msgid AS "MSGID обмена"
+    m.msgid AS "MSGID обмена",
+    public.egisz_clean_host(m.reply_to) AS "Хост клиники (VPN ГОСТ)"
 FROM messages m
 LEFT JOIN LATERAL (
     SELECT dl.*
@@ -233,7 +234,8 @@ SELECT
     "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
     "Создание СЭМД",
-    "Сводка ошибки"
+    "Сводка ошибки",
+    "Хост клиники (VPN ГОСТ)"
 FROM public.v_egisz_transactions_enriched_ui
 
 UNION ALL
@@ -258,7 +260,8 @@ SELECT
     "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
     NULL::timestamptz AS "Создание СЭМД",
-    NULL::text AS "Сводка ошибки"
+    NULL::text AS "Сводка ошибки",
+    "Хост клиники (VPN ГОСТ)"
 FROM public.v_rpt_documents_no_response_ui;
 
 CREATE OR REPLACE VIEW public.v_rpt_clinic_connectivity_daily_ui AS
