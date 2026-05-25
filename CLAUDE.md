@@ -1,8 +1,8 @@
-# AI Agent Instructions (AGENTS.md / Codex)
+# CLAUDE.md — project contract for Claude Code
 
-You are an expert Data Engineer and DevOps Architect. Whenever you generate, refactor, or review code in this repository, strictly adhere to the following architectural guidelines and naming conventions.
+This file is your operating contract in this repository. The same contract in Codex format lives in [AGENTS.md](AGENTS.md); content is equivalent — when you edit one, edit the other.
 
-For deep domain context (what ЕГИСЗ/СЭМД are, how payload parsing works, what each dashboard shows) — read [README.md](README.md). This file is "how to write code in this repo", not a domain primer.
+Domain context (what ЕГИСЗ/СЭМД are, how parsing works, what each dashboard shows) lives in @README.md. Do not restate the README in code or comments; link to the relevant section instead.
 
 ---
 
@@ -14,7 +14,7 @@ For deep domain context (what ЕГИСЗ/СЭМД are, how payload parsing works
 
 **5 hard rules** (full list — §1, §8):
 
-1. **Names are fixed.** Domain — `egisz` / Python package — `egisz_elt` / DWH — `dwh_egisz` / source — `proxy_egisz` / fact table — `fact_egisz_transactions`.
+1. **Names are fixed.** Domain — `egisz` / Python package — `egisz_elt` / DWH — `dwh_egisz` / source — `proxy_egisz` / fact table — `fact_egisz_transactions`. 
 2. **All transformation business logic lives in PL/pgSQL.** SOAP/XML parsing, status normalization, error classification, building `fact_egisz_transactions` — inside [db/parts/50_transform.sql](db/parts/50_transform.sql) plus helpers from `20_functions_parsing.sql` / `40_functions_errors.sql`. Python only does Airflow orchestration and raw loading.
 3. **DWH schema lives only in `db/dwh_init.sql` + `db/parts/*.sql`.** No migration files (`migrations/`, alembic, etc.). Every module is idempotent (`CREATE ... IF NOT EXISTS`, `CREATE OR REPLACE`, `INSERT ... ON CONFLICT`).
 4. **Watermark only moves via `GREATEST(current, new)`.** Never roll it back — doing so breaks idempotency of the entire pipeline.
@@ -100,7 +100,7 @@ max_active_runs = 1   # parallel runs forbidden (race on watermark)
 }
 ```
 
-This contract is fixed — adding or renaming keys requires a synchronized edit in `airflow/dags/egisz_elt_dag.py` and this file.
+This contract is fixed — adding or renaming keys requires a synchronized edit in `airflow/dags/egisz_elt_dag.py`, this file, **and** AGENTS.md.
 
 All tasks are **idempotent**. PostgreSQL writes use `INSERT ... ON CONFLICT DO UPDATE`. Re-running the same batch creates no duplicates; a late callback may overwrite an older record.
 
@@ -293,7 +293,7 @@ CREATE ROLE egisz LOGIN PASSWORD 'egisz';
 CREATE DATABASE dwh_egisz OWNER postgres;
 ```
 
-Deploy/update the DWH schema (idempotent, can be re-run as many times as you want):
+Deploy/update the DWH schema (idempotent):
 
 ```powershell
 psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
@@ -333,3 +333,21 @@ pytest -q
 psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql   # run twice — verifies idempotency
 python scripts/apply_metabase_field_filters.py                         # second run must report "Patched 0"
 ```
+
+---
+
+## 10. Claude Code: working notes
+
+This section concerns Claude Code only; Codex does not use it.
+
+- **Environment is Windows.** System shell is PowerShell 5.1 (Bash is also available via the Bash tool). Use PowerShell syntax: `$env:VAR` instead of `$VAR`, `;` or `if ($?) {...}` instead of `&&`, do NOT use `New-Item -Force` on an existing file (it truncates).
+- **Long-running repo commands** (`pytest`, `psql -f db/dwh_init.sql`, `.\up.ps1`) — run them in the foreground so you see the exit code and logs. Do not send them to background if the result is needed for the next step.
+- **When editing `db/parts/*.sql`** — after the edit, run `psql -f db/dwh_init.sql` twice against the local `dwh_egisz` to verify idempotency (exactly as CI does). The change is not done until this passes.
+- **When editing dashboards** — after editing JSON, run `python scripts/apply_metabase_field_filters.py` and `pytest tests/test_dashboards.py`. Snapshot tests will fail if structure drifted.
+- **When changing the XCom shape or task order in the DAG** — synchronously update §2 in this file **and** in [AGENTS.md](AGENTS.md). The contract is pinned in three places at once: code, CLAUDE.md, AGENTS.md.
+- **Hidden incidents easy to forget:**
+  - `analyze_raw_tables` cannot be removed (see §2 and §8).
+  - `update_watermark` uses `GREATEST` — do not simplify to a direct UPDATE.
+  - SOAP/XML parsing belongs in PL/pgSQL only — do not pull `xml.etree` into Python.
+- **README and this file are different genres.** README explains "what and why" at the domain level (in Russian, for humans); CLAUDE.md/AGENTS.md explain "how to write code" (in English, for LLMs). When documenting the domain, write to README. When documenting an agent rule, write here (and in AGENTS.md).
+- **Language convention.** This file and [AGENTS.md](AGENTS.md) are maintained in English; the only Cyrillic kept is for domain proper nouns without standard English equivalents (ЕГИСЗ, РЭМД, СЭМД, etc.). When adding new content, write it in English.

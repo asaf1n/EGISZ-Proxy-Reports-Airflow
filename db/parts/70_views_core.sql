@@ -92,7 +92,8 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) l ON TRUE
 LEFT JOIN public.dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
-LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid;
+LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid
+WITH NO DATA;
 
 CREATE UNIQUE INDEX ON public.v_egisz_transactions_enriched_ui (transaction_id);
 CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("День");
@@ -152,4 +153,3 @@ SELECT
     NULL::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
 WHERE t.status <> 'error' OR t.error_summary IS NULL;
-

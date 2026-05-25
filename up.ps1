@@ -121,6 +121,26 @@ function Install-Airflow {
         helm upgrade --install airflow apache-airflow/airflow -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
     }
 
+    Write-Host "Restoring Airflow replicas after any previous scale-to-zero stop..."
+    Invoke-Checked "Scale Airflow PostgreSQL to 1" {
+        kubectl scale statefulset/airflow-postgresql --replicas=1
+    }
+    Invoke-Checked "Scale Airflow Redis to 1" {
+        kubectl scale statefulset/airflow-redis --replicas=1
+    }
+    Invoke-Checked "Scale Airflow webserver to 1" {
+        kubectl scale deployment/airflow-webserver --replicas=1
+    }
+    Invoke-Checked "Scale Airflow scheduler to 1" {
+        kubectl scale deployment/airflow-scheduler --replicas=1
+    }
+    Invoke-Checked "Scale Airflow worker to 1" {
+        kubectl scale statefulset/airflow-worker --replicas=1
+    }
+    Invoke-Checked "Scale Airflow triggerer to 1" {
+        kubectl scale statefulset/airflow-triggerer --replicas=1
+    }
+
     Write-Host "Waiting for Airflow Redis broker..."
     Invoke-Checked "Wait for Airflow Redis" {
         kubectl rollout status statefulset/airflow-redis --timeout=300s
@@ -184,6 +204,14 @@ function Install-Metabase {
     Write-Host "Starting Metabase PostgreSQL and Metabase..."
     Invoke-Checked "Apply Metabase deployment" {
         kubectl apply -f k8s/metabase/metabase.yaml
+    }
+
+    Write-Host "Restoring Metabase replicas after any previous scale-to-zero stop..."
+    Invoke-Checked "Scale Metabase PostgreSQL to 1" {
+        kubectl scale statefulset/metabase-postgres --replicas=1
+    }
+    Invoke-Checked "Scale Metabase deployment to 1" {
+        kubectl scale deployment/metabase --replicas=1
     }
 
     Write-Host "Waiting for Metabase PostgreSQL to be ready..."
@@ -260,6 +288,8 @@ if ($Action -in @("Stop", "Stop-Metabase")) {
 
 if ($Action -eq "Start") {
     Write-Host "Done. Airflow: http://localhost:8080, Metabase: http://localhost:3000"
+} elseif ($Action -in @("Airflow", "Metabase")) {
+    Write-Host "Done. Selected Kubernetes components are running."
 } else {
     Write-Host "Done. Selected Kubernetes components were scaled down to zero; PVC-backed data was preserved."
 }

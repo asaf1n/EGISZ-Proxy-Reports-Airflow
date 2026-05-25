@@ -210,3 +210,31 @@ tags:
       - query_contains: [v_egisz_transactions_enriched_ui]
         table_ref: public.v_egisz_transactions_enriched_ui
         field_name: Обработано IPS
+
+  client_period:
+    rules:
+      - table_ref: public.v_rpt_client_documents_ui
+        field_name: document_ts
+
+  client_document_type:
+    rules:
+      - table_ref: public.v_rpt_client_documents_ui
+        field_name: document_type
+
+  # mgmt_month — единый dimension-фильтр периода для 05_executive.json.
+  # Привязка зависит от того, какая service_audit-витрина используется в карточке;
+  # первое совпавшее правило побеждает.
+  mgmt_month:
+    rules:
+      - query_contains: [v_rpt_service_audit_financial_summary_ui]
+        table_ref: public.v_rpt_service_audit_financial_summary_ui
+        field_name: month
+      - query_contains: [v_rpt_service_audit_mrr_trend_ui]
+        table_ref: public.v_rpt_service_audit_mrr_trend_ui
+        field_name: month
+      - query_contains: [v_rpt_service_audit_cost_breakdown_ui]
+        table_ref: public.v_rpt_service_audit_cost_breakdown_ui
+        field_name: month
+      - query_contains: [v_rpt_service_audit_jid_month_ui]
+        table_ref: public.v_rpt_service_audit_jid_month_ui
+        field_name: month

@@ -76,7 +76,8 @@ LEFT JOIN LATERAL (
 WHERE r.logstate = 3
    OR COALESCE(r.msgtext, '') ILIKE '%error%'
    OR COALESCE(r.logtext, '') ILIKE '%error%'
-   OR COALESCE(r.logtext, '') ILIKE '%ошиб%';
+   OR COALESCE(r.logtext, '') ILIKE '%ошиб%'
+WITH NO DATA;
 
 CREATE UNIQUE INDEX ON public.v_stg_channel_errors_by_document (id);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (error_top_type);
@@ -88,4 +89,3 @@ CREATE OR REPLACE VIEW public.v_stg_channel_network_errors_by_document AS
 SELECT *
 FROM public.v_stg_channel_errors_by_document
 WHERE error_top_type = 'network';
-
