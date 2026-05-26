@@ -102,7 +102,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -178,7 +178,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -411,7 +411,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending')::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
           "template-tags": {}
         },
         "database": 1
@@ -443,7 +443,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", CASE \"Статус\" WHEN 'success' THEN 'Успех' WHEN 'error' THEN 'Ошибка' WHEN 'pending' THEN 'В обработке' WHEN 'unknown' THEN 'Нераспознан' ELSE 'Нераспознан' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
+          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", CASE \"Статус\" WHEN 'success' THEN 'Успех' WHEN 'error' THEN 'Ошибка' WHEN 'pending' THEN 'Документы в ожидании' WHEN 'unknown' THEN 'Неизвестная ошибка' ELSE 'Неизвестная ошибка' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
           "template-tags": {}
         },
         "database": 1
@@ -480,7 +480,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -544,7 +544,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
+          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending')::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",

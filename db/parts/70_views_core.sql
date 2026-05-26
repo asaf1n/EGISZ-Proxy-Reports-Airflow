@@ -19,9 +19,9 @@ SELECT
     CASE t.status
         WHEN 'success' THEN 'Успех'
         WHEN 'error'   THEN 'Ошибка'
-        WHEN 'pending' THEN 'В обработке'
-        WHEN 'unknown' THEN 'Нераспознан'
-        ELSE                'Нераспознан'
+        WHEN 'pending' THEN 'Документы в ожидании'
+        WHEN 'unknown' THEN 'Неизвестная ошибка'
+        ELSE                'Неизвестная ошибка'
     END AS "Статус (отчёт)",
     t.error_type AS "Тип ошибки",
     t.error_summary AS "Сводка ошибки",

@@ -49,6 +49,32 @@ function Test-KubernetesConnection {
     }
 }
 
+function Test-DockerConnection {
+    Write-Host "Checking Docker Desktop Linux engine..."
+    $context = ""
+    try {
+        $context = docker context show 2>$null
+    } catch {
+        $context = ""
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($context)) {
+        throw "Docker CLI cannot read the active context. Start Docker Desktop and select the Linux engine before running up.ps1."
+    }
+
+    $serverOs = ""
+    try {
+        $serverOs = docker info --format '{{.OSType}}' 2>$null
+    } catch {
+        $serverOs = ""
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($serverOs)) {
+        throw "Docker Desktop Linux engine is not reachable for context '${context}'. Start/restart Docker Desktop and wait until 'docker version' shows a Server section."
+    }
+    if ($serverOs.Trim() -ne "linux") {
+        throw "Docker context '${context}' is connected to a '${serverOs}' engine, but this project builds Linux images. Switch Docker Desktop to Linux containers."
+    }
+}
+
 function Initialize-SecretFiles {
     Write-Host "Preparing Kubernetes secrets from examples..."
     if (-not (Test-Path k8s/metabase/metabase-connections-secret.yaml)) {
@@ -108,6 +134,7 @@ function Initialize-EgiszEltNamespace {
 function Install-Airflow {
     Initialize-SecretFiles
     Test-KubernetesConnection
+    Test-DockerConnection
     Initialize-EgiszEltNamespace
 
     Write-Host "Applying Airflow connection secrets..."
@@ -120,7 +147,9 @@ function Install-Airflow {
         # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
         # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем
         # через ForEach-Object, чтобы каждая строка стала обычным stdout.
-        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile . 2>&1 | ForEach-Object { "$_" }
+        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile . 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+        }
     }
 
     Initialize-AirflowInternalMetadataDatabase
@@ -199,6 +228,7 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 function Install-Metabase {
     Initialize-SecretFiles
     Test-KubernetesConnection
+    Test-DockerConnection
 
     Write-Host "Applying Metabase connection secrets..."
     Invoke-Checked "Apply Metabase connection secrets" {
@@ -210,7 +240,9 @@ function Install-Metabase {
         # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
         # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем
         # через ForEach-Object, чтобы каждая строка стала обычным stdout.
-        docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile . 2>&1 | ForEach-Object { "$_" }
+        docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile . 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+        }
     }
 
     Write-Host "Starting Metabase PostgreSQL and Metabase..."

@@ -332,8 +332,12 @@ WITH fact_source AS (
             NULLIF(f."Рег. номер РЭМД (emdrid)", ''),
             f.transaction_id::text
         ) AS document_key,
-        NULLIF(f."Код СЭМД", '') AS semd_code,
-        COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
+        CASE WHEN f."Статус" <> 'pending' THEN NULLIF(f."Код СЭМД", '') END AS semd_code,
+        CASE
+            WHEN f."Статус" <> 'pending'
+            THEN COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)')
+            ELSE NULL::text
+        END AS document_type,
         CASE
             WHEN f."Статус" = 'success' THEN 'success'
             WHEN f."Статус" = 'error' THEN 'error'
@@ -342,7 +346,7 @@ WITH fact_source AS (
         CASE
             WHEN f."Статус" = 'success' THEN 'Успех'
             WHEN f."Статус" = 'error' THEN 'Ошибка'
-            ELSE 'В обработке / ждет ответа'
+            ELSE 'Документы в ожидании'
         END AS status_label,
         CASE
             WHEN f."Статус" = 'success' THEN 1
@@ -394,10 +398,10 @@ pending_source AS (
         p."Отправлено"::date AS document_day,
         NULLIF(p."JID клиники", '') AS client_jid,
         COALESCE(NULLIF(p."localUid СЭМД", ''), NULLIF(p."MSGID обмена", ''), NULLIF(p."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", '')) AS document_key,
-        NULLIF(p."Код СЭМД", '') AS semd_code,
-        COALESCE(NULLIF(p."Тип СЭМД (код · НСИ)", ''), NULLIF(p."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
+        NULL::text AS semd_code,
+        NULL::text AS document_type,
         'pending'::text AS status_code,
-        'В обработке / ждет ответа'::text AS status_label,
+        'Документы в ожидании'::text AS status_label,
         2::integer AS status_sort,
         NULL::text AS error_text,
         NULL::numeric AS delivery_seconds,
@@ -455,4 +459,3 @@ SELECT
         ELSE md5(lower(public.egisz_clean_text_value(raw_doctor_name)))
     END AS doctor_hash
 FROM normalized;
-

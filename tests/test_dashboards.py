@@ -36,6 +36,43 @@ def test_operational_error_types_include_network_slice() -> None:
     assert "'Сетевая ошибка'::text" in sql
 
 
+def test_operational_status_breakdown_keeps_pending_separate() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
+    card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
+    query = card["dataset_query"]["native"]["query"]
+    rows = card["visualization_settings"]["pie.rows"]
+    row_keys = {row["key"] for row in rows}
+
+    assert "Документы в ожидании" in query
+    assert "WHEN \"Статус\" IN ('error', 'unknown') THEN 'Неизвестная ошибка'" in query
+    assert "SUM(\"Документов\")::bigint" in query
+    assert "отказы РЭМД (status=error)" not in query
+    assert "Документы в ожидании" in row_keys
+    assert "Неизвестная ошибка" in row_keys
+    assert "В обработке" not in row_keys
+    assert "Нераспознан" not in row_keys
+
+
+def test_pending_rows_do_not_feed_type_or_bi_breakdowns() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert 'CASE WHEN f."Статус" <> \'pending\' THEN NULLIF(f."Код СЭМД", \'\') END AS semd_code' in sql
+    assert "NULL::text AS document_type" in sql
+
+    quality = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    quality_queries = _native_queries(quality)
+    assert any('"Статус" <> \'pending\'' in q and "Тип СЭМД (код · НСИ)" in q for q in quality_queries)
+
+    client_service = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    service_queries = _native_queries(client_service)
+    assert any("status_code <> 'pending'" in q and "Тип документа" in q for q in service_queries)
+    assert any("status_code <> 'pending'" in q and "Тип СЭМД" in q for q in service_queries)
+
+    bi = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
+    bi_queries = _native_queries(bi)
+    assert any("status_code <> 'pending'" in q and "patient_hash" in q for q in bi_queries)
+    assert any("status_code <> 'pending'" in q and "document_type" in q for q in bi_queries)
+
+
 def test_error_analytics_use_raw_json_column_for_grouping() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)

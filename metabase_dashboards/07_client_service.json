@@ -72,7 +72,10 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Документов\"]": {"decimals": 0, "number_separators": ". "}
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ". "
+          }
         }
       },
       "sizeX": 6,
@@ -96,7 +99,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code <> 'pending'), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid_stub": {
               "widget-type": "string/=",
@@ -147,7 +150,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'error') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'error') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code <> 'pending'), 0), 1), 0)::text, '%)') AS \"Ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid_stub": {
               "widget-type": "string/=",
@@ -280,8 +283,13 @@
       "display": "bar",
       "visualization_settings": {
         "stackable.stack_type": "stacked",
-        "graph.dimensions": ["Дата", "Статус"],
-        "graph.metrics": ["Документов"],
+        "graph.dimensions": [
+          "Дата",
+          "Статус"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
         "graph.show_values": false
       },
       "sizeX": 12,
@@ -305,7 +313,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} AND status_code <> 'pending' [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid_stub": {
               "widget-type": "string/=",
@@ -412,7 +420,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key), 0), 1) AS \"% успеха\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key), 0), 1) AS \"% успеха\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid_stub}} AND status_code <> 'pending' [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid_stub": {
               "widget-type": "string/=",
@@ -443,8 +451,14 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Документов\"]": {"decimals": 0, "number_separators": ". "},
-          "[\"name\",\"% успеха\"]": {"decimals": 1, "suffix": "%"}
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ". "
+          },
+          "[\"name\",\"% успеха\"]": {
+            "decimals": 1,
+            "suffix": "%"
+          }
         }
       },
       "sizeX": 16,
