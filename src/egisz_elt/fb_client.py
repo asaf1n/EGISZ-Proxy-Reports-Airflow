@@ -95,6 +95,7 @@ def fetch_exchangelog_after_cursor(
     *,
     after_log_id: int,
     limit: int,
+    created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a JSON-serializable EXCHANGELOG batch for Airflow XComs."""
     if limit <= 0:
@@ -102,8 +103,7 @@ def fetch_exchangelog_after_cursor(
 
     cur = con.cursor()
     try:
-        cur.execute(
-            """
+        query = """
             SELECT
                 LOGID,
                 LOGDATE,
@@ -114,11 +114,17 @@ def fetch_exchangelog_after_cursor(
                 MSGTEXT
             FROM EXCHANGELOG
             WHERE LOGID > ?
+            """
+        params: list[Any] = [int(after_log_id or 0)]
+        if created_from is not None:
+            query += " AND COALESCE(LOGDATE, CREATEDATE) >= ?"
+            params.append(created_from)
+        query += """
             ORDER BY LOGID
             ROWS ?
-            """,
-            (int(after_log_id or 0), int(limit)),
-        )
+            """
+        params.append(int(limit))
+        cur.execute(query, tuple(params))
         rows: list[dict[str, Any]] = []
         for logid, logdate, createdate, msgid, logstate, logtext, msgtext in cur.fetchall():
             rows.append(
@@ -142,6 +148,7 @@ def fetch_egisz_messages_after_cursor(
     *,
     after_egmid: int,
     limit: int,
+    created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a JSON-serializable EGISZ_MESSAGES batch for Airflow XComs."""
     if limit <= 0:
@@ -149,8 +156,7 @@ def fetch_egisz_messages_after_cursor(
 
     cur = con.cursor()
     try:
-        cur.execute(
-            """
+        query = """
             SELECT
                 EGMID,
                 CREATEDATE,
@@ -159,11 +165,17 @@ def fetch_egisz_messages_after_cursor(
                 DOCUMENTID
             FROM EGISZ_MESSAGES
             WHERE EGMID > ?
+            """
+        params: list[Any] = [int(after_egmid or 0)]
+        if created_from is not None:
+            query += " AND CREATEDATE >= ?"
+            params.append(created_from)
+        query += """
             ORDER BY EGMID
             ROWS ?
-            """,
-            (int(after_egmid or 0), int(limit)),
-        )
+            """
+        params.append(int(limit))
+        cur.execute(query, tuple(params))
         return _serialize_egisz_message_rows(cur.fetchall())
     finally:
         cur.close()
@@ -190,6 +202,7 @@ def fetch_egisz_messages_by_identifiers(
     msgids: set[str],
     document_ids: set[str],
     chunk_size: int = 2000,
+    created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch EGISZ_MESSAGES rows referenced by the current EXCHANGELOG batch.
 
@@ -215,8 +228,7 @@ def fetch_egisz_messages_by_identifiers(
                 if not chunk:
                     continue
                 placeholders = ", ".join("?" for _ in chunk)
-                cur.execute(
-                    f"""
+                query = f"""
                     SELECT
                         EGMID,
                         CREATEDATE,
@@ -225,9 +237,12 @@ def fetch_egisz_messages_by_identifiers(
                         DOCUMENTID
                     FROM EGISZ_MESSAGES
                     WHERE {column} IN ({placeholders})
-                    """,
-                    tuple(chunk),
-                )
+                    """
+                params: list[Any] = list(chunk)
+                if created_from is not None:
+                    query += " AND CREATEDATE >= ?"
+                    params.append(created_from)
+                cur.execute(query, tuple(params))
                 round_trips += 1
                 for row in _serialize_egisz_message_rows(cur.fetchall()):
                     by_egmid[int(row["egmid"])] = row

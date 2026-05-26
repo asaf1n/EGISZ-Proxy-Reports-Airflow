@@ -49,6 +49,9 @@ AS $$
 $$;
 
 CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid_norm ON egisz_messages_raw (public.egisz_normalize_message_id(msgid));
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid_norm_logid_desc
+    ON exchangelog_raw (public.egisz_normalize_message_id(msgid), logid DESC)
+    WHERE msgid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
 
@@ -152,4 +155,3 @@ AS $$
         ELSE 'unknown'
     END;
 $$;
-

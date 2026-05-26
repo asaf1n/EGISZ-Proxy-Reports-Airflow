@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from egisz_elt.fb_client import fetch_egisz_messages_after_cursor, fetch_exchangelog_after_cursor, fetch_organizations
+from egisz_elt.fb_client import (
+    fetch_egisz_messages_after_cursor,
+    fetch_egisz_messages_by_identifiers,
+    fetch_exchangelog_after_cursor,
+    fetch_organizations,
+)
 
 
 class FakeCursor:
@@ -75,6 +81,16 @@ def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
     assert con.cursor_instance.params == (41, 500)
 
 
+def test_fetch_egisz_messages_after_cursor_applies_created_cutoff() -> None:
+    cutoff = datetime(2026, 5, 18)
+    con = FakeConnection([])
+
+    fetch_egisz_messages_after_cursor(con, after_egmid=41, limit=500, created_from=cutoff)
+
+    assert "CREATEDATE >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (41, cutoff, 500)
+
+
 def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytics() -> None:
     con = FakeConnection(
         [(101, None, None, "msg-1", 1, "log", "<xml/>")],
@@ -94,3 +110,28 @@ def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytic
         }
     ]
     assert con.cursor_instance.params == (100, 500)
+
+
+def test_fetch_exchangelog_after_cursor_applies_created_cutoff() -> None:
+    cutoff = datetime(2026, 5, 18)
+    con = FakeConnection([])
+
+    fetch_exchangelog_after_cursor(con, after_log_id=100, limit=500, created_from=cutoff)
+
+    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (100, cutoff, 500)
+
+
+def test_fetch_related_egisz_messages_applies_created_cutoff() -> None:
+    cutoff = datetime(2026, 5, 18)
+    con = FakeConnection([])
+
+    fetch_egisz_messages_by_identifiers(
+        con,
+        msgids={"msg-1"},
+        document_ids=set(),
+        created_from=cutoff,
+    )
+
+    assert "CREATEDATE >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == ("msg-1", cutoff)

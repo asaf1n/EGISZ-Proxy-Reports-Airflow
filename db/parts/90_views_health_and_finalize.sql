@@ -221,5 +221,10 @@ $$;
 
 REFRESH MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui;
 REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document;
+ANALYZE public.exchangelog_raw;
+ANALYZE public.egisz_messages_raw;
+ANALYZE public.fact_egisz_transactions;
+ANALYZE public.v_egisz_transactions_enriched_ui;
+ANALYZE public.v_stg_channel_errors_by_document;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

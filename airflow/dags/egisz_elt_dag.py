@@ -33,6 +33,7 @@ PIPELINE = "egisz"
 BATCH_SIZE = 3000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
+SOURCE_MIN_CREATED_AT = datetime(2026, 5, 18)
 
 
 def _dwh_connection():
@@ -104,6 +105,7 @@ def egisz_elt_pipeline() -> None:
                 fb_conn,
                 after_log_id=last_log_id,
                 limit=BATCH_SIZE,
+                created_from=SOURCE_MIN_CREATED_AT,
             )
             log.info(
                 "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
@@ -116,6 +118,7 @@ def egisz_elt_pipeline() -> None:
                 fb_conn,
                 after_egmid=last_egmid,
                 limit=BATCH_SIZE,
+                created_from=SOURCE_MIN_CREATED_AT,
             )
             log.info(
                 "Fetched %s EGISZ_MESSAGES row(s) after EGMID=%s in %.2fs.",
@@ -139,6 +142,7 @@ def egisz_elt_pipeline() -> None:
                 fb_conn,
                 msgids=related_msgids,
                 document_ids=related_document_ids,
+                created_from=SOURCE_MIN_CREATED_AT,
             )
             log.info(
                 "Fetched %s related EGISZ_MESSAGES row(s) for %s MSGID(s) and %s DOCUMENTID(s) in %.2fs.",
@@ -237,6 +241,10 @@ def egisz_elt_pipeline() -> None:
                 min_egmid=int(load_info.get("last_egmid", 0)),
                 max_egmid=int(load_info.get("max_egmid", 0)),
             )
+            if transformed > 0:
+                with pg_conn.cursor() as cur:
+                    cur.execute("ANALYZE public.fact_egisz_transactions")
+                pg_conn.commit()
             log.info("Transformed %s row(s) into fact_egisz_transactions.", transformed)
         finally:
             pg_conn.close()
@@ -255,6 +263,8 @@ def egisz_elt_pipeline() -> None:
             with pg_conn.cursor() as cur:
                 cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_transactions_enriched_ui")
                 cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_stg_channel_errors_by_document")
+                cur.execute("ANALYZE public.v_egisz_transactions_enriched_ui")
+                cur.execute("ANALYZE public.v_stg_channel_errors_by_document")
             pg_conn.commit()
             log.info("Refreshed materialized views v_egisz_transactions_enriched_ui and v_stg_channel_errors_by_document.")
         finally:
