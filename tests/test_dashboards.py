@@ -51,25 +51,29 @@ def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
 
     assert dashboard["name"] == "05 Управленческий дашборд"
 
-    # Финансовые карточки читают service_audit-витрины с зашитым тарифом 10 000 ₽/JID/мес.
-    assert any("v_rpt_service_audit_jid_month_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_financial_summary_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_mrr_trend_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_ltv_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_nrr_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_churn_risk_ui" in q for q in queries)
-    assert any("v_rpt_service_audit_cost_breakdown_ui" in q for q in queries)
+    # 05 после перестройки опирается ТОЛЬКО на реальные данные DWH.
+    # Заглушечные таблицы (clients/subscriptions/billing/tickets/sla_metrics/
+    # sed_transfers/churn_events/client_costs_monthly) и v_rpt_service_audit_*
+    # удалены вместе с дашбордами, которые их использовали — никаких ссылок не должно быть.
+    assert all("v_rpt_service_audit_" not in q for q in queries), (
+        "05_executive must not reference removed v_rpt_service_audit_* views"
+    )
+    for placeholder in ("clients", "subscriptions", "billing", "tickets",
+                        "sla_metrics", "sed_transfers", "churn_events",
+                        "client_costs_monthly"):
+        assert all(f"FROM {placeholder}" not in q and f"from {placeholder}" not in q for q in queries), (
+            f"05_executive must not reference removed placeholder table '{placeholder}'"
+        )
 
-    # Операционная карточка очереди читает rpt-вью без сводки.
+    # Источники только реальные.
+    assert any("v_egisz_transactions_enriched_ui" in q for q in queries)
     assert any("v_rpt_documents_no_response_ui" in q for q in queries)
 
-    # 10 000 ₽ как фиксированный тариф должен быть зашит ровно в DWH-вью (тест целостности).
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert "10000::numeric(14, 2) AS service_price_monthly" in sql
-    assert "10000::numeric(14, 2) AS service_price_per_jid_month" in sql
+    # Фикс-тариф 10 000 ₽/JID/мес зашит явно в SQL карточек (раньше прятался в view-константе).
+    assert any("10000" in q for q in queries), "MRR formula must use the fixed 10 000 ₽/JID/month tariff"
 
-    # Тариф разложен «отдельной карточкой»: явная константа 10000 в native query.
-    assert any("10000::numeric(14, 2)" in q for q in queries)
+    # Новый статус pending должен учитываться в KPI-карточках.
+    assert any("'pending'" in q for q in queries)
 
 
 def test_executive_dashboard_uses_section_headers() -> None:

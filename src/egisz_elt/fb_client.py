@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 from firebird.driver import connect
+
+log = logging.getLogger(__name__)
 
 
 def connect_fb(conn: Any):
@@ -185,45 +189,58 @@ def fetch_egisz_messages_by_identifiers(
     *,
     msgids: set[str],
     document_ids: set[str],
-    chunk_size: int = 500,
+    chunk_size: int = 2000,
 ) -> list[dict[str, Any]]:
-    """Fetch EGISZ_MESSAGES rows referenced by the current EXCHANGELOG batch."""
+    """Fetch EGISZ_MESSAGES rows referenced by the current EXCHANGELOG batch.
+
+    Прежняя реализация чанковала параллельно msgids и document_ids в одних
+    запросах с OR и итерировала по max(len) — при асимметричных множествах это
+    давало 2-4× избыточных round-trip'ов к Firebird. Теперь множества
+    обрабатываются раздельно крупными IN-чанками (Firebird 5 спокойно держит
+    несколько тысяч).
+    """
     identifiers = sorted({value for value in msgids if value})
     documents = sorted({value for value in document_ids if value})
     if not identifiers and not documents:
         return []
 
-    rows: list[dict[str, Any]] = []
+    started_at = time.monotonic()
+    by_egmid: dict[int, dict[str, Any]] = {}
+    round_trips = 0
     cur = con.cursor()
     try:
-        for start in range(0, max(len(identifiers), len(documents), 1), chunk_size):
-            msgid_chunk = identifiers[start : start + chunk_size]
-            document_chunk = documents[start : start + chunk_size]
-            clauses: list[str] = []
-            params: list[str] = []
-            if msgid_chunk:
-                clauses.append(f"MSGID IN ({', '.join('?' for _ in msgid_chunk)})")
-                params.extend(msgid_chunk)
-            if document_chunk:
-                clauses.append(f"DOCUMENTID IN ({', '.join('?' for _ in document_chunk)})")
-                params.extend(document_chunk)
-            if not clauses:
-                continue
-            cur.execute(
-                f"""
-                SELECT
-                    EGMID,
-                    CREATEDATE,
-                    MSGID,
-                    REPLYTO,
-                    DOCUMENTID
-                FROM EGISZ_MESSAGES
-                WHERE {' OR '.join(clauses)}
-                """,
-                tuple(params),
-            )
-            rows.extend(_serialize_egisz_message_rows(cur.fetchall()))
-        return rows
+        for column, values in (("MSGID", identifiers), ("DOCUMENTID", documents)):
+            for start in range(0, len(values), chunk_size):
+                chunk = values[start : start + chunk_size]
+                if not chunk:
+                    continue
+                placeholders = ", ".join("?" for _ in chunk)
+                cur.execute(
+                    f"""
+                    SELECT
+                        EGMID,
+                        CREATEDATE,
+                        MSGID,
+                        REPLYTO,
+                        DOCUMENTID
+                    FROM EGISZ_MESSAGES
+                    WHERE {column} IN ({placeholders})
+                    """,
+                    tuple(chunk),
+                )
+                round_trips += 1
+                for row in _serialize_egisz_message_rows(cur.fetchall()):
+                    by_egmid[int(row["egmid"])] = row
+        log.info(
+            "fetch_egisz_messages_by_identifiers: msgids=%s, document_ids=%s, "
+            "round_trips=%s, unique_rows=%s in %.2fs.",
+            len(identifiers),
+            len(documents),
+            round_trips,
+            len(by_egmid),
+            time.monotonic() - started_at,
+        )
+        return list(by_egmid.values())
     finally:
         cur.close()
 

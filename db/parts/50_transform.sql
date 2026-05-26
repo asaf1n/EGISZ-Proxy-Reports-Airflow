@@ -141,12 +141,7 @@ BEGIN
             p.*,
             COALESCE(p.message_jid, p.jid_from_payload) AS resolved_jid,
             COALESCE(p.semd_code, p.message_kind) AS resolved_semd_code,
-            CASE
-                WHEN p.logstate = 3 THEN 'error'
-                WHEN p.raw_status LIKE '%success%' THEN 'success'
-                WHEN p.raw_status LIKE '%error%' OR COALESCE(p.msgtext, '') ILIKE '%error%' THEN 'error'
-                ELSE 'unknown'
-            END AS final_status,
+            public.egisz_classify_async_status(p.logstate, p.raw_status, p.msgtext, p.logtext) AS final_status,
             CASE
                 WHEN p.logstate = 3 THEN 'Сетевая ошибка: ' || COALESCE(NULLIF(p.logtext, ''), 'нет деталей')
                 ELSE p.xml_message
@@ -172,9 +167,9 @@ BEGIN
         e.creation_date, now(),
         CASE
             WHEN e.final_status = 'error' AND e.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
-            WHEN e.final_status = 'error' THEN public.egisz_error_classify(e.built_errors_json)
+            WHEN e.final_status = 'error'   THEN public.egisz_error_classify(e.built_errors_json)
             WHEN e.final_status = 'success' THEN 'Успешно'
-            ELSE COALESCE(e.final_status, 'unknown')
+            ELSE NULL  -- pending/unknown: видимость через status, error_type не заполняется
         END,
         public.egisz_error_interpretation_row(e.built_errors_json),
         public.egisz_error_messages_row(e.built_errors_json)

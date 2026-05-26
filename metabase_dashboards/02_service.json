@@ -561,7 +561,7 @@
     },
     {
       "name": "02 · Сигналы healthcheck",
-      "description": "Пять сигналов: error_rate_high (>10% за 24ч при объёме **документов** >50), unknown_high (>5%), channel_errors_burst (**уникальных документов** со сбоем канала за час >10), queue_red_24h (>50 в очереди >24ч), cursor_stale (elt_state.updated_at >6ч). Уровень — green/yellow/red.",
+      "description": "Сигналы ELT-контура: raw_rows (поступление журнала), queue_24h (очередь без ответа > 24ч), network_errors (LOGSTATE=3), error_rows (status=error), data_freshness (минут с последнего факта), **pending_backlog_24h** (просрочено > 72ч; pending — норма, просрочено — эскалация), **unknown_high** (доля status=unknown за 24ч > 1% — возможно появился новый шаблон ответа РЭМД, который не распознан в egisz_classify_async_status). Уровень — green/yellow/red.",
       "dataset_query": {
         "type": "native",
         "native": {

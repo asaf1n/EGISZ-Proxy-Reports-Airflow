@@ -30,7 +30,7 @@ from egisz_elt.pg_client import (
 log = logging.getLogger(__name__)
 
 PIPELINE = "egisz"
-BATCH_SIZE = 3000
+BATCH_SIZE = 1500
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 
@@ -245,6 +245,9 @@ def egisz_elt_pipeline() -> None:
     @task
     def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
         if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
+            return load_info
+        if load_info.get("transformed", 0) <= 0:
+            log.info("Skipping MV refresh: transform produced 0 rows.")
             return load_info
 
         pg_conn = _dwh_connection()

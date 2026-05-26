@@ -1,7 +1,7 @@
 {
   "name": "03 Документы без ответа",
   "width": "full",
-  "description": "Очередь исходящих **СЭМД** без callback: единица учёта — **`localUid СЭМД`** (исходящая запись в РЭМД), это **не** то же самое, что **relatesToMessage** из колбэка. Построчный список, топ клиник, возраст ожидания, срез по типу СЭМД. Field filter по **«Отправлено»**; **Код СЭМД** / **JID** — `top_semd_filter` / `top_clinic_filter` (как на **01**).",
+  "description": "Очередь исходящих **СЭМД** без callback: единица учёта — **`localUid СЭМД`** (исходящая запись в РЭМД), это **не** то же самое, что **relatesToMessage** из колбэка. Построчный список, топ клиник, возраст ожидания, срез по типу СЭМД. Колонка **«Категория ожидания»** разделяет «в обработке» (≤72ч, операционная норма) и «просрочено» (>72ч, эскалация). Field filter по **«Отправлено»**; **Код СЭМД** / **JID** — `top_semd_filter` / `top_clinic_filter` (как на **01**).",
   "parameters": [
     {
       "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",
@@ -245,11 +245,11 @@
     },
     {
       "name": "03 · Возраст зависших документов",
-      "description": "Распределение по времени ожидания; «сейчас» для расчёта — момент последней «Отправлено» в снимке.",
+      "description": "Распределение по времени ожидания с порогом эскалации **72 часа** (после — «просрочено», требует разбора). «Сейчас» для расчёта — момент последней «Отправлено» в снимке.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 72 THEN '24–72 часа' ELSE 'просрочено (>72ч)' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",

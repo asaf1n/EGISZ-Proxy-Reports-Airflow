@@ -16,6 +16,13 @@ SELECT
     t.log_date::date AS "День (тренд)",
     COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
     t.status AS "Статус",
+    CASE t.status
+        WHEN 'success' THEN 'Успех'
+        WHEN 'error'   THEN 'Ошибка'
+        WHEN 'pending' THEN 'В обработке'
+        WHEN 'unknown' THEN 'Нераспознан'
+        ELSE                'Нераспознан'
+    END AS "Статус (отчёт)",
     t.error_type AS "Тип ошибки",
     t.error_summary AS "Сводка ошибки",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",

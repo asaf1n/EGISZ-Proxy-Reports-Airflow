@@ -45,7 +45,7 @@ Do not invent names. Use exactly this taxonomy:
 | Dimension: organizations | `dim_organizations` | Source: Firebird `JPERSONS`, PK `jid` |
 | Dimension: licenses | `dim_licenses` | Source: Firebird `EGISZ_LICENSES`, PK `id` |
 | Dimension: СЭМД types | `dim_semd_types` | Static reference table, PK `code` |
-| Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id` |
+| Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id`. `status` ∈ {`success`, `error`, `pending`, `unknown`}; `error_type` непустой только для `status='error'` (для pending/unknown — `NULL`) |
 | Materialized views | `v_*` (MV variants — `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document`) | Refreshed by a dedicated Airflow task |
 | Reporting views | `v_rpt_*_ui` | Plain views on top of MVs |
 | Healthcheck views | `v_health_*_ui` | Plain views for dashboard `02_service.json` |
@@ -73,14 +73,14 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> analyze_raw_tables >> tr
 | `extract_from_proxy` | Read watermarks from `elt_state` (`get_cursors(pipeline)`), pull `EXCHANGELOG` batch by `LOGID > last_log_id` and `EGISZ_MESSAGES` batch by `EGMID > last_egmid`. Additionally pull related older messages referenced via `<messageId>` / `<relatesToMessage>` / `<relatesTo>` / `<localUid>` / `<DOCUMENTID>` in XML and via `MSGID` in the journal row. Returns XCom dict |
 | `load_to_dwh` | UPSERT into `exchangelog_raw` and `egisz_messages_raw` via `execute_values` + `INSERT ... ON CONFLICT DO UPDATE`. Forwards the XCom dict downstream |
 | `analyze_raw_tables` | `ANALYZE public.exchangelog_raw` / `public.egisz_messages_raw` — only for tables that actually received rows in this batch. Runs in autocommit. **Mandatory task**: without it, after the first bulk-COPY the planner uses `pg_class.reltuples=0` and falls back to seq-scan on `exchangelog_raw` (~1.2 GB) instead of the functional indexes `msgid_norm` / `document_id_norm` — Metabase queries hang for 8–16 minutes. Autovacuum can't keep up on a calm pipeline. Costs ~1s per batch |
-| `transform_data` | Calls `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function does **not** refresh MVs — that's a separate task |
-| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on the MV — present on `transaction_id` |
+| `transform_data` | Calls `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. Финальный статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success`/`error` для финальных ответов, `pending` для промежуточных («принято к обработке»), `unknown` для нераспознанных. `pending` — операционная норма, **не ошибка**; `error_type` для pending/unknown остаётся `NULL`. The function does **not** refresh MVs — that's a separate task |
+| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on the MV — present on `transaction_id`. Skipped when `transformed=0` (нечего рефрешить) |
 | `update_watermark` | UPSERT into `elt_state` via `GREATEST(current, new)` for `last_log_id` and `last_egmid` — guards against accidental cursor rollback during manual re-runs of older batches |
 
 ### Batch size and schedule
 
 ```python
-BATCH_SIZE = 5000   # rows per Firebird fetch
+BATCH_SIZE = 3000   # rows per Firebird fetch
 schedule  = "*/5 * * * *"
 max_active_runs = 1   # parallel runs forbidden (race on watermark)
 ```
@@ -150,7 +150,7 @@ db/parts/50_transform.sql                  — egisz_transform_raw_to_facts (the
 db/parts/60_drop_dependents.sql            — DROP dependent views and legacy columns before rebuild
 db/parts/70_views_core.sql                 — v_egisz_transactions_enriched_ui (MV) + v_rpt_error_interpretations_ui
 db/parts/75_views_stg.sql                  — v_stg_channel_errors_by_document (MV) + v_stg_channel_network_errors_by_document (alias view)
-db/parts/80_views_rpt.sql                  — v_rpt_*_ui (network_errors_detail, documents_no_response, semd_archive, clinic_connectivity_daily, connectivity_global_daily, error_category_breakdown, client_documents, service_audit_*)
+db/parts/80_views_rpt.sql                  — v_rpt_*_ui (network_errors_detail, documents_no_response, semd_archive, clinic_connectivity_daily, connectivity_global_daily, error_category_breakdown, client_documents)
 db/parts/90_views_health_and_finalize.sql  — v_health_*_ui + GRANT verification + REFRESH of both MVs
 ```
 
@@ -193,10 +193,10 @@ The СЭМД type reference is seeded directly in `db/parts/10_tables.sql` (a la
   - `02_service.json` — ETL and channel healthcheck
   - `03_documents_no_response.json` — escalation queue (callback not received)
   - `04_quality_and_errors.json` — detailed failure analysis (69-category classification)
-  - `05_executive.json` — management summary
+  - `05_executive.json` — management summary. Операционные + финансовые KPI на реальных данных DWH; финансовая модель — фикс-подписка **10 000 ₽/JID/мес** (MRR = `COUNT(DISTINCT jid) × 10 000`). Раньше дашборд опирался на заглушечные таблицы service_audit (clients/subscriptions/tickets/billing/sla_metrics/sed_transfers/churn_events/client_costs_monthly) с захардкоженными константами — они удалены, метрики на придуманных данных (CAC/LTV/SLA/MTTR/...) сняты
   - `06_semd_archive.json` — locate a specific document by any identifier
-  - `07_service_audit.json` — service audit: revenue (`1 JID = 10 000 ₽/month`), cost, SLA/incidents, СЭМД compliance, churn risk
-  - `08_client.json` — per-client dashboard with a visible JID auth-stub filter, period, and document type
+  - `07_client_service.json` — per-client service dashboard with JID auth-stub filter, period, and document type
+  - `08_client_bianalytic.json` — per-client BI-analytic dashboard (patient/doctor hash counts, no PII)
 - Most cards run on top of `v_egisz_transactions_enriched_ui` and `v_rpt_*_ui`.
 - Dashboards are imported **automatically on container start** via `metabase/entrypoint.sh` → `metabase/provision.sh` (if `METABASE_AUTO_PROVISION=true`, default — true). Additionally, after `kubectl apply` `up.ps1` invokes `setup-dashboards.sh` explicitly (`kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh`) — re-running is idempotent (it verifies a sha256 manifest).
 - Field filters for dashboards are configured by `scripts/apply_metabase_field_filters.py` using declarative rules in `metabase_dashboards/field_filter_defaults.yaml` (format — **version: 2**). This is a resolver, not business logic.
@@ -268,6 +268,8 @@ These prohibitions are not stylistic preferences — they encode past incidents.
 | Parse SOAP/XML on the Python side in the DAG / `fb_client.py` | Parsing belongs in `db/parts/20_functions_parsing.sql` (`egisz_xml_text`, `egisz_normalize_message_id`, etc.) |
 | Roll the watermark back on manual reruns | `update_watermark` UPSERTs via `GREATEST(current, new)` — bypassing this breaks idempotency |
 | Remove `analyze_raw_tables` "as an optimization" | This task guards against 8–16-minute Metabase hangs after bulk-COPY (see §2) |
+| Записывать `'unknown'` в `error_type` для нераспознанных callback'ов | `error_type IS NULL` для `status` ∈ {`pending`, `unknown`}; видимость — через `status` и колонку `"Статус (отчёт)"` в `v_egisz_transactions_enriched_ui` |
+| Создавать «теневые» таблицы DWH без ELT-источника (commercial/financial mart с захардкоженными константами в view) | Считать управленческие метрики прямо в SQL карточек 05_executive из `fact_egisz_transactions` / `v_egisz_transactions_enriched_ui` / `v_rpt_documents_no_response_ui`. Финансовая модель — фикс-тариф `10 000 ₽/JID/мес`, явно зашит в SQL карточек |
 | Add ticket/task references in code comments | Comments — only when the **why** is non-obvious (hidden invariant, bug workaround) |
 
 ---

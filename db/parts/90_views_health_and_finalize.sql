@@ -68,6 +68,31 @@ SELECT * FROM (
         ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT "localUid СЭМД")::numeric FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" < now() - INTERVAL '24 hours'), 'документов', 'egisz_messages_raw без callback-факта', 'Проверить клиники с зависшими документами и транспортный канал'),
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Ключ документа (группировка)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'EXCHANGELOG LOGSTATE=3 и журнал ошибок', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
+        ('pending_backlog_24h',
+         'Документы в обработке > 24ч (backlog)',
+         CASE
+             WHEN (SELECT COUNT(*) FROM public.v_rpt_documents_no_response_ui WHERE "Категория ожидания" = 'просрочено') >= 100 THEN 'red'
+             WHEN (SELECT COUNT(*) FROM public.v_rpt_documents_no_response_ui WHERE "Категория ожидания" = 'просрочено') >= 20  THEN 'yellow'
+             ELSE 'green'
+         END,
+         (SELECT COUNT(*)::numeric FROM public.v_rpt_documents_no_response_ui WHERE "Категория ожидания" = 'просрочено'),
+         'документов > 72ч',
+         'v_rpt_documents_no_response_ui (просрочено)',
+         'Проверить транспорт клиник в дашборде 03; pending — норма, просрочено — эскалация'),
+        ('unknown_high',
+         'Доля «Нераспознан» (status=unknown)',
+         CASE
+             WHEN (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours' AND status = 'unknown')
+                  / NULLIF((SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours'), 0) >= 0.05 THEN 'red'
+             WHEN (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours' AND status = 'unknown')
+                  / NULLIF((SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours'), 0) >= 0.01 THEN 'yellow'
+             ELSE 'green'
+         END,
+         ROUND(100.0 * (SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours' AND status = 'unknown')
+                     / NULLIF((SELECT COUNT(*)::numeric FROM fact_egisz_transactions WHERE log_date >= now() - INTERVAL '24 hours'), 0), 2),
+         '% (за 24ч)',
+         'fact_egisz_transactions.status=unknown / total',
+         'Проверить регексп egisz_classify_async_status — возможно, появился новый шаблон ответа РЭМД'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
          CASE

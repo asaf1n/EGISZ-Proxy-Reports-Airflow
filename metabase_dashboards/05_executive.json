@@ -1,67 +1,39 @@
 {
   "name": "05 Управленческий дашборд",
   "width": "full",
-  "description": "Операционные и финансовые показатели сервиса для руководства. Тариф фиксирован: **1 активный JID = 10 000 ₽/мес**; формулы с деньгами разложены отдельными карточками (цена · количество = выручка), чтобы цифра управляющая глазом могла проверить расчёт. Источники — `v_rpt_service_audit_*_ui` (агрегированы по месяцам, не парсят XML/JSON во время запроса).",
+  "description": "Операционные и финансовые показатели сервиса для руководства. Источники — **реальные данные** из `fact_egisz_transactions`, `v_egisz_transactions_enriched_ui`, `v_rpt_documents_no_response_ui` и `dim_organizations`. Тариф фиксированный: **1 активный JID = 10 000 ₽/мес**. MRR = COUNT(DISTINCT JID) × 10 000. Раньше дашборд опирался на заглушечные таблицы service_audit (CAC/LTV/SLA/MTTR) с захардкоженными константами — те view и таблицы удалены, метрики, которые невозможно посчитать без реальных финансовых/тикетных данных, тоже сняты.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
       "name": "Период",
-      "slug": "mgmt_month_filter",
+      "slug": "mgmt_period_filter",
       "type": "date/all-options",
       "sectionId": "date"
-    },
-    {
-      "id": "05e00000-0000-4000-8000-000000000002",
-      "name": "Tier клиента",
-      "slug": "mgmt_tier_filter",
-      "type": "string/=",
-      "sectionId": "string"
-    },
-    {
-      "id": "05e00000-0000-4000-8000-000000000003",
-      "name": "Регион",
-      "slug": "mgmt_region_filter",
-      "type": "string/=",
-      "sectionId": "string"
     }
   ],
   "cards": [
     {
       "display": "text",
-      "text": "## Операционные показатели\nСчётчики по фильтру «Период / Tier / Регион». Базовые объёмы документооборота и доли успеха — без денег.",
+      "text": "## Операционные показатели\nСчётчики по фильтру «Период». Базовые объёмы документооборота и распределение по статусам — по реальным callback'ам из `fact_egisz_transactions`.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
       "col": 0
     },
     {
-      "name": "05 · Активных JID (период)",
-      "description": "COUNT(DISTINCT client_id) — сколько клиник было активным хоть раз в выбранных месяцах.",
+      "name": "05 · Активных JID",
+      "description": "COUNT(DISTINCT JID клиники) по реальным транзакциям в выбранном периоде. Включает клиники, у которых был хотя бы один callback от РЭМД или хотя бы одна запись в EGISZ_MESSAGES без callback.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT client_id)::bigint AS \"Активных JID\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
+          "query": "WITH active_from_fact AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), active_from_pending AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ) SELECT COUNT(DISTINCT jid)::bigint AS \"Активных JID\" FROM ( SELECT jid FROM active_from_fact UNION SELECT jid FROM active_from_pending ) u",
           "template-tags": {
-            "mgmt_month": {
+            "mgmt_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
               "id": "05e10000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
+              "name": "mgmt_period",
               "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e10000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e10000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
             }
           }
         },
@@ -71,50 +43,35 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Активных JID\"]": {
-            "decimals": 0,
-            "number_separators": ". "
+            "number_separators": " "
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 4,
       "sizeY": 3,
       "row": 1,
       "col": 0,
       "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     },
     {
-      "name": "05 · Документов обработано (период)",
-      "description": "Сумма успешных, ошибочных и ожидающих документов за выбранный период.",
+      "name": "05 · Документов за период",
+      "description": "COUNT(DISTINCT «Документ (ключ учёта)») из enriched + COUNT(DISTINCT localUid) из pending — все исходящие СЭМД (с callback'ом или без).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT SUM(documents_total)::bigint AS \"Документов\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
+          "query": "WITH docs_fact AS ( SELECT \"Документ (ключ учёта)\" AS doc FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ), docs_pending AS ( SELECT COALESCE(NULLIF(\"localUid СЭМД\", ''), NULLIF(\"MSGID обмена\", ''), \"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\") AS doc FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT COUNT(DISTINCT doc)::bigint AS \"Документов\" FROM ( SELECT doc FROM docs_fact UNION ALL SELECT doc FROM docs_pending ) u WHERE doc IS NOT NULL",
           "template-tags": {
-            "mgmt_month": {
+            "mgmt_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "05e20000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
+              "id": "05e10000-0000-4000-8000-000000000002",
+              "name": "mgmt_period",
               "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e20000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e20000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
             }
           }
         },
@@ -124,50 +81,35 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ". "
+            "number_separators": " "
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 4,
       "sizeY": 3,
       "row": 1,
-      "col": 6,
+      "col": 4,
       "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     },
     {
-      "name": "05 · % успеха регистраций",
-      "description": "SUM(success_documents) / SUM(documents_total). Считается на агрегированных JID-месяцах; pending не выкидывается из знаменателя.",
+      "name": "05 · % успеха",
+      "description": "Доля документов со статусом success в общем потоке: success / (success + error + pending + unknown). Только реальные ответы РЭМД (без pending без callback'а).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * SUM(success_documents) / NULLIF(SUM(documents_total), 0), 2) AS \"% успеха\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
-            "mgmt_month": {
+            "mgmt_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "05e30000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
+              "id": "05e10000-0000-4000-8000-000000000003",
+              "name": "mgmt_period",
               "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e30000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e30000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
             }
           }
         },
@@ -177,29 +119,104 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
-            "decimals": 2,
-            "suffix": "%"
+            "suffix": " %"
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 4,
       "sizeY": 3,
       "row": 1,
-      "col": 12,
+      "col": 8,
       "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     },
     {
-      "name": "05 · Очередь без ответа (снимок)",
-      "description": "Текущее число документов, по которым callback не получен. Не зависит от фильтров — это снимок «сейчас».",
+      "name": "05 · % в обработке",
+      "description": "Доля документов со статусом pending в общем потоке: pending — это callback РЭМД с промежуточным статусом («принято к обработке», processing, accepted). Высокое значение — нормальная очередь, не ошибка.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"В очереди\" FROM public.v_rpt_documents_no_response_ui",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000004",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% в обработке\"]": {
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 1,
+      "col": 12,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
+    },
+    {
+      "name": "05 · % ошибок",
+      "description": "Доля документов со статусом error: РЭМД отверг документ либо сетевая ошибка. Без сетевых ошибок из транспорта (только колбэки).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000005",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"% ошибок\"]": {
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 1,
+      "col": 16,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
+    },
+    {
+      "name": "05 · Просрочено (>72ч)",
+      "description": "Документы из EGISZ_MESSAGES, отправленные более 72 часов назад без callback'а от РЭМД — кандидаты на эскалацию. Пороговое значение по умолчанию: 72 часа (3 дня).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Просрочено\" FROM public.v_rpt_documents_no_response_ui WHERE \"Категория ожидания\" = 'просрочено'",
           "template-tags": {}
         },
         "database": 1
@@ -207,32 +224,31 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"В очереди\"]": {
-            "decimals": 0,
-            "number_separators": ". "
+          "[\"name\",\"Просрочено\"]": {
+            "number_separators": " "
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 4,
       "sizeY": 3,
       "row": 1,
-      "col": 18
+      "col": 20
     },
     {
       "display": "text",
-      "text": "## Финансовые показатели — 10 000 ₽/JID/мес\nЦифры разложены так, чтобы формула «выручка = цена × количество JID-месяцев» считалась глазом.",
+      "text": "## Финансовая модель\nАбонентская плата фиксирована: **1 активный JID = 10 000 ₽/мес**. MRR (Monthly Recurring Revenue) = количество активных JID в текущем месяце × 10 000 ₽. ARR = MRR × 12. Все расчёты — на реальных данных, без захардкоженных констант в SQL view.",
       "sizeX": 24,
-      "sizeY": 1,
+      "sizeY": 2,
       "row": 4,
       "col": 0
     },
     {
-      "name": "05 · Цена / JID / мес",
-      "description": "Фиксированный тариф подписки. Берётся из `v_rpt_service_audit_financial_summary_ui.service_price_per_jid_month` — там зашита константа 10 000 ₽.",
+      "name": "05 · MRR (текущий месяц), ₽",
+      "description": "MRR = COUNT(DISTINCT JID, у которых был хотя бы один callback или pending в текущем месяце) × 10 000 ₽.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT MAX(service_price_per_jid_month)::numeric(14, 2) AS \"Цена / JID / мес, ₽\" FROM public.v_rpt_service_audit_financial_summary_ui",
+          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) AND \"Обработано IPS\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' UNION SELECT DISTINCT \"JID клиники\" FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) AND \"Отправлено\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -240,153 +256,95 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Цена / JID / мес, ₽\"]": {
-            "decimals": 0,
-            "number_separators": ". ",
+          "[\"name\",\"MRR, ₽\"]": {
+            "number_separators": " ",
             "suffix": " ₽"
           }
         }
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 5,
+      "row": 6,
       "col": 0
     },
     {
-      "name": "05 · JID-месяцев в периоде",
-      "description": "Количество строк (JID × месяц) в `v_rpt_service_audit_jid_month_ui` за выбранный период. Множитель в формуле выручки.",
+      "name": "05 · ARR (текущий MRR × 12), ₽",
+      "description": "ARR (Annual Recurring Revenue) = MRR текущего месяца × 12. Показывает годовую выручку при сохранении текущего числа активных JID.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(*)::bigint AS \"JID-месяцев\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e40000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e40000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e40000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
+          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) AND \"Обработано IPS\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' UNION SELECT DISTINCT \"JID клиники\" FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) AND \"Отправлено\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000 * 12)::numeric(14, 2) AS \"ARR, ₽\" FROM active_jid",
+          "template-tags": {}
         },
         "database": 1
       },
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"JID-месяцев\"]": {
-            "decimals": 0,
-            "number_separators": ". "
-          }
-        }
-      },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 5,
-      "col": 6,
-      "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
-        }
-      }
-    },
-    {
-      "name": "05 · Выручка за период, ₽",
-      "description": "SUM(revenue_accrual) = JID-месяцев × 10 000 ₽. Если применён tier/region — выручка только по выбранному сегменту.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT SUM(revenue_accrual)::numeric(14, 2) AS \"Выручка, ₽\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e50000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e50000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e50000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Выручка, ₽\"]": {
-            "decimals": 0,
-            "number_separators": ". ",
+          "[\"name\",\"ARR, ₽\"]": {
+            "number_separators": " ",
             "suffix": " ₽"
           }
         }
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 5,
+      "row": 6,
+      "col": 6
+    },
+    {
+      "name": "05 · Цена за документ, ₽",
+      "description": "Стоимость отправки одного документа за выбранный период: (Активных JID × 10 000 ₽) / общее число документов. Показывает, во сколько обходится один СЭМД на текущей подписке.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(active_jid.active * 10000 / NULLIF(docs.total, 0), 2) AS \"₽ / документ\" FROM active_jid, docs",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000008",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"₽ / документ\"]": {
+            "suffix": " ₽",
+            "decimals": 2
+          }
+        }
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 6,
       "col": 12,
       "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     },
     {
-      "name": "05 · Валовая прибыль за период, ₽",
-      "description": "SUM(gross_profit) = выручка − себестоимость (gateway/infra/L2/other из `client_costs_monthly`). Если расходы не загружены — равно выручке.",
+      "name": "05 · Документов на 1 ₽ выручки",
+      "description": "Productivity-метрика: общее число документов за период / (Активных JID × 10 000). Показывает, сколько документов «снимается» с одного рубля абонплаты.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT SUM(gross_profit)::numeric(14, 2) AS \"Валовая прибыль, ₽\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
+          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(docs.total / NULLIF(active_jid.active * 10000, 0), 4) AS \"Документов / ₽\" FROM active_jid, docs",
           "template-tags": {
-            "mgmt_month": {
+            "mgmt_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "05e60000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
+              "id": "05e10000-0000-4000-8000-000000000009",
+              "name": "mgmt_period",
               "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e60000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e60000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
             }
           }
         },
@@ -395,378 +353,205 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Валовая прибыль, ₽\"]": {
-            "decimals": 0,
-            "number_separators": ". ",
-            "suffix": " ₽"
+          "[\"name\",\"Документов / ₽\"]": {
+            "decimals": 4
           }
         }
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 5,
+      "row": 6,
       "col": 18,
       "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
         }
       }
     },
     {
       "display": "text",
-      "text": "## Тренды по месяцам\nMRR (активные JID × 10 000) и динамика качества рядом, чтобы видеть корреляцию деньги ↔ операции.",
+      "text": "## Тренды (последние 12 месяцев)\nДинамика выручки, доли успеха и распределения статусов по месяцам. На графиках — все JID, фильтры «Период» не применяются (тренд имеет смысл только на полном горизонте).",
       "sizeX": 24,
-      "sizeY": 1,
-      "row": 8,
+      "sizeY": 2,
+      "row": 9,
       "col": 0
     },
     {
-      "name": "05 · Динамика MRR и активных JID",
-      "description": "MRR = activeJID × 10 000. Линия MRR + столбцы активных JID за месяц.",
+      "name": "05 · Динамика MRR по месяцам",
+      "description": "MRR за каждый из последних 12 месяцев: для каждого месяца считается COUNT(DISTINCT JID, активного в этом месяце) × 10 000 ₽.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month AS \"Месяц\", SUM(clients)::bigint AS \"Активных JID\", SUM(mrr)::numeric(14, 2) AS \"MRR, ₽\" FROM public.v_rpt_service_audit_mrr_trend_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] GROUP BY month ORDER BY month",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e70000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e70000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e70000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "combo",
-      "visualization_settings": {
-        "graph.dimensions": ["Месяц"],
-        "graph.metrics": ["Активных JID", "MRR, ₽"],
-        "graph.show_values": true,
-        "series_settings": {
-          "Активных JID": {"display": "bar", "axis": "left"},
-          "MRR, ₽": {"display": "line", "axis": "right"}
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 9,
-      "col": 0,
-      "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_mrr_trend_ui",
-          "field_name": "month"
-        }
-      }
-    },
-    {
-      "name": "05 · Динамика % успеха регистраций",
-      "description": "% успеха по месяцам в виде линии. Падение коррелирует с просадками выручки/удержания.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT month AS \"Месяц\", ROUND(100.0 * SUM(success_documents) / NULLIF(SUM(documents_total), 0), 2) AS \"% успеха\", SUM(documents_total)::bigint AS \"Документов\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] GROUP BY month ORDER BY month",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e80000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e80000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e80000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
+          "query": "WITH months AS ( SELECT generate_series( date_trunc('month', CURRENT_DATE) - INTERVAL '11 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month' )::date AS month ), jid_per_month AS ( SELECT date_trunc('month', \"Обработано IPS\")::date AS month, \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' UNION SELECT date_trunc('month', \"Отправлено\")::date AS month, \"JID клиники\" AS jid FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' ) SELECT m.month AS \"Месяц\", COALESCE(COUNT(DISTINCT j.jid), 0)::bigint AS \"Активных JID\", (COALESCE(COUNT(DISTINCT j.jid), 0) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM months m LEFT JOIN jid_per_month j ON j.month = m.month GROUP BY m.month ORDER BY m.month",
+          "template-tags": {}
         },
         "database": 1
       },
       "display": "line",
       "visualization_settings": {
-        "graph.dimensions": ["Месяц"],
-        "graph.metrics": ["% успеха"],
-        "graph.show_values": true
+        "graph.dimensions": [
+          "Месяц"
+        ],
+        "graph.metrics": [
+          "MRR, ₽",
+          "Активных JID"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries"
       },
       "sizeX": 12,
-      "sizeY": 6,
-      "row": 9,
-      "col": 12,
-      "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
-        }
-      }
+      "sizeY": 8,
+      "row": 11,
+      "col": 0
     },
     {
-      "name": "05 · Себестоимость по категориям",
-      "description": "gateway / infra / L2 / other из `client_costs_monthly`. Нули означают, что расходы по этой категории не загружены.",
+      "name": "05 · % успеха по месяцам",
+      "description": "Доля документов с финальным статусом success в каждом месяце последних 12 месяцев. По данным fact_egisz_transactions (только записи с callback'ом).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT cost_category AS \"Категория\", SUM(cost_amount)::numeric(14, 2) AS \"Себестоимость, ₽\" FROM public.v_rpt_service_audit_cost_breakdown_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] GROUP BY cost_category ORDER BY \"Себестоимость, ₽\" DESC",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e90000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05e90000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05e90000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
+          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Месяц"
+        ],
+        "graph.metrics": [
+          "% успеха"
+        ],
+        "graph.show_values": true,
+        "graph.x_axis.scale": "timeseries",
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {
+            "suffix": " %"
           }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 11,
+      "col": 12
+    },
+    {
+      "name": "05 · Распределение статусов по месяцам",
+      "description": "Stacked bar за 12 месяцев: success / error / pending / unknown. Помогает увидеть, в какой момент режим работы сервиса менялся.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", CASE \"Статус\" WHEN 'success' THEN 'Успех' WHEN 'error' THEN 'Ошибка' WHEN 'pending' THEN 'В обработке' WHEN 'unknown' THEN 'Нераспознан' ELSE 'Нераспознан' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
+          "template-tags": {}
         },
         "database": 1
       },
       "display": "bar",
       "visualization_settings": {
-        "graph.dimensions": ["Категория"],
-        "graph.metrics": ["Себестоимость, ₽"],
-        "graph.show_values": true
+        "graph.dimensions": [
+          "Месяц",
+          "Статус"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "stackable.stack_type": "stacked"
       },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 15,
-      "col": 0,
-      "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_cost_breakdown_ui",
-          "field_name": "month"
-        }
-      }
-    },
-    {
-      "name": "05 · Маржинальность по месяцам, %",
-      "description": "gross_margin_pct = (выручка − себестоимость) / выручка. По умолчанию ≈ 100 %, если расходы ещё не загружены в `client_costs_monthly`.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT month AS \"Месяц\", ROUND(100.0 * SUM(gross_profit) / NULLIF(SUM(revenue_accrual), 0), 2) AS \"Маржа, %\" FROM public.v_rpt_service_audit_jid_month_ui WHERE 1=1 [[AND {{mgmt_month}}]] [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] GROUP BY month ORDER BY month",
-          "template-tags": {
-            "mgmt_month": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05ea0000-0000-4000-8000-000000000001",
-              "name": "mgmt_month",
-              "type": "dimension"
-            },
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05ea0000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05ea0000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": ["Месяц"],
-        "graph.metrics": ["Маржа, %"],
-        "graph.show_values": true
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 15,
-      "col": 12,
-      "metabase-field-filters": {
-        "mgmt_month": {
-          "table_ref": "public.v_rpt_service_audit_jid_month_ui",
-          "field_name": "month"
-        }
-      }
-    },
-    {
-      "display": "text",
-      "text": "## Юнит-экономика — ARPU, LTV, CAC, NRR\nКомпоненты разложены: ARPU = 10 000 ₽/JID/мес (тариф). LTV считается через средний gross margin и годовой churn по исчезновению JID. CAC при отсутствии данных — 30 000 ₽.",
       "sizeX": 24,
-      "sizeY": 1,
-      "row": 21,
+      "sizeY": 8,
+      "row": 19,
       "col": 0
     },
     {
-      "name": "05 · ARPU и удельная экономика",
-      "description": "ARPU фиксирован тарифом. revenue_per_document = MRR / документов: показывает, во сколько обходится один документ для клиента — чем выше, тем дешевле клиенту работать.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT 10000::numeric(14, 2) AS \"ARPU/JID, ₽\", SUM(documents_total)::bigint AS \"Документов\", ROUND(SUM(total_mrr) / NULLIF(SUM(documents_total), 0), 2) AS \"Выручка/документ, ₽\" FROM public.v_rpt_service_audit_arpu_segments_ui WHERE 1=1 [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
-          "template-tags": {
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05eb0000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05eb0000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"ARPU/JID, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"Выручка/документ, ₽\"]": {"decimals": 2, "suffix": " ₽"},
-          "[\"name\",\"Документов\"]": {"decimals": 0, "number_separators": ". "}
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 5,
-      "row": 22,
-      "col": 0
-    },
-    {
-      "name": "05 · LTV / CAC / LTV-CAC",
-      "description": "LTV = ARPU × 12 × gross_margin / annual_churn. CAC = 30 000 ₽ при отсутствии данных в `client_costs_monthly`(category='cac').",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT arpu AS \"ARPU, ₽\", ROUND(annual_churn_rate * 100, 2) AS \"Annual churn, %\", ROUND(gross_margin_rate * 100, 2) AS \"Gross margin, %\", ltv AS \"LTV, ₽\", default_cac AS \"CAC, ₽\", ltv_cac_ratio AS \"LTV / CAC\" FROM public.v_rpt_service_audit_ltv_ui",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"ARPU, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"LTV, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"CAC, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"LTV / CAC\"]": {"decimals": 2},
-          "[\"name\",\"Annual churn, %\"]": {"decimals": 2, "suffix": "%"},
-          "[\"name\",\"Gross margin, %\"]": {"decimals": 2, "suffix": "%"}
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 5,
-      "row": 22,
-      "col": 8
-    },
-    {
-      "name": "05 · NRR (Net Revenue Retention)",
-      "description": "NRR по базе клиентов прошлого года: revenue_current / revenue_base. > 1 = расширение, < 1 = отток.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT SUM(revenue_base)::numeric(14, 2) AS \"База, ₽\", SUM(revenue_current)::numeric(14, 2) AS \"Текущая, ₽\", ROUND(100.0 * SUM(revenue_current) / NULLIF(SUM(revenue_base), 0), 2) AS \"NRR, %\" FROM public.v_rpt_service_audit_nrr_ui WHERE 1=1 [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]]",
-          "template-tags": {
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05ec0000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05ec0000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"База, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"Текущая, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"NRR, %\"]": {"decimals": 2, "suffix": "%"}
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 5,
-      "row": 22,
-      "col": 16
-    },
-    {
       "display": "text",
-      "text": "## Структура клиентов и риск оттока\nТоп клиентов по выручке за 12 месяцев и распределение churn-риска. Тариф фиксированный, поэтому выручка пропорциональна сроку активности JID.",
+      "text": "## Топ-клиенты\nКто формирует основной поток, у кого больше всего ошибок, у кого зависшие документы. Фильтр «Период» применяется к таблицам объёма и ошибок.",
       "sizeX": 24,
-      "sizeY": 1,
+      "sizeY": 2,
       "row": 27,
       "col": 0
     },
     {
-      "name": "05 · Топ клиентов по выручке (12 мес)",
-      "description": "Группировка по client_id. Выручка = revenue (gross-margin-вью даёт суммы за 12 мес).",
+      "name": "05 · Топ-20 клиник по объёму документов",
+      "description": "Лидеры документооборота за выбранный период. % успеха и % pending помогают увидеть, у каких крупных клиник статистика проседает.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT client_name AS \"Клиент\", tier AS \"Tier\", region AS \"Регион\", documents_total AS \"Документов\", revenue AS \"Выручка, ₽\", gross_profit AS \"Прибыль, ₽\", gross_margin_pct AS \"Маржа, %\" FROM public.v_rpt_service_audit_gross_margin_ui WHERE 1=1 [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] ORDER BY revenue DESC NULLS LAST LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05ed0000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05ed0000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-00000000000a",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.column_formatting": [
+          {
+            "color": "#84BB4C",
+            "columns": [
+              "% успеха"
+            ],
+            "operator": ">=",
+            "type": "single",
+            "value": 90
+          },
+          {
+            "color": "#EF8C8C",
+            "columns": [
+              "% ошибок"
+            ],
+            "operator": ">=",
+            "type": "single",
+            "value": 10
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {
+            "suffix": " %"
+          },
+          "[\"name\",\"% в обработке\"]": {
+            "suffix": " %"
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 10,
+      "row": 29,
+      "col": 0,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
+    },
+    {
+      "name": "05 · Топ-10 клиник с высокой долей ошибок",
+      "description": "Клиники с долей ошибок > 10%, отсортированные по убыванию. Учитываются только клиники с объёмом ≥ 50 документов за период — чтобы не показывать шумные значения у мелких клиник.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-00000000000b",
+              "name": "mgmt_period",
+              "type": "dimension"
             }
           }
         },
@@ -775,53 +560,51 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Выручка, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"Прибыль, ₽\"]": {"decimals": 0, "number_separators": ". ", "suffix": " ₽"},
-          "[\"name\",\"Документов\"]": {"decimals": 0, "number_separators": ". "},
-          "[\"name\",\"Маржа, %\"]": {"decimals": 2, "suffix": "%"}
+          "[\"name\",\"% ошибок\"]": {
+            "suffix": " %"
+          }
         }
       },
       "sizeX": 12,
-      "sizeY": 6,
-      "row": 28,
-      "col": 0
+      "sizeY": 10,
+      "row": 29,
+      "col": 12,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "field_name": "Обработано IPS"
+        }
+      }
     },
     {
-      "name": "05 · Churn risk — распределение по уровням",
-      "description": "Composite score по low/medium/high. Score = compliance_loss × 40 + p1_tickets × 5 (cap 30) + late_payments × 10 (cap 30).",
+      "name": "05 · Клиники с просроченными pending (>72ч)",
+      "description": "Клиники, у которых есть документы из EGISZ_MESSAGES, отправленные более 72 часов назад без callback'а. Топ-15 по числу просроченных документов. Фильтр периода не применяется — это операционный backlog «здесь и сейчас».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT churn_risk_band AS \"Уровень риска\", COUNT(*)::bigint AS \"Клиентов\", ROUND(AVG(churn_risk_score), 2) AS \"Средний score\" FROM public.v_rpt_service_audit_churn_risk_ui WHERE 1=1 [[AND tier = {{mgmt_tier}}]] [[AND region = {{mgmt_region}}]] GROUP BY churn_risk_band ORDER BY CASE churn_risk_band WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END",
-          "template-tags": {
-            "mgmt_tier": {
-              "widget-type": "string/=",
-              "display-name": "Tier клиента",
-              "id": "05ee0000-0000-4000-8000-000000000002",
-              "name": "mgmt_tier",
-              "type": "text"
-            },
-            "mgmt_region": {
-              "widget-type": "string/=",
-              "display-name": "Регион",
-              "id": "05ee0000-0000-4000-8000-000000000003",
-              "name": "mgmt_region",
-              "type": "text"
-            }
-          }
+          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Просрочено документов\", ROUND(MAX(\"Часов в ожидании\"), 1) AS \"Макс. ожидание (ч)\" FROM public.v_rpt_documents_no_response_ui WHERE \"Категория ожидания\" = 'просрочено' AND NULLIF(\"JID клиники\", '') IS NOT NULL GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 15",
+          "template-tags": {}
         },
         "database": 1
       },
-      "display": "bar",
+      "display": "table",
       "visualization_settings": {
-        "graph.dimensions": ["Уровень риска"],
-        "graph.metrics": ["Клиентов"],
-        "graph.show_values": true
+        "table.column_formatting": [
+          {
+            "color": "#EF8C8C",
+            "columns": [
+              "Макс. ожидание (ч)"
+            ],
+            "operator": ">=",
+            "type": "single",
+            "value": 168
+          }
+        ]
       },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 28,
-      "col": 12
+      "sizeX": 24,
+      "sizeY": 8,
+      "row": 39,
+      "col": 0
     }
   ]
 }

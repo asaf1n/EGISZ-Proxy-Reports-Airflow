@@ -48,3 +48,15 @@ DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
 ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid;
 ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind;
 ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext;
+
+-- Drop legacy "service audit" placeholder tables that were never wired to any
+-- ELT source. Dashboards/views referencing them have been removed; CASCADE
+-- сметает оставшиеся зависимости в один шаг (это идемпотентно).
+DROP TABLE IF EXISTS public.client_costs_monthly CASCADE;
+DROP TABLE IF EXISTS public.churn_events        CASCADE;
+DROP TABLE IF EXISTS public.sed_transfers       CASCADE;
+DROP TABLE IF EXISTS public.sla_metrics         CASCADE;
+DROP TABLE IF EXISTS public.tickets             CASCADE;
+DROP TABLE IF EXISTS public.billing             CASCADE;
+DROP TABLE IF EXISTS public.subscriptions       CASCADE;
+DROP TABLE IF EXISTS public.clients             CASCADE;

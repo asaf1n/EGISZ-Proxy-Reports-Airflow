@@ -418,11 +418,11 @@
     },
     {
       "name": "Статусы за период",
-      "description": "По **витрине ответов РЭМД**: успех / неизвестно / ошибки регистрации РЭМД — COUNT DISTINCT экземпляров СЭМД (**«Документ (ключ учёта)»**). Срез **«Ошибка связи»** — из `v_rpt_network_errors_detail_ui`, те же опциональные фильтры **Код СЭМД** и **JID** (колбэк или JID из gost в журнале), период — **«Дата создания документа»**. «Итого» на круговой диаграмме — сумма срезов; один СЭМД теоретически может учитываться и в колбэках, и в транспорте при разных временных окнах фильтров.",
+      "description": "По **витрине ответов РЭМД**: успех / в обработке / нераспознан / ошибки регистрации РЭМД — COUNT DISTINCT экземпляров СЭМД (**«Документ (ключ учёта)»**). «В обработке» — промежуточный callback РЭМД (processing/accepted/принят), это нормальное операционное состояние, **не ошибка**. «Нераспознан» — редкий fallback для callback'ов без явного финального статуса. Срез **«Ошибка связи»** — из `v_rpt_network_errors_detail_ui`, те же опциональные фильтры **Код СЭМД** и **JID**, период — **«Дата создания документа»**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH fact_status AS ( SELECT CASE WHEN \"Статус\" = 'error' AND \"Тип ошибки\" <> 'Сетевая ошибка' THEN 'Ошибка регистрации в РЭМД' WHEN \"Статус\" = 'error' THEN 'отказы РЭМД (status=error)' ELSE \"Статус\" END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net AS ( SELECT 'Ошибка связи'::text AS \"Статус\", COUNT(DISTINCT document_group_key)::bigint AS \"Документов\" FROM public.v_stg_channel_network_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] ) SELECT * FROM fact_status UNION ALL SELECT * FROM net WHERE \"Документов\" > 0 ORDER BY 2 DESC",
+          "query": "WITH fact_status AS ( SELECT CASE WHEN \"Статус\" = 'error' AND \"Тип ошибки\" <> 'Сетевая ошибка' THEN 'Ошибка регистрации в РЭМД' WHEN \"Статус\" = 'error' THEN 'отказы РЭМД (status=error)' WHEN \"Статус\" = 'success' THEN 'success' WHEN \"Статус\" = 'pending' THEN 'В обработке' WHEN \"Статус\" = 'unknown' THEN 'Нераспознан' ELSE 'Нераспознан' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net AS ( SELECT 'Ошибка связи'::text AS \"Статус\", COUNT(DISTINCT document_group_key)::bigint AS \"Документов\" FROM public.v_stg_channel_network_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] ) SELECT * FROM fact_status UNION ALL SELECT * FROM net WHERE \"Документов\" > 0 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -514,14 +514,24 @@
             "originalName": "Ошибка связи"
           },
           {
+            "color": "#F2A86F",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false,
+            "key": "В обработке",
+            "name": "В обработке",
+            "originalName": "В обработке"
+          },
+          {
             "color": "#F7C4C4",
             "defaultColor": false,
             "enabled": true,
             "hidden": false,
             "isOther": false,
-            "key": "unknown",
-            "name": "unknown",
-            "originalName": "unknown"
+            "key": "Нераспознан",
+            "name": "Нераспознан",
+            "originalName": "Нераспознан"
           },
           {
             "color": "#C7EAEA",
