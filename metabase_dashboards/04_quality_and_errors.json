@@ -664,7 +664,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH semd_per_doc AS ( SELECT \"Документ (ключ учёта)\", MAX(COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)')) AS semd_lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), errs AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] ) SELECT COALESCE(s.semd_lbl, '(неизвестно)') AS \"Тип СЭМД\", e.err_lbl AS \"Вид ошибки\", COUNT(DISTINCT e.\"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM errs e LEFT JOIN semd_per_doc s ON s.\"Документ (ключ учёта)\" = e.\"Документ (ключ учёта)\" GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Вид ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -738,7 +738,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH ctx AS ( SELECT \"Документ (ключ учёта)\", MAX(COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)')) AS semd_lbl, MAX(\"JID клиники\"::text) AS jid, MAX(LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 40)) AS clinic FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ), errs AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] ) SELECT e.err_lbl AS \"Вид ошибки\", COALESCE(c.semd_lbl, '(неизвестно)') AS \"Тип СЭМД (код · НСИ)\", c.jid AS \"JID клиники\", COALESCE(c.clinic, '') AS \"Клиника\", COUNT(DISTINCT e.\"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM errs e LEFT JOIN ctx c ON c.\"Документ (ключ учёта)\" = e.\"Документ (ключ учёта)\" GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC NULLS LAST LIMIT 400",
+          "query": "WITH ctx AS ( SELECT \"Документ (ключ учёта)\", MAX(\"JID клиники\"::text) AS jid, MAX(LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 40)) AS clinic FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' GROUP BY 1 ), errs AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl, COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_lbl, \"JID клиники\"::text AS jid_e FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] ) SELECT e.err_lbl AS \"Вид ошибки\", e.semd_lbl AS \"Тип СЭМД (код · НСИ)\", COALESCE(e.jid_e, c.jid) AS \"JID клиники\", COALESCE(c.clinic, '') AS \"Клиника\", COUNT(DISTINCT e.\"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM errs e LEFT JOIN ctx c ON c.\"Документ (ключ учёта)\" = e.\"Документ (ключ учёта)\" GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC NULLS LAST LIMIT 400",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

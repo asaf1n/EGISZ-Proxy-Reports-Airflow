@@ -32,6 +32,16 @@ fail() {
   exit 1
 }
 
+# Сериализация: entrypoint запускает provision.sh в фоне, а up.ps1 параллельно
+# дёргает этот же скрипт через kubectl exec. Без блокировки два параллельных
+# прогона гонятся за archive_stale_collection_cards / create_or_update_card и
+# второй падает на 409/конфликте имени карточки.
+SETUP_DASHBOARDS_LOCK="${SETUP_DASHBOARDS_LOCK:-/tmp/setup-dashboards.lock}"
+if [ "${SETUP_DASHBOARDS_LOCKED:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+  export SETUP_DASHBOARDS_LOCKED=1
+  exec flock "${SETUP_DASHBOARDS_LOCK}" "$0" "$@"
+fi
+
 current_dashboard_manifest() {
   if [ -f "${DASHBOARDS_DIR}/.manifest.sha256" ]; then
     cat "${DASHBOARDS_DIR}/.manifest.sha256"
@@ -443,19 +453,8 @@ create_or_update_dashboard() {
         card_id_json="${card_id}"
         viz_settings="{}"
         mappings="$(
-          jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" --slurpfile meta_file "${DB_METADATA_FILE}" '
-            def field_id($table_ref; $field_name):
-              ($table_ref | sub("^public\\."; "")) as $table_name
-              | [
-                  $meta_file[0].tables[]?
-                  | select((.schema // "public") == "public" and .name == $table_name)
-                  | .fields[]?
-                  | select(.name == $field_name or .display_name == $field_name)
-                  | .id
-                ][0];
-
+          jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" '
             (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
-            | (.cards[$cardIndex]["metabase-field-filters"] // {}) as $fieldFilters
             | ($tags | keys) as $tagKeys
             | [
                 $dashParams[] as $param
@@ -468,23 +467,11 @@ create_or_update_dashboard() {
                   ) as $tagName
                 | select(($tagKeys | index($tagName)) != null)
                 | ($tags[$tagName].type // "") as $tagType
-                | ($fieldFilters[$tagName] // {}) as $fieldFilter
-                | ($fieldFilter.table_ref // "") as $tableRef
-                | ($fieldFilter.field_name // "") as $fieldName
-                | (
-                    if $tableRef != "" and $fieldName != "" then
-                      field_id($tableRef; $fieldName)
-                    else
-                      null
-                    end
-                  ) as $fieldId
                 | {
                     parameter_id: $param.id,
                     card_id: $cardDbId,
                     target: (
-                      if $tagType == "dimension" and $fieldId != null then
-                        ["dimension", ["field", $fieldId, null]]
-                      elif $tagType == "dimension" then
+                      if $tagType == "dimension" then
                         ["dimension", ["template-tag", $tagName]]
                       else
                         ["variable", ["template-tag", $tagName]]

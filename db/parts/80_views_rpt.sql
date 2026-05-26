@@ -19,6 +19,7 @@ WITH remd_errors AS (
                  t.doc_number, t.message_id, t.exchangelog_log_id::text)              AS "Документ (ключ учёта)",
         t.jid::text                                                                   AS "JID клиники",
         public.egisz_normalize_semd_code(t.semd_code)                                AS "Код СЭМД",
+        public.egisz_semd_type_report_label(t.semd_code, t.semd_name)                AS "Тип СЭМД (код · НСИ)",
         trim(err_item)                                                                AS "Тип ошибки"
     FROM fact_egisz_transactions t
     CROSS JOIN LATERAL unnest(
@@ -37,6 +38,7 @@ network_errors AS (
         n.document_group_key        AS "Документ (ключ учёта)",
         NULL::text                  AS "JID клиники",
         NULL::text                  AS "Код СЭМД",
+        NULL::text                  AS "Тип СЭМД (код · НСИ)",
         'Сетевая ошибка'::text      AS "Тип ошибки"
     FROM public.v_stg_channel_network_errors_by_document n
 )
@@ -46,6 +48,7 @@ SELECT
     "Документ (ключ учёта)",
     "JID клиники",
     "Код СЭМД",
+    "Тип СЭМД (код · НСИ)",
     "Тип ошибки",
     public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
 FROM remd_errors
@@ -56,6 +59,7 @@ SELECT
     "Документ (ключ учёта)",
     "JID клиники",
     "Код СЭМД",
+    "Тип СЭМД (код · НСИ)",
     "Тип ошибки",
     'Ошибки связи'::text AS "Категория ошибки"
 FROM network_errors;

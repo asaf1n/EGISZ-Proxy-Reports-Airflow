@@ -147,7 +147,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -348,7 +348,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(p.\"Наименование СЭМД\"), ''), NULLIF(TRIM(p.\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui p WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(p.\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",

@@ -110,7 +110,7 @@ spec:
             - name: METABASE_SITE_NAME
               value: "Интеграция с ЕГИСЗ"
             - name: METABASE_AUTO_PROVISION
-              value: "false"
+              value: "true"
             - name: METABASE_FORCE_PROVISION
               value: "always"
             - name: JAVA_TOOL_OPTIONS

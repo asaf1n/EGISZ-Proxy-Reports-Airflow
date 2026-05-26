@@ -15,6 +15,12 @@ function Invoke-Checked {
         [scriptblock]$Command
     )
 
+    # Local override: native-команды (docker buildx, kubectl) пишут прогресс/info
+    # в stderr. Глобальный $ErrorActionPreference='Stop' трактует это как
+    # terminating error ДО проверки exit-кода — даже если команда отработала
+    # успешно. Переходим на Continue в пределах функции и проверяем $LASTEXITCODE
+    # сами; это и есть смысл этой обёртки.
+    $ErrorActionPreference = 'Continue'
     & $Command
     if ($LASTEXITCODE -ne 0) {
         throw "${Description} failed with exit code ${LASTEXITCODE}"
@@ -111,7 +117,10 @@ function Install-Airflow {
 
     Write-Host "Building Airflow image with current DAG and egisz_elt package..."
     Invoke-Checked "Build Airflow image" {
-        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile .
+        # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
+        # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем
+        # через ForEach-Object, чтобы каждая строка стала обычным stdout.
+        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile . 2>&1 | ForEach-Object { "$_" }
     }
 
     Initialize-AirflowInternalMetadataDatabase
@@ -198,7 +207,10 @@ function Install-Metabase {
 
     Write-Host "Building Metabase image with current dashboard provisioning scripts..."
     Invoke-Checked "Build Metabase image" {
-        docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile .
+        # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
+        # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем
+        # через ForEach-Object, чтобы каждая строка стала обычным stdout.
+        docker build -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile . 2>&1 | ForEach-Object { "$_" }
     }
 
     Write-Host "Starting Metabase PostgreSQL and Metabase..."

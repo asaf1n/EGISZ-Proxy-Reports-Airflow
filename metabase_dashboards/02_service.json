@@ -81,7 +81,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', e.\"Дата создания документа\") AS \"Час\", COUNT(DISTINCT e.\"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui e CROSS JOIN b WHERE e.\"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', \"Дата создания документа\") AS \"Час\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui CROSS JOIN b WHERE \"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -132,7 +132,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', e.created_at) AS \"Час\", COUNT(DISTINCT e.document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document e CROSS JOIN b WHERE e.created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', created_at) AS \"Час\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document CROSS JOIN b WHERE created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -341,7 +341,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', v.\"Обработано IPS\")::date AS day, COALESCE(NULLIF(TRIM(v.\"Наименование клиники\"), ''), 'JID ' || v.\"JID клиники\"::text) AS clinic, COUNT(DISTINCT v.\"Документ (ключ учёта)\") AS cnt, COUNT(DISTINCT v.\"Документ (ключ учёта)\") FILTER (WHERE v.\"Статус\" = 'error') AS err FROM public.v_egisz_transactions_enriched_ui v WHERE NULLIF(TRIM(v.\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(v.\"Код СЭМД\"), '') = {{top_semd}}]] [[AND v.\"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', \"Обработано IPS\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') AS err FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
