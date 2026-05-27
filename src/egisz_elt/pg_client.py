@@ -19,7 +19,7 @@ DIRECTORY_PK_COLUMNS = {
 }
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
-RAW_MESSAGE_COLUMNS = ("egmid", "created_at", "msgid", "reply_to", "document_id")
+MESSAGE_COLUMNS = ("egmid", "created_at", "msgid", "reply_to", "document_id")
 DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 1000
@@ -101,17 +101,17 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
     con.commit()
 
 
-def load_raw_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]]) -> None:
-    """Load EGISZ_MESSAGES rows into egisz_messages_raw."""
+def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]]) -> None:
+    """Load structured Firebird EGISZ_MESSAGES rows into the persistent DWH message fact."""
     values: list[tuple[Any, ...]] = []
     for row in rows:
-        missing_columns = [column for column in RAW_MESSAGE_COLUMNS if column not in row]
+        missing_columns = [column for column in MESSAGE_COLUMNS if column not in row]
         if missing_columns:
-            raise ValueError(f"Raw EGISZ_MESSAGES row is missing required column(s): {', '.join(missing_columns)}")
+            raise ValueError(f"EGISZ_MESSAGES row is missing required column(s): {', '.join(missing_columns)}")
         normalized = dict(row)
         normalized["msgid"] = normalize_message_id(normalized.get("msgid"))
         normalized["reply_to"] = normalize_message_id(normalized.get("reply_to"))
-        values.append(tuple(normalized[column] for column in RAW_MESSAGE_COLUMNS))
+        values.append(tuple(normalized[column] for column in MESSAGE_COLUMNS))
 
     if not values:
         return
@@ -120,14 +120,37 @@ def load_raw_messages(con: psycopg2.extensions.connection, rows: list[dict[str, 
         execute_values(
             cur,
             """
-            INSERT INTO egisz_messages_raw (egmid, created_at, msgid, reply_to, document_id)
-            VALUES %s
+            INSERT INTO fact_egisz_messages (
+                egmid, created_at, msgid, reply_to, document_id,
+                msgid_norm, document_id_norm, document_key, reply_to_jid, reply_to_host
+            )
+            SELECT
+                v.egmid,
+                v.created_at::timestamptz,
+                v.msgid,
+                v.reply_to,
+                v.document_id,
+                public.egisz_normalize_message_id(v.msgid),
+                lower(NULLIF(btrim(v.document_id), '')),
+                COALESCE(
+                    lower(NULLIF(btrim(v.document_id), '')),
+                    public.egisz_normalize_message_id(v.msgid),
+                    v.egmid::text
+                ),
+                NULLIF(public.egisz_extract_jid_from_endpoint(v.reply_to), '')::integer,
+                public.egisz_clean_host(v.reply_to)
+            FROM (VALUES %s) AS v(egmid, created_at, msgid, reply_to, document_id)
             ON CONFLICT (egmid) DO UPDATE SET
                 created_at = EXCLUDED.created_at,
                 msgid = EXCLUDED.msgid,
                 reply_to = EXCLUDED.reply_to,
                 document_id = EXCLUDED.document_id,
-                loaded_at = now()
+                msgid_norm = EXCLUDED.msgid_norm,
+                document_id_norm = EXCLUDED.document_id_norm,
+                document_key = EXCLUDED.document_key,
+                reply_to_jid = EXCLUDED.reply_to_jid,
+                reply_to_host = EXCLUDED.reply_to_host,
+                updated_at = now()
             """,
             values,
         )

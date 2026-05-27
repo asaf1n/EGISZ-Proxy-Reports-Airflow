@@ -430,21 +430,20 @@ RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    WITH resolved AS (
+    WITH normalized AS (
+        SELECT public.egisz_normalize_semd_code(semd_code) AS code
+    ),
+    resolved AS (
         SELECT
-            public.egisz_normalize_semd_code(semd_code) AS code,
-            COALESCE(
-                d.name,
-                CASE
-                    WHEN public.egisz_clean_text_value(semd_name) IS NOT NULL
-                     AND public.egisz_clean_text_value(semd_name) !~ '^\d+$'
-                     AND public.egisz_clean_text_value(semd_name) <> public.egisz_normalize_semd_code(semd_code)
-                    THEN public.egisz_clean_text_value(semd_name)
-                    ELSE NULL
-                END
+            n.code,
+            (
+                SELECT d.name
+                FROM public.dim_semd_types d
+                WHERE d.oid = n.code
+                ORDER BY d.start_date DESC NULLS LAST, d.code DESC
+                LIMIT 1
             ) AS display_name
-        FROM (SELECT public.egisz_normalize_semd_code(semd_code) AS code) n
-        LEFT JOIN public.dim_semd_types d ON d.code = n.code
+        FROM normalized n
     )
     SELECT CASE
         WHEN code IS NULL AND display_name IS NULL THEN '(неизвестно)'
@@ -454,4 +453,3 @@ AS $$
     END
     FROM resolved;
 $$;
-

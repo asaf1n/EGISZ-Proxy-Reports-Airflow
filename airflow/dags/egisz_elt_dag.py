@@ -20,7 +20,7 @@ from egisz_elt.fb_client import (
 from egisz_elt.pg_client import (
     connect_pg,
     get_cursors,
-    load_raw_messages,
+    load_messages,
     load_raw_logs,
     sync_directory,
     transform_raw_to_facts,
@@ -113,6 +113,7 @@ def egisz_elt_pipeline() -> None:
                 last_log_id,
                 time.monotonic() - started_at,
             )
+            cursor_max_log_id = max((int(row["logid"]) for row in log_rows), default=last_log_id)
             started_at = time.monotonic()
             message_rows = fetch_egisz_messages_after_cursor(
                 fb_conn,
@@ -159,11 +160,10 @@ def egisz_elt_pipeline() -> None:
         for row in related_message_rows:
             messages_by_egmid[int(row["egmid"])] = row
         message_rows = list(messages_by_egmid.values())
-        max_id = max((int(row["logid"]) for row in log_rows), default=last_log_id)
         log.info(
             "Extracted %s EXCHANGELOG row(s), max LOGID=%s; %s EGISZ_MESSAGES row(s), cursor max EGMID=%s.",
             len(log_rows),
-            max_id,
+            cursor_max_log_id,
             len(message_rows),
             cursor_max_egmid,
         )
@@ -172,7 +172,7 @@ def egisz_elt_pipeline() -> None:
             "message_count": len(message_rows),
             "last_log_id": last_log_id,
             "last_egmid": last_egmid,
-            "max_id": max_id,
+            "max_id": cursor_max_log_id,
             "max_egmid": cursor_max_egmid,
             "rows": log_rows,
             "message_rows": message_rows,
@@ -188,9 +188,9 @@ def egisz_elt_pipeline() -> None:
             if extraction_result["count"] > 0:
                 load_raw_logs(pg_conn, extraction_result["rows"])
             if extraction_result.get("message_count", 0) > 0:
-                load_raw_messages(pg_conn, extraction_result["message_rows"])
+                load_messages(pg_conn, extraction_result["message_rows"])
             log.info(
-                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw and %s EGISZ_MESSAGES row(s) into egisz_messages_raw.",
+                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw and %s EGISZ_MESSAGES row(s) into fact_egisz_messages.",
                 extraction_result["count"],
                 extraction_result.get("message_count", 0),
             )
@@ -203,7 +203,7 @@ def egisz_elt_pipeline() -> None:
         """Освежает planner-статистику для raw-таблиц после bulk-загрузки.
 
         Без этого PostgreSQL planner использует pg_class.reltuples=0 после первичного
-        COPY и выбирает seq-scan по exchangelog_raw / egisz_messages_raw даже когда
+        COPY и выбирает seq-scan по exchangelog_raw / fact_egisz_messages даже когда
         функциональные индексы (msgid_norm, document_id_norm) уже существуют.
         Autovacuum не запустит ANALYZE, пока не накопится достаточно изменений после
         bulk-загрузки — на спокойном пайплайне это могут быть дни, и к тому моменту
@@ -221,8 +221,8 @@ def egisz_elt_pipeline() -> None:
                 if load_info["count"] > 0:
                     cur.execute("ANALYZE public.exchangelog_raw")
                 if load_info.get("message_count", 0) > 0:
-                    cur.execute("ANALYZE public.egisz_messages_raw")
-            log.info("ANALYZE done for raw tables touched in this batch.")
+                    cur.execute("ANALYZE public.fact_egisz_messages")
+            log.info("ANALYZE done for staging/fact tables touched in this batch.")
         finally:
             pg_conn.close()
         return load_info
@@ -244,6 +244,8 @@ def egisz_elt_pipeline() -> None:
             if transformed > 0:
                 with pg_conn.cursor() as cur:
                     cur.execute("ANALYZE public.fact_egisz_transactions")
+                    cur.execute("ANALYZE public.fact_egisz_documents")
+                    cur.execute("ANALYZE public.fact_egisz_channel_errors")
                 pg_conn.commit()
             log.info("Transformed %s row(s) into fact_egisz_transactions.", transformed)
         finally:

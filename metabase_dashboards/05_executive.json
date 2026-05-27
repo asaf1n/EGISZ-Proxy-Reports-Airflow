@@ -255,9 +255,41 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.segments": [
+          {
+            "min": 0,
+            "max": 1000000,
+            "color": "#F7CBA9",
+            "label": ""
+          },
+          {
+            "min": 1000000,
+            "max": 2000000,
+            "color": "#689636",
+            "label": ""
+          },
+          {
+            "min": 2000000,
+            "max": 4000000,
+            "color": "#8A5EB0",
+            "label": ""
+          },
+          {
+            "min": 4000000,
+            "max": 8000000,
+            "color": "#E75454",
+            "label": ""
+          },
+          {
+            "min": 8000000,
+            "max": 16000000,
+            "color": "#227FD2",
+            "label": ""
+          }
+        ],
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -280,9 +312,10 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.segments": [],
         "column_settings": {
           "[\"name\",\"ARR, ₽\"]": {
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -393,12 +426,12 @@
         "graph.dimensions": [
           "Месяц"
         ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
         "graph.metrics": [
           "MRR, ₽",
           "Активных JID"
-        ],
-        "graph.show_values": false,
-        "graph.x_axis.scale": "timeseries"
+        ]
       },
       "sizeX": 12,
       "sizeY": 8,
@@ -454,12 +487,12 @@
           "Месяц",
           "Статус"
         ],
-        "graph.metrics": [
-          "Документов"
-        ],
         "graph.show_values": false,
         "graph.x_axis.scale": "timeseries",
-        "stackable.stack_type": "stacked"
+        "stackable.stack_type": "stacked",
+        "graph.metrics": [
+          "Документов"
+        ]
       },
       "sizeX": 24,
       "sizeY": 8,

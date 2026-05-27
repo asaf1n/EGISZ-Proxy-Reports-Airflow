@@ -39,18 +39,48 @@ def test_operational_error_types_include_network_slice() -> None:
 def test_operational_status_breakdown_keeps_pending_separate() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
+    trend_card = next(card for card in dashboard["cards"] if card["name"] == "01 · Транзакции по дням и статусам")
     query = card["dataset_query"]["native"]["query"]
+    trend_query = trend_card["dataset_query"]["native"]["query"]
     rows = card["visualization_settings"]["pie.rows"]
     row_keys = {row["key"] for row in rows}
 
-    assert "Документы в ожидании" in query
+    assert "public.v_rpt_semd_archive_ui" in query
+    assert "Документы в обработке" in query
+    assert "\"Статус\" IN ('pending', 'в обработке', 'просрочено')" in query
     assert "WHEN \"Статус\" IN ('error', 'unknown') THEN 'Неизвестная ошибка'" in query
     assert "SUM(\"Документов\")::bigint" in query
     assert "отказы РЭМД (status=error)" not in query
-    assert "Документы в ожидании" in row_keys
+    assert card["metabase-field-filters"]["dwh_date"] == {
+        "table_ref": "public.v_rpt_semd_archive_ui",
+        "field_name": "Дата обработки",
+    }
+    assert "Документы в обработке" in row_keys
     assert "Неизвестная ошибка" in row_keys
+    assert "Документы в ожидании" not in row_keys
     assert "В обработке" not in row_keys
     assert "Нераспознан" not in row_keys
+    assert "public.v_rpt_semd_archive_ui" in trend_query
+    assert "Документы в обработке" in trend_query
+    assert trend_card["metabase-field-filters"]["dwh_date"] == {
+        "table_ref": "public.v_rpt_semd_archive_ui",
+        "field_name": "Дата обработки",
+    }
+
+
+def test_archive_no_code_documents_are_qualified_by_status() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
+    card = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по типу СЭМД")
+    query = card["dataset_query"]["native"]["query"]
+
+    assert '"СЭМД (архив)"' in sql
+    assert "Документ в обработке" in sql
+    assert "Документ с ошибкой и не определён код" in sql
+    assert '"Тип ошибки"' in sql
+    assert 'NULLIF(TRIM("Код СЭМД"), \'\') IS NOT NULL' in query
+    assert "Наименование СЭМД" in query
+    assert 'TRIM("СЭМД (архив)")' not in query
 
 
 def test_pending_rows_do_not_feed_type_or_bi_breakdowns() -> None:

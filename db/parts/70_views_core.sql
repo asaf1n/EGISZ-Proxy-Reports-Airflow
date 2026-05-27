@@ -14,7 +14,14 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День",
     t.log_date::date AS "День (тренд)",
-    COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
+    COALESCE(
+        public.egisz_clean_text_value(t.local_uid_semd),
+        public.egisz_clean_text_value(t.emdr_id),
+        public.egisz_clean_text_value(t.relates_to_id),
+        public.egisz_clean_text_value(t.doc_number),
+        public.egisz_clean_text_value(t.message_id),
+        t.exchangelog_log_id::text
+    ) AS "Документ (ключ учёта)",
     t.status AS "Статус",
     CASE t.status
         WHEN 'success' THEN 'Успех'
@@ -29,13 +36,6 @@ SELECT
     public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
     COALESCE(
         st.name,
-        CASE
-            WHEN public.egisz_clean_text_value(t.semd_name) IS NOT NULL
-             AND public.egisz_clean_text_value(t.semd_name) !~ '^\d+$'
-             AND public.egisz_clean_text_value(t.semd_name) <> public.egisz_normalize_semd_code(t.semd_code)
-            THEN public.egisz_clean_text_value(t.semd_name)
-            ELSE NULL
-        END,
         CASE
             WHEN public.egisz_normalize_semd_code(t.semd_code) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
@@ -56,20 +56,25 @@ SELECT
     t.creation_date AS "Создание СЭМД",
     public.egisz_extract_jid_from_endpoint(m.reply_to) AS "JID из gost в REPLYTO",
     public.egisz_clean_host(m.reply_to) AS "Токен gost (REPLYTO)",
-    t.local_uid_semd AS "localUid СЭМД",
-    t.local_uid_semd AS "Идентификатор документа (localUid)",
-    t.relates_to_id AS "Связанное сообщение",
-    lower(NULLIF(btrim(t.relates_to_id), '')) AS "Связанное сообщение (канон)",
-    lower(NULLIF(btrim(t.local_uid_semd), '')) AS "localUid СЭМД (канон)",
+    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
+    public.egisz_clean_text_value(t.local_uid_semd) AS "Идентификатор документа (localUid)",
+    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
+    lower(public.egisz_clean_text_value(t.relates_to_id)) AS "Связанное сообщение (канон)",
+    lower(public.egisz_clean_text_value(t.local_uid_semd)) AS "localUid СЭМД (канон)",
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     t.emdr_id AS "Регистрационный номер РЭМД",
     t.doc_number AS "DOCUMENTID",
     t.error_json_text AS "Исходный текст ошибки",
+    t.patient_name_masked,
+    t.snils_masked,
+    t.doctor_name,
+    t.patient_hash,
+    t.doctor_hash,
     t.exchangelog_log_id AS transaction_id,
     COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
     public.egisz_normalize_semd_code(t.semd_code) AS service_id
 FROM fact_egisz_transactions t
-LEFT JOIN egisz_messages_raw m ON m.egmid = t.egmid
+LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid
 LEFT JOIN LATERAL (
     SELECT candidate.*
     FROM (
@@ -98,7 +103,13 @@ LEFT JOIN LATERAL (
     ORDER BY _prio, modifydate DESC NULLS LAST, id DESC
     LIMIT 1
 ) l ON TRUE
-LEFT JOIN public.dim_semd_types st ON st.code = public.egisz_normalize_semd_code(t.semd_code)
+LEFT JOIN LATERAL (
+    SELECT dst.*
+    FROM public.dim_semd_types dst
+    WHERE dst.oid = public.egisz_normalize_semd_code(t.semd_code)
+    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
+    LIMIT 1
+) st ON TRUE
 LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid
 WITH NO DATA;
 
@@ -115,10 +126,17 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День (тренд)",
     t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
-    t.local_uid_semd AS "localUid СЭМД",
+    COALESCE(
+        public.egisz_clean_text_value(t.local_uid_semd),
+        public.egisz_clean_text_value(t.emdr_id),
+        public.egisz_clean_text_value(t.relates_to_id),
+        public.egisz_clean_text_value(t.doc_number),
+        public.egisz_clean_text_value(t.message_id),
+        t.exchangelog_log_id::text
+    ) AS "Документ (ключ учёта)",
+    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
-    t.relates_to_id AS "Связанное сообщение",
+    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
     t.jid::text AS "JID клиники",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",
@@ -147,10 +165,17 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День (тренд)",
     t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id, t.doc_number, t.message_id, t.exchangelog_log_id::text) AS "Документ (ключ учёта)",
-    t.local_uid_semd AS "localUid СЭМД",
+    COALESCE(
+        public.egisz_clean_text_value(t.local_uid_semd),
+        public.egisz_clean_text_value(t.emdr_id),
+        public.egisz_clean_text_value(t.relates_to_id),
+        public.egisz_clean_text_value(t.doc_number),
+        public.egisz_clean_text_value(t.message_id),
+        t.exchangelog_log_id::text
+    ) AS "Документ (ключ учёта)",
+    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
-    t.relates_to_id AS "Связанное сообщение",
+    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
     t.jid::text AS "JID клиники",
     public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",

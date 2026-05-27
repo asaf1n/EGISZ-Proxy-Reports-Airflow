@@ -561,7 +561,7 @@
     },
     {
       "name": "02 · Сигналы healthcheck",
-      "description": "Сигналы ELT-контура: raw_rows (поступление журнала), queue_24h (очередь без ответа > 24ч), network_errors (LOGSTATE=3), error_rows (status=error), data_freshness (минут с последнего факта), **pending_backlog_24h** (просрочено > 72ч; pending — норма, просрочено — эскалация), **unknown_high** (доля status=unknown за 24ч > 1% — возможно появился новый шаблон ответа РЭМД, который не распознан в egisz_classify_async_status). Уровень — green/yellow/red.",
+      "description": "Сигналы ELT-контура: parsed_messages (сообщения, разложенные в fact_egisz_messages), queue_24h (очередь без ответа > 24ч), network_errors (fact_egisz_channel_errors), error_rows (status=error), data_freshness (минут с последнего факта), **pending_backlog_24h** (просрочено > 72ч; pending — норма, просрочено — эскалация), **unknown_high** (доля status=unknown за 24ч > 1% — возможно появился новый шаблон ответа РЭМД, который не распознан в egisz_classify_async_status). Уровень — green/yellow/red.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -748,11 +748,11 @@
     },
     {
       "name": "02 · Сводка прокси-БД",
-      "description": "Цифры из `v_health_proxy_db_ui`: очередь исходящих в прокси-БД (`stg_egisz_outbound_documents`), max EGMID в нём, очередь без ответа, `elt_state.last_log_id`, `elt_state.last_egmid` (курсор выгрузки снимка `EGISZ_MESSAGES`).",
+      "description": "Цифры из `v_health_proxy_db_ui`: очередь исходящих сообщений из persistent DWH-слоя (`fact_egisz_messages`), max EGMID, очередь без ответа, `elt_state.last_log_id`, `elt_state.last_egmid` (курсор выгрузки `EGISZ_MESSAGES`). Raw staging в этих расчётах не используется.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Staging: всего строк\", \"Без EGMID\", \"Очередь всего\", \"Очередь > 24ч\", \"Staging max EGMID\", \"Staging max Sent\", \"Последний апдейт курсора\", \"elt_state.last_log_id\", \"elt_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
+          "query": "SELECT \"DWH сообщений всего\", \"Без EGMID\", \"Очередь всего\", \"Очередь > 24ч\", \"DWH max EGMID\", \"DWH max Sent\", \"Последний апдейт курсора\", \"elt_state.last_log_id\", \"elt_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
           "template-tags": {}
         },
         "database": 1
@@ -772,7 +772,7 @@
             }
           }
         },
-        "table.cell_column": "Staging: всего строк",
+        "table.cell_column": "DWH сообщений всего",
         "column_settings": {
           "[\"name\",\"elt_state.last_log_id\"]": {
             "column_title": "elt_state.last_log_id"

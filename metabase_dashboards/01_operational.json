@@ -418,11 +418,11 @@
     },
     {
       "name": "Статусы за период",
-      "description": "По **витрине ответов РЭМД**: успех / документы в ожидании / неизвестная ошибка / ошибки регистрации РЭМД — COUNT DISTINCT экземпляров СЭМД (**«Документ (ключ учёта)»**). «Документы в ожидании» — промежуточный callback РЭМД (processing/accepted/принят), это нормальное операционное состояние, **не ошибка**. «Неизвестная ошибка» объединяет нераспознанные callback'и и error без интерпретированного типа. Срез **«Ошибка связи»** — из `v_rpt_network_errors_detail_ui`, те же опциональные фильтры **Код СЭМД** и **JID**, период — **«Дата создания документа»**.",
+      "description": "По **архивной витрине СЭМД**: успех / документы в обработке / неизвестная ошибка / ошибки регистрации РЭМД. COUNT DISTINCT экземпляров СЭМД по колонке **«Документ (ключ учёта)»**. «Документы в обработке» включают pending-callback и отправленные документы без финального callback; это операционное состояние, **не ошибка**. «Неизвестная ошибка» объединяет нераспознанные callback'и и error без интерпретированного типа. Срез **«Ошибка связи»** — из `v_rpt_network_errors_detail_ui`, период — **«Дата создания документа»**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH fact_status AS ( SELECT CASE WHEN \"Статус\" = 'error' AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", '')), '') IS NOT NULL AND \"Тип ошибки\" <> 'Сетевая ошибка' THEN 'Ошибка регистрации в РЭМД' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" IN ('error', 'unknown') THEN 'Неизвестная ошибка' WHEN \"Статус\" = 'success' THEN 'success' WHEN \"Статус\" = 'pending' THEN 'Документы в ожидании' ELSE 'Неизвестная ошибка' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net AS ( SELECT 'Ошибка связи'::text AS \"Статус\", COUNT(DISTINCT document_group_key)::bigint AS \"Документов\" FROM public.v_stg_channel_network_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] ) SELECT \"Статус\", SUM(\"Документов\")::bigint AS \"Документов\" FROM ( SELECT * FROM fact_status UNION ALL SELECT * FROM net ) u WHERE \"Документов\" > 0 GROUP BY 1 ORDER BY 2 DESC",
+          "query": "WITH archive_status AS ( SELECT CASE WHEN \"Статус\" = 'error' AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", '')), '') IS NOT NULL AND \"Тип ошибки\" <> 'Сетевая ошибка' THEN 'Ошибка регистрации в РЭМД' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" IN ('pending', 'в обработке', 'просрочено') THEN 'Документы в обработке' WHEN \"Статус\" IN ('error', 'unknown') THEN 'Неизвестная ошибка' WHEN \"Статус\" = 'success' THEN 'success' ELSE 'Неизвестная ошибка' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), net AS ( SELECT 'Ошибка связи'::text AS \"Статус\", COUNT(DISTINCT document_group_key)::bigint AS \"Документов\" FROM public.v_stg_channel_network_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] ) SELECT \"Статус\", SUM(\"Документов\")::bigint AS \"Документов\" FROM ( SELECT * FROM archive_status UNION ALL SELECT * FROM net ) u WHERE \"Документов\" > 0 GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -519,9 +519,9 @@
             "enabled": true,
             "hidden": false,
             "isOther": false,
-            "key": "Документы в ожидании",
-            "name": "Документы в ожидании",
-            "originalName": "Документы в ожидании"
+            "key": "Документы в обработке",
+            "name": "Документы в обработке",
+            "originalName": "Документы в обработке"
           },
           {
             "color": "#F7C4C4",
@@ -559,19 +559,19 @@
       "col": 18,
       "metabase-field-filters": {
         "top_clinic": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "JID клиники"
         },
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Дата обработки"
         },
         "parse_created": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "Дата создания документа"
         },
         "top_semd": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "Код СЭМД"
         }
       }
@@ -920,7 +920,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT DATE(\"Обработано IPS\") AS \"Дата\", CASE WHEN \"Статус\" = 'pending' THEN 'Документы в ожидании' WHEN \"Статус\" = 'unknown' THEN 'Неизвестная ошибка' ELSE \"Статус\" END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", CASE WHEN \"Статус\" IN ('pending', 'в обработке', 'просрочено') THEN 'Документы в обработке' WHEN \"Статус\" = 'unknown' THEN 'Неизвестная ошибка' ELSE \"Статус\" END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -978,8 +978,8 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "День (тренд)"
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Дата обработки"
         }
       }
     },

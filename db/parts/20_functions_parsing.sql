@@ -48,10 +48,24 @@ AS $$
     SELECT NULLIF(regexp_replace(trim(both '<>' from btrim(COALESCE(value, ''))), '^urn:uuid:', '', 'i'), '');
 $$;
 
-CREATE INDEX IF NOT EXISTS idx_egisz_messages_msgid_norm ON egisz_messages_raw (public.egisz_normalize_message_id(msgid));
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid_norm_logid_desc
     ON exchangelog_raw (public.egisz_normalize_message_id(msgid), logid DESC)
     WHERE msgid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_message_id_norm
+    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'messageId')), logid DESC)
+    WHERE public.egisz_xml_text(msgtext, 'messageId') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_relates_to_message_norm
+    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'relatesToMessage')), logid DESC)
+    WHERE public.egisz_xml_text(msgtext, 'relatesToMessage') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_relates_to_norm
+    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'relatesTo')), logid DESC)
+    WHERE public.egisz_xml_text(msgtext, 'relatesTo') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_local_uid_norm
+    ON exchangelog_raw (lower(NULLIF(btrim(public.egisz_xml_text(msgtext, 'localUid')), '')), logid DESC)
+    WHERE NULLIF(btrim(public.egisz_xml_text(msgtext, 'localUid')), '') IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_document_id_norm
+    ON exchangelog_raw (lower(NULLIF(btrim(public.egisz_xml_text(msgtext, 'DOCUMENTID')), '')), logid DESC)
+    WHERE NULLIF(btrim(public.egisz_xml_text(msgtext, 'DOCUMENTID')), '') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
 

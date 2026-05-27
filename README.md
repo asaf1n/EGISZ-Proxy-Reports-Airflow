@@ -2,7 +2,7 @@
 
 Сервис собирает данные обмена СЭМД с ЕГИСЗ из прокси-БД интегратора, преобразует их в аналитическую модель PostgreSQL и публикует эксплуатационные дашборды в Metabase.
 
-Основной сценарий: каждые 5 минут Airflow забирает новые строки журналов Firebird, загружает raw-слой в DWH, запускает SQL-трансформацию, обновляет материализованные витрины и продвигает watermark. Пользователь видит состояние отправок, callback'ов, ошибок, очередей ожидания и здоровья ETL-контура.
+Основной сценарий: каждые 5 минут Airflow забирает новые строки журналов Firebird, загружает raw-слой как временный staging, разбирает его в persistent DWH-таблицы, обновляет материализованные витрины и продвигает watermark. Пользователь видит состояние отправок, callback'ов, ошибок, очередей ожидания и здоровья ETL-контура по разложенным fact-таблицам, а не по raw.
 
 | Интерфейс | Адрес | Логин | Пароль |
 |---|---|---|---|
@@ -35,7 +35,7 @@
 | Обратная связь РЭМД | Наличие callback'ов, регистрационный номер `emdrId`, документы в обработке и просроченные ожидания. |
 | Ошибки регистрации | Человекочитаемую классификацию отказов РЭМД, сетевых ошибок и технических сбоев. |
 | Полнота данных | Документы без ответа, пустые или противоречивые идентификаторы, нераспознанные callback'и. |
-| Здоровье ETL | Свежесть данных, движение watermark, объём raw/fact-слоёв, состояние материализованных витрин. |
+| Здоровье ETL | Свежесть данных, движение watermark, объём staging/fact-слоёв, состояние материализованных витрин. |
 
 Текущее рабочее окно данных стенда начинается с `2026-05-18`. Ограничение закреплено в DAG через `SOURCE_MIN_CREATED_AT` и применяется к основным и связанным строкам Firebird.
 
@@ -53,13 +53,13 @@
 
 ## Архитектура
 
-Проект построен как ELT-сервис. Python отвечает за оркестрацию и загрузку raw-данных. Предметная трансформация выполняется в PostgreSQL функциями PL/pgSQL.
+Проект построен как ELT-сервис. Python отвечает за оркестрацию и загрузку raw staging. Предметная трансформация выполняется в PostgreSQL функциями PL/pgSQL и сохраняет результат в persistent fact-таблицы.
 
 | Компонент | Технология | Ответственность |
 |---|---|---|
 | Источник | Firebird 5, база `proxy_egisz` | Журнал обмена шлюза и справочники клиник. |
 | Оркестратор | Apache Airflow 2.11.2 | Инкрементальная загрузка, запуск SQL-трансформации, refresh витрин, watermark. |
-| DWH | PostgreSQL 16+, база `dwh_egisz` | Raw-слой, справочники, факты, функции парсинга, аналитические view. |
+| DWH | PostgreSQL 16+, база `dwh_egisz` | Staging-слой, справочники, persistent facts, функции парсинга, аналитические view. |
 | BI | Metabase v0.60.2.5 | 8 дашбордов и около 100 native SQL-карточек. |
 | Деплой | Kubernetes + Docker Desktop | Airflow через Helm, Metabase через манифест, запуск через `up.ps1`. |
 
@@ -126,9 +126,9 @@ sync_dimensions
 |---|---|
 | `sync_dimensions` | Обновляет `dim_organizations` и `dim_licenses` из Firebird. |
 | `extract_from_proxy` | Забирает новые `EXCHANGELOG` и `EGISZ_MESSAGES`, а также связанные сообщения внутри рабочего окна данных. |
-| `load_to_dwh` | Выполняет UPSERT в `exchangelog_raw` и `egisz_messages_raw`. |
-| `analyze_raw_tables` | Обновляет статистику PostgreSQL для raw-таблиц после загрузки. |
-| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)` и обновляет статистику фактов. |
+| `load_to_dwh` | Выполняет UPSERT журнальных payload'ов в `exchangelog_raw` и напрямую сохраняет структурированные `EGISZ_MESSAGES` в `fact_egisz_messages`. |
+| `analyze_raw_tables` | Обновляет статистику PostgreSQL для staging-таблиц и `fact_egisz_messages` после загрузки. |
+| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`, заполняет `fact_egisz_transactions`, `fact_egisz_documents`, `fact_egisz_channel_errors` и обновляет статистику фактов. |
 | `refresh_materialized_views` | Обновляет `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document`, затем запускает `ANALYZE`. |
 | `update_watermark` | Продвигает `elt_state` через `GREATEST(current, new)`. |
 
@@ -179,11 +179,14 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 | Слой | Объекты | Содержание |
 |---|---|---|
-| Raw | `exchangelog_raw`, `egisz_messages_raw`, `elt_state` | Данные из Firebird без предметной трансформации и курсоры загрузки. |
+| Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Production может очищать эту таблицу после разложения данных в DWH facts. `EGISZ_MESSAGES` уже структурирована и грузится напрямую в `fact_egisz_messages`. |
+| ELT state | `elt_state` | Курсоры загрузки `last_log_id` и `last_egmid`. |
 | Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types` | Организации, лицензии, типы СЭМД. |
-| Fact | `fact_egisz_transactions` | Одна строка на логическую транзакцию обмена СЭМД. |
-| Materialized views | `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document` | Быстрые витрины для Metabase и отчётных view. |
+| Fact | `fact_egisz_transactions`, `fact_egisz_messages`, `fact_egisz_documents`, `fact_egisz_channel_errors` | Разложенные DWH-таблицы для callback'ов, отправленных сообщений, реквизитов ЭМД (`KIND`/OID хранится как `semd_code`) и ошибок канала. |
+| Materialized views | `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document` | Быстрые витрины для Metabase и отчётных view; строятся поверх fact-таблиц. |
 | Reporting views | `v_rpt_*_ui`, `v_health_*_ui` | Готовые SQL-интерфейсы для карточек. |
+
+`_raw`-таблицы не являются источником отчётности. Представления и дашборды должны читать только persistent DWH-слой (`fact_egisz_*`, dimensions, materialized views). Это важно для production, где raw staging периодически очищается.
 
 Статусы фактов:
 
@@ -303,7 +306,9 @@ SELECT
 FROM pg_stat_user_tables
 WHERE relname IN (
     'exchangelog_raw',
-    'egisz_messages_raw',
+    'fact_egisz_messages',
+    'fact_egisz_documents',
+    'fact_egisz_channel_errors',
     'fact_egisz_transactions',
     'v_egisz_transactions_enriched_ui',
     'v_stg_channel_errors_by_document'
@@ -353,6 +358,6 @@ up.ps1                             локальный запуск Kubernetes-с
 | `messageId` | Идентификатор SOAP/Ws-Addressing сообщения. |
 | `relatesTo` / `relatesToMessage` | Ссылка callback на исходное сообщение. |
 | Watermark | Последний успешно обработанный `LOGID` и `EGMID`. |
-| Raw layer | Таблицы DWH с данными источника без предметной трансформации. |
+| Raw layer | Временные staging-таблицы DWH с данными источника до предметной трансформации. |
 | Fact table | Таблица нормализованных транзакций обмена СЭМД. |
 | Materialized view | Предрасчитанная витрина PostgreSQL для быстрых BI-запросов. |

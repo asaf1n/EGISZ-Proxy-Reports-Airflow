@@ -45,9 +45,24 @@ DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
 
 -- Drop legacy columns after dependent views are gone.
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS jid;
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS kind;
-ALTER TABLE egisz_messages_raw DROP COLUMN IF EXISTS msgtext;
+ALTER TABLE fact_egisz_messages DROP COLUMN IF EXISTS semd_code;
+
+DO $$
+BEGIN
+    IF to_regclass('public.fact_egisz_document_kinds') IS NOT NULL THEN
+        INSERT INTO public.fact_egisz_documents (document_key, semd_code, source_logid, updated_at)
+        SELECT document_key, semd_code, source_logid, updated_at
+        FROM public.fact_egisz_document_kinds
+        ON CONFLICT (document_key) DO UPDATE SET
+            semd_code = EXCLUDED.semd_code,
+            source_logid = GREATEST(public.fact_egisz_documents.source_logid, EXCLUDED.source_logid),
+            updated_at = now();
+    END IF;
+END
+$$;
+
+DROP TABLE IF EXISTS public.fact_egisz_document_kinds CASCADE;
+DROP TABLE IF EXISTS public.egisz_messages_raw CASCADE;
 
 -- Drop legacy "service audit" placeholder tables that were never wired to any
 -- ELT source. Dashboards/views referencing them have been removed; CASCADE

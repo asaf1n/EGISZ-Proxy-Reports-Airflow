@@ -127,35 +127,33 @@ COMMENT ON VIEW public.v_rpt_network_errors_detail_ui IS
 'Техническая витрина ошибок связи proxy_egisz: healthcheck/поддержка клиник, LOGSTATE=3 и строки журнала с привязкой к документу, если её удалось восстановить.';
 
 CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
-WITH messages AS (
+WITH source_documents AS (
+    SELECT document_key, semd_code
+    FROM public.fact_egisz_documents
+),
+messages_all AS (
     SELECT
         m.egmid,
         m.created_at,
         m.msgid,
         m.reply_to,
-        m.document_id,
-        public.egisz_normalize_semd_code(
-            COALESCE(public.egisz_xml_text(r.msgtext, 'kind'),
-                     public.egisz_xml_text(r.msgtext, 'KIND'))
-        ) AS semd_code_resolved,
-        public.egisz_clean_text_value(
-            COALESCE(public.egisz_xml_text(r.msgtext, 'documentTypeName'),
-                     public.egisz_xml_text(r.msgtext, 'name'),
-                     public.egisz_xml_text(r.msgtext, 'documentName'))
-        ) AS semd_name_payload,
-        public.egisz_normalize_message_id(m.msgid) AS msgid_norm,
-        lower(NULLIF(btrim(m.document_id), '')) AS document_id_norm,
-        NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer AS reply_to_jid,
-        public.egisz_clean_host(m.reply_to) AS reply_to_host
-    FROM egisz_messages_raw m
-    LEFT JOIN LATERAL (
-        SELECT er.msgtext
-        FROM exchangelog_raw er
-        WHERE er.msgid IS NOT NULL
-          AND public.egisz_normalize_message_id(er.msgid) = public.egisz_normalize_message_id(m.msgid)
-        ORDER BY er.logid DESC
-        LIMIT 1
-    ) r ON TRUE
+        public.egisz_clean_text_value(m.document_id) AS document_id,
+        m.document_key,
+        source_doc.semd_code AS semd_code_resolved,
+        m.msgid_norm,
+        m.document_id_norm,
+        m.reply_to_jid,
+        m.reply_to_host
+    FROM public.fact_egisz_messages m
+    LEFT JOIN source_documents source_doc
+      ON source_doc.document_key = m.document_key
+),
+messages AS (
+    SELECT DISTINCT ON (document_key)
+        *
+    FROM messages_all
+    WHERE document_key IS NOT NULL
+    ORDER BY document_key, created_at DESC NULLS LAST, egmid DESC
 ),
 fact_message_keys AS (
     SELECT DISTINCT public.egisz_normalize_message_id(f.message_id) AS message_key
@@ -169,9 +167,15 @@ fact_message_keys AS (
     WHERE NULLIF(public.egisz_normalize_message_id(f.relates_to_id), '') IS NOT NULL
 ),
 fact_document_keys AS (
-    SELECT DISTINCT lower(NULLIF(btrim(f.local_uid_semd), '')) AS document_key
+    SELECT DISTINCT lower(public.egisz_clean_text_value(f.local_uid_semd)) AS document_key
     FROM fact_egisz_transactions f
-    WHERE lower(NULLIF(btrim(f.local_uid_semd), '')) IS NOT NULL
+    WHERE public.egisz_clean_text_value(f.local_uid_semd) IS NOT NULL
+
+    UNION
+
+    SELECT DISTINCT lower(public.egisz_clean_text_value(f.doc_number)) AS document_key
+    FROM fact_egisz_transactions f
+    WHERE public.egisz_clean_text_value(f.doc_number) IS NOT NULL
 )
 SELECT
     m.created_at AS "Отправлено",
@@ -186,19 +190,12 @@ SELECT
     COALESCE(
         st.name,
         CASE
-            WHEN public.egisz_clean_text_value(m.semd_name_payload) IS NOT NULL
-             AND public.egisz_clean_text_value(m.semd_name_payload) !~ '^\d+$'
-             AND public.egisz_clean_text_value(m.semd_name_payload) <> public.egisz_normalize_semd_code(m.semd_code_resolved)
-            THEN public.egisz_clean_text_value(m.semd_name_payload)
-            ELSE NULL
-        END,
-        CASE
             WHEN public.egisz_normalize_semd_code(m.semd_code_resolved) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
-    public.egisz_semd_type_report_label(m.semd_code_resolved, m.semd_name_payload) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_semd_type_report_label(m.semd_code_resolved, NULL) AS "Тип СЭМД (код · НСИ)",
     COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники",
     COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
     NULL::text AS "Связанное сообщение",
@@ -220,16 +217,37 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) l ON TRUE
 LEFT JOIN dim_organizations o ON o.jid = COALESCE(m.reply_to_jid, l.jid)
-LEFT JOIN dim_semd_types st ON st.code = public.egisz_normalize_semd_code(m.semd_code_resolved)
+LEFT JOIN LATERAL (
+    SELECT dst.*
+    FROM public.dim_semd_types dst
+    WHERE dst.oid = public.egisz_normalize_semd_code(m.semd_code_resolved)
+    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
+    LIMIT 1
+) st ON TRUE
 LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
 LEFT JOIN fact_document_keys fd ON fd.document_key = m.document_id_norm
+LEFT JOIN public.fact_egisz_transactions fe ON fe.egmid = m.egmid
 WHERE fm.message_key IS NULL
-  AND fd.document_key IS NULL;
+  AND fd.document_key IS NULL
+  AND fe.egmid IS NULL;
 
 CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
 SELECT
     "Обработано IPS" AS "Дата обработки",
     "День (тренд)",
+    CASE
+        WHEN NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
+        THEN COALESCE(
+            NULLIF(TRIM("Наименование СЭМД"), ''),
+            NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
+            NULLIF(TRIM("Код СЭМД"), '')
+        )
+        WHEN "Статус" IN ('pending', 'в обработке', 'просрочено')
+        THEN 'Документ в обработке'
+        WHEN "Статус" IN ('error', 'unknown')
+        THEN 'Документ с ошибкой и не определён код'
+        ELSE 'Документ без кода СЭМД'
+    END AS "СЭМД (архив)",
     "Код СЭМД",
     "Наименование СЭМД",
     "Тип СЭМД (код · НСИ)",
@@ -243,6 +261,7 @@ SELECT
     "Связанное сообщение",
     "Рег. номер РЭМД (emdrid)" AS "Рег. номер РЭМД",
     "Статус",
+    "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
     "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
@@ -256,6 +275,17 @@ UNION ALL
 SELECT
     "Отправлено" AS "Дата обработки",
     "Отправлено"::date AS "День (тренд)",
+    CASE
+        WHEN NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
+        THEN COALESCE(
+            NULLIF(TRIM("Наименование СЭМД"), ''),
+            NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
+            NULLIF(TRIM("Код СЭМД"), '')
+        )
+        WHEN "Категория ожидания" IN ('в обработке', 'просрочено')
+        THEN 'Документ в обработке'
+        ELSE 'Документ без кода СЭМД'
+    END AS "СЭМД (архив)",
     "Код СЭМД",
     "Наименование СЭМД",
     "Тип СЭМД (код · НСИ)",
@@ -264,11 +294,16 @@ SELECT
     "Наименование клиники",
     NULL::text AS "OID организации",
     NULL::text AS "OID клиники",
-    COALESCE("localUid СЭМД", "MSGID обмена", "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)") AS "Документ (ключ учёта)",
+    COALESCE(
+        public.egisz_clean_text_value("localUid СЭМД"),
+        public.egisz_clean_text_value("MSGID обмена"),
+        public.egisz_clean_text_value("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)")
+    ) AS "Документ (ключ учёта)",
     "localUid СЭМД",
     "Связанное сообщение",
     NULL::text AS "Рег. номер РЭМД",
     "Категория ожидания" AS "Статус",
+    NULL::text AS "Тип ошибки",
     NULL::text AS "LOGID журнала EXCHANGELOG",
     "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
@@ -361,35 +396,12 @@ WITH fact_source AS (
             THEN ROUND(EXTRACT(EPOCH FROM (f."Обработано IPS" - f."Создание СЭМД"))::numeric, 0)
             ELSE NULL::numeric
         END AS delivery_seconds,
-        r.msgtext AS raw_msgtext,
-        COALESCE(
-            public.egisz_xml_text(r.msgtext, 'patientName'),
-            public.egisz_xml_text(r.msgtext, 'patientFio'),
-            public.egisz_xml_text(r.msgtext, 'fio'),
-            public.egisz_xml_text(r.msgtext, 'patient'),
-            public.egisz_xml_text(r.msgtext, 'PatientName'),
-            NULLIF(concat_ws(
-                ' ',
-                public.egisz_xml_text(r.msgtext, 'familyName'),
-                public.egisz_xml_text(r.msgtext, 'givenName'),
-                public.egisz_xml_text(r.msgtext, 'patronymic')
-            ), '')
-        ) AS raw_patient_name,
-        COALESCE(
-            public.egisz_xml_text(r.msgtext, 'snils'),
-            public.egisz_xml_text(r.msgtext, 'SNILS'),
-            public.egisz_xml_text(r.msgtext, 'patientSnils')
-        ) AS raw_snils,
-        COALESCE(
-            public.egisz_xml_text(r.msgtext, 'doctorName'),
-            public.egisz_xml_text(r.msgtext, 'doctorFio'),
-            public.egisz_xml_text(r.msgtext, 'physicianName'),
-            public.egisz_xml_text(r.msgtext, 'medicalWorkerName'),
-            public.egisz_xml_text(r.msgtext, 'authorName'),
-            public.egisz_xml_text(r.msgtext, 'doctor')
-        ) AS raw_doctor_name
+        f.patient_name_masked,
+        f.snils_masked,
+        f.doctor_name,
+        f.patient_hash,
+        f.doctor_hash
     FROM public.v_egisz_transactions_enriched_ui f
-    LEFT JOIN public.exchangelog_raw r ON r.logid = f.transaction_id
 ),
 pending_source AS (
     SELECT
@@ -405,23 +417,17 @@ pending_source AS (
         2::integer AS status_sort,
         NULL::text AS error_text,
         NULL::numeric AS delivery_seconds,
-        NULL::text AS raw_msgtext,
-        NULL::text AS raw_patient_name,
-        NULL::text AS raw_snils,
-        NULL::text AS raw_doctor_name
+        '(нет данных)'::text AS patient_name_masked,
+        '(нет данных)'::text AS snils_masked,
+        '(нет данных)'::text AS doctor_name,
+        NULL::text AS patient_hash,
+        NULL::text AS doctor_hash
     FROM public.v_rpt_documents_no_response_ui p
 ),
 source_rows AS (
     SELECT * FROM fact_source
     UNION ALL
     SELECT * FROM pending_source
-),
-normalized AS (
-    SELECT
-        s.*,
-        regexp_split_to_array(public.egisz_clean_text_value(s.raw_patient_name), '\s+') AS patient_parts,
-        regexp_replace(COALESCE(s.raw_snils, ''), '\D', '', 'g') AS snils_digits
-    FROM source_rows s
 )
 SELECT
     document_row_id,
@@ -436,26 +442,9 @@ SELECT
     status_sort,
     error_text,
     delivery_seconds,
-    CASE
-        WHEN patient_parts IS NULL OR array_length(patient_parts, 1) IS NULL THEN '(нет данных)'
-        ELSE substring(patient_parts[1] FROM 1 FOR 1) || '***'
-             || CASE WHEN array_length(patient_parts, 1) >= 2 THEN ' ' || substring(patient_parts[2] FROM 1 FOR 1) || '.' ELSE '' END
-             || CASE WHEN array_length(patient_parts, 1) >= 3 THEN substring(patient_parts[3] FROM 1 FOR 1) || '.' ELSE '' END
-    END AS patient_name_masked,
-    CASE
-        WHEN length(snils_digits) >= 4 THEN '***-***-*** ' || right(snils_digits, 4)
-        WHEN length(snils_digits) >= 2 THEN '***-***-*** ' || right(snils_digits, 2)
-        ELSE '(нет данных)'
-    END AS snils_masked,
-    COALESCE(NULLIF(public.egisz_clean_text_value(raw_doctor_name), ''), '(нет данных)') AS doctor_name,
-    -- стабильные surrogate-ID для COUNT DISTINCT в BI-дашборде; raw_* не покидают view.
-    CASE
-        WHEN COALESCE(NULLIF(btrim(raw_patient_name), ''), '') = ''
-         AND COALESCE(NULLIF(snils_digits, ''), '') = '' THEN NULL
-        ELSE md5(lower(COALESCE(btrim(raw_patient_name), '')) || '|' || COALESCE(snils_digits, ''))
-    END AS patient_hash,
-    CASE
-        WHEN public.egisz_clean_text_value(raw_doctor_name) IS NULL THEN NULL
-        ELSE md5(lower(public.egisz_clean_text_value(raw_doctor_name)))
-    END AS doctor_hash
-FROM normalized;
+    patient_name_masked,
+    snils_masked,
+    doctor_name,
+    patient_hash,
+    doctor_hash
+FROM source_rows;
