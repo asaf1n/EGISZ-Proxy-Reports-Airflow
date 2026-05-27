@@ -460,11 +460,3 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_patient_hash ON fact_egisz_transaction
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_doctor_hash ON fact_egisz_transactions (doctor_hash);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
-
--- Service-audit placeholder tables (clients/subscriptions/billing/tickets/
--- sla_metrics/sed_transfers/churn_events/client_costs_monthly) were never
--- wired to any ETL source — only fed dashboards with fabricated numbers.
--- Удалены. DROP TABLE ... CASCADE для уже-существующих установок — в
--- 60_drop_dependents.sql. Финансовая модель 05_executive теперь — фикс-
--- подписка 10 000 ₽/JID/мес, считается прямо в SQL карточек по
--- COUNT(DISTINCT jid) из fact.

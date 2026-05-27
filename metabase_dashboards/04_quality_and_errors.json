@@ -193,24 +193,17 @@
     },
     {
       "name": "04 · Успешность по клиникам",
-      "description": "Ответы РЭМД по сводке колбэков (COUNT DISTINCT «Документ (ключ учёта)» по статусу) плюс **ошибки связи (транспорт)** из `v_rpt_network_errors_detail_ui` (одна группа; период транспорта — **«Дата создания документа»**). Асинхронные отказы РЭМД — в колонке «Ошибок РЭМД (асинхрон)». % успешных считается только по ответам РЭМД.",
+      "description": "Ответы РЭМД по сводке колбэков (COUNT DISTINCT «Документ (ключ учёта)» по статусу) плюс **ошибки связи (транспорт)** из `v_rpt_network_errors_detail_ui` (одна группа; период транспорта — **«Дата создания документа»**). Асинхронные отказы РЭМД — в колонке «Ошибок регистрации». % успешных считается только по ответам РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS jid_key, MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')) AS clinic_nm, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS vsego, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS usp, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error')::bigint AS err_remd FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{dwh_date}}]] GROUP BY 1 ), net AS ( SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), NULLIF(TRIM(\"JID из журнала (gost, число)\"::text), ''), '(нет JID)') AS jid_key, MAX(NULLIF(TRIM(\"Клиника (транспорт)\"::text), '')) AS transport_lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS net_cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ) SELECT COALESCE(b.jid_key, n.jid_key) AS \"JID клиники\", COALESCE(NULLIF(b.clinic_nm, ''), NULLIF(n.transport_lbl, ''), '(нет наименования)') AS \"Наименование клиники\", COALESCE(b.vsego, 0)::bigint AS \"Всего ответов РЭМД\", COALESCE(b.usp, 0)::bigint AS \"Успешно\", COALESCE(b.err_remd, 0)::bigint AS \"Ошибок РЭМД (асинхрон)\", COALESCE(n.net_cnt, 0)::bigint AS \"Ошибок связи (транспорт)\", ROUND(100.0 * COALESCE(b.usp, 0) / NULLIF(COALESCE(b.vsego, 0), 0), 2) AS \"Процент успешных (по ответам)\" FROM base b FULL OUTER JOIN net n ON b.jid_key = n.jid_key WHERE COALESCE(b.vsego, 0) + COALESCE(n.net_cnt, 0) > 0 ORDER BY 7 ASC NULLS LAST, 3 DESC LIMIT 50",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), '(нет наименования)') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" <> 'Сетевая ошибка')::bigint AS \"Ошибок регистрации\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" = 'Сетевая ошибка')::bigint AS \"Ошибок связи (транспорт)\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 7 ASC NULLS LAST, 3 DESC LIMIT 50",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f6000001-0001-4001-8001-000000000001",
               "name": "dwh_date",
-              "type": "dimension"
-            },
-            "parse_created": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Дата создания документа», ошибки связи",
-              "id": "f6000001-0001-4001-8001-000000000002",
-              "name": "parse_created",
               "type": "dimension"
             }
           }
@@ -245,7 +238,7 @@
             "enabled": true
           },
           {
-            "name": "Ошибок РЭМД (асинхрон)",
+            "name": "Ошибок регистрации",
             "enabled": true
           },
           {
@@ -297,12 +290,8 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        },
-        "parse_created": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Дата создания документа"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -312,7 +301,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего отправлено\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Процент успешных\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 5 ASC, 2 DESC LIMIT 50",
+          "query": "SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего отправлено\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Процент успешных\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 4 ASC, 2 DESC LIMIT 50",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -393,8 +382,8 @@
       "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -472,7 +461,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_label FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT semd_label AS \"СЭМД (подпись)\", COUNT(*)::bigint AS \"Ошибок\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH doc_first AS ( SELECT \"Документ (ключ учёта)\", \"Тип СЭМД (код · НСИ)\" AS lbl FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] ), per_code AS ( SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД (подпись)\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -529,8 +518,8 @@
       "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -600,7 +589,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_code AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH doc_first AS ( SELECT \"Документ (ключ учёта)\", \"Тип СЭМД (код · НСИ)\" AS lbl FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] ), per_code AS ( SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -653,8 +642,8 @@
       "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -664,7 +653,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS \"Тип СЭМД\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Вид ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
+          "query": "SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД\", \"Тип ошибки\" AS \"Вид ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип ошибки\"), '') IS NOT NULL [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -738,7 +727,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH ctx AS ( SELECT \"Документ (ключ учёта)\", MAX(\"JID клиники\"::text) AS jid, MAX(LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 40)) AS clinic FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' GROUP BY 1 ), errs AS ( SELECT \"Документ (ключ учёта)\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_lbl, COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(неизвестно)') AS semd_lbl, \"JID клиники\"::text AS jid_e FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] ) SELECT e.err_lbl AS \"Вид ошибки\", e.semd_lbl AS \"Тип СЭМД (код · НСИ)\", COALESCE(e.jid_e, c.jid) AS \"JID клиники\", COALESCE(c.clinic, '') AS \"Клиника\", COUNT(DISTINCT e.\"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM errs e LEFT JOIN ctx c ON c.\"Документ (ключ учёта)\" = e.\"Документ (ключ учёта)\" GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC NULLS LAST LIMIT 400",
+          "query": "WITH ctx AS ( SELECT \"Документ (ключ учёта)\", MAX(\"JID клиники\"::text) AS jid, MAX(LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 40)) AS clinic FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' GROUP BY 1 ), errs AS ( SELECT \"Документ (ключ учёта)\", \"Тип ошибки\" AS err_lbl, \"Тип СЭМД (код · НСИ)\" AS semd_lbl, \"JID клиники\"::text AS jid_e FROM public.v_rpt_error_category_breakdown_ui WHERE NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип ошибки\"), '') IS NOT NULL [[AND {{dwh_date}}]] ) SELECT e.err_lbl AS \"Вид ошибки\", e.semd_lbl AS \"Тип СЭМД (код · НСИ)\", COALESCE(e.jid_e, c.jid) AS \"JID клиники\", COALESCE(c.clinic, '') AS \"Клиника\", COUNT(DISTINCT e.\"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM errs e LEFT JOIN ctx c ON c.\"Документ (ключ учёта)\" = e.\"Документ (ключ учёта)\" GROUP BY 1, 2, 3, 4 ORDER BY 5 DESC NULLS LAST LIMIT 400",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -798,7 +787,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{dwh_date}}]] AND NULLIF(BTRIM(\"JID клиники\"::text), '') IS NULL) AS \"Транз. без JID\", (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{dwh_date}}]] AND NULLIF(BTRIM(\"OID организации\"::text), '') IS NOT NULL AND NULLIF(BTRIM(\"OID клиники\"::text), '') IS NOT NULL AND BTRIM(COALESCE(\"OID организации\"::text, '')) <> BTRIM(COALESCE(\"OID клиники\"::text, ''))) AS \"Несовпадение OID факта и клиники\"",
+          "query": "SELECT (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] AND NULLIF(BTRIM(\"JID клиники\"::text), '') IS NULL) AS \"Документов без JID\", (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] AND NULLIF(BTRIM(\"OID организации\"::text), '') IS NOT NULL AND NULLIF(BTRIM(\"OID клиники\"::text), '') IS NOT NULL AND BTRIM(COALESCE(\"OID организации\"::text, '')) <> BTRIM(COALESCE(\"OID клиники\"::text, ''))) AS \"Несовпадение OID факта и клиники\"",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -840,8 +829,8 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -851,7 +840,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"localUid СЭМД\"::text), '') IS NULL)::bigint AS \"Без localUid\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"Код СЭМД\"::text), '') IS NULL)::bigint AS \"Без кода СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success' AND \"Обработано IPS\" IS NULL)::bigint AS \"Успех без Обработано IPS\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{dwh_date}}]]",
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"localUid СЭМД\"::text), '') IS NULL)::bigint AS \"Без localUid\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE NULLIF(BTRIM(\"Код СЭМД\"::text), '') IS NULL)::bigint AS \"Без кода СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success' AND \"Дата обработки\" IS NULL)::bigint AS \"Успех без Дата обработки\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]]",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -898,8 +887,8 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -909,7 +898,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов с ошибкой\", COUNT(DISTINCT NULLIF(TRIM(\"Код СЭМД\"), ''))::bigint AS \"Уникальных кодов СЭМД\", COUNT(DISTINCT \"JID клиники\")::bigint AS \"Уникальных клиник (JID)\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]]",
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]]",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -956,8 +945,8 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },

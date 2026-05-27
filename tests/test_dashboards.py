@@ -36,7 +36,7 @@ def test_operational_error_types_include_network_slice() -> None:
     assert "'Сетевая ошибка'::text" in sql
 
 
-def test_operational_status_breakdown_keeps_pending_separate() -> None:
+def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
     trend_card = next(card for card in dashboard["cards"] if card["name"] == "01 · Транзакции по дням и статусам")
@@ -45,23 +45,30 @@ def test_operational_status_breakdown_keeps_pending_separate() -> None:
     rows = card["visualization_settings"]["pie.rows"]
     row_keys = {row["key"] for row in rows}
 
-    assert "public.v_rpt_semd_archive_ui" in query
-    assert "Документы в обработке" in query
-    assert "\"Статус\" IN ('pending', 'в обработке', 'просрочено')" in query
-    assert "WHEN \"Статус\" IN ('error', 'unknown') THEN 'Неизвестная ошибка'" in query
-    assert "SUM(\"Документов\")::bigint" in query
+    assert "public.v_rpt_documents_ui" in query
+    assert "WHERE \"Статус\" IN ('success', 'error')" in query
+    assert "WHEN \"Статус\" = 'success' THEN 'Успешный ответ'" in query
+    assert "WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи'" in query
+    assert "WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации'" in query
+    assert "COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
     assert "отказы РЭМД (status=error)" not in query
     assert card["metabase-field-filters"]["dwh_date"] == {
-        "table_ref": "public.v_rpt_semd_archive_ui",
+        "table_ref": "public.v_rpt_documents_ui",
         "field_name": "Дата обработки",
     }
-    assert "Документы в обработке" in row_keys
-    assert "Неизвестная ошибка" in row_keys
-    assert "Документы в ожидании" not in row_keys
+    assert "Успешный ответ" in row_keys
+    assert "Ошибка регистрации" in row_keys
+    assert "Ошибка связи" in row_keys
     assert "В обработке" not in row_keys
+    assert "Отправлен" not in row_keys
+    assert "Неизвестная ошибка" not in row_keys
+    assert "Документы в ожидании" not in row_keys
     assert "Нераспознан" not in row_keys
     assert "public.v_rpt_semd_archive_ui" in trend_query
-    assert "Документы в обработке" in trend_query
+    assert "CREATE OR REPLACE VIEW public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "FROM public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "Успешный ответ" in trend_query
+    assert "Ошибка регистрации" in trend_query
     assert trend_card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_semd_archive_ui",
         "field_name": "Дата обработки",
@@ -75,7 +82,6 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
     query = card["dataset_query"]["native"]["query"]
 
     assert '"СЭМД (архив)"' in sql
-    assert "Документ в обработке" in sql
     assert "Документ с ошибкой и не определён код" in sql
     assert '"Тип ошибки"' in sql
     assert 'NULLIF(TRIM("Код СЭМД"), \'\') IS NOT NULL' in query
@@ -83,24 +89,31 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
     assert 'TRIM("СЭМД (архив)")' not in query
 
 
-def test_pending_rows_do_not_feed_type_or_bi_breakdowns() -> None:
+def test_document_views_choose_latest_journal_entry_before_status_priority() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert 'CASE WHEN f."Статус" <> \'pending\' THEN NULLIF(f."Код СЭМД", \'\') END AS semd_code' in sql
-    assert "NULL::text AS document_type" in sql
+
+    assert 'NULLIF("LOGID журнала EXCHANGELOG", \'\')::bigint DESC NULLS LAST' in sql
+    assert 'NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", \'\')::bigint DESC NULLS LAST' in sql
+    assert "CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST" in sql
+
+
+def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert 'WHERE "Статус" IN (\'success\', \'error\')' in sql
+    assert "pending_source AS" not in sql
 
     quality = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     quality_queries = _native_queries(quality)
-    assert any('"Статус" <> \'pending\'' in q and "Тип СЭМД (код · НСИ)" in q for q in quality_queries)
+    assert any('"Статус" IN (\'success\', \'error\')' in q and "Тип СЭМД (код · НСИ)" in q for q in quality_queries)
 
     client_service = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     service_queries = _native_queries(client_service)
-    assert any("status_code <> 'pending'" in q and "Тип документа" in q for q in service_queries)
-    assert any("status_code <> 'pending'" in q and "Тип СЭМД" in q for q in service_queries)
+    assert all("status_code NOT IN ('pending', 'sent')" not in q for q in service_queries)
+    assert all("status_code = 'pending'" not in q for q in service_queries)
 
     bi = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
     bi_queries = _native_queries(bi)
-    assert any("status_code <> 'pending'" in q and "patient_hash" in q for q in bi_queries)
-    assert any("status_code <> 'pending'" in q and "document_type" in q for q in bi_queries)
+    assert all("status_code NOT IN ('pending', 'sent')" not in q for q in bi_queries)
 
 
 def test_error_analytics_use_raw_json_column_for_grouping() -> None:
@@ -119,28 +132,25 @@ def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
     assert dashboard["name"] == "05 Управленческий дашборд"
 
     # 05 после перестройки опирается ТОЛЬКО на реальные данные DWH.
-    # Заглушечные таблицы (clients/subscriptions/billing/tickets/sla_metrics/
-    # sed_transfers/churn_events/client_costs_monthly) и v_rpt_service_audit_*
-    # удалены вместе с дашбордами, которые их использовали — никаких ссылок не должно быть.
+    # Управленческий дашборд не должен читать снятые service_audit-витрины и таблицы.
     assert all("v_rpt_service_audit_" not in q for q in queries), (
         "05_executive must not reference removed v_rpt_service_audit_* views"
     )
-    for placeholder in ("clients", "subscriptions", "billing", "tickets",
-                        "sla_metrics", "sed_transfers", "churn_events",
-                        "client_costs_monthly"):
-        assert all(f"FROM {placeholder}" not in q and f"from {placeholder}" not in q for q in queries), (
-            f"05_executive must not reference removed placeholder table '{placeholder}'"
+    for retired_table in ("clients", "subscriptions", "billing", "tickets",
+                          "sla_metrics", "sed_transfers", "churn_events",
+                          "client_costs_monthly"):
+        assert all(f"FROM {retired_table}" not in q and f"from {retired_table}" not in q for q in queries), (
+            f"05_executive must not reference removed table '{retired_table}'"
         )
 
     # Источники только реальные.
-    assert any("v_egisz_transactions_enriched_ui" in q for q in queries)
-    assert any("v_rpt_documents_no_response_ui" in q for q in queries)
+    assert any("v_rpt_documents_ui" in q for q in queries)
+    assert all("v_rpt_documents_no_response_ui" not in q for q in queries)
 
     # Фикс-тариф 10 000 ₽/JID/мес зашит явно в SQL карточек (раньше прятался в view-константе).
     assert any("10000" in q for q in queries), "MRR formula must use the fixed 10 000 ₽/JID/month tariff"
 
-    # Новый статус pending должен учитываться в KPI-карточках.
-    assert any("'pending'" in q for q in queries)
+    assert all("'pending'" not in q for q in queries)
 
 
 def test_executive_dashboard_uses_section_headers() -> None:
@@ -151,16 +161,16 @@ def test_executive_dashboard_uses_section_headers() -> None:
         assert "text" in card and card["text"].strip(), "text-карточка должна содержать содержимое"
 
 
-def test_client_service_dashboard_uses_jid_stub_and_client_view() -> None:
+def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
 
     assert dashboard["name"] == "07 Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ"
-    assert any(p["name"] == "JID (заглушка авторизации)" for p in dashboard["parameters"])
+    assert any(p["name"] == "JID клиники" for p in dashboard["parameters"])
     assert any(p["name"] == "Период" and p.get("default") == "past7days" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
     assert all("public.v_rpt_client_documents_ui" in query for query in queries)
-    assert all("{{client_jid_stub}}" in query for query in queries)
+    assert all("{{client_jid}}" in query for query in queries)
 
 
 def test_client_bianalytic_dashboard_uses_hashed_unique_keys() -> None:
@@ -168,9 +178,9 @@ def test_client_bianalytic_dashboard_uses_hashed_unique_keys() -> None:
     queries = _native_queries(dashboard)
 
     assert dashboard["name"] == "08 Клиентский дашборд. BI-аналитика ЭМД"
-    assert any(p["name"] == "JID (заглушка авторизации)" for p in dashboard["parameters"])
+    assert any(p["name"] == "JID клиники" for p in dashboard["parameters"])
     assert all("public.v_rpt_client_documents_ui" in query for query in queries)
-    assert all("{{client_jid_stub}}" in query for query in queries)
+    assert all("{{client_jid}}" in query for query in queries)
     # Уникальный счёт пациентов/врачей идёт через hash-колонки, не через masked-имена.
     assert any("patient_hash" in q for q in queries)
     assert any("doctor_hash" in q for q in queries)
@@ -187,8 +197,8 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
             tags = card["dataset_query"]["native"]["template-tags"]
             filters = card.get("metabase-field-filters", {})
 
-            assert tags["client_jid_stub"]["type"] == "text", f"{path_name}: JID должен быть text-тегом, иначе фильтр-заглушка не работает"
-            assert tags["client_jid_stub"]["required"] is True, f"{path_name}: JID должен быть required"
+            assert tags["client_jid"]["type"] == "text", f"{path_name}: JID должен быть text-тегом, иначе JID-фильтр не работает"
+            assert tags["client_jid"]["required"] is True, f"{path_name}: JID должен быть required"
             assert tags["client_period"]["type"] == "dimension"
             assert tags["client_document_type"]["type"] == "dimension"
             assert filters["client_period"] == {
@@ -213,7 +223,7 @@ def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> 
     assert "doctor_hash" in sql
 
 
-def test_no_legacy_dashboard_files_remain() -> None:
+def test_no_retired_dashboard_files_remain() -> None:
     names = {p.name for p in _dashboard_paths()}
     # старые версии переименованных дашбордов должны быть удалены, иначе setup-dashboards.sh
     # импортирует дубликаты в коллекцию.

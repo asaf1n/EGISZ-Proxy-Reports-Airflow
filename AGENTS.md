@@ -45,8 +45,8 @@ Do not invent names. Use exactly this taxonomy:
 | Dimension: organizations | `dim_organizations` | Source: Firebird `JPERSONS`, PK `jid` |
 | Dimension: licenses | `dim_licenses` | Source: Firebird `EGISZ_LICENSES`, PK `id` |
 | Dimension: СЭМД types | `dim_semd_types` | Static reference table, PK `code` |
-| Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id`. `status` ∈ {`success`, `error`, `pending`, `unknown`}; `error_type` непустой только для `status='error'` (для pending/unknown — `NULL`) |
-| Fact table: sent messages | `fact_egisz_messages` | Persistent parsed `EGISZ_MESSAGES`; source for waiting queue and client pending rows |
+| Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id`. Analytics dashboards use only recognized callback facts: `success`, registration `error`, and network `error` (`LOGSTATE=3`). User-facing statuses: `Успешный ответ`, `Ошибка регистрации`, `Ошибка связи`. `error_type` непустой только для `status='error'` |
+| Fact table: sent messages | `fact_egisz_messages` | Persistent parsed `EGISZ_MESSAGES`; source for the no-callback waiting queue shown only on dashboard `03_documents_no_response` |
 | Fact table: EMD documents | `fact_egisz_documents` | Persistent EMD requisites parsed from `getDocumentFile`; `KIND`/OID is stored as `semd_code`, readable names are resolved from `dim_semd_types` in views |
 | Fact table: channel errors | `fact_egisz_channel_errors` | Persistent parsed transport/channel errors; source for `v_stg_channel_errors_by_document` |
 | Materialized views | `v_*` (MV variants — `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document`) | Refreshed by a dedicated Airflow task |
@@ -62,7 +62,7 @@ Airflow version: **2.11.2**. Use it as a first-class orchestrator, not a cron wr
 
 ### Decorators
 
-Only `@dag` and `@task`. No legacy operators (`PythonOperator`, `BashOperator`) for Python logic.
+Only `@dag` and `@task`. No `PythonOperator` / `BashOperator` for Python logic.
 
 ### Task pipeline (order matters)
 
@@ -76,7 +76,7 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> analyze_raw_tables >> tr
 | `extract_from_proxy` | Read watermarks from `elt_state` (`get_cursors(pipeline)`), pull `EXCHANGELOG` batch by `LOGID > last_log_id` and `EGISZ_MESSAGES` batch by `EGMID > last_egmid`, bounded by `SOURCE_MIN_CREATED_AT = 2026-05-18`. Additionally pull related older messages referenced via `<messageId>` / `<relatesToMessage>` / `<relatesTo>` / `<localUid>` / `<DOCUMENTID>` in XML and via `MSGID` in the journal row, but only when the related source row is not older than `SOURCE_MIN_CREATED_AT`. Returns XCom dict |
 | `load_to_dwh` | UPSERT into `exchangelog_raw` for journal payloads and directly persists structured `EGISZ_MESSAGES` into `fact_egisz_messages`. Forwards the XCom dict downstream |
 | `analyze_raw_tables` | `ANALYZE` for touched raw staging tables and `fact_egisz_messages`. Runs in autocommit. **Mandatory task**: without fresh stats after bulk load, PostgreSQL may miss the functional indexes used during parsing and matching. |
-| `transform_data` | Calls `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function parses raw payloads into persistent DWH facts: `fact_egisz_transactions`, `fact_egisz_documents`, and `fact_egisz_channel_errors`. Финальный статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success`/`error` для финальных ответов, `pending` для промежуточных («принято к обработке»), `unknown` для нераспознанных. `pending` — операционная норма, **не ошибка**; `error_type` для pending/unknown остаётся `NULL`. The function does **not** refresh MVs — that's a separate task |
+| `transform_data` | Calls `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function parses raw payloads into persistent DWH facts: `fact_egisz_transactions`, `fact_egisz_documents`, and `fact_egisz_channel_errors`. Статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success` для успешного ответа, `error` для отказа регистрации или `LOGSTATE=3`. Документы без связанного callback'а остаются только в `v_rpt_documents_no_response_ui` и дашборде `03_documents_no_response.json`; остальные дашборды используют аналитику распознанных документов. The function does **not** refresh MVs — that's a separate task |
 | `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on the MV — present on `transaction_id`. Skipped when `transformed=0` (нечего рефрешить) |
 | `update_watermark` | UPSERT into `elt_state` via `GREATEST(current, new)` for `last_log_id` and `last_egmid` — guards against accidental cursor rollback during manual re-runs of older batches |
 
@@ -150,7 +150,7 @@ db/parts/20_functions_parsing.sql          — egisz_xml_text, egisz_normalize_m
 db/parts/30_error_rules.sql                — egisz_error_interpretation_rules + rule seed
 db/parts/40_functions_errors.sql           — error classify / interpretation / build_errors_json / semd_type_report_label
 db/parts/50_transform.sql                  — egisz_transform_raw_to_facts (the main function)
-db/parts/60_drop_dependents.sql            — DROP dependent views and legacy columns before rebuild
+db/parts/60_drop_dependents.sql            — DROP dependent views and retired columns before rebuild
 db/parts/70_views_core.sql                 — v_egisz_transactions_enriched_ui (MV) + v_rpt_error_interpretations_ui
 db/parts/75_views_stg.sql                  — v_stg_channel_errors_by_document (MV) + v_stg_channel_network_errors_by_document (alias view)
 db/parts/80_views_rpt.sql                  — v_rpt_*_ui (network_errors_detail, documents_no_response, semd_archive, clinic_connectivity_daily, connectivity_global_daily, error_category_breakdown, client_documents)
@@ -198,9 +198,9 @@ The СЭМД type reference is seeded directly in `db/parts/10_tables.sql` (a la
   - `02_service.json` — ETL and channel healthcheck
   - `03_documents_no_response.json` — escalation queue (callback not received)
   - `04_quality_and_errors.json` — detailed failure analysis (69-category classification)
-  - `05_executive.json` — management summary. Операционные + финансовые KPI на реальных данных DWH; финансовая модель — фикс-подписка **10 000 ₽/JID/мес** (MRR = `COUNT(DISTINCT jid) × 10 000`). Раньше дашборд опирался на заглушечные таблицы service_audit (clients/subscriptions/tickets/billing/sla_metrics/sed_transfers/churn_events/client_costs_monthly) с захардкоженными константами — они удалены, метрики на придуманных данных (CAC/LTV/SLA/MTTR/...) сняты
+  - `05_executive.json` — management summary. Операционные + финансовые KPI на реальных данных DWH; финансовая модель — фикс-подписка **10 000 ₽/JID/мес** (MRR = `COUNT(DISTINCT jid) × 10 000`). Метрики считаются только по реальным фактам DWH; CAC/LTV/SLA/MTTR без исходных финансовых и тикетных данных не строятся
   - `06_semd_archive.json` — locate a specific document by any identifier
-  - `07_client_service.json` — per-client service dashboard with JID auth-stub filter, period, and document type
+  - `07_client_service.json` — per-client service dashboard with JID filter, period, and document type
   - `08_client_bianalytic.json` — per-client BI-analytic dashboard (patient/doctor hash counts, no PII)
 - Most cards run on top of `v_egisz_transactions_enriched_ui` and `v_rpt_*_ui`.
 - Dashboards are imported **automatically on container start** via `metabase/entrypoint.sh` → `metabase/provision.sh` (if `METABASE_AUTO_PROVISION=true`, default — true). Additionally, after `kubectl apply` `up.ps1` invokes `setup-dashboards.sh` explicitly (`kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh`) — re-running is idempotent (it verifies a sha256 manifest).
@@ -274,8 +274,8 @@ These prohibitions are not stylistic preferences — they encode past incidents.
 | Roll the watermark back on manual reruns | `update_watermark` UPSERTs via `GREATEST(current, new)` — bypassing this breaks idempotency |
 | Remove `analyze_raw_tables` "as an optimization" | This task guards parsing/matching plans after bulk load (see §2) |
 | Build reporting or healthcheck views directly on `_raw` tables | Parse raw payloads into persistent DWH tables first; views read `fact_egisz_*`, dimensions, and MVs only |
-| Записывать `'unknown'` в `error_type` для нераспознанных callback'ов | `error_type IS NULL` для `status` ∈ {`pending`, `unknown`}; видимость — через `status` и колонку `"Статус (отчёт)"` в `v_egisz_transactions_enriched_ui` |
-| Создавать «теневые» таблицы DWH без ELT-источника (commercial/financial mart с захардкоженными константами в view) | Считать управленческие метрики прямо в SQL карточек 05_executive из `fact_egisz_transactions` / `v_egisz_transactions_enriched_ui` / `v_rpt_documents_no_response_ui`. Финансовая модель — фикс-тариф `10 000 ₽/JID/мес`, явно зашит в SQL карточек |
+| Записывать `'unknown'` или `'Успешно'` в `error_type` для неошибочных callback'ов | `error_type IS NULL` для `status` ∈ {`success`, `pending`, `unknown`}; видимость — через `status` и колонку `"Статус (отчёт)"` в `v_egisz_transactions_enriched_ui` |
+| Создавать «теневые» таблицы DWH без ELT-источника (commercial/financial mart с захардкоженными константами в view) | Считать управленческие метрики прямо в SQL карточек 05_executive из `fact_egisz_transactions` / `v_egisz_transactions_enriched_ui`. Финансовая модель — фикс-тариф `10 000 ₽/JID/мес`, явно зашит в SQL карточек |
 | Add ticket/task references in code comments | Comments — only when the **why** is non-obvious (hidden invariant, bug workaround) |
 
 ---

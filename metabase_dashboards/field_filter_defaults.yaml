@@ -62,6 +62,9 @@ tags:
       - query_contains: [v_rpt_error_category_breakdown_ui]
         table_ref: public.v_rpt_error_category_breakdown_ui
         field_name: Код СЭМД
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Код СЭМД
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Код СЭМД
@@ -84,6 +87,9 @@ tags:
       - query_contains: [v_health_by_clinic_ui]
         table_ref: public.v_health_by_clinic_ui
         field_name: JID клиники
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: JID клиники
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: JID клиники
@@ -103,6 +109,9 @@ tags:
       - query_contains: [v_stg_channel_errors_by_document]
         table_ref: public.v_stg_channel_errors_by_document
         field_name: local_uid_hint
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: localUid СЭМД
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: localUid СЭМД
@@ -118,6 +127,9 @@ tags:
       - query_contains: [v_stg_channel_errors_by_document]
         table_ref: public.v_stg_channel_errors_by_document
         field_name: relates_to_id
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Связанное сообщение
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Связанное сообщение
@@ -129,6 +141,9 @@ tags:
       - query_contains: [v_stg_channel_errors_by_document]
         table_ref: public.v_stg_channel_errors_by_document
         field_name: emdr_id_hint
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Рег. номер РЭМД
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Рег. номер РЭМД
@@ -137,6 +152,9 @@ tags:
 
   status:
     rules:
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Статус
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Статус
@@ -148,6 +166,9 @@ tags:
       - query_contains: [v_stg_channel_errors_by_document]
         table_ref: public.v_stg_channel_errors_by_document
         field_name: exchangelog_log_id
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: LOGID журнала EXCHANGELOG
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: LOGID журнала EXCHANGELOG
@@ -159,6 +180,9 @@ tags:
       - query_contains: [v_stg_channel_errors_by_document]
         table_ref: public.v_stg_channel_errors_by_document
         field_name: egisz_messages_egmid
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
@@ -188,8 +212,16 @@ tags:
         table_ref: public.v_rpt_semd_archive_ui
         field_name: День (тренд)
       - display_name_contains: ["День (тренд)"]
+        query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: День (тренд)
+      - display_name_contains: ["День (тренд)"]
         table_ref: public.v_egisz_transactions_enriched_ui
         field_name: День (тренд)
+      - display_name_contains: [Дата обработки]
+        query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Дата обработки
       - display_name_contains: [Дата обработки]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Дата обработки
@@ -207,6 +239,9 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Дата обработки
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Дата обработки
       - query_contains: [v_egisz_transactions_enriched_ui]
         table_ref: public.v_egisz_transactions_enriched_ui
         field_name: Обработано IPS
@@ -222,10 +257,12 @@ tags:
         field_name: document_type
 
   # mgmt_period — единый dimension-фильтр периода для 05_executive.json.
-  # Привязан к колонке "Обработано IPS" в v_egisz_transactions_enriched_ui
-  # (раньше использовались несколько v_rpt_service_audit_*_ui витрин, они удалены
-  # вместе с заглушечными таблицами clients/subscriptions/tickets/billing/...).
+  # Документные карточки привязаны к "Дата обработки" в v_rpt_documents_ui;
+  # транзакционные карточки остаются на "Обработано IPS" в v_egisz_transactions_enriched_ui.
   mgmt_period:
     rules:
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Дата обработки
       - table_ref: public.v_egisz_transactions_enriched_ui
         field_name: Обработано IPS

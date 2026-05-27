@@ -18,10 +18,12 @@ WITH remd_errors AS (
         COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id,
                  t.doc_number, t.message_id, t.exchangelog_log_id::text)              AS "Документ (ключ учёта)",
         t.jid::text                                                                   AS "JID клиники",
-        public.egisz_normalize_semd_code(t.semd_code)                                AS "Код СЭМД",
-        public.egisz_semd_type_report_label(t.semd_code, t.semd_name)                AS "Тип СЭМД (код · НСИ)",
+        public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))         AS "Код СЭМД",
+        public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
         trim(err_item)                                                                AS "Тип ошибки"
     FROM fact_egisz_transactions t
+    LEFT JOIN public.fact_egisz_documents d
+      ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
     CROSS JOIN LATERAL unnest(
         string_to_array(
             COALESCE(NULLIF(trim(t.error_type), ''), 'Неизвестная ошибка'),
@@ -166,16 +168,28 @@ fact_message_keys AS (
     FROM fact_egisz_transactions f
     WHERE NULLIF(public.egisz_normalize_message_id(f.relates_to_id), '') IS NOT NULL
 ),
-fact_document_keys AS (
+known_document_keys AS (
     SELECT DISTINCT lower(public.egisz_clean_text_value(f.local_uid_semd)) AS document_key
     FROM fact_egisz_transactions f
     WHERE public.egisz_clean_text_value(f.local_uid_semd) IS NOT NULL
 
     UNION
 
+    SELECT DISTINCT lower(public.egisz_clean_text_value(f.emdr_id)) AS document_key
+    FROM fact_egisz_transactions f
+    WHERE public.egisz_clean_text_value(f.emdr_id) IS NOT NULL
+
+    UNION
+
     SELECT DISTINCT lower(public.egisz_clean_text_value(f.doc_number)) AS document_key
     FROM fact_egisz_transactions f
     WHERE public.egisz_clean_text_value(f.doc_number) IS NOT NULL
+
+    UNION
+
+    SELECT document_key
+    FROM public.fact_egisz_documents
+    WHERE document_key IS NOT NULL
 )
 SELECT
     m.created_at AS "Отправлено",
@@ -225,13 +239,14 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) st ON TRUE
 LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
-LEFT JOIN fact_document_keys fd ON fd.document_key = m.document_id_norm
+LEFT JOIN known_document_keys kd ON kd.document_key = m.document_id_norm
 LEFT JOIN public.fact_egisz_transactions fe ON fe.egmid = m.egmid
 WHERE fm.message_key IS NULL
-  AND fd.document_key IS NULL
+  AND kd.document_key IS NULL
   AND fe.egmid IS NULL;
 
-CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
+CREATE OR REPLACE VIEW public.v_rpt_documents_ui AS
+WITH source_rows AS (
 SELECT
     "Обработано IPS" AS "Дата обработки",
     "День (тренд)",
@@ -242,8 +257,6 @@ SELECT
             NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
             NULLIF(TRIM("Код СЭМД"), '')
         )
-        WHEN "Статус" IN ('pending', 'в обработке', 'просрочено')
-        THEN 'Документ в обработке'
         WHEN "Статус" IN ('error', 'unknown')
         THEN 'Документ с ошибкой и не определён код'
         ELSE 'Документ без кода СЭМД'
@@ -269,48 +282,87 @@ SELECT
     "Сводка ошибки",
     "Хост клиники (VPN ГОСТ)"
 FROM public.v_egisz_transactions_enriched_ui
-
-UNION ALL
-
+WHERE "Статус" IN ('success', 'error')
+),
+ranked AS (
+    SELECT
+        source_rows.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(
+                NULLIF("Документ (ключ учёта)", ''),
+                NULLIF("LOGID журнала EXCHANGELOG", ''),
+                NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", ''),
+                NULLIF("MSGID обмена", '')
+            )
+            ORDER BY
+                NULLIF("LOGID журнала EXCHANGELOG", '')::bigint DESC NULLS LAST,
+                NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", '')::bigint DESC NULLS LAST,
+                "Дата обработки" DESC NULLS LAST,
+                CASE
+                    WHEN "Статус" = 'success' THEN 0
+                    WHEN "Статус" = 'error' THEN 1
+                    ELSE 2
+                END,
+                "MSGID обмена" DESC NULLS LAST
+        ) AS rn
+    FROM source_rows
+)
 SELECT
-    "Отправлено" AS "Дата обработки",
-    "Отправлено"::date AS "День (тренд)",
-    CASE
-        WHEN NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
-        THEN COALESCE(
-            NULLIF(TRIM("Наименование СЭМД"), ''),
-            NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
-            NULLIF(TRIM("Код СЭМД"), '')
-        )
-        WHEN "Категория ожидания" IN ('в обработке', 'просрочено')
-        THEN 'Документ в обработке'
-        ELSE 'Документ без кода СЭМД'
-    END AS "СЭМД (архив)",
+    "Дата обработки",
+    "День (тренд)",
+    "СЭМД (архив)",
     "Код СЭМД",
     "Наименование СЭМД",
     "Тип СЭМД (код · НСИ)",
-    "JID клиники" AS "JID",
+    "JID",
     "JID клиники",
     "Наименование клиники",
-    NULL::text AS "OID организации",
-    NULL::text AS "OID клиники",
-    COALESCE(
-        public.egisz_clean_text_value("localUid СЭМД"),
-        public.egisz_clean_text_value("MSGID обмена"),
-        public.egisz_clean_text_value("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)")
-    ) AS "Документ (ключ учёта)",
+    "OID организации",
+    "OID клиники",
+    "Документ (ключ учёта)",
     "localUid СЭМД",
     "Связанное сообщение",
-    NULL::text AS "Рег. номер РЭМД",
-    "Категория ожидания" AS "Статус",
-    NULL::text AS "Тип ошибки",
-    NULL::text AS "LOGID журнала EXCHANGELOG",
+    "Рег. номер РЭМД",
+    "Статус",
+    "Тип ошибки",
+    "LOGID журнала EXCHANGELOG",
     "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
-    NULL::timestamptz AS "Создание СЭМД",
-    NULL::text AS "Сводка ошибки",
+    "Создание СЭМД",
+    "Сводка ошибки",
     "Хост клиники (VPN ГОСТ)"
-FROM public.v_rpt_documents_no_response_ui;
+FROM ranked
+WHERE rn = 1;
+
+COMMENT ON VIEW public.v_rpt_documents_ui IS
+'Единая документная витрина распознанных документов: одна актуальная строка на "Документ (ключ учёта)" только для callback-фактов success/error. Очередь без callback остаётся в v_rpt_documents_no_response_ui и используется дашбордом 03.';
+
+CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
+SELECT
+    "Дата обработки",
+    "День (тренд)",
+    "СЭМД (архив)",
+    "Код СЭМД",
+    "Наименование СЭМД",
+    "Тип СЭМД (код · НСИ)",
+    "JID",
+    "JID клиники",
+    "Наименование клиники",
+    "OID организации",
+    "OID клиники",
+    "Документ (ключ учёта)",
+    "localUid СЭМД",
+    "Связанное сообщение",
+    "Рег. номер РЭМД",
+    "Статус",
+    "Тип ошибки",
+    "LOGID журнала EXCHANGELOG",
+    "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
+    "MSGID обмена",
+    "Создание СЭМД",
+    "Сводка ошибки",
+    "Хост клиники (VPN ГОСТ)"
+FROM public.v_rpt_documents_ui;
 
 CREATE OR REPLACE VIEW public.v_rpt_clinic_connectivity_daily_ui AS
 WITH success_by_day AS (
@@ -367,25 +419,21 @@ WITH fact_source AS (
             NULLIF(f."Рег. номер РЭМД (emdrid)", ''),
             f.transaction_id::text
         ) AS document_key,
-        CASE WHEN f."Статус" <> 'pending' THEN NULLIF(f."Код СЭМД", '') END AS semd_code,
-        CASE
-            WHEN f."Статус" <> 'pending'
-            THEN COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)')
-            ELSE NULL::text
-        END AS document_type,
+        NULLIF(f."Код СЭМД", '') AS semd_code,
+        COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
         CASE
             WHEN f."Статус" = 'success' THEN 'success'
-            WHEN f."Статус" = 'error' THEN 'error'
-            ELSE 'pending'
+            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'network_error'
+            ELSE 'registration_error'
         END AS status_code,
         CASE
-            WHEN f."Статус" = 'success' THEN 'Успех'
-            WHEN f."Статус" = 'error' THEN 'Ошибка'
-            ELSE 'Документы в ожидании'
+            WHEN f."Статус" = 'success' THEN 'Успешный ответ'
+            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'Ошибка связи'
+            ELSE 'Ошибка регистрации'
         END AS status_label,
         CASE
             WHEN f."Статус" = 'success' THEN 1
-            WHEN f."Статус" = 'error' THEN 3
+            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 3
             ELSE 2
         END AS status_sort,
         COALESCE(NULLIF(f."Сводка ошибки", ''), NULLIF(f."Исходный текст ошибки", ''), '(ошибка без текста)') AS error_text,
@@ -402,32 +450,23 @@ WITH fact_source AS (
         f.patient_hash,
         f.doctor_hash
     FROM public.v_egisz_transactions_enriched_ui f
-),
-pending_source AS (
-    SELECT
-        'pending:' || COALESCE(NULLIF(p."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", ''), p."MSGID обмена", p."localUid СЭМД") AS document_row_id,
-        p."Отправлено" AS document_ts,
-        p."Отправлено"::date AS document_day,
-        NULLIF(p."JID клиники", '') AS client_jid,
-        COALESCE(NULLIF(p."localUid СЭМД", ''), NULLIF(p."MSGID обмена", ''), NULLIF(p."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", '')) AS document_key,
-        NULL::text AS semd_code,
-        NULL::text AS document_type,
-        'pending'::text AS status_code,
-        'Документы в ожидании'::text AS status_label,
-        2::integer AS status_sort,
-        NULL::text AS error_text,
-        NULL::numeric AS delivery_seconds,
-        '(нет данных)'::text AS patient_name_masked,
-        '(нет данных)'::text AS snils_masked,
-        '(нет данных)'::text AS doctor_name,
-        NULL::text AS patient_hash,
-        NULL::text AS doctor_hash
-    FROM public.v_rpt_documents_no_response_ui p
+    WHERE f."Статус" IN ('success', 'error')
 ),
 source_rows AS (
     SELECT * FROM fact_source
-    UNION ALL
-    SELECT * FROM pending_source
+),
+ranked AS (
+    SELECT
+        source_rows.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(document_key, ''), NULLIF(document_row_id, ''))
+            ORDER BY
+                CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST,
+                document_ts DESC NULLS LAST,
+                status_sort,
+                document_row_id DESC
+        ) AS rn
+    FROM source_rows
 )
 SELECT
     document_row_id,
@@ -447,4 +486,5 @@ SELECT
     doctor_name,
     patient_hash,
     doctor_hash
-FROM source_rows;
+FROM ranked
+WHERE rn = 1;

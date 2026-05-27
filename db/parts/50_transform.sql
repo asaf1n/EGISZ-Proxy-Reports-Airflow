@@ -402,8 +402,7 @@ BEGIN
         CASE
             WHEN e.final_status = 'error' AND e.error_code = 'INTEGRATION_LOGSTATE_3' THEN 'Сетевая ошибка'
             WHEN e.final_status = 'error'   THEN public.egisz_error_classify(e.built_errors_json)
-            WHEN e.final_status = 'success' THEN 'Успешно'
-            ELSE NULL  -- pending/unknown: видимость через status, error_type не заполняется
+            ELSE NULL  -- success/pending/unknown: видимость через status, error_type не заполняется
         END,
         public.egisz_error_interpretation_row(e.built_errors_json),
         public.egisz_error_messages_row(e.built_errors_json),

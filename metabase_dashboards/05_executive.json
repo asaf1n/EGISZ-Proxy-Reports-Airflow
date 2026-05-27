@@ -1,7 +1,7 @@
 {
   "name": "05 Управленческий дашборд",
   "width": "full",
-  "description": "Операционные и финансовые показатели сервиса для руководства. Источники — **реальные данные** из `fact_egisz_transactions`, `v_egisz_transactions_enriched_ui`, `v_rpt_documents_no_response_ui` и `dim_organizations`. Тариф фиксированный: **1 активный JID = 10 000 ₽/мес**. MRR = COUNT(DISTINCT JID) × 10 000. Раньше дашборд опирался на заглушечные таблицы service_audit (CAC/LTV/SLA/MTTR) с захардкоженными константами — те view и таблицы удалены, метрики, которые невозможно посчитать без реальных финансовых/тикетных данных, тоже сняты.",
+  "description": "Операционные и финансовые показатели сервиса для руководства. Источники — **реальные данные** из `fact_egisz_transactions`, `v_rpt_documents_ui`, `v_egisz_transactions_enriched_ui` и `dim_organizations`. Тариф фиксированный: **1 активный JID = 10 000 ₽/мес**. MRR = COUNT(DISTINCT JID) × 10 000. Метрики считаются только по реальным фактам DWH; CAC/LTV/SLA/MTTR без исходных финансовых и тикетных данных не строятся.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -26,7 +26,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_from_fact AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), active_from_pending AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ) SELECT COUNT(DISTINCT jid)::bigint AS \"Активных JID\" FROM ( SELECT jid FROM active_from_fact UNION SELECT jid FROM active_from_pending ) u",
+          "query": "SELECT COUNT(DISTINCT \"JID клиники\")::bigint AS \"Активных JID\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -53,18 +53,18 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
     {
       "name": "05 · Документов за период",
-      "description": "COUNT(DISTINCT «Документ (ключ учёта)») из enriched + COUNT(DISTINCT localUid) из pending — все исходящие СЭМД (с callback'ом или без).",
+      "description": "COUNT(DISTINCT «Документ (ключ учёта)») по распознанным документам с callback-статусом.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH docs_fact AS ( SELECT \"Документ (ключ учёта)\" AS doc FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ), docs_pending AS ( SELECT COALESCE(NULLIF(\"localUid СЭМД\", ''), NULLIF(\"MSGID обмена\", ''), \"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\") AS doc FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT COUNT(DISTINCT doc)::bigint AS \"Документов\" FROM ( SELECT doc FROM docs_fact UNION ALL SELECT doc FROM docs_pending ) u WHERE doc IS NOT NULL",
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -91,18 +91,18 @@
       "col": 4,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
     {
       "name": "05 · % успеха",
-      "description": "Доля документов со статусом success в общем потоке: success / (success + error + pending + unknown). Только реальные ответы РЭМД (без pending без callback'а).",
+      "description": "Доля документов со статусом «Успешный ответ»: success / (success + error).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% успеха\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -129,46 +129,8 @@
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        }
-      }
-    },
-    {
-      "name": "05 · % в обработке",
-      "description": "Доля документов со статусом pending в общем потоке: pending — это callback РЭМД с промежуточным статусом («принято к обработке», processing, accepted). Высокое значение — нормальная очередь, не ошибка.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
-          "template-tags": {
-            "mgmt_period": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "05e10000-0000-4000-8000-000000000004",
-              "name": "mgmt_period",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"% в обработке\"]": {
-            "suffix": " %"
-          }
-        }
-      },
-      "sizeX": 4,
-      "sizeY": 3,
-      "row": 1,
-      "col": 12,
-      "metabase-field-filters": {
-        "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -178,7 +140,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" <> 'pending' [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -205,34 +167,10 @@
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
-    },
-    {
-      "name": "05 · Просрочено (>72ч)",
-      "description": "Документы из EGISZ_MESSAGES, отправленные более 72 часов назад без callback'а от РЭМД — кандидаты на эскалацию. Пороговое значение по умолчанию: 72 часа (3 дня).",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Просрочено\" FROM public.v_rpt_documents_no_response_ui WHERE \"Категория ожидания\" = 'просрочено'",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Просрочено\"]": {
-            "number_separators": " "
-          }
-        }
-      },
-      "sizeX": 4,
-      "sizeY": 3,
-      "row": 1,
-      "col": 20
     },
     {
       "display": "text",
@@ -244,11 +182,11 @@
     },
     {
       "name": "05 · MRR (текущий месяц), ₽",
-      "description": "MRR = COUNT(DISTINCT JID, у которых был хотя бы один callback или pending в текущем месяце) × 10 000 ₽.",
+      "description": "MRR = COUNT(DISTINCT JID, у которых был хотя бы один распознанный документ в текущем месяце) × 10 000 ₽.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) AND \"Обработано IPS\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' UNION SELECT DISTINCT \"JID клиники\" FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) AND \"Отправлено\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) AND \"Дата обработки\" < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -305,7 +243,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) AND \"Обработано IPS\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' UNION SELECT DISTINCT \"JID клиники\" FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) AND \"Отправлено\" <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000 * 12)::numeric(14, 2) AS \"ARR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) AND \"Дата обработки\" < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000 * 12)::numeric(14, 2) AS \"ARR, ₽\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -331,7 +269,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(active_jid.active * 10000 / NULLIF(docs.total, 0), 2) AS \"₽ / документ\" FROM active_jid, docs",
+          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(active_jid.active * 10000 / NULLIF(docs.total, 0), 4) AS \"₽ / документ\" FROM active_jid, docs",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -359,8 +297,8 @@
       "col": 12,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -370,7 +308,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(docs.total / NULLIF(active_jid.active * 10000, 0), 4) AS \"Документов / ₽\" FROM active_jid, docs",
+          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(docs.total / NULLIF(active_jid.active * 10000, 0), 4) AS \"Документов / ₽\" FROM active_jid, docs",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -397,8 +335,8 @@
       "col": 18,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -416,7 +354,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH months AS ( SELECT generate_series( date_trunc('month', CURRENT_DATE) - INTERVAL '11 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month' )::date AS month ), jid_per_month AS ( SELECT date_trunc('month', \"Обработано IPS\")::date AS month, \"JID клиники\" AS jid FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' UNION SELECT date_trunc('month', \"Отправлено\")::date AS month, \"JID клиники\" AS jid FROM public.v_rpt_documents_no_response_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Отправлено\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' ) SELECT m.month AS \"Месяц\", COALESCE(COUNT(DISTINCT j.jid), 0)::bigint AS \"Активных JID\", (COALESCE(COUNT(DISTINCT j.jid), 0) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM months m LEFT JOIN jid_per_month j ON j.month = m.month GROUP BY m.month ORDER BY m.month",
+          "query": "WITH months AS ( SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '11 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS month ), jid_per_month AS ( SELECT date_trunc('month', \"Дата обработки\")::date AS month, \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' ) SELECT m.month AS \"Месяц\", COALESCE(COUNT(DISTINCT j.jid), 0)::bigint AS \"Активных JID\", (COALESCE(COUNT(DISTINCT j.jid), 0) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM months m LEFT JOIN jid_per_month j ON j.month = m.month GROUP BY m.month ORDER BY m.month",
           "template-tags": {}
         },
         "database": 1
@@ -440,11 +378,11 @@
     },
     {
       "name": "05 · % успеха по месяцам",
-      "description": "Доля документов с финальным статусом success в каждом месяце последних 12 месяцев. По данным fact_egisz_transactions (только записи с callback'ом).",
+      "description": "Доля документов со статусом success в каждом месяце последних 12 месяцев.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending')::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error'))::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
           "template-tags": {}
         },
         "database": 1
@@ -472,11 +410,11 @@
     },
     {
       "name": "05 · Распределение статусов по месяцам",
-      "description": "Stacked bar за 12 месяцев: success / error / pending / unknown. Помогает увидеть, в какой момент режим работы сервиса менялся.",
+      "description": "Stacked bar за 12 месяцев: Успешный ответ / Ошибка регистрации / Ошибка связи.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Обработано IPS\")::date AS \"Месяц\", CASE \"Статус\" WHEN 'success' THEN 'Успех' WHEN 'error' THEN 'Ошибка' WHEN 'pending' THEN 'Документы в ожидании' WHEN 'unknown' THEN 'Неизвестная ошибка' ELSE 'Неизвестная ошибка' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE \"Обработано IPS\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
+          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
           "template-tags": {}
         },
         "database": 1
@@ -509,11 +447,11 @@
     },
     {
       "name": "05 · Топ-20 клиник по объёму документов",
-      "description": "Лидеры документооборота за выбранный период. % успеха и % pending помогают увидеть, у каких крупных клиник статистика проседает.",
+      "description": "Лидеры документооборота за выбранный период по распознанным документам. Показывает % успеха и % ошибок.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'pending') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% в обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending'), 0), 2) AS \"% ошибок\" FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -566,8 +504,8 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
     },
@@ -577,7 +515,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" <> 'pending')::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
+          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error'))::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -604,40 +542,10 @@
       "col": 12,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
       }
-    },
-    {
-      "name": "05 · Клиники с просроченными pending (>72ч)",
-      "description": "Клиники, у которых есть документы из EGISZ_MESSAGES, отправленные более 72 часов назад без callback'а. Топ-15 по числу просроченных документов. Фильтр периода не применяется — это операционный backlog «здесь и сейчас».",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Просрочено документов\", ROUND(MAX(\"Часов в ожидании\"), 1) AS \"Макс. ожидание (ч)\" FROM public.v_rpt_documents_no_response_ui WHERE \"Категория ожидания\" = 'просрочено' AND NULLIF(\"JID клиники\", '') IS NOT NULL GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 15",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.column_formatting": [
-          {
-            "color": "#EF8C8C",
-            "columns": [
-              "Макс. ожидание (ч)"
-            ],
-            "operator": ">=",
-            "type": "single",
-            "value": 168
-          }
-        ]
-      },
-      "sizeX": 24,
-      "sizeY": 8,
-      "row": 39,
-      "col": 0
     }
   ]
 }

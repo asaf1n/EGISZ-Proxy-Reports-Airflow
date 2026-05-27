@@ -141,12 +141,17 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "src_doc.semd_code AS source_document_semd_code" in sql
     assert "p.source_document_semd_code" in sql
     assert "WHERE d.oid = n.code" in sql
-    assert "WHERE dst.oid = public.egisz_normalize_semd_code(t.semd_code)" in sql
+    assert "WHERE dst.oid = public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))" in sql
     assert "WHERE dst.oid = public.egisz_normalize_semd_code(m.semd_code_resolved)" in sql
     assert "FROM public.fact_egisz_documents" in sql
     assert "source_doc.semd_code AS semd_code_resolved" in sql
     assert "FROM public.fact_egisz_messages m" in sql
     assert "LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid" in sql
+    assert "known_document_keys AS" in sql
+    assert "SELECT document_key\n    FROM public.fact_egisz_documents" in sql
+    assert "LEFT JOIN known_document_keys kd ON kd.document_key = m.document_id_norm" in sql
+    assert "AND kd.document_key IS NULL" in sql
+    assert "ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))" in sql
     assert "f.semd_code IS DISTINCT FROM k.semd_code" in sql
     assert "semd_name = NULL" in sql
     assert "p.error_code = 'NO_DOCUMENT_KIND_ON_DATE'" not in sql
@@ -175,7 +180,7 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "Данные пациента не соответствуют ГИП" in sql
     assert "Документ уже зарегистрирован в РЭМД" in sql
     assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
-    assert "Ошибка регистрации в РЭМД" in sql
+    assert "Ошибка регистрации" in sql
     assert "Отказ РЭМД" not in sql
     assert "Отказ РЭМД (ns2status: error)" not in sql
     assert "Сетевая ошибка: " in sql
@@ -188,6 +193,21 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "egisz_error_messages_row" in sql
     assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
+
+
+def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
+    sql = _read_dwh_init_sql()
+
+    assert "Прокси не отдаёт отдельный статус для синхронного приёма" in sql
+    assert "THEN 'success'" in sql
+    assert "THEN 'sent'" not in sql
+    assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql
+    assert "WHEN t.status = 'success' THEN 'Успешный ответ'" in sql
+    assert "WHEN t.status = 'error' AND t.error_type = 'Сетевая ошибка' THEN 'Ошибка связи'" in sql
+    assert "WHEN t.status = 'error' THEN 'Ошибка регистрации'" in sql
+    assert "WHERE \"Статус\" IN ('success', 'error')" in sql
+    assert "pending_source AS" not in sql
+    assert "WHEN e.final_status = 'success' THEN 'Успешно'" not in sql
 
 
 def test_dwh_init_sql_does_not_keep_egisz_messages_raw_staging() -> None:

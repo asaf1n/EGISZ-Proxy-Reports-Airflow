@@ -143,10 +143,8 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.egisz_clean_host(mo_domen));
 
 -- Финальный статус транзакции из EXCHANGELOG-callback'а.
--- Приоритет: финальные ответы РЭМД (success/error) > промежуточные (pending) > 'unknown'.
--- 'pending' выделен отдельно от 'unknown', чтобы документы в обработке не классифицировались
--- как ошибки с «Неизвестной ошибкой» в дашбордах. 'unknown' остаётся диагностической
--- категорией для редких нераспознанных callback'ов.
+-- Прокси не отдаёт отдельный статус для синхронного приёма: в аналитике остаются
+-- только распознанные финальные ответы success/error и техническая ошибка LOGSTATE=3.
 CREATE OR REPLACE FUNCTION public.egisz_classify_async_status(
     p_logstate    integer,
     p_raw_status  text,
@@ -158,7 +156,7 @@ IMMUTABLE
 AS $$
     SELECT CASE
         WHEN p_logstate = 3                                                                  THEN 'error'
-        WHEN COALESCE(p_raw_status, '') LIKE '%success%'                                     THEN 'success'
+        WHEN COALESCE(p_raw_status, '') ~* '(success|ok)'                                    THEN 'success'
         WHEN COALESCE(p_raw_status, '') ~* '(error|fail|reject|denied|отказ|ошибк)'          THEN 'error'
         WHEN COALESCE(p_msgtext, '') ~* '<(ns[0-9]+:)?error|<faultstring|<errorCode'         THEN 'error'
         WHEN COALESCE(p_raw_status, '') ~* '(processing|in[_-]?progress|inprogress|queued|received|accepted|pending|wait|обработк|принят|получен|ожида)'

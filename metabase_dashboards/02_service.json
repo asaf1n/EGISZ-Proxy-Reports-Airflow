@@ -1,7 +1,7 @@
 {
   "name": "Сервис интеграции (healthcheck и динамика)",
   "width": "full",
-  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_group_key** (цепочка подсказок из журнала прокси-БД). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, очередь, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «network vs async» и разбор строк — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, ключ группировки как на **01**). Отказы РЭМД — **01** и **04**.",
+  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_group_key** (цепочка подсказок из журнала прокси-БД). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «network vs async» и разбор строк — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, ключ группировки как на **01**). Отказы РЭМД — **01** и **04**.",
   "parameters": [
     {
       "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",
@@ -341,7 +341,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', \"Обработано IPS\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') AS err FROM public.v_egisz_transactions_enriched_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', \"Дата обработки\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') AS err FROM public.v_rpt_documents_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -405,15 +405,15 @@
       "col": 0,
       "metabase-field-filters": {
         "top_clinic": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         },
         "top_semd": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         }
       }
@@ -477,7 +477,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -546,26 +546,26 @@
       "col": 12,
       "metabase-field-filters": {
         "top_clinic": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         },
         "top_semd": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         }
       }
     },
     {
       "name": "02 · Сигналы healthcheck",
-      "description": "Сигналы ELT-контура: parsed_messages (сообщения, разложенные в fact_egisz_messages), queue_24h (очередь без ответа > 24ч), network_errors (fact_egisz_channel_errors), error_rows (status=error), data_freshness (минут с последнего факта), **pending_backlog_24h** (просрочено > 72ч; pending — норма, просрочено — эскалация), **unknown_high** (доля status=unknown за 24ч > 1% — возможно появился новый шаблон ответа РЭМД, который не распознан в egisz_classify_async_status). Уровень — green/yellow/red.",
+      "description": "Сигналы ELT-контура без очереди документов без callback; эта очередь вынесена в дашборд 03.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Сигнал\", \"Уровень\", \"Значение\", \"Единица\", \"База расчёта\", \"Что делать\" FROM public.v_health_signals_ui ORDER BY CASE \"Уровень\" WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'green' THEN 2 ELSE 3 END, \"Код сигнала\"",
+          "query": "SELECT \"Сигнал\", \"Уровень\", \"Значение\", \"Единица\", \"База расчёта\", \"Что делать\" FROM public.v_health_signals_ui WHERE \"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h') ORDER BY CASE \"Уровень\" WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'green' THEN 2 ELSE 3 END, \"Код сигнала\"",
           "template-tags": {}
         },
         "database": 1
@@ -628,7 +628,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -694,65 +694,26 @@
       "col": 0,
       "metabase-field-filters": {
         "top_clinic": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         },
         "top_semd": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         }
       }
     },
     {
-      "name": "02 · Возраст очереди без ответа",
-      "description": "Сколько документов «зависло» по возрасту: < 1ч, 1–24ч, > 24ч (источник `v_health_proxy_db`). Высокая `> 24ч` колонка — повод эскалировать на шлюз РЭМД.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT 'До 1 часа' AS \"Возраст\", \"Очередь < 1ч\" AS \"Документов\" FROM public.v_health_proxy_db_ui UNION ALL SELECT '1–24 часа', \"Очередь 1–24ч\" FROM public.v_health_proxy_db_ui UNION ALL SELECT 'Более 24 часов', \"Очередь > 24ч\" FROM public.v_health_proxy_db_ui",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Возраст"
-        ],
-        "graph.show_values": true,
-        "table": {
-          "columns": {
-            "[\"name\",\"clinic_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"service_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"transaction_id\"]": {
-              "display_as": null
-            }
-          }
-        },
-        "graph.metrics": [
-          "Документов"
-        ]
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 27,
-      "col": 12
-    },
-    {
       "name": "02 · Сводка прокси-БД",
-      "description": "Цифры из `v_health_proxy_db_ui`: очередь исходящих сообщений из persistent DWH-слоя (`fact_egisz_messages`), max EGMID, очередь без ответа, `elt_state.last_log_id`, `elt_state.last_egmid` (курсор выгрузки `EGISZ_MESSAGES`). Raw staging в этих расчётах не используется.",
+      "description": "Цифры из `v_health_proxy_db_ui`: DWH-сообщения, max EGMID, курсоры выгрузки. Очередь без callback вынесена в дашборд 03.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"DWH сообщений всего\", \"Без EGMID\", \"Очередь всего\", \"Очередь > 24ч\", \"DWH max EGMID\", \"DWH max Sent\", \"Последний апдейт курсора\", \"elt_state.last_log_id\", \"elt_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
+          "query": "SELECT \"DWH сообщений всего\", \"Без EGMID\", \"DWH max EGMID\", \"DWH max Sent\", \"Последний апдейт курсора\", \"elt_state.last_log_id\", \"elt_state.last_egmid (курсор EGISZ_MESSAGES)\" FROM public.v_health_proxy_db_ui",
           "template-tags": {}
         },
         "database": 1

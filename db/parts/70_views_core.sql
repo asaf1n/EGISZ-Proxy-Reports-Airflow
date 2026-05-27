@@ -23,21 +23,20 @@ SELECT
         t.exchangelog_log_id::text
     ) AS "Документ (ключ учёта)",
     t.status AS "Статус",
-    CASE t.status
-        WHEN 'success' THEN 'Успех'
-        WHEN 'error'   THEN 'Ошибка'
-        WHEN 'pending' THEN 'Документы в ожидании'
-        WHEN 'unknown' THEN 'Неизвестная ошибка'
-        ELSE                'Неизвестная ошибка'
+    CASE
+        WHEN t.status = 'success' THEN 'Успешный ответ'
+        WHEN t.status = 'error' AND t.error_type = 'Сетевая ошибка' THEN 'Ошибка связи'
+        WHEN t.status = 'error' THEN 'Ошибка регистрации'
+        ELSE NULL
     END AS "Статус (отчёт)",
     t.error_type AS "Тип ошибки",
     t.error_summary AS "Сводка ошибки",
-    public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
-    public.egisz_normalize_semd_code(t.semd_code) AS "Код СЭМД",
+    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) AS "Код СЭМД",
     COALESCE(
         st.name,
         CASE
-            WHEN public.egisz_normalize_semd_code(t.semd_code) IS NOT NULL
+            WHEN public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
@@ -72,9 +71,11 @@ SELECT
     t.doctor_hash,
     t.exchangelog_log_id AS transaction_id,
     COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
-    public.egisz_normalize_semd_code(t.semd_code) AS service_id
+    public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) AS service_id
 FROM fact_egisz_transactions t
 LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid
+LEFT JOIN public.fact_egisz_documents d
+  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
 LEFT JOIN LATERAL (
     SELECT candidate.*
     FROM (
@@ -106,7 +107,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT dst.*
     FROM public.dim_semd_types dst
-    WHERE dst.oid = public.egisz_normalize_semd_code(t.semd_code)
+    WHERE dst.oid = public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))
     ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
     LIMIT 1
 ) st ON TRUE
@@ -138,25 +139,27 @@ SELECT
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
     t.jid::text AS "JID клиники",
-    public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",
     CASE
-        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'success' THEN 'Успешный ответ'
         WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_json_text, ''), '(нет текста)')
         ELSE ''
     END AS "Исходный текст ошибки",
     CASE
-        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'success' THEN 'Успешный ответ'
         WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), 'Неизвестная ошибка')
         ELSE ''
     END AS "Интерпретация ошибки",
     CASE
-        WHEN t.status = 'success' THEN 'Успешно'
+        WHEN t.status = 'success' THEN 'Успешный ответ'
         WHEN t.status = 'error' THEN t.error_type
         ELSE ''
     END AS "Тип ошибки",
     1::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
+LEFT JOIN public.fact_egisz_documents d
+  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
 WHERE t.status = 'error'
 
 UNION ALL
@@ -177,11 +180,22 @@ SELECT
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
     t.jid::text AS "JID клиники",
-    public.egisz_semd_type_report_label(t.semd_code, t.semd_name) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
     t.status AS "Статус",
-    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Исходный текст ошибки",
-    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Интерпретация ошибки",
-    CASE WHEN t.status = 'success' THEN 'Успешно' ELSE '' END AS "Тип ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешный ответ'
+        ELSE ''
+    END AS "Исходный текст ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешный ответ'
+        ELSE ''
+    END AS "Интерпретация ошибки",
+    CASE
+        WHEN t.status = 'success' THEN 'Успешный ответ'
+        ELSE ''
+    END AS "Тип ошибки",
     NULL::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
+LEFT JOIN public.fact_egisz_documents d
+  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
 WHERE t.status <> 'error' OR t.error_summary IS NULL;
