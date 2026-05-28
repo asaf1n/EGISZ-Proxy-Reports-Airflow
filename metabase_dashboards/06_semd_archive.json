@@ -58,13 +58,6 @@
       "slug": "log_id_filter",
       "type": "string/=",
       "sectionId": "string"
-    },
-    {
-      "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef6",
-      "name": "EGMID сообщения EGISZ_MESSAGES",
-      "slug": "egmid_filter",
-      "type": "string/=",
-      "sectionId": "string"
     }
   ],
   "cards": [
@@ -412,11 +405,11 @@
     },
     {
       "name": "06 · Архив СЭМД",
-      "description": "Полный список документов из v_rpt_semd_archive_ui: РЭМД-колбэки и записи в ожидании. Фильтры по периоду, СЭМД, клинике, localUid, relatesToMessage, emdrid, статусу, LOGID, EGMID. Лимит 1000 строк.",
+      "description": "Полный список документов из v_rpt_semd_archive_ui: РЭМД-колбэки и записи в ожидании. Фильтры по периоду, СЭМД, клинике, localUid, relatesToMessage, emdrid, статусу, LOGID. Лимит 1000 строк.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT * FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 1000",
+          "query": "SELECT * FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 1000",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -458,13 +451,6 @@
               "display-name": "По дате обработки",
               "id": "f6a00006-0006-4006-8006-000000000001",
               "name": "dwh_date",
-              "type": "dimension"
-            },
-            "egmid": {
-              "widget-type": "string/=",
-              "display-name": "EGMID сообщения",
-              "id": "f6a00006-0006-4006-8006-000000000009",
-              "name": "egmid",
               "type": "dimension"
             },
             "local_uid": {
@@ -538,10 +524,6 @@
           },
           {
             "enabled": true,
-            "name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
-          },
-          {
-            "enabled": true,
             "name": "Документ (ключ учёта)"
           },
           {
@@ -585,9 +567,6 @@
           },
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
-          },
-          "[\"name\",\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"]": {
-            "column_title": "EGMID"
           },
           "[\"name\",\"Документ (ключ учёта)\"]": {
             "column_title": "Документ (ключ учёта)"
@@ -649,10 +628,6 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "Дата обработки"
-        },
-        "egmid": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
         },
         "local_uid": {
           "table_ref": "public.v_rpt_semd_archive_ui",

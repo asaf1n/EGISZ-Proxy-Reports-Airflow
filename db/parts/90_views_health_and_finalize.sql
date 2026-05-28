@@ -45,16 +45,13 @@ LEFT JOIN queue q ON q.clinic_jid = f.clinic_jid;
 CREATE OR REPLACE VIEW public.v_health_proxy_db_ui AS
 SELECT
     (SELECT COUNT(*) FROM public.fact_egisz_documents)::bigint AS "DWH сообщений всего",
-    0::bigint AS "Без EGMID",
     (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting')::bigint AS "Очередь всего",
     (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours')::bigint AS "Очередь > 24ч",
     (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '24 hours' AND sent_at < now() - INTERVAL '1 hour')::bigint AS "Очередь 1-24ч",
     (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '1 hour')::bigint AS "Очередь < 1ч",
-    (SELECT MAX(last_egmid) FROM public.fact_egisz_documents) AS "DWH max EGMID",
     (SELECT MAX(sent_at) FROM public.fact_egisz_documents) AS "DWH max Sent",
     (SELECT updated_at FROM elt_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
-    (SELECT last_log_id FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_log_id",
-    (SELECT last_egmid FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_egmid (курсор EGISZ_MESSAGES)",
+    (SELECT last_logid FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_logid",
     (SELECT MAX(callback_log_id) FROM public.fact_egisz_documents) AS "DWH max LOGID fact",
     (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents)::bigint AS "Всего документов";
 
@@ -150,11 +147,24 @@ BEGIN
 END;
 $$;
 
+UPDATE public.fact_egisz_documents d
+SET error_text = src.error_text,
+    updated_at = now()
+FROM (
+    SELECT DISTINCT ON (f.document_key)
+        f.document_key,
+        COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message) AS error_text
+    FROM public.fact_egisz_transactions f
+    WHERE COALESCE(NULLIF(btrim(f.error_json_text), ''), NULLIF(btrim(f.message), '')) IS NOT NULL
+    ORDER BY f.document_key, f.log_date DESC NULLS LAST, f.exchangelog_log_id DESC
+) src
+WHERE d.document_key = src.document_key
+  AND d.error_text IS DISTINCT FROM src.error_text;
+
 REFRESH MATERIALIZED VIEW public.v_egisz_documents_enriched_ui;
 REFRESH MATERIALIZED VIEW public.v_egisz_documents_daily_ui;
 REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document;
 ANALYZE public.exchangelog_raw;
-ANALYZE public.stg_egisz_messages;
 ANALYZE public.fact_egisz_documents;
 ANALYZE public.fact_egisz_channel_errors;
 ANALYZE public.fact_egisz_transactions;

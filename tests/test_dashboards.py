@@ -36,6 +36,53 @@ def test_operational_error_types_include_network_slice() -> None:
     assert "'Сетевая ошибка'::text" in sql
 
 
+def _view_column_names(view_name: str) -> set[str]:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    marker = f"CREATE OR REPLACE VIEW public.{view_name} AS"
+    start = sql.index(marker)
+    select_start = sql.index("SELECT", start)
+    from_start = sql.index("FROM", select_start)
+    select_list = sql[select_start:from_start]
+    columns: set[str] = set()
+    for line in select_list.splitlines():
+        stripped = line.strip().rstrip(",")
+        if not stripped or stripped == "SELECT":
+            continue
+        if " AS " in stripped.upper():
+            alias = stripped.rsplit(" AS ", 1)[-1].strip().strip('"')
+            columns.add(alias)
+        elif stripped.startswith('"'):
+            columns.add(stripped.strip('"'))
+    return columns
+
+
+def test_operational_latest_operations_table_matches_documents_view() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
+    card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
+    view_columns = _view_column_names("v_rpt_documents_ui")
+    configured_columns = {
+        column["name"]
+        for column in card["visualization_settings"]["table.columns"]
+        if column.get("enabled", True)
+    }
+
+    assert configured_columns.issubset(view_columns), sorted(configured_columns - view_columns)
+    assert "Дата обработки" in configured_columns
+    assert "ИНН клиники" in configured_columns
+    assert "Исходный текст ошибки" in configured_columns
+    assert "Обработано IPS" not in configured_columns
+
+
+def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+
+    assert 'NULLIF(TRIM("localUid СЭМД"), \'\') IS NOT NULL' not in sql
+    assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in transform_sql
+    assert '"ИНН клиники"' in sql
+    assert '"Исходный текст ошибки"' in sql
+
+
 def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
@@ -101,7 +148,6 @@ def test_document_views_choose_latest_journal_entry_before_status_priority() -> 
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
     assert 'NULLIF("LOGID журнала EXCHANGELOG", \'\')::bigint DESC NULLS LAST' in sql
-    assert 'NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", \'\')::bigint DESC NULLS LAST' in sql
     assert "CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST" in sql
 
 
@@ -119,9 +165,9 @@ def test_dashboards_do_not_expose_technical_document_key_fallbacks() -> None:
 
 
 def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert 'WHERE "Статус" IN (\'success\', \'error\')' in sql
-    assert "pending_source AS" not in sql
+    transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in transform_sql
+    assert "pending_source AS" not in transform_sql
 
     quality = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     quality_queries = _native_queries(quality)

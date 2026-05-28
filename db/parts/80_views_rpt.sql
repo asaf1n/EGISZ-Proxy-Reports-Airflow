@@ -85,7 +85,6 @@ SELECT
     s.created_at AS "Дата создания документа",
     s.exchangelog_log_id::text AS "LOGID журнала (сетевая ошибка)",
     s.journal_msgid AS "MSGID обмена",
-    s.egisz_messages_egmid::text AS "EGMID сообщения (строка журнала)",
     s.document_key AS "Документ (ключ учёта)",
     s.relates_to_hint AS "relatesToMessage (из текста журнала)",
     s.local_uid_hint AS "localUid / DOCUMENTID (из текста)",
@@ -103,7 +102,6 @@ SELECT
     s.error_global_subcategory AS "Подтип ошибки канала",
     CASE WHEN f."Документ (ключ учёта)" IS NULL THEN 'нет' ELSE 'да' END AS "Связанный колбэк найден в аналитике",
     f."LOGID журнала EXCHANGELOG" AS "LOGID записи ответа",
-    f."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)" AS "EGMID записи ответа",
     f."Связанное сообщение" AS "Связанное сообщение (ответ РЭМД)",
     f."Идентификатор документа (localUid)",
     f."Регистрационный номер РЭМД"
@@ -141,7 +139,6 @@ SELECT
     d."JID клиники",
     d."Наименование клиники",
     d."Связанное сообщение",
-    d."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     d."MSGID обмена",
     d."Хост клиники (VPN ГОСТ)"
 FROM public.v_egisz_documents_enriched_ui d
@@ -169,6 +166,7 @@ SELECT
     "JID клиники" AS "JID",
     "JID клиники",
     "Наименование клиники",
+    "ИНН клиники",
     "OID организации",
     "OID клиники",
     "Документ (ключ учёта)",
@@ -178,14 +176,13 @@ SELECT
     "Статус",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
-    "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
     "Создание СЭМД",
     "Сводка ошибки",
+    "Исходный текст ошибки",
     "Хост клиники (VPN ГОСТ)"
 FROM public.v_egisz_documents_enriched_ui
-WHERE "Статус" IN ('success', 'error')
-  AND NULLIF(TRIM("Документ (ключ учёта)"), '') IS NOT NULL
+WHERE NULLIF(TRIM("Документ (ключ учёта)"), '') IS NOT NULL
 ),
 ranked AS (
     SELECT
@@ -194,7 +191,6 @@ ranked AS (
             PARTITION BY NULLIF("Документ (ключ учёта)", '')
             ORDER BY
                 NULLIF("LOGID журнала EXCHANGELOG", '')::bigint DESC NULLS LAST,
-                NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", '')::bigint DESC NULLS LAST,
                 "Дата обработки" DESC NULLS LAST,
                 CASE
                     WHEN "Статус" = 'success' THEN 0
@@ -215,6 +211,7 @@ SELECT
     "JID",
     "JID клиники",
     "Наименование клиники",
+    "ИНН клиники",
     "OID организации",
     "OID клиники",
     "Документ (ключ учёта)",
@@ -224,16 +221,16 @@ SELECT
     "Статус",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
-    "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
     "Создание СЭМД",
     "Сводка ошибки",
+    "Исходный текст ошибки",
     "Хост клиники (VPN ГОСТ)"
 FROM ranked
 WHERE rn = 1;
 
 COMMENT ON VIEW public.v_rpt_documents_ui IS
-'Единая документная витрина распознанных документов: одна актуальная строка на "Документ (ключ учёта)" только для callback-фактов success/error. Очередь без callback остаётся в v_rpt_documents_no_response_ui и используется дашбордом 03.';
+'Единая документная витрина: одна актуальная строка на "Документ (ключ учёта)". Документы без localUid не попадают в fact_egisz_documents на этапе transform (getDocumentFile). Очередь без ответа — v_rpt_documents_no_response_ui (дашборд 03).';
 
 CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
 SELECT
@@ -246,6 +243,7 @@ SELECT
     "JID",
     "JID клиники",
     "Наименование клиники",
+    "ИНН клиники",
     "OID организации",
     "OID клиники",
     "Документ (ключ учёта)",
@@ -255,10 +253,10 @@ SELECT
     "Статус",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
-    "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     "MSGID обмена",
     "Создание СЭМД",
     "Сводка ошибки",
+    "Исходный текст ошибки",
     "Хост клиники (VPN ГОСТ)"
 FROM public.v_rpt_documents_ui;
 

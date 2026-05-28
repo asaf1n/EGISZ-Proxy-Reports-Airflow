@@ -4,8 +4,6 @@ from datetime import datetime
 from typing import Any
 
 from egisz_elt.fb_client import (
-    fetch_egisz_messages_after_cursor,
-    fetch_egisz_messages_by_identifiers,
     fetch_exchangelog_after_cursor,
     fetch_organizations,
 )
@@ -62,35 +60,6 @@ def test_fetch_organizations_preserves_empty_legal_entity_values() -> None:
     assert fetch_organizations(con) == [(1, "Clinic", None, None)]
 
 
-def test_fetch_egisz_messages_after_cursor_serializes_rows_for_xcom() -> None:
-    con = FakeConnection(
-        [(42, None, "<urn:uuid:msg>", "urn:uuid:reply", "doc-1")],
-    )
-
-    rows = fetch_egisz_messages_after_cursor(con, after_egmid=41, limit=500)
-
-    assert rows == [
-        {
-            "egmid": 42,
-            "created_at": None,
-            "msgid": "<urn:uuid:msg>",
-            "reply_to": "urn:uuid:reply",
-            "document_id": "doc-1",
-        }
-    ]
-    assert con.cursor_instance.params == (41, 500)
-
-
-def test_fetch_egisz_messages_after_cursor_applies_created_cutoff() -> None:
-    cutoff = datetime(2026, 5, 18)
-    con = FakeConnection([])
-
-    fetch_egisz_messages_after_cursor(con, after_egmid=41, limit=500, created_from=cutoff)
-
-    assert "CREATEDATE >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (41, cutoff, 500)
-
-
 def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytics() -> None:
     con = FakeConnection(
         [(101, None, None, "msg-1", 1, "log", "<xml/>")],
@@ -120,18 +89,3 @@ def test_fetch_exchangelog_after_cursor_applies_created_cutoff() -> None:
 
     assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
     assert con.cursor_instance.params == (100, cutoff, 500)
-
-
-def test_fetch_related_egisz_messages_applies_created_cutoff() -> None:
-    cutoff = datetime(2026, 5, 18)
-    con = FakeConnection([])
-
-    fetch_egisz_messages_by_identifiers(
-        con,
-        msgids={"msg-1"},
-        document_ids=set(),
-        created_from=cutoff,
-    )
-
-    assert "CREATEDATE >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == ("msg-1", cutoff)

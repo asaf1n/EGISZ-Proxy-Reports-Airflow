@@ -10,8 +10,6 @@ from airflow.hooks.base import BaseHook
 
 from egisz_elt.fb_client import (
     connect_fb,
-    fetch_egisz_messages_after_cursor,
-    fetch_egisz_messages_by_identifiers,
     fetch_exchangelog_after_cursor,
     fetch_licenses,
     fetch_organizations,
@@ -19,8 +17,6 @@ from egisz_elt.fb_client import (
 from egisz_elt.pg_client import (
     connect_pg,
     get_cursors,
-    get_related_message_identifiers,
-    load_messages,
     load_raw_logs,
     sync_directory,
     transform_raw_to_facts,
@@ -81,79 +77,54 @@ def egisz_elt_pipeline() -> None:
     def extract_cursor_batches() -> dict[str, Any]:
         pg_conn = _dwh_connection()
         try:
-            last_log_id, last_egmid = get_cursors(pg_conn, PIPELINE)
+            cursor_state = get_cursors(pg_conn, PIPELINE)
         finally:
             pg_conn.close()
+
+        last_logid = int(cursor_state.get("last_logid", 0))
 
         fb_conn = _proxy_connection()
         try:
             started_at = time.monotonic()
             log_rows = fetch_exchangelog_after_cursor(
                 fb_conn,
-                after_logid=last_log_id,
+                after_logid=last_logid,
                 limit=BATCH_SIZE,
                 created_from=SOURCE_MIN_CREATED_AT,
             )
             log.info(
                 "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
                 len(log_rows),
-                last_log_id,
+                last_logid,
                 time.monotonic() - started_at,
             )
-            cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_log_id)
-            started_at = time.monotonic()
-            cursor_message_rows = fetch_egisz_messages_after_cursor(
-                fb_conn,
-                after_egmid=last_egmid,
-                limit=BATCH_SIZE,
-                created_from=SOURCE_MIN_CREATED_AT,
-            )
-            log.info(
-                "Fetched %s EGISZ_MESSAGES row(s) after EGMID=%s in %.2fs.",
-                len(cursor_message_rows),
-                last_egmid,
-                time.monotonic() - started_at,
-            )
+            cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_logid)
         finally:
             fb_conn.close()
 
-        cursor_egmid = max((int(row["egmid"]) for row in cursor_message_rows), default=last_egmid)
-        messages_by_egmid = {int(row["egmid"]): row for row in cursor_message_rows}
-        message_rows = list(messages_by_egmid.values())
         log.info(
-            "Extracted %s EXCHANGELOG row(s), next LOGID cursor=%s; %s EGISZ_MESSAGES row(s), next EGMID cursor=%s.",
+            "Extracted %s EXCHANGELOG row(s), next LOGID cursor=%s.",
             len(log_rows),
             cursor_logid,
-            len(message_rows),
-            cursor_egmid,
         )
         return {
             "count": len(log_rows),
-            "message_count": len(message_rows),
-            "cursor_message_count": len(cursor_message_rows),
-            "last_log_id": last_log_id,
-            "last_egmid": last_egmid,
+            "last_logid": last_logid,
             "cursor_logid": cursor_logid,
-            "cursor_egmid": cursor_egmid,
             "rows": log_rows,
-            "message_rows": message_rows,
         }
 
     @task
     def load_to_dwh(extraction_result: dict[str, Any]) -> dict[str, Any]:
-        if extraction_result["count"] <= 0 and extraction_result.get("message_count", 0) <= 0:
+        if extraction_result["count"] <= 0:
             return extraction_result
 
         pg_conn = _dwh_connection()
         try:
-            if extraction_result["count"] > 0:
-                load_raw_logs(pg_conn, extraction_result["rows"])
-            if extraction_result.get("message_count", 0) > 0:
-                load_messages(pg_conn, extraction_result["message_rows"])
+            load_raw_logs(pg_conn, extraction_result["rows"])
             log.info(
-                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw and %s EGISZ_MESSAGES row(s) into stg_egisz_messages.",
+                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw.",
                 extraction_result["count"],
-                extraction_result.get("message_count", 0),
             )
         finally:
             pg_conn.close()
@@ -164,14 +135,14 @@ def egisz_elt_pipeline() -> None:
         """Освежает planner-статистику для raw-таблиц после bulk-загрузки.
 
         Без этого PostgreSQL planner использует pg_class.reltuples=0 после первичного
-        COPY и выбирает seq-scan по exchangelog_raw / stg_egisz_messages даже когда
-        функциональные индексы (msgid_norm, document_id_norm) уже существуют.
+        COPY и выбирает seq-scan по exchangelog_raw даже когда функциональные индексы
+        (msgid_norm, document_id_norm) уже существуют.
         Autovacuum не запустит ANALYZE, пока не накопится достаточно изменений после
         bulk-загрузки — на спокойном пайплайне это могут быть дни, и к тому моменту
         запросы Metabase уже виснут на 8-16 минут. Свежий ANALYZE на каждом батче
         дешёвый (~1с sample scan) и гарантирует адекватные планы.
         """
-        if load_info["count"] <= 0 and load_info.get("message_count", 0) <= 0:
+        if load_info["count"] <= 0:
             return load_info
 
         pg_conn = _dwh_connection()
@@ -179,101 +150,23 @@ def egisz_elt_pipeline() -> None:
             # ANALYZE нельзя выполнять внутри транзакции — выходим в autocommit.
             pg_conn.set_session(autocommit=True)
             with pg_conn.cursor() as cur:
-                if load_info["count"] > 0:
-                    cur.execute("ANALYZE public.exchangelog_raw")
-                if load_info.get("message_count", 0) > 0:
-                    cur.execute("ANALYZE public.stg_egisz_messages")
-            log.info("ANALYZE done for staging/fact tables touched in this batch.")
+                cur.execute("ANALYZE public.exchangelog_raw")
+            log.info("ANALYZE done for staging tables touched in this batch.")
         finally:
             pg_conn.close()
         return load_info
 
     @task
-    def resolve_related_refs_from_dwh(load_info: dict[str, Any]) -> dict[str, Any]:
-        if int(load_info.get("cursor_logid", 0)) <= int(load_info.get("last_log_id", 0)):
-            return {**load_info, "related_msgids": [], "related_document_ids": []}
-
-        pg_conn = _dwh_connection()
-        try:
-            related = get_related_message_identifiers(
-                pg_conn,
-                from_logid=int(load_info.get("last_log_id", 0)),
-                to_logid=int(load_info.get("cursor_logid", 0)),
-            )
-        finally:
-            pg_conn.close()
-
-        related_msgids = sorted(related["msgids"])
-        related_document_ids = sorted(related["document_ids"])
-        log.info(
-            "Resolved %s related MSGID(s) and %s DOCUMENTID(s) from DWH staging.",
-            len(related_msgids),
-            len(related_document_ids),
-        )
-        return {
-            **load_info,
-            "related_msgids": related_msgids,
-            "related_document_ids": related_document_ids,
-        }
-
-    @task
-    def load_related_messages(load_info: dict[str, Any]) -> dict[str, Any]:
-        related_msgids = set(load_info.get("related_msgids", []))
-        related_document_ids = set(load_info.get("related_document_ids", []))
-        if not related_msgids and not related_document_ids:
-            return {**load_info, "related_message_count": 0}
-
-        fb_conn = _proxy_connection()
-        try:
-            started_at = time.monotonic()
-            related_message_rows = fetch_egisz_messages_by_identifiers(
-                fb_conn,
-                msgids=related_msgids,
-                document_ids=related_document_ids,
-                created_from=SOURCE_MIN_CREATED_AT,
-            )
-            log.info(
-                "Fetched %s related EGISZ_MESSAGES row(s) for %s MSGID(s) and %s DOCUMENTID(s) in %.2fs.",
-                len(related_message_rows),
-                len(related_msgids),
-                len(related_document_ids),
-                time.monotonic() - started_at,
-            )
-        finally:
-            fb_conn.close()
-
-        if related_message_rows:
-            pg_conn = _dwh_connection()
-            try:
-                load_messages(pg_conn, related_message_rows)
-                pg_conn.set_session(autocommit=True)
-                with pg_conn.cursor() as cur:
-                    cur.execute("ANALYZE public.stg_egisz_messages")
-            finally:
-                pg_conn.close()
-
-        return {
-            **load_info,
-            "message_count": int(load_info.get("message_count", 0)) + len(related_message_rows),
-            "related_message_count": len(related_message_rows),
-        }
-
-    @task
     def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
-        if (
-            int(load_info.get("cursor_logid", 0)) <= int(load_info.get("last_log_id", 0))
-            and int(load_info.get("cursor_egmid", 0)) <= int(load_info.get("last_egmid", 0))
-        ):
+        if int(load_info.get("cursor_logid", 0)) <= int(load_info.get("last_logid", 0)):
             return {**load_info, "transformed": 0}
 
         pg_conn = _dwh_connection()
         try:
             transformed = transform_raw_to_facts(
                 pg_conn,
-                from_logid=int(load_info.get("last_log_id", 0)),
+                from_logid=int(load_info.get("last_logid", 0)),
                 to_logid=int(load_info["cursor_logid"]),
-                from_egmid=int(load_info.get("last_egmid", 0)),
-                to_egmid=int(load_info.get("cursor_egmid", 0)),
             )
             if transformed > 0:
                 with pg_conn.cursor() as cur:
@@ -310,18 +203,16 @@ def egisz_elt_pipeline() -> None:
     @task
     def update_watermark(load_info: dict[str, Any]) -> None:
         cursor_logid = int(load_info.get("cursor_logid", 0))
-        cursor_egmid = int(load_info.get("cursor_egmid", 0))
-        if cursor_logid <= int(load_info.get("last_log_id", 0)) and cursor_egmid <= int(load_info.get("last_egmid", 0)):
+        if cursor_logid <= int(load_info.get("last_logid", 0)):
             return
 
         pg_conn = _dwh_connection()
         try:
-            update_cursors(pg_conn, PIPELINE, logid=cursor_logid, egmid=cursor_egmid)
+            update_cursors(pg_conn, PIPELINE, logid=cursor_logid)
             log.info(
-                "Updated %s watermark to LOGID=%s, EGMID=%s.",
+                "Updated %s watermark to LOGID=%s.",
                 PIPELINE,
                 cursor_logid,
-                cursor_egmid,
             )
         finally:
             pg_conn.close()
@@ -330,13 +221,11 @@ def egisz_elt_pipeline() -> None:
     extraction = extract_cursor_batches()
     loading = load_to_dwh(extraction)
     analyzed = analyze_staging(loading)
-    related_refs = resolve_related_refs_from_dwh(analyzed)
-    related_loaded = load_related_messages(related_refs)
-    transformed = transform_data(related_loaded)
+    transformed = transform_data(analyzed)
     refreshed = refresh_materialized_views(transformed)
     watermark = update_watermark(refreshed)
 
-    dimensions >> extraction >> loading >> analyzed >> related_refs >> related_loaded >> transformed >> refreshed >> watermark
+    dimensions >> extraction >> loading >> analyzed >> transformed >> refreshed >> watermark
 
 
 egisz_elt_pipeline()

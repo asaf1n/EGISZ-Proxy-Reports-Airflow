@@ -1058,7 +1058,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Дата создания документа\", \"Клиника (транспорт)\", \"JID из журнала (gost, число)\", \"LOGID журнала (сетевая ошибка)\", LEFT(\"Текст сетевой ошибки\", 160) AS \"Сеть (фрагмент)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"Медицинская организация\", \"JID клиники\", \"Тип СЭМД (код · НСИ)\", \"Сводка ошибки регистрации\", \"Связанный колбэк найден в аналитике\", \"LOGID записи ответа\", \"EGMID записи ответа\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 150",
+          "query": "SELECT \"Дата создания документа\", \"Клиника (транспорт)\", \"JID из журнала (gost, число)\", \"LOGID журнала (сетевая ошибка)\", LEFT(\"Текст сетевой ошибки\", 160) AS \"Сеть (фрагмент)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"Медицинская организация\", \"JID клиники\", \"Тип СЭМД (код · НСИ)\", \"Сводка ошибки регистрации\", \"Связанный колбэк найден в аналитике\", \"LOGID записи ответа\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 150",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -1092,11 +1092,11 @@
     },
     {
       "name": "04 · Сеть: матрица идентификаторов документа",
-      "description": "Сопоставление полей трассировки: подсказки из журнала (relatesToMessage, localUid, emdrId), документный ключ, MSGID/EGMID/LOGID, связь с ответом РЭМД в сводке колбэков.",
+      "description": "Сопоставление полей трассировки: подсказки из журнала (relatesToMessage, localUid, emdrId), документный ключ, MSGID/LOGID, связь с ответом РЭМД в сводке колбэков.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Дата создания документа\", \"Документ (ключ учёта)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"emdrId (из текста)\", \"MSGID обмена\", \"EGMID сообщения (строка журнала)\", \"LOGID журнала (сетевая ошибка)\", \"Связанное сообщение (ответ РЭМД)\", \"Идентификатор документа (localUid)\", \"Регистрационный номер РЭМД\", \"Связанный колбэк найден в аналитике\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 200",
+          "query": "SELECT \"Дата создания документа\", \"Документ (ключ учёта)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"emdrId (из текста)\", \"MSGID обмена\", \"LOGID журнала (сетевая ошибка)\", \"Связанное сообщение (ответ РЭМД)\", \"Идентификатор документа (localUid)\", \"Регистрационный номер РЭМД\", \"Связанный колбэк найден в аналитике\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",

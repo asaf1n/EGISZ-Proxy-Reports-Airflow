@@ -15,7 +15,6 @@ SELECT
     error_group_label_ru,
     exchangelog_log_id,
     journal_msgid,
-    egisz_messages_egmid,
     relates_to_hint,
     local_uid_hint,
     emdr_id_hint,

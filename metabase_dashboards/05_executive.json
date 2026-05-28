@@ -22,7 +22,7 @@
     },
     {
       "name": "05 · Активных JID",
-      "description": "COUNT(DISTINCT JID клиники) по реальным транзакциям в выбранном периоде. Включает клиники, у которых был хотя бы один callback от РЭМД или хотя бы одна запись в EGISZ_MESSAGES без callback.",
+      "description": "COUNT(DISTINCT JID клиники) по реальным транзакциям в выбранном периоде. Включает клиники, у которых был хотя бы один callback от РЭМД или документы в очереди без callback.",
       "dataset_query": {
         "type": "native",
         "native": {

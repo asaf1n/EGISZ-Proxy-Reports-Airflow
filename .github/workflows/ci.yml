@@ -58,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-client
 
-      - name: Bootstrap role and database (mirror AGENTS.md prerequisites)
+      - name: Bootstrap role and database (mirror README prerequisites)
         run: |
           psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE egisz LOGIN PASSWORD 'egisz';" || true
           psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE dwh_egisz OWNER postgres;"
@@ -73,13 +73,12 @@ jobs:
           psql -d dwh_egisz -v ON_ERROR_STOP=1 -c "
             SELECT 'fact_egisz_transactions'::regclass,
                    'exchangelog_raw'::regclass,
-                   'egisz_messages_raw'::regclass,
                    'elt_state'::regclass,
                    'dim_organizations'::regclass,
                    'dim_licenses'::regclass,
                    'dim_semd_types'::regclass,
                    'public.egisz_transform_raw_to_facts(bigint,bigint,bigint,bigint)'::regprocedure,
-                   'public.v_egisz_transactions_enriched_ui'::regclass,
+                   'public.v_egisz_documents_enriched_ui'::regclass,
                    'public.v_stg_channel_errors_by_document'::regclass;
           "
 

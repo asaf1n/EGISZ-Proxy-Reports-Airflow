@@ -175,20 +175,6 @@ tags:
       - table_ref: public.v_egisz_documents_enriched_ui
         field_name: LOGID журнала EXCHANGELOG
 
-  egmid:
-    rules:
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
-        field_name: egisz_messages_egmid
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
-
   err_parse_code:
     rules:
       - table_ref: public.v_stg_channel_errors_by_document

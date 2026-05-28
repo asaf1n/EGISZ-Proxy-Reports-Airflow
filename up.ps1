@@ -4,6 +4,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Namespace = "egisz-bi"
 
 $ImageTag = Get-Date -Format "yyyyMMddHHmmss"
 $AirflowImage = "egisz-airflow-worker:${ImageTag}"
@@ -27,17 +28,76 @@ function Invoke-Checked {
     }
 }
 
-function Test-KubernetesConnection {
-    Write-Host "Checking Kubernetes context..."
+function Initialize-KubernetesContext {
+    if (-not (Get-Command kubectl -ErrorAction SilentlyContinue)) {
+        throw @"
+kubectl не найден в PATH.
+
+Установите kubectl и включите Kubernetes в Docker Desktop:
+Settings -> Kubernetes -> Enable Kubernetes -> Apply & Restart.
+"@
+    }
+
     $context = ""
     try {
-        $context = kubectl config current-context 2>$null
+        $context = (kubectl config current-context 2>$null).Trim()
     } catch {
         $context = ""
     }
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($context)) {
-        throw "kubectl current-context is not set. Enable/select Docker Desktop Kubernetes before running up.ps1."
+
+    if (-not [string]::IsNullOrWhiteSpace($context)) {
+        return $context
     }
+
+    $availableContexts = @()
+    try {
+        $availableContexts = @(
+            kubectl config get-contexts -o name 2>$null |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+    } catch {
+        $availableContexts = @()
+    }
+
+    $preferredContexts = @(
+        "docker-desktop",
+        "docker-for-desktop"
+    )
+
+    foreach ($preferred in $preferredContexts) {
+        if ($availableContexts -contains $preferred) {
+            Write-Host "Selecting Kubernetes context '$preferred'..."
+            Invoke-Checked "Select Kubernetes context $preferred" {
+                kubectl config use-context $preferred
+            }
+            return $preferred
+        }
+    }
+
+    if ($availableContexts.Count -eq 1) {
+        $onlyContext = $availableContexts[0]
+        Write-Host "Selecting Kubernetes context '$onlyContext'..."
+        Invoke-Checked "Select Kubernetes context $onlyContext" {
+            kubectl config use-context $onlyContext
+        }
+        return $onlyContext
+    }
+
+    throw @"
+kubectl current-context не задан, подходящий контекст не найден.
+
+Перед запуском up.ps1:
+1. Запустите Docker Desktop и дождитесь готовности Linux engine.
+2. Включите Kubernetes: Settings -> Kubernetes -> Enable Kubernetes -> Apply & Restart.
+3. Проверьте контексты: kubectl config get-contexts
+4. При необходимости выберите контекст: kubectl config use-context docker-desktop
+"@
+}
+
+function Test-KubernetesConnection {
+    Write-Host "Checking Kubernetes context..."
+    $context = Initialize-KubernetesContext
 
     try {
         kubectl cluster-info --request-timeout=10s >$null
@@ -84,13 +144,13 @@ function Initialize-SecretFiles {
 
 function Initialize-AirflowInternalMetadataDatabase {
     Write-Host "Ensuring Airflow internal metadata database airflow_db exists when PostgreSQL already has a PVC..."
-    $postgresPod = kubectl get pod airflow-postgresql-0 -n egisz-elt --ignore-not-found -o name
+    $postgresPod = kubectl get pod airflow-postgresql-0 -n $Namespace --ignore-not-found -o name
     if ([string]::IsNullOrWhiteSpace($postgresPod)) {
         Write-Host "Airflow PostgreSQL pod is not present yet; Helm will initialize airflow_db on first startup."
         return
     }
 
-    $schedulerPod = kubectl get pods -n egisz-elt -l component=scheduler,release=airflow --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
+    $schedulerPod = kubectl get pods -n $Namespace -l component=scheduler,release=airflow --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
     if ([string]::IsNullOrWhiteSpace($schedulerPod)) {
         Write-Host "Airflow scheduler pod is not running yet; Helm will initialize airflow_db on first startup."
         return
@@ -102,7 +162,7 @@ import psycopg2
 from psycopg2 import sql
 
 conn = psycopg2.connect(
-    host="airflow-postgresql.egisz-elt",
+    host="airflow-postgresql.egisz-bi",
     port=5432,
     user="postgres",
     password="postgres",
@@ -115,19 +175,34 @@ with conn.cursor() as cur:
         cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier("airflow_db")))
 conn.close()
 print("Airflow internal metadata database airflow_db is present")
-'@ | kubectl exec -n egisz-elt -i pod/$schedulerPod -c scheduler -- python -
+'@ | kubectl exec -n $Namespace -i pod/$schedulerPod -c scheduler -- python -
     }
 }
 
 function Initialize-EgiszEltNamespace {
-    Write-Host "Ensuring namespace egisz-elt exists..."
-    $existing = kubectl get namespace egisz-elt -o name
+    Write-Host "Ensuring namespace $Namespace exists..."
+    $existing = kubectl get namespace $Namespace -o name
     if ([string]::IsNullOrWhiteSpace($existing)) {
-        Invoke-Checked "Create namespace egisz-elt" {
-            kubectl create namespace egisz-elt
+        Invoke-Checked "Create namespace $Namespace" {
+            kubectl create namespace $Namespace
         }
     } else {
-        Write-Host "Namespace egisz-elt already exists, skipping."
+        Write-Host "Namespace $Namespace already exists, skipping."
+    }
+}
+
+function Initialize-AirflowConnections {
+    Write-Host "Ensuring Airflow connections are stored in metadata DB..."
+    $schedulerPod = kubectl get pods -n $Namespace -l component=scheduler,release=airflow --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if ([string]::IsNullOrWhiteSpace($schedulerPod)) {
+        throw "Cannot find running Airflow scheduler pod in namespace '$Namespace' to apply connections."
+    }
+
+    Invoke-Checked "Upsert Airflow DWH connection" {
+        kubectl exec -n $Namespace pod/$schedulerPod -c scheduler -- /bin/bash -lc "airflow connections delete dwh_egisz_pg >/dev/null 2>&1 || true; airflow connections add dwh_egisz_pg --conn-uri 'postgres://egisz:egisz@host.docker.internal:5432/dwh_egisz?sslmode=disable'"
+    }
+    Invoke-Checked "Upsert Airflow Firebird connection" {
+        kubectl exec -n $Namespace pod/$schedulerPod -c scheduler -- /bin/bash -lc "airflow connections delete proxy_egisz_fb >/dev/null 2>&1 || true; airflow connections add proxy_egisz_fb --conn-uri 'firebird://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251'"
     }
 }
 
@@ -139,7 +214,7 @@ function Install-Airflow {
 
     Write-Host "Applying Airflow connection secrets..."
     Invoke-Checked "Apply Airflow connection secrets" {
-        kubectl apply -n egisz-elt -f k8s/airflow/airflow-connections-secret.yaml
+        kubectl apply -n $Namespace -f k8s/airflow/airflow-connections-secret.yaml
     }
 
     Write-Host "Building Airflow image with current DAG and egisz_elt package..."
@@ -156,46 +231,46 @@ function Install-Airflow {
 
     Write-Host "Installing Airflow..."
     Invoke-Checked "Install Airflow Helm release" {
-        helm upgrade --install airflow apache-airflow/airflow -n egisz-elt -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
+        helm upgrade --install airflow apache-airflow/airflow -n $Namespace -f k8s/airflow/values.yaml --timeout 15m --set-string images.airflow.tag=$ImageTag
     }
 
     Write-Host "Restoring Airflow replicas after any previous scale-to-zero stop..."
     Invoke-Checked "Scale Airflow PostgreSQL to 1" {
-        kubectl scale -n egisz-elt statefulset/airflow-postgresql --replicas=1
+        kubectl scale -n $Namespace statefulset/airflow-postgresql --replicas=1
     }
     Invoke-Checked "Scale Airflow Redis to 1" {
-        kubectl scale -n egisz-elt statefulset/airflow-redis --replicas=1
+        kubectl scale -n $Namespace statefulset/airflow-redis --replicas=1
     }
     Invoke-Checked "Scale Airflow webserver to 1" {
-        kubectl scale -n egisz-elt deployment/airflow-webserver --replicas=1
+        kubectl scale -n $Namespace deployment/airflow-webserver --replicas=1
     }
     Invoke-Checked "Scale Airflow scheduler to 1" {
-        kubectl scale -n egisz-elt deployment/airflow-scheduler --replicas=1
+        kubectl scale -n $Namespace deployment/airflow-scheduler --replicas=1
     }
     Invoke-Checked "Scale Airflow worker to 1" {
-        kubectl scale -n egisz-elt statefulset/airflow-worker --replicas=1
+        kubectl scale -n $Namespace statefulset/airflow-worker --replicas=1
     }
     Invoke-Checked "Scale Airflow triggerer to 1" {
-        kubectl scale -n egisz-elt statefulset/airflow-triggerer --replicas=1
+        kubectl scale -n $Namespace statefulset/airflow-triggerer --replicas=1
     }
 
     Write-Host "Waiting for Airflow Redis broker..."
     Invoke-Checked "Wait for Airflow Redis" {
-        kubectl rollout status -n egisz-elt statefulset/airflow-redis --timeout=300s
+        kubectl rollout status -n $Namespace statefulset/airflow-redis --timeout=300s
     }
 
     Write-Host "Waiting for Airflow pods to be ready..."
     Invoke-Checked "Wait for Airflow webserver" {
-        kubectl rollout status -n egisz-elt deployment/airflow-webserver --timeout=300s
+        kubectl rollout status -n $Namespace deployment/airflow-webserver --timeout=300s
     }
     Invoke-Checked "Wait for Airflow scheduler" {
-        kubectl rollout status -n egisz-elt deployment/airflow-scheduler --timeout=300s
+        kubectl rollout status -n $Namespace deployment/airflow-scheduler --timeout=300s
     }
     Invoke-Checked "Wait for Airflow worker" {
-        kubectl rollout status -n egisz-elt statefulset/airflow-worker --timeout=300s
+        kubectl rollout status -n $Namespace statefulset/airflow-worker --timeout=300s
     }
     Invoke-Checked "Wait for Airflow triggerer" {
-        kubectl rollout status -n egisz-elt statefulset/airflow-triggerer --timeout=300s
+        kubectl rollout status -n $Namespace statefulset/airflow-triggerer --timeout=300s
     }
 
     Write-Host "Waiting for Celery worker to connect to the Redis broker..."
@@ -208,7 +283,7 @@ deadline = time.time() + 300
 marker = "ready."
 while time.time() < deadline:
     result = subprocess.run(
-        ["kubectl", "logs", "airflow-worker-0", "-n", "egisz-elt", "-c", "worker", "--tail=200"],
+        ["kubectl", "logs", "airflow-worker-0", "-n", "egisz-bi", "-c", "worker", "--tail=200"],
         check=True,
         capture_output=True,
         text=True,
@@ -222,6 +297,8 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 '@ | py -
     }
 
+    Initialize-AirflowConnections
+
     Write-Host "Airflow is ready. Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' to initialize the DWH, then unpause egisz_elt_dag."
 }
 
@@ -233,7 +310,7 @@ function Install-Metabase {
 
     Write-Host "Applying Metabase connection secrets..."
     Invoke-Checked "Apply Metabase connection secrets" {
-        kubectl apply -n egisz-elt -f k8s/metabase/metabase-connections-secret.yaml
+        kubectl apply -n $Namespace -f k8s/metabase/metabase-connections-secret.yaml
     }
 
     Write-Host "Building Metabase image with current dashboard provisioning scripts..."
@@ -248,34 +325,34 @@ function Install-Metabase {
 
     Write-Host "Starting Metabase PostgreSQL and Metabase..."
     Invoke-Checked "Apply Metabase deployment" {
-        kubectl apply -n egisz-elt -f k8s/metabase/metabase.yaml
+        kubectl apply -n $Namespace -f k8s/metabase/metabase.yaml
     }
 
     Write-Host "Restoring Metabase replicas after any previous scale-to-zero stop..."
     Invoke-Checked "Scale Metabase PostgreSQL to 1" {
-        kubectl scale -n egisz-elt statefulset/metabase-postgres --replicas=1
+        kubectl scale -n $Namespace statefulset/metabase-postgres --replicas=1
     }
     Invoke-Checked "Scale Metabase deployment to 1" {
-        kubectl scale -n egisz-elt deployment/metabase --replicas=1
+        kubectl scale -n $Namespace deployment/metabase --replicas=1
     }
 
     Write-Host "Waiting for Metabase PostgreSQL to be ready..."
     Invoke-Checked "Wait for Metabase PostgreSQL" {
-        kubectl rollout status -n egisz-elt statefulset/metabase-postgres --timeout=120s
+        kubectl rollout status -n $Namespace statefulset/metabase-postgres --timeout=120s
     }
 
     Invoke-Checked "Set Metabase image" {
-        kubectl set image -n egisz-elt deployment/metabase metabase=$MetabaseImage
+        kubectl set image -n $Namespace deployment/metabase metabase=$MetabaseImage
     }
 
     Write-Host "Waiting for Metabase pod to be ready..."
     Invoke-Checked "Wait for Metabase deployment" {
-        kubectl rollout status -n egisz-elt deployment/metabase --timeout=300s
+        kubectl rollout status -n $Namespace deployment/metabase --timeout=300s
     }
 
     Write-Host "Provisioning Metabase dashboards..."
     Invoke-Checked "Provision Metabase dashboards" {
-        kubectl exec -n egisz-elt deploy/metabase -- /bin/bash /app/setup-dashboards.sh
+        kubectl exec -n $Namespace deploy/metabase -- /bin/bash /app/setup-dashboards.sh
     }
 }
 
@@ -284,22 +361,22 @@ function Stop-Airflow {
 
     Write-Host "Scaling down Airflow components without deleting releases or PVCs..."
     Invoke-Checked "Scale Airflow webserver to 0" {
-        kubectl scale -n egisz-elt deployment/airflow-webserver --replicas=0
+        kubectl scale -n $Namespace deployment/airflow-webserver --replicas=0
     }
     Invoke-Checked "Scale Airflow scheduler to 0" {
-        kubectl scale -n egisz-elt deployment/airflow-scheduler --replicas=0
+        kubectl scale -n $Namespace deployment/airflow-scheduler --replicas=0
     }
     Invoke-Checked "Scale Airflow worker to 0" {
-        kubectl scale -n egisz-elt statefulset/airflow-worker --replicas=0
+        kubectl scale -n $Namespace statefulset/airflow-worker --replicas=0
     }
     Invoke-Checked "Scale Airflow triggerer to 0" {
-        kubectl scale -n egisz-elt statefulset/airflow-triggerer --replicas=0
+        kubectl scale -n $Namespace statefulset/airflow-triggerer --replicas=0
     }
     Invoke-Checked "Scale Airflow Redis to 0" {
-        kubectl scale -n egisz-elt statefulset/airflow-redis --replicas=0
+        kubectl scale -n $Namespace statefulset/airflow-redis --replicas=0
     }
     Invoke-Checked "Scale Airflow PostgreSQL to 0" {
-        kubectl scale -n egisz-elt statefulset/airflow-postgresql --replicas=0
+        kubectl scale -n $Namespace statefulset/airflow-postgresql --replicas=0
     }
 }
 
@@ -308,10 +385,10 @@ function Stop-Metabase {
 
     Write-Host "Scaling down Metabase components without deleting the metabase_app database PVC..."
     Invoke-Checked "Scale Metabase deployment to 0" {
-        kubectl scale -n egisz-elt deployment/metabase --replicas=0
+        kubectl scale -n $Namespace deployment/metabase --replicas=0
     }
     Invoke-Checked "Scale Metabase PostgreSQL to 0" {
-        kubectl scale -n egisz-elt statefulset/metabase-postgres --replicas=0
+        kubectl scale -n $Namespace statefulset/metabase-postgres --replicas=0
     }
 }
 

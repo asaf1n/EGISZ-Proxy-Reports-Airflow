@@ -7,7 +7,6 @@ CREATE MATERIALIZED VIEW public.v_egisz_documents_enriched_ui AS
 SELECT
     d.document_key AS "Документ (ключ учёта)",
     d.callback_log_id::text AS "LOGID журнала EXCHANGELOG",
-    d.last_egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
     d.message_id AS "MSGID обмена",
     COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) AS "Обработано IPS",
     COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)::date AS "День",
@@ -67,7 +66,7 @@ SELECT
     NULL::text AS doctor_name,
     d.patient_hash,
     d.doctor_hash,
-    COALESCE(d.callback_log_id, d.source_logid, d.first_egmid) AS transaction_id,
+    COALESCE(d.callback_log_id, d.source_logid) AS transaction_id,
     d.jid AS clinic_id,
     public.egisz_normalize_semd_code(d.semd_code) AS service_id,
     d.status AS document_status,
@@ -126,10 +125,6 @@ CREATE INDEX ON public.v_egisz_documents_daily_ui (day);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (jid);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (semd_code);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (status);
-
-CREATE OR REPLACE VIEW public.v_egisz_transactions_enriched_ui AS
-SELECT *
-FROM public.v_egisz_documents_enriched_ui;
 
 CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
 SELECT
