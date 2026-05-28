@@ -1,7 +1,7 @@
 {
   "name": "04 Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)**; ключ строится только из localUid / DOCUMENTID или emdrId. **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_egisz_transactions_enriched_ui` со «Статус»='error'; используется в карточках по клиникам/СЭМД и в «Итогах по ошибкам». **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` разбит по разделителю «·» на 70+ конкретных видов и сведён в 10 категорий через `egisz_error_category`); один документ с N разными видами учитывается N раз, поэтому сумма по видам ≥ числа документов с ошибкой. Карточки «Рейтинг видов ошибок» и «Ошибки по виду · сунбёрст» используют именно (б). Проверки JID/OID, полнота полей. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
+  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)**; ключ строится только из localUid / DOCUMENTID или emdrId. **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_egisz_documents_enriched_ui` со «Статус»='error'; используется в карточках по клиникам/СЭМД и в «Итогах по ошибкам». **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` разбит по разделителю «·» на 70+ конкретных видов и сведён в 10 категорий через `egisz_error_category`); один документ с N разными видами учитывается N раз, поэтому сумма по видам ≥ числа документов с ошибкой. Карточки «Рейтинг видов ошибок» и «Ошибки по виду · сунбёрст» используют именно (б). Проверки JID/OID, полнота полей. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
@@ -393,7 +393,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 32) || ' | JID ' || COALESCE(NULLIF(\"JID клиники\"::text, ''), '(нет JID)') AS clinic_label FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND (NULLIF(TRIM(\"Наименование клиники\"), '') IS NOT NULL OR NULLIF(\"JID клиники\"::text, '') IS NOT NULL) AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT clinic_label AS \"Клиника\", COUNT(*)::bigint AS \"Ошибок\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 32) || ' | JID ' || COALESCE(NULLIF(\"JID клиники\"::text, ''), '(нет JID)') AS clinic_label FROM public.v_egisz_documents_enriched_ui WHERE \"Статус\" = 'error' AND (NULLIF(TRIM(\"Наименование клиники\"), '') IS NOT NULL OR NULLIF(\"JID клиники\"::text, '') IS NOT NULL) AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST) SELECT clinic_label AS \"Клиника\", COUNT(*)::bigint AS \"Ошибок\" FROM doc_first GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -450,7 +450,7 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_egisz_documents_enriched_ui",
           "field_name": "Обработано IPS"
         }
       }
@@ -529,7 +529,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 24) || ' | ' || COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS lbl FROM public.v_egisz_transactions_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_clinic AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH doc_first AS (SELECT DISTINCT ON (\"Документ (ключ учёта)\") \"Документ (ключ учёта)\", LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(без наим.)'), 24) || ' | ' || COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS lbl FROM public.v_egisz_documents_enriched_ui WHERE \"Статус\" = 'error' AND 1=1 [[AND {{dwh_date}}]] ORDER BY \"Документ (ключ учёта)\", \"Обработано IPS\" DESC NULLS LAST), per_clinic AS (SELECT lbl, COUNT(*)::bigint AS cnt FROM doc_first GROUP BY 1), ranked AS (SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic), tail AS (SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -578,7 +578,7 @@
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
+          "table_ref": "public.v_egisz_documents_enriched_ui",
           "field_name": "Обработано IPS"
         }
       }

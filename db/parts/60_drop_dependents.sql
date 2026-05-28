@@ -44,9 +44,13 @@ DROP MATERIALIZED VIEW IF EXISTS public.v_rpt_documents_no_response_ui;  -- in c
 DROP VIEW IF EXISTS public.v_egisz_transactions_full;
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_transactions_enriched_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_transactions_enriched_ui;
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_documents_daily_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
+DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_documents_daily_ui;
+DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_documents_enriched_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
+DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_documents_enriched_ui;
 
 -- Drop retired columns after dependent views are gone.
-ALTER TABLE fact_egisz_messages DROP COLUMN IF EXISTS semd_code;
+ALTER TABLE stg_egisz_messages DROP COLUMN IF EXISTS semd_code;
 
 DO $$
 BEGIN

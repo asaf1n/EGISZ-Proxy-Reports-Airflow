@@ -114,9 +114,9 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 
 ```text
 sync_dimensions
-  -> extract_from_proxy
+  -> extract_cursor_batches
   -> load_to_dwh
-  -> analyze_raw_tables
+  -> analyze_staging
   -> transform_data
   -> refresh_materialized_views
   -> update_watermark
@@ -125,11 +125,13 @@ sync_dimensions
 | Задача | Результат |
 |---|---|
 | `sync_dimensions` | Обновляет `dim_organizations` и `dim_licenses` из Firebird. |
-| `extract_from_proxy` | Забирает новые `EXCHANGELOG` и `EGISZ_MESSAGES`, а также связанные сообщения внутри рабочего окна данных. |
-| `load_to_dwh` | Выполняет UPSERT журнальных payload'ов в `exchangelog_raw` и напрямую сохраняет структурированные `EGISZ_MESSAGES` в `fact_egisz_messages`. |
-| `analyze_raw_tables` | Обновляет статистику PostgreSQL для staging-таблиц и `fact_egisz_messages` после загрузки. |
-| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`, заполняет `fact_egisz_transactions`, `fact_egisz_documents`, `fact_egisz_channel_errors` и обновляет статистику фактов. |
-| `refresh_materialized_views` | Обновляет `v_egisz_transactions_enriched_ui` и `v_stg_channel_errors_by_document`, затем запускает `ANALYZE`. |
+| `extract_cursor_batches` | Забирает только курсорные партии `EXCHANGELOG` и `EGISZ_MESSAGES`. |
+| `load_to_dwh` | Выполняет UPSERT журнальных payload'ов в `exchangelog_raw` и напрямую сохраняет структурированные `EGISZ_MESSAGES` в `stg_egisz_messages`. |
+| `analyze_staging` | Обновляет статистику PostgreSQL для staging-таблиц и `stg_egisz_messages` после загрузки. |
+| `resolve_related_refs_from_dwh` | Просит PostgreSQL разобрать загруженный `exchangelog_raw` и вернуть связанные `MSGID` / идентификаторы документов. |
+| `load_related_messages` | Догружает связанные старые `EGISZ_MESSAGES` по идентификаторам из DWH-парсинга и пишет их в `stg_egisz_messages`. |
+| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`, заполняет центральный факт `fact_egisz_documents`, ошибки канала и внутреннюю lineage-таблицу `fact_egisz_transactions`. |
+| `refresh_materialized_views` | Обновляет `v_egisz_documents_enriched_ui`, `v_egisz_documents_daily_ui` и `v_stg_channel_errors_by_document`, затем запускает `ANALYZE`. |
 | `update_watermark` | Продвигает `elt_state` через `GREATEST(current, new)`. |
 
 XCom-контракт между задачами:
@@ -171,7 +173,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 | `40_functions_errors.sql` | Функции классификации и подготовки error JSON. |
 | `50_transform.sql` | Основная функция `egisz_transform_raw_to_facts`. |
 | `60_drop_dependents.sql` | Идемпотентная пересборка зависимых view. |
-| `70_views_core.sql` | `v_egisz_transactions_enriched_ui`, `v_rpt_error_interpretations_ui`. |
+| `70_views_core.sql` | `v_egisz_documents_enriched_ui`, `v_rpt_error_interpretations_ui`. |
 | `75_views_stg.sql` | `v_stg_channel_errors_by_document`, alias сетевых ошибок. |
 | `80_views_rpt.sql` | Отчётные `v_rpt_*_ui`. |
 | `90_views_health_and_finalize.sql` | Healthcheck-view, ownership, refresh и `ANALYZE`. |
@@ -180,11 +182,12 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 | Слой | Объекты | Содержание |
 |---|---|---|
-| Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Production может очищать эту таблицу после разложения данных в DWH facts. `EGISZ_MESSAGES` уже структурирована и грузится напрямую в `fact_egisz_messages`. |
+| Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Production может очищать эту таблицу после разложения данных в DWH facts. `EGISZ_MESSAGES` уже структурирована и грузится напрямую в `stg_egisz_messages`. |
 | ELT state | `elt_state` | Курсоры загрузки `last_log_id` и `last_egmid`. |
 | Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types` | Организации, лицензии, типы СЭМД. |
-| Fact | `fact_egisz_transactions`, `fact_egisz_messages`, `fact_egisz_documents`, `fact_egisz_channel_errors` | Разложенные DWH-таблицы для callback'ов, отправленных сообщений, реквизитов ЭМД (`KIND`/OID хранится как `semd_code`) и ошибок канала. |
-| Materialized views | `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document` | Быстрые витрины для Metabase и отчётных view; строятся поверх fact-таблиц. |
+| Fact | `fact_egisz_documents`, `fact_egisz_channel_errors`, `fact_egisz_transactions` | Центральный документный факт СЭМД, ошибки канала и внутренняя callback/event lineage-таблица. |
+| Staging | `stg_egisz_messages` | Структурированный входной слой `EGISZ_MESSAGES`; не является источником отчётности. |
+| Materialized views | `v_egisz_documents_enriched_ui`, `v_egisz_documents_daily_ui`, `v_stg_channel_errors_by_document` | Быстрые витрины для Metabase и отчётных view; строятся поверх document-grain facts. |
 | Reporting views | `v_rpt_*_ui`, `v_health_*_ui` | Готовые SQL-интерфейсы для карточек. |
 
 `_raw`-таблицы не являются источником отчётности. Представления и дашборды должны читать только persistent DWH-слой (`fact_egisz_*`, dimensions, materialized views). Это важно для production, где raw staging периодически очищается.
@@ -244,11 +247,11 @@ JSON-описания дашбордов находятся в `metabase_dashboa
 
 | Дашборд | Назначение | Основные источники | Фильтры |
 |---|---|---|---|
-| `01_operational.json` | Операционный поток документов, статусы, ошибки, динамика. | `v_egisz_transactions_enriched_ui`, `v_rpt_error_category_breakdown_ui` | Период, код СЭМД, JID, идентификаторы |
+| `01_operational.json` | Операционный поток документов, статусы, ошибки, динамика. | `v_egisz_documents_enriched_ui`, `v_rpt_error_category_breakdown_ui` | Период, код СЭМД, JID, идентификаторы |
 | `02_service.json` | Healthcheck ETL, канала и прокси-БД. | `v_health_*_ui`, `v_stg_channel_errors_by_document` | Период, код ошибки, JID |
 | `03_documents_no_response.json` | Очередь документов без финального callback. | `v_rpt_documents_no_response_ui` | Период, JID, тип СЭМД |
 | `04_quality_and_errors.json` | Качество данных и детализация отказов РЭМД. | `v_rpt_error_category_breakdown_ui`, `v_rpt_error_interpretations_ui` | Период, категория, тип ошибки |
-| `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу. | `v_rpt_documents_ui`, `v_egisz_transactions_enriched_ui` | Период |
+| `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу. | `v_rpt_documents_ui`, `v_egisz_documents_enriched_ui` | Период |
 | `06_semd_archive.json` | Архив документов и поиск по идентификаторам. | `v_rpt_semd_archive_ui` | Период, JID, код СЭМД, `localUid`, `emdrId`, `LOGID`, `EGMID` |
 | `07_client_service.json` | Клиентский мониторинг по одному JID. | `v_rpt_client_documents_ui` | JID, период, тип документа |
 | `08_client_bianalytic.json` | Клиентская BI-аналитика без раскрытия ПДн. | `v_rpt_client_documents_ui` | JID, период, тип документа |
@@ -307,11 +310,11 @@ SELECT
 FROM pg_stat_user_tables
 WHERE relname IN (
     'exchangelog_raw',
-    'fact_egisz_messages',
+    'stg_egisz_messages',
     'fact_egisz_documents',
     'fact_egisz_channel_errors',
     'fact_egisz_transactions',
-    'v_egisz_transactions_enriched_ui',
+    'v_egisz_documents_enriched_ui',
     'v_stg_channel_errors_by_document'
 )
 ORDER BY relname;
@@ -320,9 +323,9 @@ ORDER BY relname;
 ### Ручной refresh витрин
 
 ```sql
-REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_transactions_enriched_ui;
+REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_enriched_ui;
 REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_stg_channel_errors_by_document;
-ANALYZE public.v_egisz_transactions_enriched_ui;
+ANALYZE public.v_egisz_documents_enriched_ui;
 ANALYZE public.v_stg_channel_errors_by_document;
 ```
 

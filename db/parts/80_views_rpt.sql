@@ -13,28 +13,26 @@
 CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
 WITH remd_errors AS (
     SELECT
-        t.log_date                                                                    AS "Обработано IPS",
-        t.log_date::date                                                              AS "День (тренд)",
-        t.document_key                                                                 AS "Документ (ключ учёта)",
-        t.jid::text                                                                   AS "JID клиники",
-        public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))         AS "Код СЭМД",
-        public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
+        d."Обработано IPS",
+        d."День (тренд)",
+        d."Документ (ключ учёта)",
+        d."JID клиники",
+        d."Код СЭМД",
+        d."Тип СЭМД (код · НСИ)",
         trim(err_item)                                                                AS "Тип ошибки"
-    FROM fact_egisz_transactions t
-    LEFT JOIN public.fact_egisz_documents d
-      ON d.document_key = t.document_key
+    FROM public.v_egisz_documents_enriched_ui d
     CROSS JOIN LATERAL unnest(
         string_to_array(
-            COALESCE(NULLIF(trim(t.error_type), ''), 'Неизвестная ошибка'),
+            COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
             ' · '
         )
     ) AS err_item
-    WHERE t.status = 'error'
+    WHERE d."Статус" = 'error'
       -- после §1 error_type пуст для pending/unknown → этот фильтр осмыслен;
       -- защищает от пустых корзин 'Неизвестная ошибка' в карточках 04 дашборда.
-      AND t.error_type IS NOT NULL
-      AND t.document_key IS NOT NULL
-      AND trim(t.error_type) <> ''
+      AND d."Тип ошибки" IS NOT NULL
+      AND d."Документ (ключ учёта)" IS NOT NULL
+      AND trim(d."Тип ошибки") <> ''
       AND trim(err_item) <> ''
 ),
 network_errors AS (
@@ -112,7 +110,7 @@ SELECT
 FROM source_rows s
 LEFT JOIN LATERAL (
     SELECT f.*
-    FROM public.v_egisz_transactions_enriched_ui f
+    FROM public.v_egisz_documents_enriched_ui f
     WHERE lower(NULLIF(btrim(f."localUid СЭМД"), '')) = lower(NULLIF(btrim(s.local_uid_hint), ''))
        OR lower(NULLIF(btrim(f."Рег. номер РЭМД (emdrid)"), '')) = lower(NULLIF(btrim(s.emdr_id_hint), ''))
     ORDER BY
@@ -128,109 +126,26 @@ COMMENT ON VIEW public.v_rpt_network_errors_detail_ui IS
 'Техническая витрина ошибок связи proxy_egisz: healthcheck/поддержка клиник, LOGSTATE=3 и строки журнала с привязкой к документу, если её удалось восстановить.';
 
 CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
-WITH source_documents AS (
-    SELECT document_key, semd_code
-    FROM public.fact_egisz_documents
-),
-messages_all AS (
-    SELECT
-        m.egmid,
-        m.created_at,
-        m.msgid,
-        m.reply_to,
-        public.egisz_clean_text_value(m.document_id) AS document_id,
-        m.document_key,
-        source_doc.semd_code AS semd_code_resolved,
-        m.msgid_norm,
-        m.document_id_norm,
-        m.reply_to_jid,
-        m.reply_to_host
-    FROM public.fact_egisz_messages m
-    LEFT JOIN source_documents source_doc
-      ON source_doc.document_key = m.document_key
-),
-messages AS (
-    SELECT DISTINCT ON (document_key)
-        *
-    FROM messages_all
-    WHERE document_key IS NOT NULL
-    ORDER BY document_key, created_at DESC NULLS LAST, egmid DESC
-),
-fact_message_keys AS (
-    SELECT DISTINCT public.egisz_normalize_message_id(f.message_id) AS message_key
-    FROM fact_egisz_transactions f
-    WHERE NULLIF(public.egisz_normalize_message_id(f.message_id), '') IS NOT NULL
-
-    UNION
-
-    SELECT DISTINCT public.egisz_normalize_message_id(f.relates_to_id) AS message_key
-    FROM fact_egisz_transactions f
-    WHERE NULLIF(public.egisz_normalize_message_id(f.relates_to_id), '') IS NOT NULL
-),
-known_document_keys AS (
-    SELECT DISTINCT f.document_key
-    FROM fact_egisz_transactions f
-    WHERE f.document_key IS NOT NULL
-
-    UNION
-
-    SELECT document_key
-    FROM public.fact_egisz_documents
-    WHERE document_key IS NOT NULL
-)
 SELECT
-    m.created_at AS "Отправлено",
-    EXTRACT(EPOCH FROM (now() - m.created_at))/3600.0 AS "Часов в ожидании",
+    d.sent_at AS "Отправлено",
+    EXTRACT(EPOCH FROM (now() - d.sent_at))/3600.0 AS "Часов в ожидании",
     CASE
-        WHEN now() - m.created_at > INTERVAL '72 hours' THEN 'просрочено'
+        WHEN now() - d.sent_at > INTERVAL '72 hours' THEN 'просрочено'
         ELSE 'в обработке'
     END AS "Категория ожидания",
-    m.document_id AS "localUid СЭМД",
-    m.document_id AS "Идентификатор документа (localUid)",
-    m.semd_code_resolved AS "Код СЭМД",
-    COALESCE(
-        st.name,
-        CASE
-            WHEN public.egisz_normalize_semd_code(m.semd_code_resolved) IS NOT NULL
-            THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
-            ELSE NULL
-        END
-    ) AS "Наименование СЭМД",
-    public.egisz_semd_type_report_label(m.semd_code_resolved, NULL) AS "Тип СЭМД (код · НСИ)",
-    COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники",
-    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(m.reply_to_jid, l.jid)::text) AS "Наименование клиники",
-    NULL::text AS "Связанное сообщение",
-    m.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
-    m.msgid AS "MSGID обмена",
-    public.egisz_clean_host(m.reply_to) AS "Хост клиники (VPN ГОСТ)"
-FROM messages m
-LEFT JOIN LATERAL (
-    SELECT dl.*
-    FROM dim_licenses dl
-    WHERE (m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid)
-       OR (m.reply_to_host IS NOT NULL AND public.egisz_clean_host(dl.mo_domen) = m.reply_to_host)
-    ORDER BY
-        CASE
-            WHEN m.reply_to_jid IS NOT NULL AND dl.jid = m.reply_to_jid THEN 0
-            ELSE 1
-        END,
-        dl.modifydate DESC NULLS LAST, dl.id DESC
-    LIMIT 1
-) l ON TRUE
-LEFT JOIN dim_organizations o ON o.jid = COALESCE(m.reply_to_jid, l.jid)
-LEFT JOIN LATERAL (
-    SELECT dst.*
-    FROM public.dim_semd_types dst
-    WHERE dst.oid = public.egisz_normalize_semd_code(m.semd_code_resolved)
-    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
-    LIMIT 1
-) st ON TRUE
-LEFT JOIN fact_message_keys fm ON fm.message_key = m.msgid_norm
-LEFT JOIN known_document_keys kd ON kd.document_key = m.document_id_norm
-LEFT JOIN public.fact_egisz_transactions fe ON fe.egmid = m.egmid
-WHERE fm.message_key IS NULL
-  AND kd.document_key IS NULL
-  AND fe.egmid IS NULL;
+    d."localUid СЭМД",
+    d."Идентификатор документа (localUid)",
+    d."Код СЭМД",
+    d."Наименование СЭМД",
+    d."Тип СЭМД (код · НСИ)",
+    d."JID клиники",
+    d."Наименование клиники",
+    d."Связанное сообщение",
+    d."EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
+    d."MSGID обмена",
+    d."Хост клиники (VPN ГОСТ)"
+FROM public.v_egisz_documents_enriched_ui d
+WHERE d.document_status = 'waiting';
 
 CREATE OR REPLACE VIEW public.v_rpt_documents_ui AS
 WITH source_rows AS (
@@ -268,7 +183,7 @@ SELECT
     "Создание СЭМД",
     "Сводка ошибки",
     "Хост клиники (VPN ГОСТ)"
-FROM public.v_egisz_transactions_enriched_ui
+FROM public.v_egisz_documents_enriched_ui
 WHERE "Статус" IN ('success', 'error')
   AND NULLIF(TRIM("Документ (ключ учёта)"), '') IS NOT NULL
 ),
@@ -355,7 +270,7 @@ WITH success_by_day AS (
         MAX("Наименование клиники") AS clinic_name,
         COUNT(DISTINCT "Документ (ключ учёта)") FILTER (WHERE "Статус" = 'success')::bigint AS ok_cnt,
         COUNT(DISTINCT "Документ (ключ учёта)") FILTER (WHERE "Статус" = 'error')::bigint AS err_remd_cnt
-    FROM public.v_egisz_transactions_enriched_ui
+    FROM public.v_egisz_documents_enriched_ui
     GROUP BY 1, 2
 ),
 network_by_day AS (
@@ -427,7 +342,7 @@ WITH fact_source AS (
         f.doctor_name,
         f.patient_hash,
         f.doctor_hash
-    FROM public.v_egisz_transactions_enriched_ui f
+    FROM public.v_egisz_documents_enriched_ui f
     WHERE f."Статус" IN ('success', 'error')
       AND NULLIF(f."Документ (ключ учёта)", '') IS NOT NULL
 ),

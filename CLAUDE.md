@@ -14,12 +14,12 @@ Domain context (what ЕГИСЗ/СЭМД are, how parsing works, what each dashb
 
 **6 hard rules** (full list — §1, §8):
 
-1. **Names are fixed.** Domain — `egisz` / Python package — `egisz_elt` / DWH — `dwh_egisz` / source — `proxy_egisz` / fact table — `fact_egisz_transactions`. 
-2. **All transformation business logic lives in PL/pgSQL.** SOAP/XML parsing, status normalization, error classification, building `fact_egisz_transactions` — inside [db/parts/50_transform.sql](db/parts/50_transform.sql) plus helpers from `20_functions_parsing.sql` / `40_functions_errors.sql`. Python only does Airflow orchestration and raw loading.
+1. **Names are fixed.** Domain — `egisz` / Python package — `egisz_elt` / DWH — `dwh_egisz` / source — `proxy_egisz` / central fact table — `fact_egisz_documents`.
+2. **All transformation business logic lives in PL/pgSQL.** SOAP/XML parsing, status normalization, error classification, and building `fact_egisz_documents` live inside [db/parts/50_transform.sql](db/parts/50_transform.sql) plus helpers from `20_functions_parsing.sql` / `40_functions_errors.sql`. Python only does Airflow orchestration and raw/staging loading.
 3. **DWH schema lives only in `db/dwh_init.sql` + `db/parts/*.sql`.** No migration files (`migrations/`, alembic, etc.). Every module is idempotent (`CREATE ... IF NOT EXISTS`, `CREATE OR REPLACE`, `INSERT ... ON CONFLICT`).
 4. **Watermark only moves via `GREATEST(current, new)`.** Never roll it back — doing so breaks idempotency of the entire pipeline.
 5. **Secrets via `BaseHook.get_connection(...)`.** No `os.getenv('DB_PASSWORD')` or `.env` inside DAG / ELT modules. Connection IDs are fixed: `proxy_egisz_fb`, `dwh_egisz_pg`.
-6. **Reporting never reads `_raw`.** `exchangelog_raw` is disposable staging for SOAP/XML journal parsing only; production may purge it. `EGISZ_MESSAGES` is already structured and is loaded directly into `fact_egisz_messages`. Views and dashboards must use `fact_egisz_transactions`, `fact_egisz_messages`, `fact_egisz_documents`, `fact_egisz_channel_errors`, dimensions, and MVs built from those facts.
+6. **Reporting never reads staging.** `exchangelog_raw` and `stg_egisz_messages` are disposable input layers. Views and dashboards must use `fact_egisz_documents`, `fact_egisz_channel_errors`, dimensions, and document-grain MVs; `fact_egisz_transactions` is internal callback lineage only.
 
 **Code entry points:**
 - DAG: [airflow/dags/egisz_elt_dag.py](airflow/dags/egisz_elt_dag.py)
@@ -45,11 +45,11 @@ Do not invent names. Use exactly this taxonomy:
 | Dimension: organizations | `dim_organizations` | Source: Firebird `JPERSONS`, PK `jid` |
 | Dimension: licenses | `dim_licenses` | Source: Firebird `EGISZ_LICENSES`, PK `id` |
 | Dimension: СЭМД types | `dim_semd_types` | Static reference table, PK `code` |
-| Fact table | `fact_egisz_transactions` | Populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id`. `status` ∈ {`success`, `error`, `pending`, `unknown`}; `error_type` непустой только для `status='error'` (для pending/unknown — `NULL`) |
-| Fact table: sent messages | `fact_egisz_messages` | Persistent parsed `EGISZ_MESSAGES`; source for waiting queue and client pending rows |
-| Fact table: EMD documents | `fact_egisz_documents` | Persistent EMD requisites parsed from `getDocumentFile`; `KIND`/OID is stored as `semd_code`, readable names are resolved from `dim_semd_types` in views |
+| Staging table: sent messages | `stg_egisz_messages` | Structured `EGISZ_MESSAGES` staging; Python loads it directly, SQL transforms it into document facts |
+| Central fact table: EMD documents | `fact_egisz_documents` | One row per СЭМД/document, keyed by `document_key`; contains `jid`, document identifiers, status, dates, error fields, patient/doctor hashes, and callback linkage |
+| Internal lineage table | `fact_egisz_transactions` | Callback/event lineage populated by `egisz_transform_raw_to_facts()`, PK `exchangelog_log_id`; not a reporting base |
 | Fact table: channel errors | `fact_egisz_channel_errors` | Persistent parsed transport/channel errors; source for `v_stg_channel_errors_by_document` |
-| Materialized views | `v_*` (MV variants — `v_egisz_transactions_enriched_ui`, `v_stg_channel_errors_by_document`) | Refreshed by a dedicated Airflow task |
+| Materialized views | `v_*` (MV variants — `v_egisz_documents_enriched_ui`, `v_stg_channel_errors_by_document`) | Refreshed by a dedicated Airflow task |
 | Reporting views | `v_rpt_*_ui` | Plain views on top of MVs |
 | Healthcheck views | `v_health_*_ui` | Plain views for dashboard `02_service.json` |
 | Watermark table | `elt_state` | Tracks `last_log_id` and `last_egmid` per `pipeline` |
@@ -67,17 +67,19 @@ Only `@dag` and `@task`. No legacy operators (`PythonOperator`, `BashOperator`) 
 ### Task pipeline (order matters)
 
 ```
-sync_dimensions >> extract_from_proxy >> load_to_dwh >> analyze_raw_tables >> transform_data >> refresh_materialized_views >> update_watermark
+sync_dimensions >> extract_cursor_batches >> load_to_dwh >> analyze_staging >> resolve_related_refs_from_dwh >> load_related_messages >> transform_data >> refresh_materialized_views >> update_watermark
 ```
 
 | Task | Responsibility |
 |---|---|
 | `sync_dimensions` | Full reload of `dim_organizations` (from `JPERSONS`) and `dim_licenses` (from `EGISZ_LICENSES`) via `sync_directory()` (UPSERT by PK with pagination `DIRECTORY_SYNC_PAGE_SIZE=1000`) |
-| `extract_from_proxy` | Read watermarks from `elt_state` (`get_cursors(pipeline)`), pull `EXCHANGELOG` batch by `LOGID > last_log_id` and `EGISZ_MESSAGES` batch by `EGMID > last_egmid`. Additionally pull related older messages referenced via `<messageId>` / `<relatesToMessage>` / `<relatesTo>` / `<localUid>` / `<DOCUMENTID>` in XML and via `MSGID` in the journal row. Returns XCom dict |
-| `load_to_dwh` | UPSERT into `exchangelog_raw` for journal payloads and directly persists structured `EGISZ_MESSAGES` into `fact_egisz_messages`. Forwards the XCom dict downstream |
-| `analyze_raw_tables` | `ANALYZE` for touched raw staging tables and `fact_egisz_messages`. Runs in autocommit. **Mandatory task**: without fresh stats after bulk load, PostgreSQL may miss the functional indexes used during parsing and matching. |
-| `transform_data` | Calls `public.egisz_transform_raw_to_facts(from_logid, to_logid, from_egmid, to_egmid)`. The function parses raw payloads into persistent DWH facts: `fact_egisz_transactions`, `fact_egisz_documents`, and `fact_egisz_channel_errors`. Финальный статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success`/`error` для финальных ответов, `pending` для промежуточных («принято к обработке», processing, accepted), `unknown` для совсем нераспознанных. `pending` — это операционная норма, **не ошибка**; для pending/unknown колонка `error_type` остаётся NULL. The function does **not** refresh MVs — that's a separate task |
-| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on the MV — present on `transaction_id`. Если `transformed=0` — таск пропускается (нечего рефрешить) |
+| `extract_cursor_batches` | Read watermarks from `elt_state` (`get_cursors(pipeline)`), pull only cursor batches: `EXCHANGELOG` by `LOGID > last_log_id` and `EGISZ_MESSAGES` by `EGMID > last_egmid`. Returns XCom dict |
+| `load_to_dwh` | UPSERT into `exchangelog_raw` for journal payloads and directly persists structured `EGISZ_MESSAGES` into `stg_egisz_messages`. Forwards the XCom dict downstream |
+| `analyze_staging` | `ANALYZE` for touched raw staging tables and `stg_egisz_messages`. Runs in autocommit. **Mandatory task**: without fresh stats after bulk load, PostgreSQL may miss the functional indexes used during parsing and matching. |
+| `resolve_related_refs_from_dwh` | Ask PostgreSQL to parse the just-loaded `exchangelog_raw` batch and return related `MSGID` / document identifiers. No XML regex parsing in Python |
+| `load_related_messages` | Fetch related older `EGISZ_MESSAGES` rows from Firebird by identifiers returned from DWH parsing and UPSERT them into `stg_egisz_messages` |
+| `transform_data` | Calls `public.egisz_transform_raw_to_facts(from_logid, to_logid, from_egmid, to_egmid)`. The function parses raw/staging payloads into document-grain `fact_egisz_documents` first, then writes `fact_egisz_channel_errors` and internal callback lineage in `fact_egisz_transactions`. Status values for documents are `success`, `registration_error`, `network_error`, and `waiting`. The function does **not** refresh MVs — that's a separate task |
+| `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_documents_enriched_ui`, `v_egisz_documents_daily_ui`, and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on each MV |
 | `update_watermark` | UPSERT into `elt_state` via `GREATEST(current, new)` for `last_log_id` and `last_egmid` — guards against accidental cursor rollback during manual re-runs of older batches |
 
 ### Batch size and schedule
@@ -152,7 +154,7 @@ db/parts/30_error_rules.sql                — egisz_error_interpretation_rules 
 db/parts/40_functions_errors.sql           — error classify / interpretation / build_errors_json / semd_type_report_label
 db/parts/50_transform.sql                  — egisz_transform_raw_to_facts (the main function)
 db/parts/60_drop_dependents.sql            — DROP dependent views and legacy columns before rebuild
-db/parts/70_views_core.sql                 — v_egisz_transactions_enriched_ui (MV) + v_rpt_error_interpretations_ui
+db/parts/70_views_core.sql                 — v_egisz_documents_enriched_ui (MV) + v_rpt_error_interpretations_ui
 db/parts/75_views_stg.sql                  — v_stg_channel_errors_by_document (MV) + v_stg_channel_network_errors_by_document (alias view)
 db/parts/80_views_rpt.sql                  — v_rpt_*_ui (network_errors_detail, documents_no_response, semd_archive, clinic_connectivity_daily, connectivity_global_daily, error_category_breakdown, client_documents)
 db/parts/90_views_health_and_finalize.sql  — v_health_*_ui + GRANT verification + REFRESH of both MVs
@@ -164,7 +166,7 @@ Every module is individually idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE O
 
 ### Transform function
 
-Data transformation happens **during the DAG run**, in the `transform_data` task. The task calls a PL/pgSQL function that does all real work — SOAP/XML parsing, enrichment, writing to `fact_egisz_transactions`:
+Data transformation happens **during the DAG run**, in the `transform_data` task. The task calls a PL/pgSQL function that does all real work — SOAP/XML parsing, enrichment, writing to `fact_egisz_documents`, channel errors, and callback lineage:
 
 ```sql
 SELECT public.egisz_transform_raw_to_facts(from_logid, to_logid, from_egmid, to_egmid)
@@ -174,9 +176,9 @@ The Python task only invokes the function; **all transformation business logic l
 
 Do not implement row-level transformation in Python (e.g. iterating rows and mutating them before write). If you feel tempted to add such logic — it belongs in PL/pgSQL.
 
-Transformation is **not** deferred to query time. By the time Metabase reads data, `fact_egisz_transactions` and the MVs are already populated.
+Transformation is **not** deferred to query time. By the time Metabase reads data, `fact_egisz_documents` and the MVs are already populated.
 
-`_raw` tables are staging only. Do not build reporting views, healthcheck views, dashboard SQL, or Metabase field filters on `exchangelog_raw`; production cleanup may truncate it after data has been parsed into the fact tables. Do not recreate `egisz_messages_raw`: `EGISZ_MESSAGES` is loaded directly into `fact_egisz_messages`.
+`_raw` tables are staging only. Do not build reporting views, healthcheck views, dashboard SQL, or Metabase field filters on `exchangelog_raw`; production cleanup may truncate it after data has been parsed into the fact tables. Do not recreate `egisz_messages_raw`: `EGISZ_MESSAGES` is loaded directly into `stg_egisz_messages`.
 
 ### Firebird-specific serialization
 
@@ -203,7 +205,7 @@ The СЭМД type reference is seeded directly in `db/parts/10_tables.sql` (a la
   - `06_semd_archive.json` — locate a specific document by any identifier
   - `07_client_service.json` — per-client service dashboard with JID auth-stub filter, period, and document type
   - `08_client_bianalytic.json` — per-client BI-analytic dashboard (patient/doctor hash counts, no PII)
-- Most cards run on top of `v_egisz_transactions_enriched_ui` and `v_rpt_*_ui`.
+- Most cards run on top of `v_egisz_documents_enriched_ui` and `v_rpt_*_ui`.
 - Dashboards are imported **automatically on container start** via `metabase/entrypoint.sh` → `metabase/provision.sh` (if `METABASE_AUTO_PROVISION=true`, default — true). Additionally, after `kubectl apply` `up.ps1` invokes `setup-dashboards.sh` explicitly (`kubectl exec deploy/metabase -- /bin/bash /app/setup-dashboards.sh`) — re-running is idempotent (it verifies a sha256 manifest).
 - Field filters for dashboards are configured by `scripts/apply_metabase_field_filters.py` using declarative rules in `metabase_dashboards/field_filter_defaults.yaml` (format — **version: 2**). This is a resolver, not business logic.
 - Metabase uses its **own** PostgreSQL database `metabase_app` (StatefulSet `metabase-postgres`). Do not mix it with `dwh_egisz` or `airflow_db`.
@@ -264,7 +266,7 @@ These prohibitions are not stylistic preferences — they encode past incidents.
 |---|---|
 | Monolithic Python script for one Airflow task | Decompose into focused functions in `fb_client.py` / `pg_client.py`; keep the DAG thin (orchestration only) |
 | `os.getenv('DB_PASSWORD')` / `.env` inside DAG / ELT modules | `BaseHook.get_connection('proxy_egisz_fb' \| 'dwh_egisz_pg')` |
-| Use the word `proxy_reports` in identifiers | Use only the fixed names from §1 (`egisz` / `egisz_elt` / `dwh_egisz`) |
+| Use the word `legacy proxy report` in identifiers | Use only the fixed names from §1 (`egisz` / `egisz_elt` / `dwh_egisz`) |
 | Write analytical data into the system DB `postgres` | All DWH writes go to `dwh_egisz` |
 | Python-side row transformation (iterate and mutate before write) | All business logic in `egisz_transform_raw_to_facts` (PL/pgSQL); Python only invokes |
 | `LIMIT/OFFSET` for Firebird pagination | Keyset pagination: `WHERE col > ? ORDER BY col ROWS N` |
@@ -273,11 +275,11 @@ These prohibitions are not stylistic preferences — they encode past incidents.
 | Refresh MVs inside `egisz_transform_raw_to_facts()` | That's the job of the separate `refresh_materialized_views` task |
 | Parse SOAP/XML on the Python side in the DAG / `fb_client.py` | Parsing belongs in `db/parts/20_functions_parsing.sql` (`egisz_xml_text`, `egisz_normalize_message_id`, etc.) |
 | Roll the watermark back on manual reruns | `update_watermark` UPSERTs via `GREATEST(current, new)` — bypassing this breaks idempotency |
-| Remove `analyze_raw_tables` "as an optimization" | This task guards parsing/matching plans after bulk load (see §2) |
+| Remove `analyze_staging` "as an optimization" | This task guards parsing/matching plans after bulk load (see §2) |
 | Build reporting or healthcheck views directly on `_raw` tables | Parse raw payloads into persistent DWH tables first; views read `fact_egisz_*`, dimensions, and MVs only |
 | Add ticket/task references in code comments | Comments — only when the **why** is non-obvious (hidden invariant, bug workaround) |
-| Записывать `'unknown'` в `error_type` для нераспознанных callback'ов | `error_type IS NULL` для `status` ∈ {`pending`, `unknown`}; видимость через сам `status` и человекочитаемый лейбл `"Статус (отчёт)"` в `v_egisz_transactions_enriched_ui` |
-| Создавать в DWH «теневые» таблицы без ELT-источника (commercial/financial mart с захардкоженными константами в view) | Считать управленческие метрики прямо в SQL-карточках 05_executive из `fact_egisz_transactions` / `v_egisz_transactions_enriched_ui` / `v_rpt_documents_no_response_ui`. Финансовая модель — фикс-тариф `10 000 ₽/JID/мес`, явно зашит в SQL карточек, не в view |
+| Записывать `'unknown'` в `error_type` для нераспознанных callback'ов | `error_type IS NULL` для `status` ∈ {`pending`, `unknown`}; видимость через сам `status` и человекочитаемый лейбл `"Статус (отчёт)"` в `v_egisz_documents_enriched_ui` |
+| Создавать в DWH «теневые» таблицы без ELT-источника (commercial/financial mart с захардкоженными константами в view) | Считать управленческие метрики прямо в SQL-карточках 05_executive из `fact_egisz_documents` / `v_egisz_documents_enriched_ui` / `v_rpt_documents_no_response_ui`. Финансовая модель — фикс-тариф `10 000 ₽/JID/мес`, явно зашит в SQL карточек, не в view |
 
 ---
 
@@ -311,7 +313,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 Refresh MVs manually (outside the DAG):
 
 ```powershell
-psql -U postgres -d dwh_egisz -c "REFRESH MATERIALIZED VIEW CONCURRENTLY v_egisz_transactions_enriched_ui;"
+psql -U postgres -d dwh_egisz -c "REFRESH MATERIALIZED VIEW CONCURRENTLY v_egisz_documents_enriched_ui;"
 psql -U postgres -d dwh_egisz -c "REFRESH MATERIALIZED VIEW CONCURRENTLY v_stg_channel_errors_by_document;"
 ```
 
@@ -355,7 +357,7 @@ This section concerns Claude Code only; Codex does not use it.
 - **When editing dashboards** — after editing JSON, run `python scripts/apply_metabase_field_filters.py` and `pytest tests/test_dashboards.py`. Snapshot tests will fail if structure drifted.
 - **When changing the XCom shape or task order in the DAG** — synchronously update §2 in this file **and** in [AGENTS.md](AGENTS.md). The contract is pinned in three places at once: code, CLAUDE.md, AGENTS.md.
 - **Hidden incidents easy to forget:**
-  - `analyze_raw_tables` cannot be removed (see §2 and §8).
+  - `analyze_staging` cannot be removed (see §2 and §8).
   - `update_watermark` uses `GREATEST` — do not simplify to a direct UPDATE.
   - SOAP/XML parsing belongs in PL/pgSQL only — do not pull `xml.etree` into Python.
 - **README and this file are different genres.** README explains "what and why" at the domain level (in Russian, for humans); CLAUDE.md/AGENTS.md explain "how to write code" (in English, for LLMs). When documenting the domain, write to README. When documenting an agent rule, write here (and in AGENTS.md).

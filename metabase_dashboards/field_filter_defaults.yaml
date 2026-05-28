@@ -69,14 +69,14 @@ tags:
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Код СЭМД
       - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_documents_no_response_ui
         field_name: Код СЭМД
       - query_contains: [v_rpt_network_errors_detail_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_network_errors_detail_ui
         field_name: Код СЭМД
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: Код СЭМД
 
   top_clinic:
@@ -94,14 +94,14 @@ tags:
         table_ref: public.v_rpt_semd_archive_ui
         field_name: JID клиники
       - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_documents_no_response_ui
         field_name: JID клиники
       - query_contains: [v_rpt_network_errors_detail_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_network_errors_detail_ui
         field_name: JID клиники
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: JID клиники
 
   local_uid:
@@ -116,10 +116,10 @@ tags:
         table_ref: public.v_rpt_semd_archive_ui
         field_name: localUid СЭМД
       - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_documents_no_response_ui
         field_name: localUid СЭМД
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: localUid СЭМД
 
   relates_to:
@@ -133,7 +133,7 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Связанное сообщение
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: Связанное сообщение
 
   emdr_id:
@@ -147,7 +147,7 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Рег. номер РЭМД
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: Рег. номер РЭМД (emdrid)
 
   status:
@@ -158,7 +158,7 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Статус
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: Статус
 
   log_id:
@@ -172,7 +172,7 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: LOGID журнала EXCHANGELOG
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: LOGID журнала EXCHANGELOG
 
   egmid:
@@ -186,7 +186,7 @@ tags:
       - query_contains: [v_rpt_semd_archive_ui]
         table_ref: public.v_rpt_semd_archive_ui
         field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)
 
   err_parse_code:
@@ -216,7 +216,7 @@ tags:
         table_ref: public.v_rpt_documents_ui
         field_name: День (тренд)
       - display_name_contains: ["День (тренд)"]
-        table_ref: public.v_egisz_transactions_enriched_ui
+        table_ref: public.v_egisz_documents_enriched_ui
         field_name: День (тренд)
       - display_name_contains: [Дата обработки]
         query_contains: [v_rpt_documents_ui]
@@ -226,14 +226,14 @@ tags:
         table_ref: public.v_rpt_semd_archive_ui
         field_name: Дата обработки
       - display_name_contains: [Обработано IPS]
-        table_ref: public.v_egisz_transactions_enriched_ui
+        table_ref: public.v_egisz_documents_enriched_ui
         field_name: Обработано IPS
       - display_name_contains: [Обработано]
         display_name_not_contains: [Отправлено]
-        table_ref: public.v_egisz_transactions_enriched_ui
+        table_ref: public.v_egisz_documents_enriched_ui
         field_name: Обработано IPS
       - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_transactions_enriched_ui]
+        query_not_contains: [v_egisz_documents_enriched_ui]
         table_ref: public.v_rpt_documents_no_response_ui
         field_name: Отправлено
       - query_contains: [v_rpt_semd_archive_ui]
@@ -242,8 +242,8 @@ tags:
       - query_contains: [v_rpt_documents_ui]
         table_ref: public.v_rpt_documents_ui
         field_name: Дата обработки
-      - query_contains: [v_egisz_transactions_enriched_ui]
-        table_ref: public.v_egisz_transactions_enriched_ui
+      - query_contains: [v_egisz_documents_enriched_ui]
+        table_ref: public.v_egisz_documents_enriched_ui
         field_name: Обработано IPS
 
   client_period:
@@ -258,11 +258,11 @@ tags:
 
   # mgmt_period — единый dimension-фильтр периода для 05_executive.json.
   # Документные карточки привязаны к "Дата обработки" в v_rpt_documents_ui;
-  # транзакционные карточки остаются на "Обработано IPS" в v_egisz_transactions_enriched_ui.
+  # транзакционные карточки остаются на "Обработано IPS" в v_egisz_documents_enriched_ui.
   mgmt_period:
     rules:
       - query_contains: [v_rpt_documents_ui]
         table_ref: public.v_rpt_documents_ui
         field_name: Дата обработки
-      - table_ref: public.v_egisz_transactions_enriched_ui
+      - table_ref: public.v_egisz_documents_enriched_ui
         field_name: Обработано IPS

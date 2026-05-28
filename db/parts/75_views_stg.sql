@@ -20,6 +20,7 @@ SELECT
     local_uid_hint,
     emdr_id_hint,
     document_key,
+    jid,
     relates_to_id
 FROM public.fact_egisz_channel_errors
 WITH NO DATA;
@@ -29,6 +30,7 @@ CREATE INDEX ON public.v_stg_channel_errors_by_document (error_top_type);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (document_key);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (journal_msgid);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (created_at);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (jid);
 
 CREATE OR REPLACE VIEW public.v_stg_channel_network_errors_by_document AS
 SELECT *

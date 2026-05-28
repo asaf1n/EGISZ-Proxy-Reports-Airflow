@@ -1,180 +1,163 @@
 -- ============================================================================
--- 70_views_core.sql — v_egisz_transactions_enriched_ui (mat-view) + v_rpt_error_interpretations_ui
--- Source: db/dwh_init.sql, lines [1276..1423).
+-- 70_views_core.sql — document-grain MVs + compatibility analytics view
 -- Loaded by db/dwh_init.sql via \i db/parts/70_views_core.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
 -- ============================================================================
 
-CREATE MATERIALIZED VIEW public.v_egisz_transactions_enriched_ui AS
+CREATE MATERIALIZED VIEW public.v_egisz_documents_enriched_ui AS
 SELECT
-    t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    t.egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
-    t.message_id AS "MSGID обмена",
-    t.log_date AS "Обработано IPS",
-    t.log_date::date AS "День",
-    t.log_date::date AS "День (тренд)",
-    t.document_key AS "Документ (ключ учёта)",
-    t.status AS "Статус",
+    d.document_key AS "Документ (ключ учёта)",
+    d.callback_log_id::text AS "LOGID журнала EXCHANGELOG",
+    d.last_egmid::text AS "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)",
+    d.message_id AS "MSGID обмена",
+    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) AS "Обработано IPS",
+    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)::date AS "День",
+    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)::date AS "День (тренд)",
     CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        WHEN t.status = 'error' AND t.error_type = 'Сетевая ошибка' THEN 'Ошибка связи'
-        WHEN t.status = 'error' THEN 'Ошибка регистрации'
-        ELSE NULL
+        WHEN d.status = 'success' THEN 'success'
+        WHEN d.status IN ('registration_error', 'network_error') THEN 'error'
+        ELSE 'waiting'
+    END AS "Статус",
+    CASE
+        WHEN d.status = 'success' THEN 'Успешный ответ'
+        WHEN d.status = 'network_error' THEN 'Ошибка связи'
+        WHEN d.status = 'registration_error' THEN 'Ошибка регистрации'
+        ELSE 'В обработке'
     END AS "Статус (отчёт)",
-    t.error_type AS "Тип ошибки",
-    t.error_summary AS "Сводка ошибки",
-    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
-    public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) AS "Код СЭМД",
+    CASE
+        WHEN d.status = 'network_error' THEN 'Сетевая ошибка'
+        WHEN d.status = 'registration_error' THEN d.error_type
+        ELSE NULL
+    END AS "Тип ошибки",
+    d.error_summary AS "Сводка ошибки",
+    public.egisz_semd_type_report_label(d.semd_code, NULL) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_normalize_semd_code(d.semd_code) AS "Код СЭМД",
     COALESCE(
         st.name,
         CASE
-            WHEN public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) IS NOT NULL
+            WHEN public.egisz_normalize_semd_code(d.semd_code) IS NOT NULL
             THEN 'Наименование СЭМД отсутствует в справочнике СЭМД'
             ELSE NULL
         END
     ) AS "Наименование СЭМД",
-    COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid)::text AS "JID клиники",
-    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid)::text) AS "Наименование клиники",
-    t.jid::text AS "JID из журнала (gost, число)",
+    d.jid::text AS "JID клиники",
+    COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || d.jid::text) AS "Наименование клиники",
+    d.jid::text AS "JID из журнала (gost, число)",
     o.name AS "Медицинская организация",
-    t.org_oid AS "OID организации",
+    NULL::text AS "OID организации",
     l.mo_uid AS "OID клиники",
-    public.egisz_clean_host(t.callback_url) AS "Хост клиники (VPN ГОСТ)",
+    public.egisz_clean_host(l.mo_domen) AS "Хост клиники (VPN ГОСТ)",
     o.inn AS "ИНН клиники",
     l.mo_domen AS "Токен gost (нецифр., для отображения)",
     l.jid::text AS "JID (EGISZ_LICENSES)",
-    CASE WHEN t.jid IS NOT NULL AND l.jid IS NOT NULL AND t.jid <> l.jid THEN 'да' ELSE 'нет' END AS "Расхождение источников JID",
-    t.creation_date AS "Создание СЭМД",
-    public.egisz_extract_jid_from_endpoint(m.reply_to) AS "JID из gost в REPLYTO",
-    public.egisz_clean_host(m.reply_to) AS "Токен gost (REPLYTO)",
-    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
-    public.egisz_clean_text_value(t.local_uid_semd) AS "Идентификатор документа (localUid)",
-    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
-    lower(public.egisz_clean_text_value(t.relates_to_id)) AS "Связанное сообщение (канон)",
-    lower(public.egisz_clean_text_value(t.local_uid_semd)) AS "localUid СЭМД (канон)",
-    t.emdr_id AS "Рег. номер РЭМД (emdrid)",
-    t.emdr_id AS "Регистрационный номер РЭМД",
-    t.doc_number AS "DOCUMENTID",
-    t.error_json_text AS "Исходный текст ошибки",
-    t.patient_name_masked,
-    t.snils_masked,
-    t.doctor_name,
-    t.patient_hash,
-    t.doctor_hash,
-    t.exchangelog_log_id AS transaction_id,
-    COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) AS clinic_id,
-    public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code)) AS service_id
-FROM fact_egisz_transactions t
-LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid
-LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = t.document_key
+    'нет'::text AS "Расхождение источников JID",
+    d.document_created_at AS "Создание СЭМД",
+    d.jid::text AS "JID из gost в REPLYTO",
+    public.egisz_clean_host(l.mo_domen) AS "Токен gost (REPLYTO)",
+    public.egisz_clean_text_value(d.local_uid) AS "localUid СЭМД",
+    public.egisz_clean_text_value(d.local_uid) AS "Идентификатор документа (localUid)",
+    public.egisz_clean_text_value(d.relates_to_id) AS "Связанное сообщение",
+    lower(public.egisz_clean_text_value(d.relates_to_id)) AS "Связанное сообщение (канон)",
+    lower(public.egisz_clean_text_value(d.local_uid)) AS "localUid СЭМД (канон)",
+    d.emdr_id AS "Рег. номер РЭМД (emdrid)",
+    d.emdr_id AS "Регистрационный номер РЭМД",
+    d.document_id AS "DOCUMENTID",
+    d.error_text AS "Исходный текст ошибки",
+    NULL::text AS patient_name_masked,
+    NULL::text AS snils_masked,
+    NULL::text AS doctor_name,
+    d.patient_hash,
+    d.doctor_hash,
+    COALESCE(d.callback_log_id, d.source_logid, d.first_egmid) AS transaction_id,
+    d.jid AS clinic_id,
+    public.egisz_normalize_semd_code(d.semd_code) AS service_id,
+    d.status AS document_status,
+    d.status_category,
+    d.sent_at,
+    d.registered_at
+FROM public.fact_egisz_documents d
 LEFT JOIN LATERAL (
-    SELECT candidate.*
-    FROM (
-        (SELECT dl.*, 0 AS _prio
-         FROM dim_licenses dl
-         WHERE t.org_oid IS NOT NULL AND dl.mo_uid = t.org_oid
-         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
-        UNION ALL
-        (SELECT dl.*, 1 AS _prio
-         FROM dim_licenses dl
-         WHERE t.jid IS NOT NULL AND dl.jid = t.jid
-         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
-        UNION ALL
-        (SELECT dl.*, 2 AS _prio
-         FROM dim_licenses dl
-         WHERE public.egisz_extract_jid_from_endpoint(m.reply_to) IS NOT NULL
-           AND dl.jid::text = public.egisz_extract_jid_from_endpoint(m.reply_to)
-         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
-        UNION ALL
-        (SELECT dl.*, 3 AS _prio
-         FROM dim_licenses dl
-         WHERE public.egisz_clean_host(m.reply_to) IS NOT NULL
-           AND public.egisz_clean_host(dl.mo_domen) = public.egisz_clean_host(m.reply_to)
-         ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC LIMIT 1)
-    ) candidate
-    ORDER BY _prio, modifydate DESC NULLS LAST, id DESC
+    SELECT dl.*
+    FROM public.dim_licenses dl
+    WHERE (d.jid IS NOT NULL AND dl.jid = d.jid)
+    ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
     LIMIT 1
 ) l ON TRUE
 LEFT JOIN LATERAL (
     SELECT dst.*
     FROM public.dim_semd_types dst
-    WHERE dst.oid = public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))
+    WHERE dst.oid = public.egisz_normalize_semd_code(d.semd_code)
     ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
     LIMIT 1
 ) st ON TRUE
-LEFT JOIN dim_organizations o ON COALESCE(t.jid, NULLIF(public.egisz_extract_jid_from_endpoint(m.reply_to), '')::integer, l.jid) = o.jid
+LEFT JOIN public.dim_organizations o ON d.jid = o.jid
+WHERE d.document_key IS NOT NULL
 WITH NO DATA;
 
-CREATE UNIQUE INDEX ON public.v_egisz_transactions_enriched_ui (transaction_id);
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("День");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("JID клиники");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui ("Статус");
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("localUid СЭМД"), '')));
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
-CREATE INDEX ON public.v_egisz_transactions_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
+CREATE UNIQUE INDEX ON public.v_egisz_documents_enriched_ui ("Документ (ключ учёта)");
+CREATE INDEX ON public.v_egisz_documents_enriched_ui ("День");
+CREATE INDEX ON public.v_egisz_documents_enriched_ui ("JID клиники");
+CREATE INDEX ON public.v_egisz_documents_enriched_ui ("Статус");
+CREATE INDEX ON public.v_egisz_documents_enriched_ui (lower(NULLIF(btrim("localUid СЭМД"), '')));
+CREATE INDEX ON public.v_egisz_documents_enriched_ui (lower(NULLIF(btrim("Рег. номер РЭМД (emdrid)"), '')));
+CREATE INDEX ON public.v_egisz_documents_enriched_ui (lower(NULLIF(btrim("Связанное сообщение"), '')));
+
+CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui AS
+SELECT
+    md5(concat_ws('|', COALESCE(day::text, ''), COALESCE(jid, ''), COALESCE(semd_code, ''), COALESCE(status, ''))) AS aggregate_key,
+    day,
+    jid,
+    semd_code,
+    status,
+    documents_count
+FROM (
+    SELECT
+        "День (тренд)" AS day,
+        NULLIF("JID клиники", '') AS jid,
+        NULLIF("Код СЭМД", '') AS semd_code,
+        "Статус" AS status,
+        COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS documents_count
+    FROM public.v_egisz_documents_enriched_ui
+    GROUP BY 1, 2, 3, 4
+) grouped
+WITH NO DATA;
+
+CREATE UNIQUE INDEX ON public.v_egisz_documents_daily_ui (aggregate_key);
+CREATE INDEX ON public.v_egisz_documents_daily_ui (day);
+CREATE INDEX ON public.v_egisz_documents_daily_ui (jid);
+CREATE INDEX ON public.v_egisz_documents_daily_ui (semd_code);
+CREATE INDEX ON public.v_egisz_documents_daily_ui (status);
+
+CREATE OR REPLACE VIEW public.v_egisz_transactions_enriched_ui AS
+SELECT *
+FROM public.v_egisz_documents_enriched_ui;
 
 CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
 SELECT
-    t.log_date AS "Обработано IPS",
-    t.log_date::date AS "День (тренд)",
-    t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    t.document_key AS "Документ (ключ учёта)",
-    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
-    t.emdr_id AS "Рег. номер РЭМД (emdrid)",
-    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
-    t.jid::text AS "JID клиники",
-    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
-    t.status AS "Статус",
+    "Обработано IPS",
+    "День (тренд)",
+    "LOGID журнала EXCHANGELOG",
+    "Документ (ключ учёта)",
+    "localUid СЭМД",
+    "Рег. номер РЭМД (emdrid)",
+    "Связанное сообщение",
+    "JID клиники",
+    "Тип СЭМД (код · НСИ)",
+    "Статус",
     CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_json_text, ''), '(нет текста)')
+        WHEN "Статус" = 'success' THEN 'Успешный ответ'
+        WHEN "Статус" = 'error' THEN COALESCE(NULLIF("Исходный текст ошибки", ''), '(нет текста)')
         ELSE ''
     END AS "Исходный текст ошибки",
     CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        WHEN t.status = 'error' THEN COALESCE(NULLIF(t.error_summary, ''), 'Неизвестная ошибка')
+        WHEN "Статус" = 'success' THEN 'Успешный ответ'
+        WHEN "Статус" = 'error' THEN COALESCE(NULLIF("Сводка ошибки", ''), 'Неизвестная ошибка')
         ELSE ''
     END AS "Интерпретация ошибки",
     CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        WHEN t.status = 'error' THEN t.error_type
+        WHEN "Статус" = 'success' THEN 'Успешный ответ'
+        WHEN "Статус" = 'error' THEN "Тип ошибки"
         ELSE ''
     END AS "Тип ошибки",
-    1::bigint AS "Порядок ошибки"
-FROM fact_egisz_transactions t
-LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = t.document_key
-WHERE t.status = 'error'
-
-UNION ALL
-
-SELECT
-    t.log_date AS "Обработано IPS",
-    t.log_date::date AS "День (тренд)",
-    t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    t.document_key AS "Документ (ключ учёта)",
-    public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
-    t.emdr_id AS "Рег. номер РЭМД (emdrid)",
-    public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
-    t.jid::text AS "JID клиники",
-    public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
-    t.status AS "Статус",
-    CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        ELSE ''
-    END AS "Исходный текст ошибки",
-    CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        ELSE ''
-    END AS "Интерпретация ошибки",
-    CASE
-        WHEN t.status = 'success' THEN 'Успешный ответ'
-        ELSE ''
-    END AS "Тип ошибки",
-    NULL::bigint AS "Порядок ошибки"
-FROM fact_egisz_transactions t
-LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = t.document_key
-WHERE t.status <> 'error' OR t.error_summary IS NULL;
+    CASE WHEN "Статус" = 'error' THEN 1::bigint ELSE NULL::bigint END AS "Порядок ошибки"
+FROM public.v_egisz_documents_enriched_ui
+WHERE "Статус" IN ('success', 'error');

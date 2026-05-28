@@ -32,8 +32,8 @@ $$;
 
 -- DROP SCHEMA public CASCADE — самый простой и надёжный способ снести
 -- все user-объекты: таблицы (включая elt_state, exchangelog_raw,
--- fact_egisz_transactions, fact_egisz_messages, fact_egisz_documents, dim_*), materialized views
--- (v_egisz_transactions_enriched_ui, v_stg_channel_errors_by_document),
+-- stg_egisz_messages, fact_egisz_documents, fact_egisz_transactions, dim_*), materialized views
+-- (v_egisz_documents_enriched_ui, v_egisz_documents_daily_ui, v_stg_channel_errors_by_document),
 -- обычные views (v_rpt_*, v_health_*), функции (egisz_*) и индексы.
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;

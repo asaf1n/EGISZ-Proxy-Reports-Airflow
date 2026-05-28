@@ -102,7 +102,7 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
 
 
 def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]]) -> None:
-    """Load structured Firebird EGISZ_MESSAGES rows into the persistent DWH message fact."""
+    """Load structured Firebird EGISZ_MESSAGES rows into the staging layer."""
     values: list[tuple[Any, ...]] = []
     for row in rows:
         missing_columns = [column for column in MESSAGE_COLUMNS if column not in row]
@@ -120,7 +120,7 @@ def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
         execute_values(
             cur,
             """
-            INSERT INTO fact_egisz_messages (
+            INSERT INTO stg_egisz_messages (
                 egmid, created_at, msgid, reply_to, document_id,
                 msgid_norm, document_id_norm, document_key, reply_to_jid, reply_to_host
             )
@@ -151,6 +151,70 @@ def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
             values,
         )
     con.commit()
+
+
+def get_related_message_identifiers(
+    con: psycopg2.extensions.connection,
+    *,
+    from_logid: int,
+    to_logid: int,
+) -> dict[str, set[str]]:
+    """Parse the just-loaded EXCHANGELOG batch in PostgreSQL and return related message keys."""
+    if to_logid <= from_logid:
+        return {"msgids": set(), "document_ids": set()}
+
+    with con.cursor() as cur:
+        cur.execute(
+            """
+            WITH parsed AS (
+                SELECT
+                    public.egisz_xml_text(msgtext, 'messageId') AS message_id,
+                    public.egisz_xml_text(msgtext, 'relatesToMessage') AS relates_to_message,
+                    public.egisz_xml_text(msgtext, 'relatesTo') AS relates_to,
+                    public.egisz_xml_text(logtext, 'messageId') AS log_message_id,
+                    public.egisz_xml_text(logtext, 'relatesToMessage') AS log_relates_to_message,
+                    public.egisz_xml_text(logtext, 'relatesTo') AS log_relates_to,
+                    public.egisz_xml_text(msgtext, 'localUid') AS local_uid,
+                    public.egisz_xml_text(msgtext, 'DOCUMENTID') AS document_id,
+                    public.egisz_xml_text(logtext, 'localUid') AS log_local_uid,
+                    public.egisz_xml_text(logtext, 'DOCUMENTID') AS log_document_id,
+                    msgid
+                FROM public.exchangelog_raw
+                WHERE logid > %s
+                  AND logid <= %s
+            ),
+            msgids AS (
+                SELECT public.egisz_normalize_message_id(v) AS value
+                FROM parsed
+                CROSS JOIN LATERAL (
+                    VALUES (msgid), (message_id), (relates_to_message), (relates_to),
+                           (log_message_id), (log_relates_to_message), (log_relates_to)
+                ) AS x(v)
+            ),
+            document_ids AS (
+                SELECT NULLIF(btrim(v), '') AS value
+                FROM parsed
+                CROSS JOIN LATERAL (VALUES (local_uid), (document_id), (log_local_uid), (log_document_id)) AS x(v)
+            )
+            SELECT 'msgid' AS key_type, value
+            FROM msgids
+            WHERE value IS NOT NULL
+            UNION ALL
+            SELECT 'document_id' AS key_type, value
+            FROM document_ids
+            WHERE value IS NOT NULL
+            """,
+            (from_logid, to_logid),
+        )
+        rows = cur.fetchall()
+
+    related: dict[str, set[str]] = {"msgids": set(), "document_ids": set()}
+    for key_type, value in rows:
+        if key_type == "msgid":
+            related["msgids"].add(str(value))
+        elif key_type == "document_id":
+            related["document_ids"].add(str(value))
+    return related
 
 
 def transform_raw_to_facts(

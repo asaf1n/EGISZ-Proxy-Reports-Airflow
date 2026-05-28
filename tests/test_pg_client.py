@@ -8,6 +8,7 @@ from egisz_elt.pg_client import (
     DIRECTORY_SYNC_LOCK_TIMEOUT,
     DIRECTORY_SYNC_PAGE_SIZE,
     DIRECTORY_SYNC_STATEMENT_TIMEOUT,
+    get_related_message_identifiers,
     load_raw_logs,
     normalize_message_id,
     sync_directory,
@@ -106,17 +107,15 @@ def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
 def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> None:
     sql = _read_dwh_init_sql()
 
-    document_key_view = 't.document_key AS "Документ (ключ учёта)"'
-    jid_priority = "COALESCE(p.message_jid, p.jid_from_payload) AS resolved_jid"
+    document_key_view = 'd.document_key AS "Документ (ключ учёта)"'
 
     assert document_key_view in sql
     assert "CREATE OR REPLACE FUNCTION public.egisz_document_key" in sql
     assert "public.egisz_document_key(m.document_id, m.document_id)" in sql
     assert "public.egisz_clean_text_value(t.message_id),\n        t.exchangelog_log_id::text" not in sql
-    assert jid_priority in sql
     assert "CREATE OR REPLACE FUNCTION public.egisz_normalize_semd_code" in sql
-    assert "public.egisz_extract_jid_from_endpoint(m.reply_to)" in sql
-    assert 'COALESCE(m.reply_to_jid, l.jid)::text AS "JID клиники"' in sql
+    assert "public.v_egisz_documents_enriched_ui" in sql
+    assert 'd.jid::text AS "JID клиники"' in sql
 
 
 def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
@@ -136,29 +135,21 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'localUid')) AS local_uid_xml" in sql
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')) AS document_id_xml" in sql
     assert "COALESCE(r.local_uid_xml, r.document_id_xml, public.egisz_clean_text_value(m.document_id)) AS local_uid_semd" in sql
-    assert "public.egisz_clean_text_value(t.local_uid_semd)" in sql
-    assert "SET document_key = public.egisz_document_key(f.local_uid_semd, f.doc_number, f.emdr_id)" in sql
-    assert "local_uid_semd = public.egisz_clean_text_value(f.local_uid_semd)" in sql
-    assert "messages_all AS" in sql
+    assert "public.egisz_clean_text_value(d.local_uid)" in sql
+    assert "status = EXCLUDED.status" in sql
+    assert "status_category = EXCLUDED.status_category" in sql
     assert "SELECT DISTINCT ON (document_key)" in sql
     assert "public.egisz_normalize_semd_code(r.kind_xml) AS semd_code" in sql
     assert "src_doc.semd_code AS source_document_semd_code" in sql
     assert "p.source_document_semd_code" in sql
     assert "WHERE d.oid = n.code" in sql
-    assert "WHERE dst.oid = public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))" in sql
-    assert "WHERE dst.oid = public.egisz_normalize_semd_code(m.semd_code_resolved)" in sql
+    assert "WHERE dst.oid = public.egisz_normalize_semd_code(d.semd_code)" in sql
     assert "FROM public.fact_egisz_documents" in sql
-    assert "source_doc.semd_code AS semd_code_resolved" in sql
-    assert "FROM public.fact_egisz_messages m" in sql
-    assert "LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid" in sql
-    assert "known_document_keys AS" in sql
-    assert "SELECT document_key\n    FROM public.fact_egisz_documents" in sql
-    assert "LEFT JOIN known_document_keys kd ON kd.document_key = m.document_id_norm" in sql
-    assert "AND kd.document_key IS NULL" in sql
-    assert "ON d.document_key = t.document_key" in sql
+    assert "FROM public.stg_egisz_messages m" in sql
+    assert "CREATE OR REPLACE VIEW public.fact_egisz_messages AS" in sql
+    assert "FROM public.v_egisz_documents_enriched_ui d" in sql
     assert "document_group_key" not in sql
-    assert "f.semd_code IS DISTINCT FROM k.semd_code" in sql
-    assert "semd_name = NULL" in sql
+    assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui" in sql
     assert "p.error_code = 'NO_DOCUMENT_KIND_ON_DATE'" not in sql
     assert "regexp_match(COALESCE(p.msgtext, ''), '\\[([0-9]+)\\]')" not in sql
     assert "regexp_match(COALESCE(r.msgtext, ''), '\\[([0-9]+)\\]')" not in sql
@@ -176,6 +167,9 @@ def test_reporting_views_do_not_depend_on_raw_tables() -> None:
 
     assert "exchangelog_raw" not in reporting_sql
     assert "egisz_messages_raw" not in reporting_sql
+    assert "stg_egisz_messages" not in reporting_sql
+    assert "fact_egisz_messages" not in reporting_sql
+    assert "fact_egisz_transactions" not in reporting_sql
 
 
 def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors() -> None:
@@ -207,9 +201,9 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "THEN 'success'" in sql
     assert "THEN 'sent'" not in sql
     assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql
-    assert "WHEN t.status = 'success' THEN 'Успешный ответ'" in sql
-    assert "WHEN t.status = 'error' AND t.error_type = 'Сетевая ошибка' THEN 'Ошибка связи'" in sql
-    assert "WHEN t.status = 'error' THEN 'Ошибка регистрации'" in sql
+    assert "WHEN d.status = 'success' THEN 'Успешный ответ'" in sql
+    assert "WHEN d.status = 'network_error' THEN 'Ошибка связи'" in sql
+    assert "WHEN d.status = 'registration_error' THEN 'Ошибка регистрации'" in sql
     assert "WHERE e.final_status IN ('success', 'error')" in sql
     assert "WHERE \"Статус\" IN ('success', 'error')" in sql
     assert "AND NULLIF(TRIM(\"Документ (ключ учёта)\"), '') IS NOT NULL" in sql
@@ -224,6 +218,39 @@ def test_dwh_init_sql_does_not_keep_egisz_messages_raw_staging() -> None:
     assert "CREATE TABLE IF NOT EXISTS egisz_messages_raw" not in sql
     assert "INSERT INTO egisz_messages_raw" not in sql
     assert "DROP TABLE IF EXISTS public.egisz_messages_raw CASCADE" in sql
+
+
+def test_get_related_message_identifiers_parses_refs_in_postgres() -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[object, ...]) -> None:
+            self.calls.append((sql, params))
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("msgid", "m-1"), ("document_id", "doc-1"), ("msgid", "m-1")]
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    con = Connection()
+
+    related = get_related_message_identifiers(con, from_logid=10, to_logid=20)
+
+    assert related == {"msgids": {"m-1"}, "document_ids": {"doc-1"}}
+    assert con.cursor_instance.calls[0][1] == (10, 20)
+    assert "public.exchangelog_raw" in con.cursor_instance.calls[0][0]
 
 
 class FakeSyncCursor:
