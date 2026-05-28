@@ -96,7 +96,7 @@ def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytic
         [(101, None, None, "msg-1", 1, "log", "<xml/>")],
     )
 
-    rows = fetch_exchangelog_after_cursor(con, after_log_id=100, limit=500)
+    rows = fetch_exchangelog_after_cursor(con, after_logid=100, limit=500)
 
     assert rows == [
         {
@@ -116,7 +116,7 @@ def test_fetch_exchangelog_after_cursor_applies_created_cutoff() -> None:
     cutoff = datetime(2026, 5, 18)
     con = FakeConnection([])
 
-    fetch_exchangelog_after_cursor(con, after_log_id=100, limit=500, created_from=cutoff)
+    fetch_exchangelog_after_cursor(con, after_logid=100, limit=500, created_from=cutoff)
 
     assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
     assert con.cursor_instance.params == (100, cutoff, 500)

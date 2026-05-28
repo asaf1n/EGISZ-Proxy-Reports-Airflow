@@ -140,6 +140,21 @@ AS $$
     FROM normalized;
 $$;
 
+CREATE OR REPLACE FUNCTION public.egisz_document_key(
+    p_local_uid text,
+    p_document_id text,
+    p_emdr_id text DEFAULT NULL
+) RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT lower(NULLIF(btrim(COALESCE(
+        public.egisz_clean_text_value(p_local_uid),
+        public.egisz_clean_text_value(p_document_id),
+        public.egisz_clean_text_value(p_emdr_id)
+    )), ''));
+$$;
+
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.egisz_clean_host(mo_domen));
 
 -- Финальный статус транзакции из EXCHANGELOG-callback'а.

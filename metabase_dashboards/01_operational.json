@@ -1,7 +1,7 @@
 {
   "name": "01 Оперативный мониторинг и динамика",
   "width": "full",
-  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** / **DOCUMENTID**, **emdrId** (РЭМД), плюс **relatesToMessage** в XML колбэка — это **коррелятор запрос–ответ**, не замена идентификатора СЭМД. Агрегаты «сколько СЭМД» — по колонке **«Документ (ключ учёта)»** (`egisz_document_identity_key`: приоритет localUid / DOCUMENTID → emdrId → MessageID; relatesToMessage — только поздний технический fallback). Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**; период **ошибок связи (транспорт)** — отдельный фильтр `parse_created` по **«Дата создания документа»** (карточки «Статусы», «Доля по клиникам», «Ошибки по типу», «Доля по СЭМД»). Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** / **DOCUMENTID**, **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` строится только из localUid / DOCUMENTID или emdrId; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**; период **ошибок связи (транспорт)** — отдельный фильтр `parse_created` по **«Дата создания документа»** (карточки «Статусы», «Доля по клиникам», «Ошибки по типу», «Доля по СЭМД»). Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -81,7 +81,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT public.v_egisz_transactions_enriched_ui.* FROM public.v_egisz_transactions_enriched_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД (emdrid)\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Обработано IPS\" DESC NULLS LAST LIMIT 50",
+          "query": "SELECT public.v_rpt_documents_ui.* FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(\"EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)\"::text), '') = {{egmid}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -378,42 +378,42 @@
       "row": 0,
       "col": 0,
       "metabase-field-filters": {
-        "top_clinic": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "JID клиники"
-        },
-        "log_id": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "LOGID журнала EXCHANGELOG"
-        },
-        "top_semd": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Код СЭМД"
-        },
-        "status": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Статус"
-        },
-        "relates_to": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Связанное сообщение"
-        },
-        "dwh_date": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Обработано IPS"
-        },
-        "egmid": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
-        },
-        "local_uid": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "localUid СЭМД"
-        },
-        "emdr_id": {
-          "table_ref": "public.v_egisz_transactions_enriched_ui",
-          "field_name": "Рег. номер РЭМД (emdrid)"
-        }
+            "top_clinic": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "JID клиники"
+            },
+            "log_id": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "LOGID журнала EXCHANGELOG"
+            },
+            "top_semd": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "Код СЭМД"
+            },
+            "status": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "Статус"
+            },
+            "relates_to": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "Связанное сообщение"
+            },
+            "dwh_date": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "Дата обработки"
+            },
+            "egmid": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)"
+            },
+            "local_uid": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "localUid СЭМД"
+            },
+            "emdr_id": {
+              "table_ref": "public.v_rpt_documents_ui",
+              "field_name": "Рег. номер РЭМД"
+            }
       }
     },
     {

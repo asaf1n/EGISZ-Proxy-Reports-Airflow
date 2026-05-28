@@ -1,7 +1,7 @@
 {
   "name": "Сервис интеграции (healthcheck и динамика)",
   "width": "full",
-  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_group_key** (цепочка подсказок из журнала прокси-БД). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «network vs async» и разбор строк — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, ключ группировки как на **01**). Отказы РЭМД — **01** и **04**.",
+  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_key** (canonical localUid / DOCUMENTID / emdrId). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «network vs async» и разбор строк — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, документный ключ как на **01**). Отказы РЭМД — **01** и **04**.",
   "parameters": [
     {
       "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",
@@ -81,7 +81,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', \"Дата создания документа\") AS \"Час\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui CROSS JOIN b WHERE \"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', \"Дата создания документа\") AS \"Час\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui CROSS JOIN b WHERE \"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -128,11 +128,11 @@
     },
     {
       "name": "Ошибки регистрации в РЭМД ЕГИСЗ (тренд)",
-      "description": "Динамика **уникальных документов** со сбоем канала (`document_group_key`) по часам. Ось времени — **created_at** в `stg_channel_errors` (не IPS). Используйте фильтр по **created_at**; без него берётся окно **30 суток до MAX(created_at)** (не привязано к календарю сервера).",
+      "description": "Динамика **уникальных документов** со сбоем канала (`document_key`) по часам. Ось времени — **created_at** в `stg_channel_errors` (не IPS). Используйте фильтр по **created_at**; без него берётся окно **30 суток до MAX(created_at)** (не привязано к календарю сервера).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', created_at) AS \"Час\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document CROSS JOIN b WHERE created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', created_at) AS \"Час\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document CROSS JOIN b WHERE created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -198,11 +198,11 @@
     },
     {
       "name": "async vs network",
-      "description": "Доля ошибок связи (только при идентификаторе документа в журнале) vs асинхронный ответ РЭМД; уникальные документы (DISTINCT document_group_key). Период — `parse_created_filter` (created_at, healthcheck).",
+      "description": "Доля ошибок связи (только при идентификаторе документа в журнале) vs асинхронный ответ РЭМД; уникальные документы (DISTINCT document_key). Период — `parse_created_filter` (created_at, healthcheck).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE WHEN COALESCE(NULLIF(error_top_type, ''), 'async_response') = 'network' THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS \"Тип\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов\" FROM public.v_stg_channel_errors_by_document WHERE NOT ( (error_top_type = 'network' OR UPPER(COALESCE(error_code::text, '')) IN ('NETWORK_ERROR', 'INTEGRATION_LOGSTATE_3')) AND NULLIF(TRIM(relates_to_id::text), '') IS NULL AND NULLIF(TRIM(relates_to_hint::text), '') IS NULL AND NULLIF(TRIM(local_uid_hint::text), '') IS NULL AND NULLIF(TRIM(emdr_id_hint::text), '') IS NULL ) [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT CASE WHEN COALESCE(NULLIF(error_top_type, ''), 'async_response') = 'network' THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS \"Тип\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов\" FROM public.v_stg_channel_errors_by_document WHERE NOT ( (error_top_type = 'network' OR UPPER(COALESCE(error_code::text, '')) IN ('NETWORK_ERROR', 'INTEGRATION_LOGSTATE_3')) AND NULLIF(TRIM(relates_to_id::text), '') IS NULL AND NULLIF(TRIM(relates_to_hint::text), '') IS NULL AND NULLIF(TRIM(local_uid_hint::text), '') IS NULL AND NULLIF(TRIM(emdr_id_hint::text), '') IS NULL ) [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -747,11 +747,11 @@
     },
     {
       "name": "02 · Парсинг: строки журнала vs уникальные документы",
-      "description": "Сравнение сырого COUNT(*) по ошибкам и **COUNT(DISTINCT document_group_key)**. Одна и та же проблема по одному СЭМД не должна многократно раздувать «документную» метрику, если в тексте извлечён relatesToMessage / localUid / emdrId.",
+      "description": "Сравнение сырого COUNT(*) по ошибкам и **COUNT(DISTINCT document_key)**. Одна и та же проблема по одному СЭМД не должна многократно раздувать «документную» метрику; document_key строится только из localUid / DOCUMENTID или emdrId.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(*)::bigint AS \"Строк в stg_channel_errors\", COUNT(DISTINCT document_group_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]]",
+          "query": "SELECT COUNT(*)::bigint AS \"Строк в stg_channel_errors\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]]",
           "template-tags": {
             "err_parse_code": {
               "widget-type": "string/=",
@@ -799,11 +799,11 @@
     },
     {
       "name": "02 · Ошибки парсинга (stg_channel_errors)",
-      "description": "Последние 100 записей канала (healthcheck) с **ссылками на источник** (LOGID, MSGID, EGMID) и подсказками из сырого XML. Деталь по строкам журнала; для KPI используйте карточку «строки vs документы» и `document_group_key`.",
+      "description": "Последние 100 записей канала (healthcheck) с **ссылками на источник** (LOGID, MSGID, EGMID) и подсказками из сырого XML. Деталь по строкам журнала; для KPI используйте карточку «строки vs документы» и `document_key`.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT id AS \"Номер записи\", error_code AS \"Код ошибки\", LEFT(message, 200) AS \"Сообщение\", created_at AS \"Создано\", relates_to_hint AS \"relatesToMessage (из текста журнала)\", local_uid_hint AS \"localUid (из текста)\", emdr_id_hint AS \"emdrId (из текста)\", exchangelog_log_id AS \"EXCHANGELOG.LOGID\", journal_msgid AS \"EXCHANGELOG.MSGID\", egisz_messages_egmid AS \"EGISZ_MESSAGES.EGMID\", document_group_key AS \"Ключ документа (группировка)\", relates_to_id AS \"relates_to_id (если есть)\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]] [[AND NULLIF(TRIM(local_uid_hint::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(relates_to_hint::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(emdr_id_hint::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(exchangelog_log_id::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(egisz_messages_egmid::text), '') = {{egmid}}]] ORDER BY id DESC LIMIT 100",
+          "query": "SELECT id AS \"Номер записи\", error_code AS \"Код ошибки\", LEFT(message, 200) AS \"Сообщение\", created_at AS \"Создано\", relates_to_hint AS \"relatesToMessage (из текста журнала)\", local_uid_hint AS \"localUid (из текста)\", emdr_id_hint AS \"emdrId (из текста)\", exchangelog_log_id AS \"EXCHANGELOG.LOGID\", journal_msgid AS \"EXCHANGELOG.MSGID\", egisz_messages_egmid AS \"EGISZ_MESSAGES.EGMID\", document_key AS \"Документ (ключ учёта)\", relates_to_id AS \"relates_to_id (если есть)\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]] [[AND NULLIF(TRIM(local_uid_hint::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(relates_to_hint::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(emdr_id_hint::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(exchangelog_log_id::text), '') = {{log_id}}]] [[AND NULLIF(TRIM(egisz_messages_egmid::text), '') = {{egmid}}]] ORDER BY id DESC LIMIT 100",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -923,11 +923,11 @@
     },
     {
       "name": "02 · Сетевые ошибки (LOGSTATE=3)",
-      "description": "Транспорт (`v_rpt_network_errors_detail_ui`): счёт **COUNT(DISTINCT …)** по ключу группировки (как **01**). **relatesToMessage** в детальных таблицах — коррелятор, не UID СЭМД.",
+      "description": "Транспорт (`v_rpt_network_errors_detail_ui`): счёт **COUNT(DISTINCT …)** по документному ключу (как **01**). **relatesToMessage** в детальных таблицах — коррелятор, не UID СЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 140) AS \"Сетевая ошибка\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 50",
+          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 140) AS \"Сетевая ошибка\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 50",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -970,7 +970,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 160) AS \"Сообщение (норм.)\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 160) AS \"Сообщение (норм.)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",

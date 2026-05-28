@@ -13,7 +13,10 @@ SELECT DISTINCT ON (document_key)
     now()
 FROM (
     SELECT
-        lower(NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '')) AS document_key,
+        public.egisz_document_key(
+            public.egisz_xml_text(sr.msgtext, 'localUid'),
+            public.egisz_xml_text(sr.msgtext, 'DOCUMENTID')
+        ) AS document_key,
         public.egisz_clean_text_value(public.egisz_xml_text(sr.msgtext, 'localUid')) AS local_uid,
         public.egisz_clean_text_value(public.egisz_xml_text(sr.msgtext, 'DOCUMENTID')) AS document_id,
         public.egisz_normalize_semd_code(public.egisz_xml_text(sr.msgtext, 'KIND')) AS semd_code,
@@ -26,7 +29,10 @@ FROM (
     UNION ALL
 
     SELECT
-        lower(NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'DOCUMENTID')), '')) AS document_key,
+        public.egisz_document_key(
+            public.egisz_xml_text(sr.msgtext, 'localUid'),
+            public.egisz_xml_text(sr.msgtext, 'DOCUMENTID')
+        ) AS document_key,
         public.egisz_clean_text_value(public.egisz_xml_text(sr.msgtext, 'localUid')) AS local_uid,
         public.egisz_clean_text_value(public.egisz_xml_text(sr.msgtext, 'DOCUMENTID')) AS document_id,
         public.egisz_normalize_semd_code(public.egisz_xml_text(sr.msgtext, 'KIND')) AS semd_code,
@@ -47,10 +53,29 @@ ON CONFLICT (document_key) DO UPDATE SET
 WHERE public.fact_egisz_documents.source_logid IS NULL
    OR public.fact_egisz_documents.source_logid <= EXCLUDED.source_logid;
 
+INSERT INTO public.fact_egisz_documents (document_key, document_id, first_sent_at, jid, updated_at)
+SELECT DISTINCT ON (m.document_key)
+    m.document_key,
+    public.egisz_clean_text_value(m.document_id),
+    m.created_at,
+    m.reply_to_jid,
+    now()
+FROM public.fact_egisz_messages m
+WHERE m.document_key IS NOT NULL
+ORDER BY m.document_key, m.created_at ASC NULLS LAST, m.egmid ASC
+ON CONFLICT (document_key) DO UPDATE SET
+    document_id = COALESCE(public.fact_egisz_documents.document_id, EXCLUDED.document_id),
+    first_sent_at = LEAST(
+        COALESCE(public.fact_egisz_documents.first_sent_at, EXCLUDED.first_sent_at),
+        COALESCE(EXCLUDED.first_sent_at, public.fact_egisz_documents.first_sent_at)
+    ),
+    jid = COALESCE(public.fact_egisz_documents.jid, EXCLUDED.jid),
+    updated_at = now();
+
 INSERT INTO public.fact_egisz_channel_errors (
     id, created_at, error_code, message, error_top_type, error_global_subcategory,
     error_group_label_ru, exchangelog_log_id, journal_msgid, egisz_messages_egmid,
-    relates_to_hint, local_uid_hint, emdr_id_hint, document_group_key, relates_to_id,
+    relates_to_hint, local_uid_hint, emdr_id_hint, document_key, relates_to_id,
     updated_at
 )
 SELECT
@@ -68,14 +93,8 @@ SELECT
     COALESCE(x.local_uid_msgtext, x.document_id_msgtext, m.document_id),
     x.emdr_id_msgtext,
     COALESCE(
-        x.local_uid_msgtext,
-        x.document_id_msgtext,
-        x.emdr_id_msgtext,
-        x.relates_to_message_msgtext,
-        x.relates_to_msgtext,
-        m.document_id,
-        r.msgid,
-        r.logid::text
+        public.egisz_document_key(x.local_uid_msgtext, x.document_id_msgtext, x.emdr_id_msgtext),
+        public.egisz_document_key(m.document_id, m.document_id)
     ),
     COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext),
     now()
@@ -94,8 +113,7 @@ LEFT JOIN LATERAL (
     FROM public.fact_egisz_messages em
     WHERE em.document_id_norm IN (
             lower(NULLIF(btrim(x.local_uid_msgtext), '')),
-            lower(NULLIF(btrim(x.document_id_msgtext), '')),
-            lower(NULLIF(btrim(x.emdr_id_msgtext), ''))
+            lower(NULLIF(btrim(x.document_id_msgtext), ''))
           )
        OR em.msgid_norm = public.egisz_normalize_message_id(COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext))
        OR em.msgid_norm = public.egisz_normalize_message_id(r.msgid)
@@ -103,8 +121,7 @@ LEFT JOIN LATERAL (
         CASE
             WHEN em.document_id_norm IN (
                 lower(NULLIF(btrim(x.local_uid_msgtext), '')),
-                lower(NULLIF(btrim(x.document_id_msgtext), '')),
-                lower(NULLIF(btrim(x.emdr_id_msgtext), ''))
+                lower(NULLIF(btrim(x.document_id_msgtext), ''))
             ) THEN 0
             WHEN em.msgid_norm = public.egisz_normalize_message_id(COALESCE(x.relates_to_message_msgtext, x.relates_to_msgtext)) THEN 1
             ELSE 2
@@ -112,10 +129,16 @@ LEFT JOIN LATERAL (
         em.egmid DESC
     LIMIT 1
 ) m ON TRUE
-WHERE r.logstate = 3
-   OR COALESCE(r.msgtext, '') ILIKE '%error%'
-   OR COALESCE(r.logtext, '') ILIKE '%error%'
-   OR COALESCE(r.logtext, '') ILIKE '%ошиб%'
+WHERE (
+    r.logstate = 3
+    OR COALESCE(r.msgtext, '') ILIKE '%error%'
+    OR COALESCE(r.logtext, '') ILIKE '%error%'
+    OR COALESCE(r.logtext, '') ILIKE '%ошиб%'
+)
+  AND COALESCE(
+      public.egisz_document_key(x.local_uid_msgtext, x.document_id_msgtext, x.emdr_id_msgtext),
+      public.egisz_document_key(m.document_id, m.document_id)
+  ) IS NOT NULL
 ON CONFLICT (id) DO UPDATE SET
     created_at = EXCLUDED.created_at,
     error_code = EXCLUDED.error_code,
@@ -129,16 +152,21 @@ ON CONFLICT (id) DO UPDATE SET
     relates_to_hint = EXCLUDED.relates_to_hint,
     local_uid_hint = EXCLUDED.local_uid_hint,
     emdr_id_hint = EXCLUDED.emdr_id_hint,
-    document_group_key = EXCLUDED.document_group_key,
+    document_key = EXCLUDED.document_key,
     relates_to_id = EXCLUDED.relates_to_id,
     updated_at = now();
 
+DELETE FROM public.fact_egisz_channel_errors
+WHERE document_key IS NULL;
+
 UPDATE public.fact_egisz_transactions f
-SET local_uid_semd = public.egisz_clean_text_value(f.local_uid_semd),
+SET document_key = public.egisz_document_key(f.local_uid_semd, f.doc_number, f.emdr_id),
+    local_uid_semd = public.egisz_clean_text_value(f.local_uid_semd),
     emdr_id = public.egisz_clean_text_value(f.emdr_id),
     doc_number = public.egisz_clean_text_value(f.doc_number),
     org_oid = public.egisz_clean_text_value(f.org_oid)
-WHERE f.local_uid_semd IS DISTINCT FROM public.egisz_clean_text_value(f.local_uid_semd)
+WHERE f.document_key IS DISTINCT FROM public.egisz_document_key(f.local_uid_semd, f.doc_number, f.emdr_id)
+   OR f.local_uid_semd IS DISTINCT FROM public.egisz_clean_text_value(f.local_uid_semd)
    OR f.emdr_id IS DISTINCT FROM public.egisz_clean_text_value(f.emdr_id)
    OR f.doc_number IS DISTINCT FROM public.egisz_clean_text_value(f.doc_number)
    OR f.org_oid IS DISTINCT FROM public.egisz_clean_text_value(f.org_oid);
@@ -147,14 +175,45 @@ UPDATE public.fact_egisz_transactions f
 SET semd_code = k.semd_code,
     semd_name = NULL
 FROM public.fact_egisz_documents k
-WHERE k.document_key = lower(COALESCE(
-        public.egisz_clean_text_value(f.local_uid_semd),
-        public.egisz_clean_text_value(f.doc_number)
-    ))
+WHERE k.document_key = f.document_key
   AND (
       f.semd_code IS DISTINCT FROM k.semd_code
       OR f.semd_name IS NOT NULL
   );
+
+DELETE FROM public.fact_egisz_transactions f
+WHERE f.document_key IS NULL;
+
+INSERT INTO public.fact_egisz_documents (
+    document_key, local_uid, document_id, emdr_id, semd_code,
+    source_logid, last_callback_at, last_status, last_egmid, jid, updated_at
+)
+SELECT DISTINCT ON (f.document_key)
+    f.document_key,
+    public.egisz_clean_text_value(f.local_uid_semd),
+    public.egisz_clean_text_value(f.doc_number),
+    public.egisz_clean_text_value(f.emdr_id),
+    public.egisz_normalize_semd_code(f.semd_code),
+    f.exchangelog_log_id,
+    f.log_date,
+    f.status,
+    f.egmid,
+    f.jid,
+    now()
+FROM public.fact_egisz_transactions f
+WHERE f.document_key IS NOT NULL
+ORDER BY f.document_key, f.log_date DESC NULLS LAST, f.exchangelog_log_id DESC
+ON CONFLICT (document_key) DO UPDATE SET
+    local_uid = COALESCE(EXCLUDED.local_uid, public.fact_egisz_documents.local_uid),
+    document_id = COALESCE(EXCLUDED.document_id, public.fact_egisz_documents.document_id),
+    emdr_id = COALESCE(EXCLUDED.emdr_id, public.fact_egisz_documents.emdr_id),
+    semd_code = COALESCE(EXCLUDED.semd_code, public.fact_egisz_documents.semd_code),
+    source_logid = GREATEST(COALESCE(public.fact_egisz_documents.source_logid, 0), COALESCE(EXCLUDED.source_logid, 0)),
+    last_callback_at = GREATEST(COALESCE(public.fact_egisz_documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
+    last_status = COALESCE(EXCLUDED.last_status, public.fact_egisz_documents.last_status),
+    last_egmid = COALESCE(EXCLUDED.last_egmid, public.fact_egisz_documents.last_egmid),
+    jid = COALESCE(EXCLUDED.jid, public.fact_egisz_documents.jid),
+    updated_at = now();
 
 CREATE OR REPLACE VIEW public.v_health_by_clinic_ui AS
 WITH anchor AS (
@@ -200,9 +259,9 @@ SELECT
     (SELECT COUNT(DISTINCT "localUid СЭМД") FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" >= now() - INTERVAL '1 hour')::bigint AS "Очередь < 1ч",
     (SELECT MAX(egmid) FROM public.fact_egisz_messages) AS "DWH max EGMID",
     (SELECT MAX(created_at) FROM public.fact_egisz_messages) AS "DWH max Sent",
-    (SELECT MAX(updated_at) FROM elt_state) AS "Последний апдейт курсора",
-    (SELECT MAX(last_log_id) FROM elt_state) AS "elt_state.last_log_id",
-    (SELECT MAX(last_egmid) FROM elt_state) AS "elt_state.last_egmid (курсор EGISZ_MESSAGES)",
+    (SELECT updated_at FROM elt_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
+    (SELECT last_log_id FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_log_id",
+    (SELECT last_egmid FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_egmid (курсор EGISZ_MESSAGES)",
     (SELECT MAX(exchangelog_log_id) FROM public.fact_egisz_transactions) AS "DWH max LOGID fact",
     (SELECT COUNT(DISTINCT "Документ (ключ учёта)") FROM public.v_egisz_transactions_enriched_ui)::bigint AS "Всего документов";
 
@@ -214,7 +273,7 @@ SELECT * FROM (
     VALUES
         ('parsed_messages', 'Разложенные сообщения proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.fact_egisz_messages), 'строк', 'fact_egisz_messages', 'Контроль поступления EGISZ_MESSAGES в DWH'),
         ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT "localUid СЭМД")::numeric FROM public.v_rpt_documents_no_response_ui WHERE "Отправлено" < now() - INTERVAL '24 hours'), 'документов', 'fact_egisz_messages без callback-факта', 'Проверить клиники с зависшими документами и транспортный канал'),
-        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Ключ документа (группировка)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'fact_egisz_channel_errors', 'Разобрать top формулировок и последние события в дашборде 02'),
+        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT "Документ (ключ учёта)")::numeric FROM public.v_rpt_network_errors_detail_ui), 'документов', 'fact_egisz_channel_errors', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.fact_egisz_transactions WHERE status = 'error'), 'строк', 'fact_egisz_transactions.status=error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('pending_backlog_24h',
          'Документы в обработке > 24ч (backlog)',

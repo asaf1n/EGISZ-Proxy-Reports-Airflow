@@ -93,7 +93,7 @@ class FakeTransformConnection:
 def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
     con = FakeTransformConnection()
 
-    transformed = transform_raw_to_facts(con, min_log_id=10, max_log_id=20, min_egmid=30, max_egmid=40)
+    transformed = transform_raw_to_facts(con, from_logid=10, to_logid=20, from_egmid=30, to_egmid=40)
 
     assert transformed == 3
     assert con.cursor_instance.calls[0] == (
@@ -106,10 +106,13 @@ def test_transform_raw_to_facts_passes_log_and_message_cursor_bounds() -> None:
 def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> None:
     sql = _read_dwh_init_sql()
 
-    document_priority = "COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id"
+    document_key_view = 't.document_key AS "Документ (ключ учёта)"'
     jid_priority = "COALESCE(p.message_jid, p.jid_from_payload) AS resolved_jid"
 
-    assert document_priority in sql
+    assert document_key_view in sql
+    assert "CREATE OR REPLACE FUNCTION public.egisz_document_key" in sql
+    assert "public.egisz_document_key(m.document_id, m.document_id)" in sql
+    assert "public.egisz_clean_text_value(t.message_id),\n        t.exchangelog_log_id::text" not in sql
     assert jid_priority in sql
     assert "CREATE OR REPLACE FUNCTION public.egisz_normalize_semd_code" in sql
     assert "public.egisz_extract_jid_from_endpoint(m.reply_to)" in sql
@@ -134,7 +137,8 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')) AS document_id_xml" in sql
     assert "COALESCE(r.local_uid_xml, r.document_id_xml, public.egisz_clean_text_value(m.document_id)) AS local_uid_semd" in sql
     assert "public.egisz_clean_text_value(t.local_uid_semd)" in sql
-    assert "SET local_uid_semd = public.egisz_clean_text_value(f.local_uid_semd)" in sql
+    assert "SET document_key = public.egisz_document_key(f.local_uid_semd, f.doc_number, f.emdr_id)" in sql
+    assert "local_uid_semd = public.egisz_clean_text_value(f.local_uid_semd)" in sql
     assert "messages_all AS" in sql
     assert "SELECT DISTINCT ON (document_key)" in sql
     assert "public.egisz_normalize_semd_code(r.kind_xml) AS semd_code" in sql
@@ -151,7 +155,8 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "SELECT document_key\n    FROM public.fact_egisz_documents" in sql
     assert "LEFT JOIN known_document_keys kd ON kd.document_key = m.document_id_norm" in sql
     assert "AND kd.document_key IS NULL" in sql
-    assert "ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))" in sql
+    assert "ON d.document_key = t.document_key" in sql
+    assert "document_group_key" not in sql
     assert "f.semd_code IS DISTINCT FROM k.semd_code" in sql
     assert "semd_name = NULL" in sql
     assert "p.error_code = 'NO_DOCUMENT_KIND_ON_DATE'" not in sql
@@ -205,7 +210,10 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "WHEN t.status = 'success' THEN 'Успешный ответ'" in sql
     assert "WHEN t.status = 'error' AND t.error_type = 'Сетевая ошибка' THEN 'Ошибка связи'" in sql
     assert "WHEN t.status = 'error' THEN 'Ошибка регистрации'" in sql
+    assert "WHERE e.final_status IN ('success', 'error')" in sql
     assert "WHERE \"Статус\" IN ('success', 'error')" in sql
+    assert "AND NULLIF(TRIM(\"Документ (ключ учёта)\"), '') IS NOT NULL" in sql
+    assert "public.egisz_clean_text_value(t.message_id),\n        t.exchangelog_log_id::text" not in sql
     assert "pending_source AS" not in sql
     assert "WHEN e.final_status = 'success' THEN 'Успешно'" not in sql
 

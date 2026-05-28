@@ -38,14 +38,22 @@ def test_operational_error_types_include_network_slice() -> None:
 
 def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
+    latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
     trend_card = next(card for card in dashboard["cards"] if card["name"] == "01 · Транзакции по дням и статусам")
+    latest_query = latest_card["dataset_query"]["native"]["query"]
     query = card["dataset_query"]["native"]["query"]
     trend_query = trend_card["dataset_query"]["native"]["query"]
     rows = card["visualization_settings"]["pie.rows"]
     row_keys = {row["key"] for row in rows}
 
     assert "public.v_rpt_documents_ui" in query
+    assert "public.v_rpt_documents_ui" in latest_query
+    assert "public.v_egisz_transactions_enriched_ui" not in latest_query
+    assert latest_card["metabase-field-filters"]["dwh_date"] == {
+        "table_ref": "public.v_rpt_documents_ui",
+        "field_name": "Дата обработки",
+    }
     assert "WHERE \"Статус\" IN ('success', 'error')" in query
     assert "WHEN \"Статус\" = 'success' THEN 'Успешный ответ'" in query
     assert "WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи'" in query
@@ -95,6 +103,19 @@ def test_document_views_choose_latest_journal_entry_before_status_priority() -> 
     assert 'NULLIF("LOGID журнала EXCHANGELOG", \'\')::bigint DESC NULLS LAST' in sql
     assert 'NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", \'\')::bigint DESC NULLS LAST' in sql
     assert "CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST" in sql
+
+
+def test_dashboards_do_not_expose_technical_document_key_fallbacks() -> None:
+    payload = "\n".join(path.read_text(encoding="utf-8") for path in _dashboard_paths())
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+
+    assert "document_group_key" not in payload
+    assert "Ключ документа (группировка)" not in payload
+    assert "egisz_document_identity_key" not in payload
+    assert "MessageID; relatesToMessage" not in payload
+    assert "PARTITION BY COALESCE(" not in sql
+    assert "PARTITION BY NULLIF(" in sql
+    assert "Документ (ключ учёта)" in sql
 
 
 def test_only_recognized_documents_feed_non_queue_dashboards() -> None:

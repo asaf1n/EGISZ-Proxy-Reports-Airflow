@@ -54,9 +54,9 @@ def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> tuple[int
     with con.cursor() as cur:
         cur.execute(
             """
-            SELECT MAX(last_log_id), MAX(last_egmid)
+            SELECT last_log_id, last_egmid
             FROM elt_state
-            WHERE pipeline IN (%s, 'main')
+            WHERE pipeline = %s
             """,
             (pipeline,),
         )
@@ -132,11 +132,7 @@ def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
                 v.document_id,
                 public.egisz_normalize_message_id(v.msgid),
                 lower(NULLIF(btrim(v.document_id), '')),
-                COALESCE(
-                    lower(NULLIF(btrim(v.document_id), '')),
-                    public.egisz_normalize_message_id(v.msgid),
-                    v.egmid::text
-                ),
+                public.egisz_document_key(v.document_id, v.document_id),
                 NULLIF(public.egisz_extract_jid_from_endpoint(v.reply_to), '')::integer,
                 public.egisz_clean_host(v.reply_to)
             FROM (VALUES %s) AS v(egmid, created_at, msgid, reply_to, document_id)
@@ -160,16 +156,16 @@ def load_messages(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
 def transform_raw_to_facts(
     con: psycopg2.extensions.connection,
     *,
-    min_log_id: int,
-    max_log_id: int,
-    min_egmid: int = 0,
-    max_egmid: int = 0,
+    from_logid: int,
+    to_logid: int,
+    from_egmid: int = 0,
+    to_egmid: int = 0,
 ) -> int:
     """Run the database-side ELT transform and refresh EGISZ materialized views if present."""
     with con.cursor() as cur:
         cur.execute(
             "SELECT public.egisz_transform_raw_to_facts(%s, %s, %s, %s)",
-            (min_log_id, max_log_id, min_egmid, max_egmid),
+            (from_logid, to_logid, from_egmid, to_egmid),
         )
         transformed = int(cur.fetchone()[0] or 0)
     con.commit()
@@ -210,7 +206,7 @@ def sync_directory(con: psycopg2.extensions.connection, table_name: str, rows: l
 def update_cursors(
     con: psycopg2.extensions.connection,
     pipeline: str,
-    log_id: int = 0,
+    logid: int = 0,
     egmid: int = 0,
 ) -> None:
     with con.cursor() as cur:
@@ -223,6 +219,6 @@ def update_cursors(
                 last_egmid = GREATEST(elt_state.last_egmid, EXCLUDED.last_egmid),
                 updated_at = now();
             """,
-            (pipeline, log_id, egmid),
+            (pipeline, logid, egmid),
         )
     con.commit()

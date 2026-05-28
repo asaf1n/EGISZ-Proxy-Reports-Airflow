@@ -76,7 +76,7 @@ sync_dimensions >> extract_from_proxy >> load_to_dwh >> analyze_raw_tables >> tr
 | `extract_from_proxy` | Read watermarks from `elt_state` (`get_cursors(pipeline)`), pull `EXCHANGELOG` batch by `LOGID > last_log_id` and `EGISZ_MESSAGES` batch by `EGMID > last_egmid`, bounded by `SOURCE_MIN_CREATED_AT = 2026-05-18`. Additionally pull related older messages referenced via `<messageId>` / `<relatesToMessage>` / `<relatesTo>` / `<localUid>` / `<DOCUMENTID>` in XML and via `MSGID` in the journal row, but only when the related source row is not older than `SOURCE_MIN_CREATED_AT`. Returns XCom dict |
 | `load_to_dwh` | UPSERT into `exchangelog_raw` for journal payloads and directly persists structured `EGISZ_MESSAGES` into `fact_egisz_messages`. Forwards the XCom dict downstream |
 | `analyze_raw_tables` | `ANALYZE` for touched raw staging tables and `fact_egisz_messages`. Runs in autocommit. **Mandatory task**: without fresh stats after bulk load, PostgreSQL may miss the functional indexes used during parsing and matching. |
-| `transform_data` | Calls `public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)`. The function parses raw payloads into persistent DWH facts: `fact_egisz_transactions`, `fact_egisz_documents`, and `fact_egisz_channel_errors`. Статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success` для успешного ответа, `error` для отказа регистрации или `LOGSTATE=3`. Документы без связанного callback'а остаются только в `v_rpt_documents_no_response_ui` и дашборде `03_documents_no_response.json`; остальные дашборды используют аналитику распознанных документов. The function does **not** refresh MVs — that's a separate task |
+| `transform_data` | Calls `public.egisz_transform_raw_to_facts(from_logid, to_logid, from_egmid, to_egmid)`. The function parses raw payloads into persistent DWH facts: `fact_egisz_transactions`, `fact_egisz_documents`, and `fact_egisz_channel_errors`. Статус callback'а считается через `egisz_classify_async_status(logstate, raw_status, msgtext, logtext)`: `success` для успешного ответа, `error` для отказа регистрации или `LOGSTATE=3`. Документы без связанного callback'а остаются только в `v_rpt_documents_no_response_ui` и дашборде `03_documents_no_response.json`; остальные дашборды используют аналитику распознанных документов. The function does **not** refresh MVs — that's a separate task |
 | `refresh_materialized_views` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` for `v_egisz_transactions_enriched_ui` and `v_stg_channel_errors_by_document`. CONCURRENTLY requires a unique index on the MV — present on `transaction_id`. Skipped when `transformed=0` (нечего рефрешить) |
 | `update_watermark` | UPSERT into `elt_state` via `GREATEST(current, new)` for `last_log_id` and `last_egmid` — guards against accidental cursor rollback during manual re-runs of older batches |
 
@@ -94,10 +94,11 @@ max_active_runs = 1   # parallel runs forbidden (race on watermark)
 {
     "count": int,           # EXCHANGELOG rows read
     "message_count": int,   # EGISZ_MESSAGES rows (including related "pulled-in" ones)
-    "last_log_id": int,     # watermark at the start of this run
+    "cursor_message_count": int,  # cursor-based EGISZ_MESSAGES rows, excluding pulled-in related rows
+    "last_log_id": int,      # LOGID cursor at the start of this run
     "last_egmid": int,      # watermark at the start of this run
-    "max_id": int,          # max LOGID in the batch
-    "max_egmid": int,       # max EGMID in the main (cursor-based) batch, excluding pulled-in ones
+    "cursor_logid": int,    # next LOGID cursor, max LOGID actually read in this batch
+    "cursor_egmid": int,    # next EGMID cursor, max EGMID from cursor-based rows only
     "rows": list[dict],     # serialized EXCHANGELOG rows
     "message_rows": list[dict],  # serialized EGISZ_MESSAGES rows
 }
@@ -166,7 +167,7 @@ Every module is individually idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE O
 Data transformation happens **during the DAG run**, in the `transform_data` task. The task calls a PL/pgSQL function that does all real work — SOAP/XML parsing, enrichment, writing to `fact_egisz_transactions`:
 
 ```sql
-SELECT public.egisz_transform_raw_to_facts(min_log_id, max_log_id, min_egmid, max_egmid)
+SELECT public.egisz_transform_raw_to_facts(from_logid, to_logid, from_egmid, to_egmid)
 ```
 
 The Python task only invokes the function; **all transformation business logic lives in SQL, not in Python**. MV refresh is a separate task `refresh_materialized_views`; do not duplicate it inside `egisz_transform_raw_to_facts()`.

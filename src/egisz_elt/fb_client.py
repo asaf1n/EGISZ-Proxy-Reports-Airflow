@@ -93,7 +93,7 @@ def ping_fb(con) -> None:
 def fetch_exchangelog_after_cursor(
     con,
     *,
-    after_log_id: int,
+    after_logid: int,
     limit: int,
     created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
@@ -115,7 +115,7 @@ def fetch_exchangelog_after_cursor(
             FROM EXCHANGELOG
             WHERE LOGID > ?
             """
-        params: list[Any] = [int(after_log_id or 0)]
+        params: list[Any] = [int(after_logid or 0)]
         if created_from is not None:
             query += " AND COALESCE(LOGDATE, CREATEDATE) >= ?"
             params.append(created_from)

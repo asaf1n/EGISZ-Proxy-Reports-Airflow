@@ -1,7 +1,7 @@
 {
   "name": "04 Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)** (`egisz_document_identity_key`). **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_egisz_transactions_enriched_ui` со «Статус»='error'; используется в карточках по клиникам/СЭМД и в «Итогах по ошибкам». **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` разбит по разделителю «·» на 70+ конкретных видов и сведён в 10 категорий через `egisz_error_category`); один документ с N разными видами учитывается N раз, поэтому сумма по видам ≥ числа документов с ошибкой. Карточки «Рейтинг видов ошибок» и «Ошибки по виду · сунбёрст» используют именно (б). Проверки JID/OID, полнота полей. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
+  "description": "**Качество данных (прокси-база):** **СЭМД** — структурированный меддокумент; идентификаторы — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** (**«Связанное сообщение»**) — коррелятор XML, не замена UID СЭМД. Успешность по клиникам и по **типу СЭМД** (колонка «Тип СЭМД (код · НСИ)»: каждый код НСИ — отдельный документ ЕГИСЗ; идентификатор и наименование по паспорту НСИ 1520). Учёт экземпляра СЭМД — **COUNT(DISTINCT «Документ (ключ учёта)»)**; ключ строится только из localUid / DOCUMENTID или emdrId. **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_egisz_transactions_enriched_ui` со «Статус»='error'; используется в карточках по клиникам/СЭМД и в «Итогах по ошибкам». **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` разбит по разделителю «·» на 70+ конкретных видов и сведён в 10 категорий через `egisz_error_category`); один документ с N разными видами учитывается N раз, поэтому сумма по видам ≥ числа документов с ошибкой. Карточки «Рейтинг видов ошибок» и «Ошибки по виду · сунбёрст» используют именно (б). Проверки JID/OID, полнота полей. **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3), не путать с текстом отказа регистрации в XML ответа РЭМД. `v_rpt_network_errors_detail_ui`: «Клиника (транспорт)» — gost/JID из журнала и/или контекст из связанного колбэка; фильтр периода — **«Обработано IPS»** (`dwh_date_filter`) на фактах и **`parse_created_filter`** по **«Дата создания документа»**. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` и `v_rpt_clinic_connectivity_daily_ui` — прокси по формуле успехи/(успехи+ошибки связи) по документам; фильтр **`connectivity_day_filter`** (календарный день UTC).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
@@ -956,7 +956,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), '(не определено)') AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), '(не определено)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -1003,11 +1003,11 @@
     },
     {
       "name": "04 · Ошибки связи: доля по формулировке LOGSTATE=3",
-      "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host в тексте заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности транспорта — **COUNT(DISTINCT …)** по «Ключ документа (группировка)» (как на **01**). Период — **«Дата создания документа»**.",
+      "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host в тексте заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности транспорта — **COUNT(DISTINCT …)** по «Документ (ключ учёта)» (как на **01**). Период — **«Дата создания документа»**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 120) AS lbl, COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 120) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -1092,11 +1092,11 @@
     },
     {
       "name": "04 · Сеть: матрица идентификаторов документа",
-      "description": "Сопоставление полей трассировки: подсказки из журнала (relatesToMessage, localUid, emdrId), ключ группировки, MSGID/EGMID/LOGID, связь с ответом РЭМД в сводке колбэков.",
+      "description": "Сопоставление полей трассировки: подсказки из журнала (relatesToMessage, localUid, emdrId), документный ключ, MSGID/EGMID/LOGID, связь с ответом РЭМД в сводке колбэков.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Дата создания документа\", \"Ключ документа (группировка)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"emdrId (из текста)\", \"MSGID обмена\", \"EGMID сообщения (строка журнала)\", \"LOGID журнала (сетевая ошибка)\", \"Связанное сообщение (ответ РЭМД)\", \"Идентификатор документа (localUid)\", \"Регистрационный номер РЭМД\", \"Связанный колбэк найден в аналитике\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 200",
+          "query": "SELECT \"Дата создания документа\", \"Документ (ключ учёта)\", \"relatesToMessage (из текста журнала)\", \"localUid / DOCUMENTID (из текста)\", \"emdrId (из текста)\", \"MSGID обмена\", \"EGMID сообщения (строка журнала)\", \"LOGID журнала (сетевая ошибка)\", \"Связанное сообщение (ответ РЭМД)\", \"Идентификатор документа (localUid)\", \"Регистрационный номер РЭМД\", \"Связанный колбэк найден в аналитике\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -1128,7 +1128,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Клиника (транспорт)\", \"JID из журнала (gost, число)\", \"JID клиники\", \"Медицинская организация\", \"Связанный колбэк найден в аналитике\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Документов (ошибка связи)\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1, 2, 3, 4, 5 ORDER BY 6 DESC NULLS LAST LIMIT 80",
+          "query": "SELECT \"Клиника (транспорт)\", \"JID из журнала (gost, число)\", \"JID клиники\", \"Медицинская организация\", \"Связанный колбэк найден в аналитике\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов (ошибка связи)\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1, 2, 3, 4, 5 ORDER BY 6 DESC NULLS LAST LIMIT 80",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -1307,7 +1307,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('day', \"Дата создания документа\")::date AS \"День\", COUNT(DISTINCT \"Ключ документа (группировка)\")::bigint AS \"Документов с ошибкой связи\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('day', \"Дата создания документа\")::date AS \"День\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов с ошибкой связи\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",

@@ -138,10 +138,11 @@ XCom-контракт между задачами:
 {
     "count": int,
     "message_count": int,
+    "cursor_message_count": int,
     "last_log_id": int,
     "last_egmid": int,
-    "max_id": int,
-    "max_egmid": int,
+    "cursor_logid": int,
+    "cursor_egmid": int,
     "rows": list[dict],
     "message_rows": list[dict],
 }

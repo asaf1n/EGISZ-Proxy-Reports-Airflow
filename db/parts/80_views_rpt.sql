@@ -15,15 +15,14 @@ WITH remd_errors AS (
     SELECT
         t.log_date                                                                    AS "Обработано IPS",
         t.log_date::date                                                              AS "День (тренд)",
-        COALESCE(t.local_uid_semd, t.emdr_id, t.relates_to_id,
-                 t.doc_number, t.message_id, t.exchangelog_log_id::text)              AS "Документ (ключ учёта)",
+        t.document_key                                                                 AS "Документ (ключ учёта)",
         t.jid::text                                                                   AS "JID клиники",
         public.egisz_normalize_semd_code(COALESCE(d.semd_code, t.semd_code))         AS "Код СЭМД",
         public.egisz_semd_type_report_label(COALESCE(d.semd_code, t.semd_code), t.semd_name) AS "Тип СЭМД (код · НСИ)",
         trim(err_item)                                                                AS "Тип ошибки"
     FROM fact_egisz_transactions t
     LEFT JOIN public.fact_egisz_documents d
-      ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
+      ON d.document_key = t.document_key
     CROSS JOIN LATERAL unnest(
         string_to_array(
             COALESCE(NULLIF(trim(t.error_type), ''), 'Неизвестная ошибка'),
@@ -34,6 +33,7 @@ WITH remd_errors AS (
       -- после §1 error_type пуст для pending/unknown → этот фильтр осмыслен;
       -- защищает от пустых корзин 'Неизвестная ошибка' в карточках 04 дашборда.
       AND t.error_type IS NOT NULL
+      AND t.document_key IS NOT NULL
       AND trim(t.error_type) <> ''
       AND trim(err_item) <> ''
 ),
@@ -41,12 +41,13 @@ network_errors AS (
     SELECT
         n.created_at                AS "Обработано IPS",
         n.created_at::date          AS "День (тренд)",
-        n.document_group_key        AS "Документ (ключ учёта)",
+        n.document_key              AS "Документ (ключ учёта)",
         NULL::text                  AS "JID клиники",
         NULL::text                  AS "Код СЭМД",
         NULL::text                  AS "Тип СЭМД (код · НСИ)",
         'Сетевая ошибка'::text      AS "Тип ошибки"
     FROM public.v_stg_channel_network_errors_by_document n
+    WHERE n.document_key IS NOT NULL
 )
 SELECT
     "Обработано IPS",
@@ -87,7 +88,7 @@ SELECT
     s.exchangelog_log_id::text AS "LOGID журнала (сетевая ошибка)",
     s.journal_msgid AS "MSGID обмена",
     s.egisz_messages_egmid::text AS "EGMID сообщения (строка журнала)",
-    s.document_group_key AS "Ключ документа (группировка)",
+    s.document_key AS "Документ (ключ учёта)",
     s.relates_to_hint AS "relatesToMessage (из текста журнала)",
     s.local_uid_hint AS "localUid / DOCUMENTID (из текста)",
     s.emdr_id_hint AS "emdrId (из текста)",
@@ -114,12 +115,10 @@ LEFT JOIN LATERAL (
     FROM public.v_egisz_transactions_enriched_ui f
     WHERE lower(NULLIF(btrim(f."localUid СЭМД"), '')) = lower(NULLIF(btrim(s.local_uid_hint), ''))
        OR lower(NULLIF(btrim(f."Рег. номер РЭМД (emdrid)"), '')) = lower(NULLIF(btrim(s.emdr_id_hint), ''))
-       OR lower(NULLIF(btrim(f."Связанное сообщение"), '')) = lower(NULLIF(btrim(s.relates_to_hint), ''))
     ORDER BY
         CASE
             WHEN lower(NULLIF(btrim(f."localUid СЭМД"), '')) = lower(NULLIF(btrim(s.local_uid_hint), '')) THEN 0
-            WHEN lower(NULLIF(btrim(f."Рег. номер РЭМД (emdrid)"), '')) = lower(NULLIF(btrim(s.emdr_id_hint), '')) THEN 1
-            ELSE 2
+            ELSE 1
         END,
         f."Обработано IPS" DESC NULLS LAST
     LIMIT 1
@@ -169,21 +168,9 @@ fact_message_keys AS (
     WHERE NULLIF(public.egisz_normalize_message_id(f.relates_to_id), '') IS NOT NULL
 ),
 known_document_keys AS (
-    SELECT DISTINCT lower(public.egisz_clean_text_value(f.local_uid_semd)) AS document_key
+    SELECT DISTINCT f.document_key
     FROM fact_egisz_transactions f
-    WHERE public.egisz_clean_text_value(f.local_uid_semd) IS NOT NULL
-
-    UNION
-
-    SELECT DISTINCT lower(public.egisz_clean_text_value(f.emdr_id)) AS document_key
-    FROM fact_egisz_transactions f
-    WHERE public.egisz_clean_text_value(f.emdr_id) IS NOT NULL
-
-    UNION
-
-    SELECT DISTINCT lower(public.egisz_clean_text_value(f.doc_number)) AS document_key
-    FROM fact_egisz_transactions f
-    WHERE public.egisz_clean_text_value(f.doc_number) IS NOT NULL
+    WHERE f.document_key IS NOT NULL
 
     UNION
 
@@ -283,17 +270,13 @@ SELECT
     "Хост клиники (VPN ГОСТ)"
 FROM public.v_egisz_transactions_enriched_ui
 WHERE "Статус" IN ('success', 'error')
+  AND NULLIF(TRIM("Документ (ключ учёта)"), '') IS NOT NULL
 ),
 ranked AS (
     SELECT
         source_rows.*,
         ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(
-                NULLIF("Документ (ключ учёта)", ''),
-                NULLIF("LOGID журнала EXCHANGELOG", ''),
-                NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", ''),
-                NULLIF("MSGID обмена", '')
-            )
+            PARTITION BY NULLIF("Документ (ключ учёта)", '')
             ORDER BY
                 NULLIF("LOGID журнала EXCHANGELOG", '')::bigint DESC NULLS LAST,
                 NULLIF("EGISZ_MESSAGES.EGMID (ключ записи, РЭМД)", '')::bigint DESC NULLS LAST,
@@ -380,7 +363,7 @@ network_by_day AS (
         "Дата создания документа"::date AS day,
         NULLIF(COALESCE("JID клиники", "JID из журнала (gost, число)"), '') AS jid,
         MAX("Клиника (транспорт)") AS clinic_name,
-        COUNT(DISTINCT "Ключ документа (группировка)")::bigint AS err_cnt
+        COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS err_cnt
     FROM public.v_rpt_network_errors_detail_ui
     GROUP BY 1, 2
 )
@@ -413,12 +396,7 @@ WITH fact_source AS (
         f."Обработано IPS" AS document_ts,
         f."День (тренд)" AS document_day,
         NULLIF(f."JID клиники", '') AS client_jid,
-        COALESCE(
-            NULLIF(f."Документ (ключ учёта)", ''),
-            NULLIF(f."localUid СЭМД", ''),
-            NULLIF(f."Рег. номер РЭМД (emdrid)", ''),
-            f.transaction_id::text
-        ) AS document_key,
+        NULLIF(f."Документ (ключ учёта)", '') AS document_key,
         NULLIF(f."Код СЭМД", '') AS semd_code,
         COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
         CASE
@@ -451,6 +429,7 @@ WITH fact_source AS (
         f.doctor_hash
     FROM public.v_egisz_transactions_enriched_ui f
     WHERE f."Статус" IN ('success', 'error')
+      AND NULLIF(f."Документ (ключ учёта)", '') IS NOT NULL
 ),
 source_rows AS (
     SELECT * FROM fact_source
@@ -459,7 +438,7 @@ ranked AS (
     SELECT
         source_rows.*,
         ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(NULLIF(document_key, ''), NULLIF(document_row_id, ''))
+            PARTITION BY NULLIF(document_key, '')
             ORDER BY
                 CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST,
                 document_ts DESC NULLS LAST,

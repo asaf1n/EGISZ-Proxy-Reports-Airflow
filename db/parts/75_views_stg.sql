@@ -19,14 +19,14 @@ SELECT
     relates_to_hint,
     local_uid_hint,
     emdr_id_hint,
-    document_group_key,
+    document_key,
     relates_to_id
 FROM public.fact_egisz_channel_errors
 WITH NO DATA;
 
 CREATE UNIQUE INDEX ON public.v_stg_channel_errors_by_document (id);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (error_top_type);
-CREATE INDEX ON public.v_stg_channel_errors_by_document (document_group_key);
+CREATE INDEX ON public.v_stg_channel_errors_by_document (document_key);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (journal_msgid);
 CREATE INDEX ON public.v_stg_channel_errors_by_document (created_at);
 

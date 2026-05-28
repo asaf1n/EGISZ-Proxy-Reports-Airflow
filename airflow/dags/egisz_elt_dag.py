@@ -103,7 +103,7 @@ def egisz_elt_pipeline() -> None:
             started_at = time.monotonic()
             log_rows = fetch_exchangelog_after_cursor(
                 fb_conn,
-                after_log_id=last_log_id,
+                after_logid=last_log_id,
                 limit=BATCH_SIZE,
                 created_from=SOURCE_MIN_CREATED_AT,
             )
@@ -113,9 +113,9 @@ def egisz_elt_pipeline() -> None:
                 last_log_id,
                 time.monotonic() - started_at,
             )
-            cursor_max_log_id = max((int(row["logid"]) for row in log_rows), default=last_log_id)
+            cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_log_id)
             started_at = time.monotonic()
-            message_rows = fetch_egisz_messages_after_cursor(
+            cursor_message_rows = fetch_egisz_messages_after_cursor(
                 fb_conn,
                 after_egmid=last_egmid,
                 limit=BATCH_SIZE,
@@ -123,7 +123,7 @@ def egisz_elt_pipeline() -> None:
             )
             log.info(
                 "Fetched %s EGISZ_MESSAGES row(s) after EGMID=%s in %.2fs.",
-                len(message_rows),
+                len(cursor_message_rows),
                 last_egmid,
                 time.monotonic() - started_at,
             )
@@ -155,25 +155,26 @@ def egisz_elt_pipeline() -> None:
         finally:
             fb_conn.close()
 
-        cursor_max_egmid = max((int(row["egmid"]) for row in message_rows), default=last_egmid)
-        messages_by_egmid = {int(row["egmid"]): row for row in message_rows}
+        cursor_egmid = max((int(row["egmid"]) for row in cursor_message_rows), default=last_egmid)
+        messages_by_egmid = {int(row["egmid"]): row for row in cursor_message_rows}
         for row in related_message_rows:
             messages_by_egmid[int(row["egmid"])] = row
         message_rows = list(messages_by_egmid.values())
         log.info(
-            "Extracted %s EXCHANGELOG row(s), max LOGID=%s; %s EGISZ_MESSAGES row(s), cursor max EGMID=%s.",
+            "Extracted %s EXCHANGELOG row(s), next LOGID cursor=%s; %s EGISZ_MESSAGES row(s), next EGMID cursor=%s.",
             len(log_rows),
-            cursor_max_log_id,
+            cursor_logid,
             len(message_rows),
-            cursor_max_egmid,
+            cursor_egmid,
         )
         return {
             "count": len(log_rows),
             "message_count": len(message_rows),
+            "cursor_message_count": len(cursor_message_rows),
             "last_log_id": last_log_id,
             "last_egmid": last_egmid,
-            "max_id": cursor_max_log_id,
-            "max_egmid": cursor_max_egmid,
+            "cursor_logid": cursor_logid,
+            "cursor_egmid": cursor_egmid,
             "rows": log_rows,
             "message_rows": message_rows,
         }
@@ -229,17 +230,20 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
-        if load_info["max_id"] <= 0 and load_info.get("message_count", 0) <= 0:
+        if (
+            int(load_info.get("cursor_logid", 0)) <= int(load_info.get("last_log_id", 0))
+            and int(load_info.get("cursor_egmid", 0)) <= int(load_info.get("last_egmid", 0))
+        ):
             return {**load_info, "transformed": 0}
 
         pg_conn = _dwh_connection()
         try:
             transformed = transform_raw_to_facts(
                 pg_conn,
-                min_log_id=int(load_info.get("last_log_id", 0)),
-                max_log_id=int(load_info["max_id"]),
-                min_egmid=int(load_info.get("last_egmid", 0)),
-                max_egmid=int(load_info.get("max_egmid", 0)),
+                from_logid=int(load_info.get("last_log_id", 0)),
+                to_logid=int(load_info["cursor_logid"]),
+                from_egmid=int(load_info.get("last_egmid", 0)),
+                to_egmid=int(load_info.get("cursor_egmid", 0)),
             )
             if transformed > 0:
                 with pg_conn.cursor() as cur:
@@ -254,8 +258,6 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
-        if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
-            return load_info
         if load_info.get("transformed", 0) <= 0:
             log.info("Skipping MV refresh: transform produced 0 rows.")
             return load_info
@@ -275,17 +277,19 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def update_watermark(load_info: dict[str, Any]) -> None:
-        if load_info["max_id"] <= 0 and load_info.get("max_egmid", 0) <= 0:
+        cursor_logid = int(load_info.get("cursor_logid", 0))
+        cursor_egmid = int(load_info.get("cursor_egmid", 0))
+        if cursor_logid <= int(load_info.get("last_log_id", 0)) and cursor_egmid <= int(load_info.get("last_egmid", 0)):
             return
 
         pg_conn = _dwh_connection()
         try:
-            update_cursors(pg_conn, PIPELINE, log_id=int(load_info["max_id"]), egmid=int(load_info.get("max_egmid", 0)))
+            update_cursors(pg_conn, PIPELINE, logid=cursor_logid, egmid=cursor_egmid)
             log.info(
                 "Updated %s watermark to LOGID=%s, EGMID=%s.",
                 PIPELINE,
-                load_info["max_id"],
-                load_info.get("max_egmid", 0),
+                cursor_logid,
+                cursor_egmid,
             )
         finally:
             pg_conn.close()

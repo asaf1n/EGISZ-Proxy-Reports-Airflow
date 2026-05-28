@@ -61,15 +61,28 @@ CREATE TABLE IF NOT EXISTS fact_egisz_documents (
     document_key text PRIMARY KEY,
     local_uid text,
     document_id text,
-    semd_code text NOT NULL,
+    emdr_id text,
+    semd_code text,
     source_logid bigint,
+    first_sent_at timestamptz,
+    last_callback_at timestamptz,
+    last_status text,
+    last_egmid bigint,
+    jid integer,
     updated_at timestamptz DEFAULT now()
 );
 
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS local_uid text;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS document_id text;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS semd_code text;
+ALTER TABLE fact_egisz_documents ALTER COLUMN semd_code DROP NOT NULL;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS source_logid bigint;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_status text;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_egmid bigint;
+ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS jid integer;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS fact_egisz_channel_errors (
@@ -86,10 +99,12 @@ CREATE TABLE IF NOT EXISTS fact_egisz_channel_errors (
     relates_to_hint text,
     local_uid_hint text,
     emdr_id_hint text,
-    document_group_key text,
+    document_key text,
     relates_to_id text,
     updated_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE fact_egisz_channel_errors ADD COLUMN IF NOT EXISTS document_key text;
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,
@@ -397,6 +412,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid ON dim_semd_types (oid) WHERE 
 
 CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
     exchangelog_log_id bigint PRIMARY KEY,
+    document_key text,
     log_date timestamptz,
     message_id text,
     relates_to_id text,
@@ -417,6 +433,7 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
 );
 
 ALTER TABLE fact_egisz_transactions DROP CONSTRAINT IF EXISTS fact_egisz_transactions_exchangelog_log_id_fkey;
+ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS document_key text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS egmid bigint;
 ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS errors_json CASCADE;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
@@ -443,10 +460,13 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_messages_reply_to_jid ON fact_egisz_me
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_semd_code ON fact_egisz_documents (semd_code);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_local_uid ON fact_egisz_documents (local_uid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_document_id ON fact_egisz_documents (document_id);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id ON fact_egisz_documents (emdr_id);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_last_callback_at ON fact_egisz_documents (last_callback_at);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_top_type ON fact_egisz_channel_errors (error_top_type);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_group_key ON fact_egisz_channel_errors (document_group_key);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_document_key ON fact_egisz_channel_errors (document_key);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_created_at ON fact_egisz_channel_errors (created_at);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_document_key ON fact_egisz_transactions (document_key);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id ON fact_egisz_transactions (message_id);

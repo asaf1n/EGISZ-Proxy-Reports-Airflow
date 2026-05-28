@@ -14,14 +14,7 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День",
     t.log_date::date AS "День (тренд)",
-    COALESCE(
-        public.egisz_clean_text_value(t.local_uid_semd),
-        public.egisz_clean_text_value(t.emdr_id),
-        public.egisz_clean_text_value(t.relates_to_id),
-        public.egisz_clean_text_value(t.doc_number),
-        public.egisz_clean_text_value(t.message_id),
-        t.exchangelog_log_id::text
-    ) AS "Документ (ключ учёта)",
+    t.document_key AS "Документ (ключ учёта)",
     t.status AS "Статус",
     CASE
         WHEN t.status = 'success' THEN 'Успешный ответ'
@@ -75,7 +68,7 @@ SELECT
 FROM fact_egisz_transactions t
 LEFT JOIN fact_egisz_messages m ON m.egmid = t.egmid
 LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
+  ON d.document_key = t.document_key
 LEFT JOIN LATERAL (
     SELECT candidate.*
     FROM (
@@ -127,14 +120,7 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День (тренд)",
     t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    COALESCE(
-        public.egisz_clean_text_value(t.local_uid_semd),
-        public.egisz_clean_text_value(t.emdr_id),
-        public.egisz_clean_text_value(t.relates_to_id),
-        public.egisz_clean_text_value(t.doc_number),
-        public.egisz_clean_text_value(t.message_id),
-        t.exchangelog_log_id::text
-    ) AS "Документ (ключ учёта)",
+    t.document_key AS "Документ (ключ учёта)",
     public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
@@ -159,7 +145,7 @@ SELECT
     1::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
 LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
+  ON d.document_key = t.document_key
 WHERE t.status = 'error'
 
 UNION ALL
@@ -168,14 +154,7 @@ SELECT
     t.log_date AS "Обработано IPS",
     t.log_date::date AS "День (тренд)",
     t.exchangelog_log_id::text AS "LOGID журнала EXCHANGELOG",
-    COALESCE(
-        public.egisz_clean_text_value(t.local_uid_semd),
-        public.egisz_clean_text_value(t.emdr_id),
-        public.egisz_clean_text_value(t.relates_to_id),
-        public.egisz_clean_text_value(t.doc_number),
-        public.egisz_clean_text_value(t.message_id),
-        t.exchangelog_log_id::text
-    ) AS "Документ (ключ учёта)",
+    t.document_key AS "Документ (ключ учёта)",
     public.egisz_clean_text_value(t.local_uid_semd) AS "localUid СЭМД",
     t.emdr_id AS "Рег. номер РЭМД (emdrid)",
     public.egisz_clean_text_value(t.relates_to_id) AS "Связанное сообщение",
@@ -197,5 +176,5 @@ SELECT
     NULL::bigint AS "Порядок ошибки"
 FROM fact_egisz_transactions t
 LEFT JOIN public.fact_egisz_documents d
-  ON d.document_key = lower(public.egisz_clean_text_value(t.local_uid_semd))
+  ON d.document_key = t.document_key
 WHERE t.status <> 'error' OR t.error_summary IS NULL;
