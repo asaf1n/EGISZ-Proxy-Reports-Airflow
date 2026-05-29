@@ -48,8 +48,13 @@ DO $$ BEGIN DROP VIEW IF EXISTS public.fact_egisz_messages CASCADE; EXCEPTION WH
 DROP TABLE IF EXISTS public.fact_egisz_messages CASCADE;
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_documents_daily_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
 DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_documents_daily_ui;
+-- Витрина могла существовать как VIEW/MATERIALIZED VIEW (legacy) или как persistent-таблица
+-- (текущая модель). IF EXISTS пропускает только отсутствующее имя, но не несовпадение типа,
+-- поэтому каждый типизированный DROP оборачиваем в wrong_object_type-гард.
 DO $$ BEGIN DROP VIEW IF EXISTS public.v_egisz_documents_enriched_ui CASCADE; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
-DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_documents_enriched_ui;
+DO $$ BEGIN DROP MATERIALIZED VIEW IF EXISTS public.v_egisz_documents_enriched_ui; EXCEPTION WHEN wrong_object_type THEN NULL; END $$;
+DROP TABLE IF EXISTS public.v_egisz_documents_enriched_ui CASCADE;
+DROP VIEW IF EXISTS public.v_egisz_documents_enriched_src CASCADE;
 
 -- Drop retired columns and staging tables after dependent views are gone.
 DROP TABLE IF EXISTS public.stg_egisz_messages CASCADE;

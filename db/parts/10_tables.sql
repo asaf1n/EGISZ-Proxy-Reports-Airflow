@@ -128,6 +128,8 @@ ALTER TABLE fact_egisz_documents DROP COLUMN IF EXISTS first_egmid;
 ALTER TABLE fact_egisz_documents DROP COLUMN IF EXISTS last_egmid;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
+-- Deprecated: сетевые ошибки пишутся в fact_egisz_documents (status=network_error).
+-- Таблица оставлена для обратной совместимости существующих инсталляций; ELT в неё не пишет.
 CREATE TABLE IF NOT EXISTS fact_egisz_channel_errors (
     id bigint PRIMARY KEY,
     created_at timestamptz,
@@ -574,7 +576,17 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_semd_code ON fact_egisz_docu
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_local_uid ON fact_egisz_documents (local_uid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_document_id ON fact_egisz_documents (document_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id ON fact_egisz_documents (emdr_id);
+-- Резолвинг callback→документ (egisz_transform_raw_to_facts, emdr_ref) ищет по
+-- lower(btrim(emdr_id)); без функционального индекса это seq scan на каждую строку
+-- батча и линейная деградация transform с ростом архива.
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id_norm
+    ON fact_egisz_documents (lower(NULLIF(btrim(emdr_id), '')))
+    WHERE NULLIF(btrim(emdr_id), '') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_last_callback_at ON fact_egisz_documents (last_callback_at);
+-- Инкрементальное сопровождение витрины v_egisz_documents_enriched_ui резолвит
+-- затронутые в транзакции document_key через updated_at = now(); без индекса это
+-- seq scan по всему архиву на каждый батч (та же O(archive)-деградация, что и emdr).
+CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_updated_at ON fact_egisz_documents (updated_at);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_status ON fact_egisz_documents (status);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_jid ON fact_egisz_documents (jid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_sent_at ON fact_egisz_documents (sent_at);

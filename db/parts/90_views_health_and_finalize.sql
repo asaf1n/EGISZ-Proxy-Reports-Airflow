@@ -15,7 +15,7 @@ fact_24h AS (
         d.jid::text AS clinic_jid,
         MAX(COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || d.jid::text)) AS clinic_name,
         COUNT(DISTINCT d.document_key)::bigint AS docs_cnt,
-        COUNT(DISTINCT d.document_key) FILTER (WHERE d.status IN ('registration_error', 'network_error'))::bigint AS err_cnt
+        COUNT(DISTINCT d.document_key) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS err_cnt
     FROM public.fact_egisz_documents d
     CROSS JOIN anchor
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
@@ -64,8 +64,8 @@ SELECT * FROM (
     VALUES
         ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents), 'документов', 'fact_egisz_documents', 'Контроль поступления СЭМД в DWH'),
         ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours'), 'документов', 'fact_egisz_documents.status=waiting', 'Проверить клиники с зависшими документами и транспортный канал'),
-        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.v_stg_channel_errors_by_document WHERE error_top_type = 'network'), 'документов', 'fact_egisz_channel_errors', 'Разобрать top формулировок и последние события в дашборде 02'),
-        ('error_rows', 'Ошибки регистрации РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'registration_error'), 'документов', 'fact_egisz_documents.status=registration_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
+        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.fact_egisz_documents WHERE status = 'network_error'), 'документов', 'fact_egisz_documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
+        ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'async_error'), 'документов', 'fact_egisz_documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('pending_backlog_24h',
          'Документы в обработке > 24ч (backlog)',
          CASE
@@ -161,15 +161,16 @@ FROM (
 WHERE d.document_key = src.document_key
   AND d.error_text IS DISTINCT FROM src.error_text;
 
-REFRESH MATERIALIZED VIEW public.v_egisz_documents_enriched_ui;
+-- Полная сборка витрины при init. Дальше её сопровождает egisz_transform_raw_to_facts
+-- инкрементально (по затронутым document_key), без полного пересчёта каждые 5 минут.
+TRUNCATE public.v_egisz_documents_enriched_ui;
+INSERT INTO public.v_egisz_documents_enriched_ui
+SELECT * FROM public.v_egisz_documents_enriched_src;
 REFRESH MATERIALIZED VIEW public.v_egisz_documents_daily_ui;
-REFRESH MATERIALIZED VIEW public.v_stg_channel_errors_by_document;
 ANALYZE public.exchangelog_raw;
 ANALYZE public.fact_egisz_documents;
-ANALYZE public.fact_egisz_channel_errors;
 ANALYZE public.fact_egisz_transactions;
 ANALYZE public.v_egisz_documents_enriched_ui;
 ANALYZE public.v_egisz_documents_daily_ui;
-ANALYZE public.v_stg_channel_errors_by_document;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

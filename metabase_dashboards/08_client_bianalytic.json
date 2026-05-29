@@ -648,7 +648,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT document_ts AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", document_type AS \"Тип СЭМД\", error_text AS \"Текст ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND status_code IN ('registration_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY document_ts DESC NULLS LAST LIMIT 50",
+          "query": "SELECT document_ts AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", document_type AS \"Тип СЭМД\", error_text AS \"Текст ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND status_code IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY document_ts DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",

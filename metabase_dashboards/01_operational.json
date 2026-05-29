@@ -391,11 +391,11 @@
     },
     {
       "name": "Статусы за период",
-      "description": "По документной витрине распознанных СЭМД: Успешный ответ / Ошибка регистрации / Ошибка связи. Документы без callback вынесены в дашборд 03.",
+      "description": "По документной витрине распознанных СЭМД: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи. Документы без callback вынесены в дашборд 03.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
+          "query": "SELECT CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -456,9 +456,9 @@
             "enabled": true
           },
           {
-            "key": "Ошибка регистрации",
-            "name": "Ошибка регистрации",
-            "originalName": "Ошибка регистрации",
+            "key": "Ошибка асинхронного ответа",
+            "name": "Ошибка асинхронного ответа",
+            "originalName": "Ошибка асинхронного ответа",
             "color": "#A989C5",
             "enabled": true
           },
@@ -828,7 +828,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

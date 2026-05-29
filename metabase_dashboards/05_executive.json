@@ -410,11 +410,11 @@
     },
     {
       "name": "05 · Распределение статусов по месяцам",
-      "description": "Stacked bar за 12 месяцев: Успешный ответ / Ошибка регистрации / Ошибка связи.",
+      "description": "Stacked bar за 12 месяцев: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
+          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
           "template-tags": {}
         },
         "database": 1

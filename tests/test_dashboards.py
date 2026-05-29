@@ -32,8 +32,8 @@ def test_operational_error_types_include_network_slice() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
     assert "public.v_rpt_error_category_breakdown_ui" in query
-    assert "public.v_stg_channel_network_errors_by_document" in sql
-    assert "'Сетевая ошибка'::text" in sql
+    assert "FROM public.v_egisz_documents_enriched_ui d" in sql
+    assert "WHEN d.status = 'network_error' THEN 'Сетевая ошибка'" in Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
 
 
 def _view_column_names(view_name: str) -> set[str]:
@@ -104,7 +104,7 @@ def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
     assert "WHERE \"Статус\" IN ('success', 'error')" in query
     assert "WHEN \"Статус\" = 'success' THEN 'Успешный ответ'" in query
     assert "WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи'" in query
-    assert "WHEN \"Статус\" = 'error' THEN 'Ошибка регистрации'" in query
+    assert "WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа'" in query
     assert "COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
     assert "отказы РЭМД (status=error)" not in query
     assert card["metabase-field-filters"]["dwh_date"] == {
@@ -112,7 +112,7 @@ def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
         "field_name": "Дата обработки",
     }
     assert "Успешный ответ" in row_keys
-    assert "Ошибка регистрации" in row_keys
+    assert "Ошибка асинхронного ответа" in row_keys
     assert "Ошибка связи" in row_keys
     assert "В обработке" not in row_keys
     assert "Отправлен" not in row_keys
@@ -123,7 +123,7 @@ def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
     assert "CREATE OR REPLACE VIEW public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     assert "FROM public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     assert "Успешный ответ" in trend_query
-    assert "Ошибка регистрации" in trend_query
+    assert "Ошибка асинхронного ответа" in trend_query
     assert trend_card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_semd_archive_ui",
         "field_name": "Дата обработки",

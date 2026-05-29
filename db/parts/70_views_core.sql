@@ -3,7 +3,11 @@
 -- Loaded by db/dwh_init.sql via \i db/parts/70_views_core.sql.
 -- ============================================================================
 
-CREATE MATERIALIZED VIEW public.v_egisz_documents_enriched_ui AS
+-- Источник обогащённой витрины: один SELECT, который переиспользуется и для полной
+-- сборки таблицы, и для инкрементального обновления в egisz_transform_raw_to_facts.
+-- Сама витрина v_egisz_documents_enriched_ui — persistent TABLE (не MATERIALIZED VIEW),
+-- которая обновляется по затронутым document_key, а не полным REFRESH каждые 5 минут.
+CREATE OR REPLACE VIEW public.v_egisz_documents_enriched_src AS
 SELECT
     d.document_key AS "Документ (ключ учёта)",
     d.callback_log_id::text AS "LOGID журнала EXCHANGELOG",
@@ -13,18 +17,18 @@ SELECT
     COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)::date AS "День (тренд)",
     CASE
         WHEN d.status = 'success' THEN 'success'
-        WHEN d.status IN ('registration_error', 'network_error') THEN 'error'
+        WHEN d.status IN ('async_error', 'network_error') THEN 'error'
         ELSE 'waiting'
     END AS "Статус",
     CASE
         WHEN d.status = 'success' THEN 'Успешный ответ'
         WHEN d.status = 'network_error' THEN 'Ошибка связи'
-        WHEN d.status = 'registration_error' THEN 'Ошибка регистрации'
+        WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа'
         ELSE 'В обработке'
     END AS "Статус (отчёт)",
     CASE
         WHEN d.status = 'network_error' THEN 'Сетевая ошибка'
-        WHEN d.status = 'registration_error' THEN d.error_type
+        WHEN d.status = 'async_error' THEN d.error_type
         ELSE NULL
     END AS "Тип ошибки",
     d.error_summary AS "Сводка ошибки",
@@ -89,8 +93,14 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) st ON TRUE
 LEFT JOIN public.dim_organizations o ON d.jid = o.jid
-WHERE d.document_key IS NOT NULL
-WITH NO DATA;
+WHERE d.document_key IS NOT NULL;
+
+-- Persistent-таблица витрины. Полностью наполняется в 90_..._finalize.sql при init,
+-- далее точечно сопровождается egisz_transform_raw_to_facts по затронутым document_key.
+-- CREATE TABLE AS идемпотентен в рамках полного init: 60_drop_dependents.sql дропает
+-- объект до пересоздания (тот же контракт, что был у MATERIALIZED VIEW).
+CREATE TABLE public.v_egisz_documents_enriched_ui AS
+SELECT * FROM public.v_egisz_documents_enriched_src WITH NO DATA;
 
 CREATE UNIQUE INDEX ON public.v_egisz_documents_enriched_ui ("Документ (ключ учёта)");
 CREATE INDEX ON public.v_egisz_documents_enriched_ui ("День");

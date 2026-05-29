@@ -172,7 +172,6 @@ def egisz_elt_pipeline() -> None:
                 with pg_conn.cursor() as cur:
                     cur.execute("ANALYZE public.fact_egisz_transactions")
                     cur.execute("ANALYZE public.fact_egisz_documents")
-                    cur.execute("ANALYZE public.fact_egisz_channel_errors")
                 pg_conn.commit()
             log.info("Transformed %s row(s) into document facts and callback lineage.", transformed)
         finally:
@@ -185,17 +184,18 @@ def egisz_elt_pipeline() -> None:
             log.info("Skipping MV refresh: transform produced 0 rows.")
             return load_info
 
+        # v_egisz_documents_enriched_ui — persistent-таблица, которую инкрементально
+        # сопровождает egisz_transform_raw_to_facts по затронутым document_key, поэтому
+        # её больше не нужно полностью пересчитывать здесь (это была O(архив) операция на
+        # каждом 5-минутном цикле). Остаётся обновить дневной rollup поверх неё.
         pg_conn = _dwh_connection()
         try:
             with pg_conn.cursor() as cur:
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_enriched_ui")
                 cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_daily_ui")
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_stg_channel_errors_by_document")
                 cur.execute("ANALYZE public.v_egisz_documents_enriched_ui")
                 cur.execute("ANALYZE public.v_egisz_documents_daily_ui")
-                cur.execute("ANALYZE public.v_stg_channel_errors_by_document")
             pg_conn.commit()
-            log.info("Refreshed document and channel materialized views.")
+            log.info("Maintained document mart (incremental) and refreshed daily rollup.")
         finally:
             pg_conn.close()
         return load_info

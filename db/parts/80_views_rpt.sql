@@ -8,8 +8,7 @@
 
 -- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
 -- Unnest'ит составной error_type (разделитель ' · ') → одна строка = один вид ошибки.
--- Сетевые ошибки из v_stg_channel_network_errors_by_document добавляются отдельно:
--- их created_at маппится в "Обработано IPS" для единого date-фильтра дашборда.
+-- Сетевые и асинхронные ошибки — из v_egisz_documents_enriched_ui (document-grain facts).
 CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
 WITH remd_errors AS (
     SELECT
@@ -34,18 +33,6 @@ WITH remd_errors AS (
       AND d."Документ (ключ учёта)" IS NOT NULL
       AND trim(d."Тип ошибки") <> ''
       AND trim(err_item) <> ''
-),
-network_errors AS (
-    SELECT
-        n.created_at                AS "Обработано IPS",
-        n.created_at::date          AS "День (тренд)",
-        n.document_key              AS "Документ (ключ учёта)",
-        NULL::text                  AS "JID клиники",
-        NULL::text                  AS "Код СЭМД",
-        NULL::text                  AS "Тип СЭМД (код · НСИ)",
-        'Сетевая ошибка'::text      AS "Тип ошибки"
-    FROM public.v_stg_channel_network_errors_by_document n
-    WHERE n.document_key IS NOT NULL
 )
 SELECT
     "Обработано IPS",
@@ -56,72 +43,44 @@ SELECT
     "Тип СЭМД (код · НСИ)",
     "Тип ошибки",
     public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
-FROM remd_errors
-UNION ALL
-SELECT
-    "Обработано IPS",
-    "День (тренд)",
-    "Документ (ключ учёта)",
-    "JID клиники",
-    "Код СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "Тип ошибки",
-    'Ошибки связи'::text AS "Категория ошибки"
-FROM network_errors;
+FROM remd_errors;
 
 COMMENT ON VIEW public.v_rpt_error_category_breakdown_ui IS
 'Разбивка ошибок EGISZ-прокси: один ряд = один вид ошибки на документ.
-Сетевые ошибки (created_at) и РЭМД-ошибки (log_date) унифицированы в "Обработано IPS"
-для единого дашборд-фильтра. Используется картой «Категории ошибок» и «Ошибки по типу».';
+Источник — v_egisz_documents_enriched_ui (async_error и network_error → «Статус»=error).
+Используется картой «Категории ошибок» и «Ошибки по типу».';
 
 CREATE OR REPLACE VIEW public.v_rpt_network_errors_detail_ui AS
-WITH source_rows AS (
-    SELECT
-        s.*,
-        NULLIF((regexp_match(COALESCE(s.message, ''), 'gost-([0-9]+)', 'i'))[1], '') AS jid_from_text
-    FROM public.v_stg_channel_network_errors_by_document s
-)
 SELECT
-    s.created_at AS "Дата создания документа",
-    s.exchangelog_log_id::text AS "LOGID журнала (сетевая ошибка)",
-    s.journal_msgid AS "MSGID обмена",
-    s.document_key AS "Документ (ключ учёта)",
-    s.relates_to_hint AS "relatesToMessage (из текста журнала)",
-    s.local_uid_hint AS "localUid / DOCUMENTID (из текста)",
-    s.emdr_id_hint AS "emdrId (из текста)",
-    public.egisz_clean_host(s.message) AS "Хост клиники (VPN ГОСТ)",
-    COALESCE(f."JID клиники", s.jid_from_text) AS "JID клиники",
-    COALESCE(f."JID из журнала (gost, число)", s.jid_from_text) AS "JID из журнала (gost, число)",
-    COALESCE(f."Наименование клиники", 'Клиника JID: ' || COALESCE(f."JID клиники", s.jid_from_text, '(нет JID)')) AS "Клиника (транспорт)",
-    f."Медицинская организация",
-    f."Тип СЭМД (код · НСИ)",
-    f."Код СЭМД",
-    f."Сводка ошибки" AS "Сводка ошибки регистрации",
-    s.message AS "Текст сетевой ошибки",
-    s.message AS "Сообщение",
-    s.error_global_subcategory AS "Подтип ошибки канала",
-    CASE WHEN f."Документ (ключ учёта)" IS NULL THEN 'нет' ELSE 'да' END AS "Связанный колбэк найден в аналитике",
-    f."LOGID журнала EXCHANGELOG" AS "LOGID записи ответа",
-    f."Связанное сообщение" AS "Связанное сообщение (ответ РЭМД)",
-    f."Идентификатор документа (localUid)",
-    f."Регистрационный номер РЭМД"
-FROM source_rows s
-LEFT JOIN LATERAL (
-    SELECT f.*
-    FROM public.v_egisz_documents_enriched_ui f
-    WHERE lower(NULLIF(btrim(f."localUid СЭМД"), '')) = lower(NULLIF(btrim(s.local_uid_hint), ''))
-       OR lower(NULLIF(btrim(f."Рег. номер РЭМД (emdrid)"), '')) = lower(NULLIF(btrim(s.emdr_id_hint), ''))
-    ORDER BY
-        CASE
-            WHEN lower(NULLIF(btrim(f."localUid СЭМД"), '')) = lower(NULLIF(btrim(s.local_uid_hint), '')) THEN 0
-            ELSE 1
-        END,
-        f."Обработано IPS" DESC NULLS LAST
-    LIMIT 1
-) f ON TRUE;
+    COALESCE(d.last_callback_at, d.sent_at, d.updated_at) AS "Дата создания документа",
+    COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID журнала (сетевая ошибка)",
+    d.message_id AS "MSGID обмена",
+    d.document_key AS "Документ (ключ учёта)",
+    d.relates_to_id AS "relatesToMessage (из текста журнала)",
+    d.local_uid AS "localUid / DOCUMENTID (из текста)",
+    d.emdr_id AS "emdrId (из текста)",
+    public.egisz_clean_host(d.error_text) AS "Хост клиники (VPN ГОСТ)",
+    d.jid::text AS "JID клиники",
+    d.jid::text AS "JID из журнала (gost, число)",
+    COALESCE(o.name, 'Клиника JID: ' || COALESCE(d.jid::text, '(нет JID)')) AS "Клиника (транспорт)",
+    o.name AS "Медицинская организация",
+    public.egisz_semd_type_report_label(d.semd_code, NULL) AS "Тип СЭМД (код · НСИ)",
+    public.egisz_normalize_semd_code(d.semd_code) AS "Код СЭМД",
+    d.error_summary AS "Сводка ошибки регистрации",
+    d.error_text AS "Текст сетевой ошибки",
+    d.error_text AS "Сообщение",
+    d.error_type AS "Подтип ошибки канала",
+    'да'::text AS "Связанный колбэк найден в аналитике",
+    COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID записи ответа",
+    d.relates_to_id AS "Связанное сообщение (ответ РЭМД)",
+    d.local_uid AS "Идентификатор документа (localUid)",
+    d.emdr_id AS "Регистрационный номер РЭМД"
+FROM public.fact_egisz_documents d
+LEFT JOIN public.dim_organizations o ON d.jid = o.jid
+WHERE d.status = 'network_error';
 
 COMMENT ON VIEW public.v_rpt_network_errors_detail_ui IS
-'Техническая витрина ошибок связи proxy_egisz: healthcheck/поддержка клиник, LOGSTATE=3 и строки журнала с привязкой к документу, если её удалось восстановить.';
+'Техническая витрина ошибок связи proxy_egisz: document-grain fact (status=network_error), без отдельной stg-таблицы канала.';
 
 CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
 SELECT
@@ -173,7 +132,9 @@ SELECT
     "localUid СЭМД",
     "Связанное сообщение",
     "Рег. номер РЭМД (emdrid)" AS "Рег. номер РЭМД",
-    "Статус",
+    -- waiting (документ отправлен, финального callback ещё нет) показываем как «В обработке»;
+    -- технические success/error сохраняются для фильтров и WHERE-логики карточек.
+    CASE WHEN "Статус" = 'waiting' THEN 'В обработке' ELSE "Статус" END AS "Статус",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
     "MSGID обмена",
@@ -315,12 +276,12 @@ WITH fact_source AS (
         CASE
             WHEN f."Статус" = 'success' THEN 'success'
             WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'network_error'
-            ELSE 'registration_error'
+            ELSE 'async_error'
         END AS status_code,
         CASE
             WHEN f."Статус" = 'success' THEN 'Успешный ответ'
             WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'Ошибка связи'
-            ELSE 'Ошибка регистрации'
+            ELSE 'Ошибка асинхронного ответа'
         END AS status_label,
         CASE
             WHEN f."Статус" = 'success' THEN 1

@@ -77,7 +77,7 @@ jobs:
                    'dim_organizations'::regclass,
                    'dim_licenses'::regclass,
                    'dim_semd_types'::regclass,
-                   'public.egisz_transform_raw_to_facts(bigint,bigint,bigint,bigint)'::regprocedure,
+                   'public.egisz_transform_raw_to_facts(bigint,bigint)'::regprocedure,
                    'public.v_egisz_documents_enriched_ui'::regclass,
                    'public.v_stg_channel_errors_by_document'::regclass;
           "

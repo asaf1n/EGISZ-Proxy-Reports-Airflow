@@ -1,7 +1,7 @@
 {
   "name": "Сервис интеграции (healthcheck и динамика)",
   "width": "full",
-  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_key** (canonical localUid / DOCUMENTID / emdrId). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «network vs async» и разбор строк — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, документный ключ как на **01**). Отказы РЭМД — **01** и **04**.",
+  "description": "**Терминология:** **СЭМД** — структурированный меддокумент (**localUid** / **DOCUMENTID**, **emdrId**); **relatesToMessage** — коррелятор в XML (**«Связанное сообщение»**), не UID СЭМД. Учёт колбэков — **«Документ (ключ учёта)»**; для сбоев канала «уникальных документов» — **document_key** (canonical localUid / DOCUMENTID / emdrId). Нагрузка и топы по колбэкам, сигналы healthcheck (`v_health_signals`, heatmap клиники × дни по **Обработано IPS**, тренд ошибок связи, сводка прокси-БД). Период колбэков — `dwh_date` по **«Обработано IPS»**; **Код СЭМД** / **JID** — `top_semd_filter`, `top_clinic_filter`. Healthcheck — снимок «сейчас» (`sql/005_healthcheck.sql`), без `dwh_date`. **Детализация для диагностики (healthcheck):** pie «async vs network» считает оба типа отказов по документам (`v_rpt_documents_ui`, status=error, период по «Обработано IPS»); разбор строк журнала связи — `v_stg_channel_errors_by_document` (`parse_created_filter` по `created_at`, `err_parse_code_filter`); блок **«Сетевые ошибки (LOGSTATE=3)»** — `v_rpt_network_errors_detail_ui` (**«Дата создания документа»**, документный ключ как на **01**). Отказы РЭМД — **01** и **04**.",
   "parameters": [
     {
       "id": "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a1",
@@ -191,17 +191,31 @@
     },
     {
       "name": "async vs network",
-      "description": "Доля ошибок связи (только при идентификаторе документа в журнале) vs асинхронный ответ РЭМД; уникальные документы (DISTINCT document_key). Период — `parse_created_filter` (created_at, healthcheck).",
+      "description": "Доля ошибок связи vs ошибок в асинхронном ответе РЭМД среди отказов по документам (DISTINCT «Документ (ключ учёта)», `v_rpt_documents_ui`, status=error). Период — общий фильтр по «Обработано IPS» (колбэки); учитывает оба типа ошибок, а не только сетевые.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE WHEN COALESCE(NULLIF(error_top_type, ''), 'async_response') = 'network' THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS \"Тип\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов\" FROM public.v_stg_channel_errors_by_document WHERE NOT ( (error_top_type = 'network' OR UPPER(COALESCE(error_code::text, '')) IN ('NETWORK_ERROR', 'INTEGRATION_LOGSTATE_3')) AND NULLIF(TRIM(relates_to_id::text), '') IS NULL AND NULLIF(TRIM(relates_to_hint::text), '') IS NULL AND NULLIF(TRIM(local_uid_hint::text), '') IS NULL AND NULLIF(TRIM(emdr_id_hint::text), '') IS NULL ) [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT CASE WHEN \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' ELSE 'Ошибка в асинхронном ответе РЭМД' END AS \"Тип\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
-            "parse_created": {
+            "dwh_date": {
               "widget-type": "date/all-options",
-              "display-name": "По дате created_at (healthcheck)",
+              "display-name": "По дате «Обработано»",
               "id": "f3a00003-0003-4003-8003-000000099001",
-              "name": "parse_created",
+              "name": "dwh_date",
+              "type": "dimension"
+            },
+            "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f3a00003-0003-4003-8003-000000099010",
+              "name": "top_semd",
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "f3a00003-0003-4003-8003-000000099011",
+              "name": "top_clinic",
               "type": "dimension"
             }
           }
@@ -251,9 +265,17 @@
       "row": 0,
       "col": 20,
       "metabase-field-filters": {
-        "parse_created": {
-          "table_ref": "public.v_stg_channel_errors_by_document",
-          "field_name": "created_at"
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "JID клиники"
         }
       }
     },

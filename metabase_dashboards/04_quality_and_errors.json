@@ -193,11 +193,11 @@
     },
     {
       "name": "04 · Успешность по клиникам",
-      "description": "Ответы РЭМД по сводке колбэков (COUNT DISTINCT «Документ (ключ учёта)» по статусу) плюс **ошибки связи (транспорт)** из `v_rpt_network_errors_detail_ui` (одна группа; период транспорта — **«Дата создания документа»**). Асинхронные отказы РЭМД — в колонке «Ошибок регистрации». % успешных считается только по ответам РЭМД.",
+      "description": "Ответы РЭМД по сводке колбэков (COUNT DISTINCT «Документ (ключ учёта)» по статусу) плюс **ошибки связи (транспорт)** из `v_rpt_network_errors_detail_ui` (одна группа; период транспорта — **«Дата создания документа»**). Асинхронные отказы РЭМД — в колонке «Ошибок асинхронного ответа». % успешных считается только по ответам РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), '(нет наименования)') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" <> 'Сетевая ошибка')::bigint AS \"Ошибок регистрации\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" = 'Сетевая ошибка')::bigint AS \"Ошибок связи (транспорт)\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 7 ASC NULLS LAST, 3 DESC LIMIT 50",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '(нет JID)') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), '(нет наименования)') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" <> 'Сетевая ошибка')::bigint AS \"Ошибок асинхронного ответа\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='error' AND \"Тип ошибки\" = 'Сетевая ошибка')::bigint AS \"Ошибок связи (транспорт)\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 7 ASC NULLS LAST, 3 DESC LIMIT 50",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -238,7 +238,7 @@
             "enabled": true
           },
           {
-            "name": "Ошибок регистрации",
+            "name": "Ошибок асинхронного ответа",
             "enabled": true
           },
           {

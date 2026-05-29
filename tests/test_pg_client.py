@@ -119,8 +119,30 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert 'd.jid::text AS "JID клиники"' in sql
 
 
+def test_enriched_mart_is_incrementally_maintained_table_not_full_refresh() -> None:
+    sql = _read_dwh_init_sql()
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+
+    # Витрина — persistent-таблица поверх переиспользуемого источника, а не materialized view.
+    assert "CREATE OR REPLACE VIEW public.v_egisz_documents_enriched_src" in sql
+    assert "CREATE TABLE public.v_egisz_documents_enriched_ui" in sql
+    assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_enriched_ui" not in sql
+
+    # Полный REFRESH обогащённой витрины (O(архив) на каждом цикле) удалён из init/DAG-контракта.
+    assert "REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_enriched_ui" not in sql
+    assert "REFRESH MATERIALIZED VIEW public.v_egisz_documents_enriched_ui" not in sql
+
+    # transform сопровождает витрину инкрементально по затронутым document_key (updated_at = now()).
+    assert "INSERT INTO public.v_egisz_documents_enriched_ui" in transform_sql
+    assert "FROM public.v_egisz_documents_enriched_src" in transform_sql
+    assert "WHERE d.updated_at = now()" in transform_sql
+    # Дневной rollup остаётся materialized view.
+    assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui" in sql
+
+
 def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     sql = _read_dwh_init_sql()
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
 
     assert "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)" in sql
     assert "oid = EXCLUDED.code" in sql
@@ -133,10 +155,15 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "public.egisz_xml_text(r.msgtext, 'KIND') AS kind_xml" in sql
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'localUid')) AS local_uid_xml" in sql
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')) AS document_id_xml" in sql
-    assert "COALESCE(r.local_uid_xml, exch_ref.local_uid) AS local_uid_semd" in sql
+    assert "COALESCE(r.local_uid_xml, exch_ref.local_uid, gdf_ref.local_uid) AS local_uid_semd" in transform_sql
     assert "public.egisz_clean_text_value(d.local_uid)" in sql
     assert "status_category = CASE" in sql
-    assert "SELECT DISTINCT ON (document_key)" in sql
+    # Запись об ЭМД (waiting) появляется при минимальном наборе localUid + JID + KIND,
+    # которые собираются по document_key из разных сообщений getDocumentFile.
+    assert "document_attributes AS" in transform_sql
+    assert "OR (a.jid IS NOT NULL AND a.semd_code IS NOT NULL)" in transform_sql
+    # Документный факт по колбэкам по-прежнему строится в document-grain (DISTINCT ON).
+    assert "SELECT DISTINCT ON (f.document_key)" in sql
     assert "public.egisz_normalize_semd_code(r.kind_xml) AS semd_code" in sql
     assert "src_doc.semd_code AS source_document_semd_code" in sql
     assert "p.source_document_semd_code" in sql
@@ -171,12 +198,13 @@ def test_reporting_views_do_not_depend_on_raw_tables() -> None:
 
 def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors() -> None:
     sql = _read_dwh_init_sql()
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
 
     assert "Не указан адрес пациента" in sql
     assert "Данные пациента не соответствуют ГИП" in sql
     assert "Документ уже зарегистрирован в РЭМД" in sql
     assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
-    assert "Ошибка регистрации" in sql
+    assert "Ошибка асинхронного ответа" in sql
     assert "Отказ РЭМД" not in sql
     assert "Отказ РЭМД (ns2status: error)" not in sql
     assert "Сетевая ошибка: " in sql
@@ -188,11 +216,14 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "v_rpt_error_interpretations_ui" in sql
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "egisz_error_messages_row" in sql
-    assert "FROM public.v_stg_channel_network_errors_by_document s" in sql
+    assert "FROM public.fact_egisz_documents d" in sql
+    assert "WHERE d.status = 'network_error'" in sql
+    assert "fact_egisz_channel_errors" not in transform_sql
 
 
 def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     sql = _read_dwh_init_sql()
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
 
     assert "Прокси не отдаёт отдельный статус для синхронного приёма" in sql
     assert "THEN 'success'" in sql
@@ -200,11 +231,14 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql
     assert "WHEN d.status = 'success' THEN 'Успешный ответ'" in sql
     assert "WHEN d.status = 'network_error' THEN 'Ошибка связи'" in sql
-    assert "WHEN d.status = 'registration_error' THEN 'Ошибка регистрации'" in sql
+    assert "WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа'" in sql
     assert "WHERE e.final_status IN ('success', 'error')" in sql
     assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in sql
     assert "outbound_ref.document_key" not in sql
     assert "exch_ref.document_key" in sql
+    assert "gdf_events AS" in transform_sql
+    assert "gdf_ref.document_key" in transform_sql
+    assert "exchangelog_raw er" not in transform_sql
     assert "dim_egisz_exchangelog_refs" in sql
     assert "CREATE TABLE IF NOT EXISTS dim_egisz_message_refs" not in sql
     assert "DROP TABLE IF EXISTS public.dim_egisz_message_refs" in sql
@@ -212,7 +246,6 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "status = 'waiting'" in sql
     assert "f.error_json_text" in sql
     assert ", message, callback_url" in sql
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
     assert "error_message," not in transform_sql
     assert "error_message =" not in transform_sql
     rpt_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")

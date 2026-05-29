@@ -99,7 +99,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'registration_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -145,12 +145,12 @@
       }
     },
     {
-      "name": "07 · Ошибка регистрации",
+      "name": "07 · Ошибка асинхронного ответа",
       "description": "Документы с ошибкой регистрации в РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'registration_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'registration_error') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Ошибка регистрации\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -248,7 +248,7 @@
     },
     {
       "name": "07 · Динамика статусов по дням",
-      "description": "Stacked bar: Успешный ответ / Ошибка регистрации / Ошибка связи по дням.",
+      "description": "Stacked bar: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи по дням.",
       "dataset_query": {
         "type": "native",
         "native": {
