@@ -173,14 +173,22 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 | Слой | Объекты | Содержание |
 |---|---|---|
-| Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Production может очищать эту таблицу после разложения данных в DWH facts. |
+| Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Партиционирована по `createdate` (RANGE, помесячно + DEFAULT). Production может очищать старые партиции raw после разложения в facts. |
 | ELT state | `elt_state` | Watermark загрузки (`last_logid`) и конфигурация отсечки источника (`source_min_created_at`). |
 | Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_egisz_exchangelog_refs` | Организации, лицензии, типы СЭМД, индекс сообщений EXCHANGELOG для связи callback с документом. |
-| Fact | `fact_egisz_documents`, `fact_egisz_transactions` | Центральный документный факт СЭМД и lineage callback/ошибок (включая `network_error` и `async_error`). |
+| Fact | `fact_egisz_documents`, `fact_egisz_transactions` | Центральный документный факт СЭМД и lineage callback/ошибок (включая `network_error` и `async_error`). `fact_egisz_transactions` партиционирована по `log_date` (RANGE, помесячно + DEFAULT). |
 | Витрины | `v_egisz_documents_enriched_ui` (persistent-таблица + источник `v_egisz_documents_enriched_src`), `v_egisz_documents_daily_ui` (materialized view) | Быстрые витрины Metabase поверх document-grain facts. `enriched_ui` сопровождается инкрементально в `egisz_transform_raw_to_facts` по затронутым `document_key`, без полного REFRESH; дневной rollup `daily_ui` остаётся materialized view. |
 | Reporting views | `v_rpt_*_ui`, `v_health_*_ui` | Готовые SQL-интерфейсы для карточек. |
 
 `_raw`-таблицы не являются источником отчётности. Представления и дашборды должны читать только persistent DWH-слой (`fact_egisz_*`, dimensions, витрины `v_egisz_documents_*`). Это важно для production, где raw staging периодически очищается.
+
+### Партиционирование и ретеншн
+
+`exchangelog_raw` и `fact_egisz_transactions` — монотонно растущие time-series таблицы. При init (`db/parts/10_tables.sql`) они идемпотентно конвертируются в RANGE-партиции по времени (`createdate` и `log_date` соответственно): помесячные партиции на 12 месяцев назад и 24 вперёд от текущего UTC-месяца, плюс DEFAULT-партиция для строк вне диапазона. Повторный `dwh_init.sql` пропускает конвертацию, если таблица уже `relkind = 'p'`, и только досоздаёт недостающие партиции.
+
+Первичный ключ включает ключ партиционирования (`logid, createdate` и `exchangelog_log_id, log_date`), потому что PostgreSQL требует этого для UNIQUE/PK на партиционированных таблицах; `logid` / `exchangelog_log_id` по-прежнему уникальны в данных источника, UPSERT-таргеты в `load_raw_logs` и `egisz_transform_raw_to_facts` обновлены соответственно.
+
+Ретеншн: удаление старых партиций (`DROP TABLE ..._y2024m01`) — операционная процедура вне init; BI не читает raw, поэтому срок хранения staging/fact-transactions настраивается независимо от витрин.
 
 Статусы фактов. Машинный код хранится в `fact_egisz_documents.status` и пробрасывается в витрины как `«Статус (код)»`; единая русская нотификация — в колонке `«Статус»`.
 

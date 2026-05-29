@@ -370,6 +370,30 @@ def test_dwh_init_sql_seeds_source_min_created_at_in_elt_state() -> None:
     assert "SOURCE_MIN_CREATED_AT" not in sql
 
 
+def test_dwh_init_sql_partitions_time_series_tables() -> None:
+    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "10_tables.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+
+    assert "PARTITION BY RANGE (createdate)" in sql
+    assert "PARTITION BY RANGE (log_date)" in sql
+    assert "PRIMARY KEY (logid, createdate)" in sql
+    assert "PRIMARY KEY (exchangelog_log_id, log_date)" in sql
+    assert "exchangelog_raw_default PARTITION OF public.exchangelog_raw DEFAULT" in sql
+    assert "fact_egisz_transactions_default PARTITION OF public.fact_egisz_transactions DEFAULT" in sql
+    assert "relkind <> 'p'" in sql
+    assert "ON CONFLICT (logid) DO UPDATE SET" in transform_sql
+    assert "ON CONFLICT (exchangelog_log_id, log_date)" in transform_sql
+
+
+def test_load_raw_logs_uses_partitioned_upsert_target() -> None:
+    import inspect
+
+    from egisz_elt import pg_client
+
+    source = inspect.getsource(pg_client.load_raw_logs)
+    assert "ON CONFLICT (logid, createdate)" in source
+
+
 def test_update_cursors_upserts_last_logid() -> None:
     class Cursor:
         def __init__(self) -> None:

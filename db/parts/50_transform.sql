@@ -471,7 +471,7 @@ BEGIN
     FROM with_bi_fields e
     WHERE e.final_status IN ('success', 'error')
       AND e.document_key IS NOT NULL
-    ON CONFLICT (exchangelog_log_id) DO UPDATE SET
+    ON CONFLICT (exchangelog_log_id, log_date) DO UPDATE SET
         log_date = EXCLUDED.log_date,
         document_key = EXCLUDED.document_key,
         message_id = EXCLUDED.message_id,

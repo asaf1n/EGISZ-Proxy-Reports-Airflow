@@ -575,6 +575,154 @@ BEGIN
     END IF;
 END $$;
 
+-- ============================================================================
+-- Range partitioning (monthly) for monotonic time-series tables.
+-- PK must include the partition key: PostgreSQL enforces UNIQUE/PK only when
+-- the partition column is part of the constraint. logid / exchangelog_log_id
+-- remain globally unique in practice; composite keys preserve ON CONFLICT upserts.
+-- ============================================================================
+
+DO $$
+DECLARE
+    relkind "char";
+BEGIN
+    SELECT c.relkind
+    INTO relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'exchangelog_raw';
+
+    IF relkind IS NOT NULL AND relkind <> 'p' THEN
+        UPDATE public.exchangelog_raw
+        SET createdate = COALESCE(createdate, logdate, loaded_at, timestamptz '1970-01-01')
+        WHERE createdate IS NULL;
+
+        CREATE TABLE public.exchangelog_raw_partitioned (
+            logid bigint NOT NULL,
+            logdate timestamptz,
+            createdate timestamptz NOT NULL DEFAULT now(),
+            msgid text,
+            logstate integer,
+            logtext text,
+            msgtext text,
+            loaded_at timestamptz DEFAULT now(),
+            PRIMARY KEY (logid, createdate)
+        ) PARTITION BY RANGE (createdate);
+
+        INSERT INTO public.exchangelog_raw_partitioned (
+            logid, logdate, createdate, msgid, logstate, logtext, msgtext, loaded_at
+        )
+        SELECT
+            logid,
+            logdate,
+            COALESCE(createdate, logdate, loaded_at, timestamptz '1970-01-01'),
+            msgid,
+            logstate,
+            logtext,
+            msgtext,
+            loaded_at
+        FROM public.exchangelog_raw;
+
+        DROP TABLE public.exchangelog_raw;
+        ALTER TABLE public.exchangelog_raw_partitioned RENAME TO exchangelog_raw;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE
+    relkind "char";
+BEGIN
+    SELECT c.relkind
+    INTO relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'fact_egisz_transactions';
+
+    IF relkind IS NOT NULL AND relkind <> 'p' THEN
+        UPDATE public.fact_egisz_transactions
+        SET log_date = COALESCE(log_date, processed_at, creation_date, now())
+        WHERE log_date IS NULL;
+
+        CREATE TABLE public.fact_egisz_transactions_partitioned (
+            LIKE public.fact_egisz_transactions INCLUDING DEFAULTS
+        ) PARTITION BY RANGE (log_date);
+
+        ALTER TABLE public.fact_egisz_transactions_partitioned
+            DROP CONSTRAINT IF EXISTS fact_egisz_transactions_pkey;
+        ALTER TABLE public.fact_egisz_transactions_partitioned
+            ADD PRIMARY KEY (exchangelog_log_id, log_date);
+        ALTER TABLE public.fact_egisz_transactions_partitioned
+            ALTER COLUMN log_date SET NOT NULL;
+
+        INSERT INTO public.fact_egisz_transactions_partitioned
+        SELECT *
+        FROM public.fact_egisz_transactions;
+
+        DROP TABLE public.fact_egisz_transactions;
+        ALTER TABLE public.fact_egisz_transactions_partitioned RENAME TO fact_egisz_transactions;
+    END IF;
+END
+$$;
+
+DO $$
+DECLARE
+    relkind "char";
+    month_offset integer;
+    part_start timestamptz;
+    part_end timestamptz;
+    part_name text;
+BEGIN
+    SELECT c.relkind
+    INTO relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'exchangelog_raw';
+
+    IF relkind = 'p' THEN
+        EXECUTE 'CREATE TABLE IF NOT EXISTS public.exchangelog_raw_default PARTITION OF public.exchangelog_raw DEFAULT';
+
+        FOR month_offset IN -12..24 LOOP
+            part_start := date_trunc('month', timezone('UTC', now())) + (month_offset || ' months')::interval;
+            part_end := part_start + INTERVAL '1 month';
+            part_name := format('exchangelog_raw_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.exchangelog_raw FOR VALUES FROM (%L) TO (%L)',
+                part_name,
+                part_start,
+                part_end
+            );
+        END LOOP;
+    END IF;
+
+    SELECT c.relkind
+    INTO relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = 'fact_egisz_transactions';
+
+    IF relkind = 'p' THEN
+        EXECUTE 'CREATE TABLE IF NOT EXISTS public.fact_egisz_transactions_default PARTITION OF public.fact_egisz_transactions DEFAULT';
+
+        FOR month_offset IN -12..24 LOOP
+            part_start := date_trunc('month', timezone('UTC', now())) + (month_offset || ' months')::interval;
+            part_end := part_start + INTERVAL '1 month';
+            part_name := format('fact_egisz_transactions_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.fact_egisz_transactions FOR VALUES FROM (%L) TO (%L)',
+                part_name,
+                part_start,
+                part_end
+            );
+        END LOOP;
+    END IF;
+END
+$$;
+
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);

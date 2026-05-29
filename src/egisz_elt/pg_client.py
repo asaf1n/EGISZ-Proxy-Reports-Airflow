@@ -76,7 +76,10 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
             missing_columns = [column for column in RAW_LOG_COLUMNS if column not in row]
             if missing_columns:
                 raise ValueError(f"Raw EXCHANGELOG row is missing required column(s): {', '.join(missing_columns)}")
-            values.append(tuple(row[column] for column in RAW_LOG_COLUMNS))
+            normalized_row = dict(row)
+            if normalized_row.get("createdate") is None:
+                normalized_row["createdate"] = normalized_row.get("logdate")
+            values.append(tuple(normalized_row[column] for column in RAW_LOG_COLUMNS))
         else:
             values.append(tuple(row))
 
@@ -89,7 +92,7 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
             """
             INSERT INTO exchangelog_raw (logid, logdate, createdate, msgid, logstate, logtext, msgtext)
             VALUES %s
-            ON CONFLICT (logid) DO UPDATE SET
+            ON CONFLICT (logid, createdate) DO UPDATE SET
                 logdate = EXCLUDED.logdate,
                 createdate = EXCLUDED.createdate,
                 msgid = EXCLUDED.msgid,
