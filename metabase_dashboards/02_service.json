@@ -8,7 +8,8 @@
       "name": "Период по «Обработано IPS» (колбэки)",
       "sectionId": "date",
       "slug": "dwh_date_filter",
-      "type": "date/all-options"
+      "type": "date/all-options",
+      "default": "past30days"
     },
     {
       "id": "b3c4d5e6-f7a8-4901-b234-56789abcdef0",

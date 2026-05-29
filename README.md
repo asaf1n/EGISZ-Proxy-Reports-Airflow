@@ -104,7 +104,7 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 | `dag_id` | `egisz_elt_dag` |
 | Расписание | `*/5 * * * *` |
 | `max_active_runs` | `1` |
-| `BATCH_SIZE` | `3000` |
+| `BATCH_SIZE` | `5000` |
 | Pipeline key | `egisz` |
 | Firebird connection | `proxy_egisz_fb` |
 | PostgreSQL connection | `dwh_egisz_pg` |
@@ -257,7 +257,9 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 ## Дашборды Metabase
 
-JSON-описания дашбордов находятся в `metabase_dashboards/`. Импорт выполняет `metabase/setup-dashboards.sh` при старте контейнера. Field-фильтры настраиваются скриптом `scripts/apply_metabase_field_filters.py` по правилам `metabase_dashboards/field_filter_defaults.yaml`.
+JSON-описания дашбордов находятся в `metabase_dashboards/`. Импорт выполняет `metabase/setup-dashboards.sh` при старте контейнера и через `kubectl exec` в `up.ps1 -Action Metabase`. Field-фильтры настраиваются скриптом `scripts/apply_metabase_field_filters.py` по правилам `metabase_dashboards/field_filter_defaults.yaml`.
+
+У основных дашбордов (01–06, 05) период по умолчанию — `past30days`; на клиентских (07/08) — `past7days`/`past30days` и примерный `JID` для локального стенда. Это предотвращает ситуацию, когда в URL остаются пустые query-параметры (`?dwh_date_filter=`) и Metabase с `auto_apply_filters` не отрисовывает привязанные карточки. Переменная `METABASE_AUTO_APPLY_FILTERS` (по умолчанию `true`) задаётся в `setup-dashboards.sh`. Проверка импорта и выполнения SQL-карточек: `py scripts/audit_metabase_dashboards.py` (нужен запущенный Metabase на `localhost:3000`).
 
 | Дашборд | Назначение | Карточек | Основные источники | Фильтры |
 |---|---|---|---|---|
@@ -265,10 +267,10 @@ JSON-описания дашбордов находятся в `metabase_dashboa
 | `02_service.json` | Healthcheck ETL, канала и прокси-БД. | 15 | `v_health_*_ui`, `v_stg_channel_errors_by_document` | Период, код ошибки, JID |
 | `03_documents_no_response.json` | Очередь документов без финального callback. | 5 | `v_rpt_documents_no_response_ui` | Период, JID, тип СЭМД |
 | `04_quality_and_errors.json` | Качество данных и детализация отказов РЭМД. | 22 | `v_rpt_error_category_breakdown_ui`, `v_rpt_error_interpretations_ui` | Период, категория, тип ошибки |
-| `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу. | 13 | `v_rpt_documents_ui`, `v_egisz_documents_enriched_ui` | Период |
+| `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу. | 17 (13 SQL) | `v_rpt_documents_ui`, `v_egisz_documents_enriched_ui` | Период (`past30days`) |
 | `06_semd_archive.json` | Архив документов и поиск по идентификаторам. | 6 | `v_rpt_semd_archive_ui` | Период, JID, код СЭМД, `localUid`, `emdrId`, `LOGID`, связанное сообщение, статус |
-| `07_client_service.json` | Клиентский мониторинг по одному JID. | 8 | `v_rpt_client_documents_ui` | JID, период, тип документа |
-| `08_client_bianalytic.json` | Клиентская BI-аналитика без раскрытия ПДн. | 11 | `v_rpt_client_documents_ui` | JID, период, тип документа |
+| `07_client_service.json` | Клиентский мониторинг по одному JID. | 9 (8 SQL) | `v_rpt_client_documents_ui` | JID (обязателен), период, тип документа |
+| `08_client_bianalytic.json` | Клиентская BI-аналитика без раскрытия ПДн. | 13 (11 SQL) | `v_rpt_client_documents_ui` | JID (обязателен), период, тип документа |
 
 Финансовые карточки используют модель `10 000 ₽ / JID / месяц`. MRR считается как количество активных JID за период, умноженное на фиксированный тариф.
 
@@ -396,6 +398,7 @@ db/parts/*.sql                     модульная DWH-схема
 metabase_dashboards/*.json         дашборды Metabase
 metabase/setup-dashboards.sh       импорт дашбордов
 scripts/apply_metabase_field_filters.py
+scripts/audit_metabase_dashboards.py  проверка карточек и запросов Metabase
 tests/                             pytest-тесты
 k8s/                               манифесты Airflow и Metabase
 up.ps1                             локальный запуск Kubernetes-стенда

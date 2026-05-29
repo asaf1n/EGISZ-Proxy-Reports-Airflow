@@ -8,7 +8,8 @@
       "name": "Период по «Отправлено» (очередь)",
       "slug": "dwh_date_filter",
       "type": "date/all-options",
-      "sectionId": "date"
+      "sectionId": "date",
+      "default": "past30days"
     },
     {
       "id": "f4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a2",

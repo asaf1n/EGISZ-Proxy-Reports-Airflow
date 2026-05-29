@@ -8,7 +8,8 @@
       "name": "Период по «Дата обработки»",
       "slug": "dwh_date_filter",
       "type": "date/all-options",
-      "sectionId": "date"
+      "sectionId": "date",
+      "default": "past30days"
     },
     {
       "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",

@@ -23,7 +23,8 @@
       "name": "JID клиники",
       "slug": "client_jid_filter",
       "type": "string/=",
-      "sectionId": "string"
+      "sectionId": "string",
+      "default": "65489"
     }
   ],
   "cards": [

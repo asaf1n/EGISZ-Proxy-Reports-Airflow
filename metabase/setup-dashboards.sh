@@ -6,6 +6,7 @@ ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}"
 DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
 METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
+METABASE_AUTO_APPLY_FILTERS="${METABASE_AUTO_APPLY_FILTERS:-true}"
 DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
@@ -412,14 +413,14 @@ create_or_update_dashboard() {
 
   payload="$(
     dashboard_payload "${file}" |
-      jq '{
+      jq --arg auto_apply "${METABASE_AUTO_APPLY_FILTERS}" '{
         name,
         description,
         collection_id,
         parameters: (.parameters // []),
         width: (.width // "full"),
         cacheables: [],
-        auto_apply_filters: true
+        auto_apply_filters: ($auto_apply == "true" or $auto_apply == "1")
       }'
   )"
   dashboard_id="$(existing_dashboard_id "${dashboard_name}")"
