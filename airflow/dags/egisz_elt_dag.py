@@ -29,7 +29,6 @@ PIPELINE = "egisz"
 BATCH_SIZE = 3000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
-SOURCE_MIN_CREATED_AT = datetime(2026, 5, 18)
 
 
 class BatchMetadata(TypedDict):
@@ -89,6 +88,7 @@ def egisz_elt_pipeline() -> None:
         try:
             cursor_state = get_cursors(pg_conn, PIPELINE)
             last_logid = int(cursor_state.get("last_logid", 0))
+            source_min_created_at = cursor_state.get("source_min_created_at")
 
             fb_conn = _proxy_connection()
             try:
@@ -97,7 +97,7 @@ def egisz_elt_pipeline() -> None:
                     fb_conn,
                     after_logid=last_logid,
                     limit=BATCH_SIZE,
-                    created_from=SOURCE_MIN_CREATED_AT,
+                    created_from=source_min_created_at,
                 )
                 log.info(
                     "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",

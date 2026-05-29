@@ -317,7 +317,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert con.committed is True
 
 
-def test_get_cursors_reads_last_logid() -> None:
+def test_get_cursors_reads_last_logid_and_source_cutoff() -> None:
     class Cursor:
         def __enter__(self) -> "Cursor":
             return self
@@ -328,14 +328,46 @@ def test_get_cursors_reads_last_logid() -> None:
         def execute(self, _sql: str, _params: tuple[object, ...]) -> None:
             return None
 
-        def fetchone(self) -> tuple[int]:
-            return (123,)
+        def fetchone(self) -> tuple[int, object]:
+            return (123, "2026-05-18T00:00:00+00:00")
 
     class Connection:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {"last_logid": 123}
+    assert get_cursors(Connection(), "egisz") == {
+        "last_logid": 123,
+        "source_min_created_at": "2026-05-18T00:00:00+00:00",
+    }
+
+
+def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
+    class Cursor:
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _sql: str, _params: tuple[object, ...]) -> None:
+            return None
+
+        def fetchone(self) -> None:
+            return None
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    assert get_cursors(Connection(), "egisz") == {"last_logid": 0, "source_min_created_at": None}
+
+
+def test_dwh_init_sql_seeds_source_min_created_at_in_elt_state() -> None:
+    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "10_tables.sql").read_text(encoding="utf-8")
+
+    assert "ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS source_min_created_at timestamptz" in sql
+    assert "INSERT INTO elt_state (pipeline, last_logid, source_min_created_at)" in sql
+    assert "SOURCE_MIN_CREATED_AT" not in sql
 
 
 def test_update_cursors_upserts_last_logid() -> None:

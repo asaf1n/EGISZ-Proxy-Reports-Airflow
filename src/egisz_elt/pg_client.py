@@ -49,11 +49,11 @@ def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
 
 
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
-    """Read the last processed EXCHANGELOG cursor for a pipeline."""
+    """Read pipeline cursor state including optional source lower bound."""
     with con.cursor() as cur:
         cur.execute(
             """
-            SELECT last_logid
+            SELECT last_logid, source_min_created_at
             FROM elt_state
             WHERE pipeline = %s
             """,
@@ -61,8 +61,11 @@ def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str,
         )
         row = cur.fetchone()
     if row is None:
-        return {"last_logid": 0}
-    return {"last_logid": int(row[0] or 0)}
+        return {"last_logid": 0, "source_min_created_at": None}
+    return {
+        "last_logid": int(row[0] or 0),
+        "source_min_created_at": row[1],
+    }
 
 
 def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:

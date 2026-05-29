@@ -37,7 +37,7 @@
 | Полнота данных | Документы без ответа, пустые или противоречивые идентификаторы, нераспознанные callback'и. |
 | Здоровье ETL | Свежесть данных, движение watermark, объём staging/fact-слоёв, актуальность витрин. |
 
-Рабочее окно данных стенда начинается с `2026-05-18`. Ограничение задано в DAG через `SOURCE_MIN_CREATED_AT` и фильтрует выборку `EXCHANGELOG` по `LOGDATE`/`CREATEDATE`.
+Рабочее окно данных стенда начинается с `2026-05-18`. Нижняя отсечка хранится в `elt_state.source_min_created_at` (seed при init) и фильтрует выборку `EXCHANGELOG` по `LOGDATE`/`CREATEDATE`. Значение `NULL` означает отсутствие нижней границы.
 
 ## Предметная область
 
@@ -108,9 +108,8 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 | Pipeline key | `egisz` |
 | Firebird connection | `proxy_egisz_fb` |
 | PostgreSQL connection | `dwh_egisz_pg` |
-| `SOURCE_MIN_CREATED_AT` | `2026-05-18` (нижняя граница выборки `EXCHANGELOG`) |
 
-Доступы к источнику и DWH берутся из Airflow Connections (`proxy_egisz_fb`, `dwh_egisz_pg`) через `BaseHook.get_connection`; учётные данные в коде и переменных окружения не хранятся. Airflow Variables DAG не использует — все параметры заданы константами в `egisz_elt_dag.py`. `catchup=False`, поэтому пайплайн идёт только вперёд по watermark.
+Доступы к источнику и DWH берутся из Airflow Connections (`proxy_egisz_fb`, `dwh_egisz_pg`) через `BaseHook.get_connection`; учётные данные в коде и переменных окружения не хранятся. Нижняя отсечка источника (`source_min_created_at`) — конфигурация в `elt_state`, не константа DAG. Расписание `*/5 * * * *` — polling; идемпотентность обеспечивает watermark, а не `data_interval`. `catchup=False`, поэтому пайплайн идёт только вперёд по watermark.
 
 Последовательность задач:
 
@@ -175,7 +174,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 | Слой | Объекты | Содержание |
 |---|---|---|
 | Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Production может очищать эту таблицу после разложения данных в DWH facts. |
-| ELT state | `elt_state` | Watermark загрузки: `last_logid`. |
+| ELT state | `elt_state` | Watermark загрузки (`last_logid`) и конфигурация отсечки источника (`source_min_created_at`). |
 | Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_egisz_exchangelog_refs` | Организации, лицензии, типы СЭМД, индекс сообщений EXCHANGELOG для связи callback с документом. |
 | Fact | `fact_egisz_documents`, `fact_egisz_transactions` | Центральный документный факт СЭМД и lineage callback/ошибок (включая `network_error` и `async_error`). |
 | Витрины | `v_egisz_documents_enriched_ui` (persistent-таблица + источник `v_egisz_documents_enriched_src`), `v_egisz_documents_daily_ui` (materialized view) | Быстрые витрины Metabase поверх document-grain facts. `enriched_ui` сопровождается инкрементально в `egisz_transform_raw_to_facts` по затронутым `document_key`, без полного REFRESH; дневной rollup `daily_ui` остаётся materialized view. |

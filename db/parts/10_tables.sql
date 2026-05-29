@@ -34,6 +34,7 @@ $$;
 
 ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS last_logid bigint DEFAULT 0;
 ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS source_min_created_at timestamptz;
 ALTER TABLE elt_state DROP COLUMN IF EXISTS last_egmid;
 
 DO $$
@@ -50,6 +51,11 @@ BEGIN
     END IF;
 END
 $$;
+
+INSERT INTO elt_state (pipeline, last_logid, source_min_created_at)
+VALUES ('egisz', 0, timestamptz '2026-05-18 00:00:00+00')
+ON CONFLICT (pipeline) DO UPDATE SET
+    source_min_created_at = COALESCE(elt_state.source_min_created_at, EXCLUDED.source_min_created_at);
 
 DO $$
 BEGIN
