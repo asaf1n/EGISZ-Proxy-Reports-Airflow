@@ -32,7 +32,8 @@ def test_operational_error_types_include_network_slice() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
     assert "public.v_rpt_error_category_breakdown_ui" in query
-    assert "FROM public.v_egisz_documents_enriched_ui d" in sql
+    assert "FROM public.v_rpt_documents_ui d" in sql
+    assert '"Статус (код)" IN (\'async_error\', \'network_error\')' in sql
     assert "WHEN d.status = 'network_error' THEN 'Сетевая ошибка'" in Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
 
 
@@ -83,7 +84,7 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
     assert '"Исходный текст ошибки"' in sql
 
 
-def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
+def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
@@ -101,33 +102,129 @@ def test_operational_status_breakdown_uses_three_recognized_statuses() -> None:
         "table_ref": "public.v_rpt_documents_ui",
         "field_name": "Дата обработки",
     }
-    assert "WHERE \"Статус\" IN ('success', 'error')" in query
-    assert "WHEN \"Статус\" = 'success' THEN 'Успешный ответ'" in query
-    assert "WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи'" in query
-    assert "WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа'" in query
+    # Единый универсум: статусный пирог не отсекает «В обработке», слайсы суммируются
+    # к общему числу документов; нотификация берётся из канонической колонки «Статус».
+    assert "WHERE \"Статус\" IN ('success', 'error')" not in query
+    assert "WHERE 1=1" in query
+    assert "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
     assert "COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
-    assert "отказы РЭМД (status=error)" not in query
     assert card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_documents_ui",
         "field_name": "Дата обработки",
     }
-    assert "Успешный ответ" in row_keys
-    assert "Ошибка асинхронного ответа" in row_keys
+    assert "Успешно зарегистрирован" in row_keys
+    assert "Ошибка асинхронного ответа РЭМД" in row_keys
     assert "Ошибка связи" in row_keys
-    assert "В обработке" not in row_keys
-    assert "Отправлен" not in row_keys
+    assert "В обработке" in row_keys
+    assert "Успешный ответ" not in row_keys
     assert "Неизвестная ошибка" not in row_keys
-    assert "Документы в ожидании" not in row_keys
     assert "Нераспознан" not in row_keys
+    # Тренд по дням: статус берётся из канонической колонки, без отсечения waiting.
     assert "public.v_rpt_semd_archive_ui" in trend_query
+    assert "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\"" in trend_query
+    assert "WHERE \"Статус\" IN ('success', 'error')" not in trend_query
     assert "CREATE OR REPLACE VIEW public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     assert "FROM public.v_rpt_documents_ui" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert "Успешный ответ" in trend_query
-    assert "Ошибка асинхронного ответа" in trend_query
     assert trend_card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_semd_archive_ui",
         "field_name": "Дата обработки",
     }
+
+
+def test_documents_view_exposes_canonical_status_label_and_code() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    core = Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
+
+    # Единая нотификация статуса (4 значения) задаётся один раз в core-витрине.
+    assert "'Успешно зарегистрирован'" in core
+    assert "'Ошибка асинхронного ответа РЭМД'" in core
+    assert "'Ошибка связи'" in core
+    assert "'В обработке'" in core
+    assert 'AS "Статус (код)"' in core
+    # Презентационная витрина отдаёт RU-нотификацию как «Статус» и машинный «Статус (код)».
+    assert '"Статус (отчёт)" AS "Статус"' in sql
+    assert '"Статус (код)"' in sql
+
+
+def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    queries = _native_queries(dashboard)
+    assert all("v_egisz_documents_enriched_ui" not in q for q in queries)
+    assert all('"Статус" = \'error\'' not in q for q in queries)
+
+
+def test_quality_error_totals_use_async_and_network_codes() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    card = next(card for card in dashboard["cards"] if card["name"] == "04 · Итоги по ошибкам за период")
+    query = card["dataset_query"]["native"]["query"]
+    assert "v_rpt_documents_ui" in query
+    assert '"Статус (код)" IN (\'async_error\', \'network_error\')' in query
+    assert "WHERE 1=1" in query
+
+
+def test_archive_top_semd_uses_same_document_universe_as_total() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
+    total = next(card for card in dashboard["cards"] if card["name"] == "06 · Всего документов")
+    top = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по типу СЭМД")
+    clinic = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по клинике")
+    assert "NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL" not in top["dataset_query"]["native"]["query"]
+    assert '"СЭМД (архив)"' in top["dataset_query"]["native"]["query"]
+    assert "v_rpt_semd_archive_ui" in total["dataset_query"]["native"]["query"]
+    assert "v_rpt_semd_archive_ui" in top["dataset_query"]["native"]["query"]
+    for query in (
+        top["dataset_query"]["native"]["query"],
+        clinic["dataset_query"]["native"]["query"],
+    ):
+        assert "LIMIT 8" not in query
+        assert "Остальные (" in query
+        assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in query
+
+
+def test_transform_backfills_semd_code_from_transactions() -> None:
+    sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    assert "UPDATE public.fact_egisz_documents d" in sql
+    assert "FROM public.fact_egisz_transactions t" in sql
+    assert "NULLIF(btrim(d.semd_code), '') IS NULL" in sql
+
+
+def test_document_metric_cards_count_distinct_document_key() -> None:
+    document_views = (
+        "v_rpt_documents_ui",
+        "v_rpt_semd_archive_ui",
+        "v_rpt_network_errors_detail_ui",
+        "v_rpt_error_category_breakdown_ui",
+        "v_rpt_client_documents_ui",
+    )
+    allowed_count_star = {
+        "02_service.json": {"v_health_signals_ui", "v_stg_channel_errors_by_document"},
+        "05_executive.json": {"active_jid"},
+        "08_client_bianalytic.json": {"per_patient"},
+    }
+    violations: list[str] = []
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard["cards"]:
+            dq = card.get("dataset_query", {})
+            if dq.get("type") != "native":
+                continue
+            query = dq["native"]["query"]
+            if not any(view in query for view in document_views):
+                continue
+            if "COUNT(*)" not in query:
+                continue
+            allow = allowed_count_star.get(path.name, set())
+            if any(token in query for token in allow):
+                continue
+            violations.append(f"{path.name} / {card.get('name', '?')}")
+    assert not violations, "Document cards must not use COUNT(*) without allowlist: " + ", ".join(violations)
+
+
+def test_error_interpretations_view_uses_canonical_labels() -> None:
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui" in sql
+    assert "FROM public.v_rpt_documents_ui" in sql
+    assert "'Успешно зарегистрирован'" in sql
+    assert "Успешный ответ" not in sql
 
 
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
@@ -139,9 +236,9 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
     assert '"СЭМД (архив)"' in sql
     assert "Документ с ошибкой и не определён код" in sql
     assert '"Тип ошибки"' in sql
-    assert 'NULLIF(TRIM("Код СЭМД"), \'\') IS NOT NULL' in query
-    assert "Наименование СЭМД" in query
-    assert 'TRIM("СЭМД (архив)")' not in query
+    assert '"СЭМД (архив)"' in query
+    assert 'NULLIF(TRIM("Код СЭМД"), \'\') IS NOT NULL' not in query
+    assert "Наименование СЭМД" not in query
 
 
 def test_document_views_choose_latest_journal_entry_before_status_priority() -> None:
@@ -171,7 +268,11 @@ def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
 
     quality = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     quality_queries = _native_queries(quality)
-    assert any('"Статус" IN (\'success\', \'error\')' in q and "Тип СЭМД (код · НСИ)" in q for q in quality_queries)
+    assert any(
+        '"Статус (код)" IN (\'success\', \'async_error\', \'network_error\')' in q
+        and "Тип СЭМД (код · НСИ)" in q
+        for q in quality_queries
+    )
 
     client_service = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     service_queries = _native_queries(client_service)

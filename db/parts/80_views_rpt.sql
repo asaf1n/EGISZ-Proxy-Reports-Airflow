@@ -6,50 +6,6 @@
 -- CREATE OR REPLACE, ALTER ... IF EXISTS).
 -- ============================================================================
 
--- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
--- Unnest'ит составной error_type (разделитель ' · ') → одна строка = один вид ошибки.
--- Сетевые и асинхронные ошибки — из v_egisz_documents_enriched_ui (document-grain facts).
-CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
-WITH remd_errors AS (
-    SELECT
-        d."Обработано IPS",
-        d."День (тренд)",
-        d."Документ (ключ учёта)",
-        d."JID клиники",
-        d."Код СЭМД",
-        d."Тип СЭМД (код · НСИ)",
-        trim(err_item)                                                                AS "Тип ошибки"
-    FROM public.v_egisz_documents_enriched_ui d
-    CROSS JOIN LATERAL unnest(
-        string_to_array(
-            COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
-            ' · '
-        )
-    ) AS err_item
-    WHERE d."Статус" = 'error'
-      -- после §1 error_type пуст для pending/unknown → этот фильтр осмыслен;
-      -- защищает от пустых корзин 'Неизвестная ошибка' в карточках 04 дашборда.
-      AND d."Тип ошибки" IS NOT NULL
-      AND d."Документ (ключ учёта)" IS NOT NULL
-      AND trim(d."Тип ошибки") <> ''
-      AND trim(err_item) <> ''
-)
-SELECT
-    "Обработано IPS",
-    "День (тренд)",
-    "Документ (ключ учёта)",
-    "JID клиники",
-    "Код СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "Тип ошибки",
-    public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
-FROM remd_errors;
-
-COMMENT ON VIEW public.v_rpt_error_category_breakdown_ui IS
-'Разбивка ошибок EGISZ-прокси: один ряд = один вид ошибки на документ.
-Источник — v_egisz_documents_enriched_ui (async_error и network_error → «Статус»=error).
-Используется картой «Категории ошибок» и «Ошибки по типу».';
-
 CREATE OR REPLACE VIEW public.v_rpt_network_errors_detail_ui AS
 SELECT
     COALESCE(d.last_callback_at, d.sent_at, d.updated_at) AS "Дата создания документа",
@@ -115,7 +71,7 @@ SELECT
             NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
             NULLIF(TRIM("Код СЭМД"), '')
         )
-        WHEN "Статус" IN ('error', 'unknown')
+        WHEN "Статус (код)" IN ('async_error', 'network_error')
         THEN 'Документ с ошибкой и не определён код'
         ELSE 'Документ без кода СЭМД'
     END AS "СЭМД (архив)",
@@ -132,9 +88,10 @@ SELECT
     "localUid СЭМД",
     "Связанное сообщение",
     "Рег. номер РЭМД (emdrid)" AS "Рег. номер РЭМД",
-    -- waiting (документ отправлен, финального callback ещё нет) показываем как «В обработке»;
-    -- технические success/error сохраняются для фильтров и WHERE-логики карточек.
-    CASE WHEN "Статус" = 'waiting' THEN 'В обработке' ELSE "Статус" END AS "Статус",
+    -- Единая нотификация: в колонке «Статус» во всех таблицах/графиках — адаптированный
+    -- русский текст (4 значения). «Статус (код)» — машинный код для WHERE/FILTER карточек.
+    "Статус (отчёт)" AS "Статус",
+    "Статус (код)",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
     "MSGID обмена",
@@ -154,8 +111,8 @@ ranked AS (
                 NULLIF("LOGID журнала EXCHANGELOG", '')::bigint DESC NULLS LAST,
                 "Дата обработки" DESC NULLS LAST,
                 CASE
-                    WHEN "Статус" = 'success' THEN 0
-                    WHEN "Статус" = 'error' THEN 1
+                    WHEN "Статус (код)" = 'success' THEN 0
+                    WHEN "Статус (код)" IN ('async_error', 'network_error') THEN 1
                     ELSE 2
                 END,
                 "MSGID обмена" DESC NULLS LAST
@@ -180,6 +137,7 @@ SELECT
     "Связанное сообщение",
     "Рег. номер РЭМД",
     "Статус",
+    "Статус (код)",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
     "MSGID обмена",
@@ -192,6 +150,83 @@ WHERE rn = 1;
 
 COMMENT ON VIEW public.v_rpt_documents_ui IS
 'Единая документная витрина: одна актуальная строка на "Документ (ключ учёта)". Документы без localUid не попадают в fact_egisz_documents на этапе transform (getDocumentFile). Очередь без ответа — v_rpt_documents_no_response_ui (дашборд 03).';
+
+-- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
+-- Unnest'ит составной error_type (разделитель ' · ') → одна строка = один вид ошибки.
+CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
+WITH remd_errors AS (
+    SELECT
+        d."Дата обработки" AS "Обработано IPS",
+        d."День (тренд)",
+        d."Документ (ключ учёта)",
+        d."JID клиники",
+        d."Код СЭМД",
+        d."Тип СЭМД (код · НСИ)",
+        trim(err_item)                                                                AS "Тип ошибки"
+    FROM public.v_rpt_documents_ui d
+    CROSS JOIN LATERAL unnest(
+        string_to_array(
+            COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
+            ' · '
+        )
+    ) AS err_item
+    WHERE d."Статус (код)" IN ('async_error', 'network_error')
+      AND d."Тип ошибки" IS NOT NULL
+      AND d."Документ (ключ учёта)" IS NOT NULL
+      AND trim(d."Тип ошибки") <> ''
+      AND trim(err_item) <> ''
+)
+SELECT
+    "Обработано IPS",
+    "День (тренд)",
+    "Документ (ключ учёта)",
+    "JID клиники",
+    "Код СЭМД",
+    "Тип СЭМД (код · НСИ)",
+    "Тип ошибки",
+    public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
+FROM remd_errors;
+
+COMMENT ON VIEW public.v_rpt_error_category_breakdown_ui IS
+'Разбивка ошибок EGISZ-прокси: один ряд = один вид ошибки на документ.
+Источник — v_rpt_documents_ui («Статус (код)» async_error / network_error).
+Используется картой «Категории ошибок» и «Ошибки по типу».';
+
+CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
+SELECT
+    "Дата обработки" AS "Обработано IPS",
+    "День (тренд)",
+    "LOGID журнала EXCHANGELOG",
+    "Документ (ключ учёта)",
+    "localUid СЭМД",
+    "Рег. номер РЭМД" AS "Рег. номер РЭМД (emdrid)",
+    "Связанное сообщение",
+    "JID клиники",
+    "Тип СЭМД (код · НСИ)",
+    "Статус",
+    CASE
+        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
+        WHEN "Статус (код)" IN ('async_error', 'network_error')
+        THEN COALESCE(NULLIF("Исходный текст ошибки", ''), '(нет текста)')
+        ELSE ''
+    END AS "Исходный текст ошибки",
+    CASE
+        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
+        WHEN "Статус (код)" IN ('async_error', 'network_error')
+        THEN COALESCE(NULLIF("Сводка ошибки", ''), 'Неизвестная ошибка')
+        ELSE ''
+    END AS "Интерпретация ошибки",
+    CASE
+        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
+        WHEN "Статус (код)" IN ('async_error', 'network_error') THEN "Тип ошибки"
+        ELSE ''
+    END AS "Тип ошибки",
+    CASE
+        WHEN "Статус (код)" IN ('async_error', 'network_error') THEN 1::bigint
+        ELSE NULL::bigint
+    END AS "Порядок ошибки"
+FROM public.v_rpt_documents_ui
+WHERE "Статус (код)" IN ('success', 'async_error', 'network_error');
 
 CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
 SELECT
@@ -212,6 +247,7 @@ SELECT
     "Связанное сообщение",
     "Рег. номер РЭМД",
     "Статус",
+    "Статус (код)",
     "Тип ошибки",
     "LOGID журнала EXCHANGELOG",
     "MSGID обмена",
@@ -273,24 +309,17 @@ WITH fact_source AS (
         NULLIF(f."Документ (ключ учёта)", '') AS document_key,
         NULLIF(f."Код СЭМД", '') AS semd_code,
         COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
+        f."Статус (код)" AS status_code,
+        f."Статус (отчёт)" AS status_label,
         CASE
-            WHEN f."Статус" = 'success' THEN 'success'
-            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'network_error'
-            ELSE 'async_error'
-        END AS status_code,
-        CASE
-            WHEN f."Статус" = 'success' THEN 'Успешный ответ'
-            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 'Ошибка связи'
-            ELSE 'Ошибка асинхронного ответа'
-        END AS status_label,
-        CASE
-            WHEN f."Статус" = 'success' THEN 1
-            WHEN f."Статус" = 'error' AND f."Тип ошибки" = 'Сетевая ошибка' THEN 3
-            ELSE 2
+            WHEN f."Статус (код)" = 'success' THEN 1
+            WHEN f."Статус (код)" = 'async_error' THEN 2
+            WHEN f."Статус (код)" = 'network_error' THEN 3
+            ELSE 4
         END AS status_sort,
         COALESCE(NULLIF(f."Сводка ошибки", ''), NULLIF(f."Исходный текст ошибки", ''), '(ошибка без текста)') AS error_text,
         CASE
-            WHEN f."Статус" = 'success'
+            WHEN f."Статус (код)" = 'success'
              AND f."Создание СЭМД" IS NOT NULL
              AND f."Обработано IPS" >= f."Создание СЭМД"
             THEN ROUND(EXTRACT(EPOCH FROM (f."Обработано IPS" - f."Создание СЭМД"))::numeric, 0)
@@ -302,8 +331,10 @@ WITH fact_source AS (
         f.patient_hash,
         f.doctor_hash
     FROM public.v_egisz_documents_enriched_ui f
-    WHERE f."Статус" IN ('success', 'error')
-      AND NULLIF(f."Документ (ключ учёта)", '') IS NOT NULL
+    -- Единый документный универсум: включаем «В обработке» (waiting), чтобы итог
+    -- «всего документов» в клиентских дашбордах совпадал с операционным. Доли успеха/
+    -- ошибок в карточках считаются по финализированным (success/async_error/network_error).
+    WHERE NULLIF(f."Документ (ключ учёта)", '') IS NOT NULL
 ),
 source_rows AS (
     SELECT * FROM fact_source

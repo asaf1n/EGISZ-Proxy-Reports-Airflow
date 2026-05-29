@@ -94,8 +94,8 @@
       }
     },
     {
-      "name": "07 · Успешный ответ",
-      "description": "Документы с финальным статусом «Успешный ответ» + конверсия от финальных ответов.",
+      "name": "07 · Успешно зарегистрирован",
+      "description": "Документы с финальным статусом «Успешно зарегистрирован» + конверсия от финальных ответов.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -145,12 +145,12 @@
       }
     },
     {
-      "name": "07 · Ошибка асинхронного ответа",
+      "name": "07 · Ошибка асинхронного ответа РЭМД",
       "description": "Документы с ошибкой регистрации в РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -201,7 +201,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error') / NULLIF(COUNT(DISTINCT document_key), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -248,7 +248,7 @@
     },
     {
       "name": "07 · Динамика статусов по дням",
-      "description": "Stacked bar: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи по дням.",
+      "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке по дням.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -420,7 +420,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key), 0), 1) AS \"% успеха\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",

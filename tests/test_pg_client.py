@@ -229,9 +229,9 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "THEN 'success'" in sql
     assert "THEN 'sent'" not in sql
     assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql
-    assert "WHEN d.status = 'success' THEN 'Успешный ответ'" in sql
+    assert "WHEN d.status = 'success' THEN 'Успешно зарегистрирован'" in sql
     assert "WHEN d.status = 'network_error' THEN 'Ошибка связи'" in sql
-    assert "WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа'" in sql
+    assert "WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа РЭМД'" in sql
     assert "WHERE e.final_status IN ('success', 'error')" in sql
     assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in sql
     assert "outbound_ref.document_key" not in sql

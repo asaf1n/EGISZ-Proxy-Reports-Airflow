@@ -391,11 +391,11 @@
     },
     {
       "name": "Статусы за период",
-      "description": "По документной витрине распознанных СЭМД: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи. Документы без callback вынесены в дашборд 03.",
+      "description": "Единая нотификация статуса документа (4 значения): Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке. Сумма долей = общему числу документов за период (тот же универсум, что у счётчиков «всего документов»). Очередь «В обработке» детализируется на дашборде 03.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
+          "query": "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -449,16 +449,16 @@
         "graph.x_axis.axis_enabled": "rotate-45",
         "pie.rows": [
           {
-            "key": "Успешный ответ",
-            "name": "Успешный ответ",
-            "originalName": "Успешный ответ",
+            "key": "Успешно зарегистрирован",
+            "name": "Успешно зарегистрирован",
+            "originalName": "Успешно зарегистрирован",
             "color": "#84BB4C",
             "enabled": true
           },
           {
-            "key": "Ошибка асинхронного ответа",
-            "name": "Ошибка асинхронного ответа",
-            "originalName": "Ошибка асинхронного ответа",
+            "key": "Ошибка асинхронного ответа РЭМД",
+            "name": "Ошибка асинхронного ответа РЭМД",
+            "originalName": "Ошибка асинхронного ответа РЭМД",
             "color": "#A989C5",
             "enabled": true
           },
@@ -467,6 +467,13 @@
             "name": "Ошибка связи",
             "originalName": "Ошибка связи",
             "color": "#F2994A",
+            "enabled": true
+          },
+          {
+            "key": "В обработке",
+            "name": "В обработке",
+            "originalName": "В обработке",
+            "color": "#509EE3",
             "enabled": true
           }
         ],
@@ -514,7 +521,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT \"Тип СЭМД (код · НСИ)\" AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT \"Тип СЭМД (код · НСИ)\" AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -601,7 +608,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус\" = 'error' AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -684,7 +691,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_kind, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Статус\" = 'error' ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), with_err AS ( SELECT f.*, COALESCE(fe.err_kind, NULLIF(f.\"Тип ошибки\", ''), NULLIF(f.\"Сводка ошибки\", ''), CASE WHEN f.\"Статус\" = 'success' THEN '(успешно)' ELSE NULL END) AS err_kind, fe.json_error_text FROM filtered f LEFT JOIN first_err fe ON fe.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') > 0 AND NULLIF(TRIM(err_kind), '') IS NOT NULL ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_kind, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Порядок ошибки\" IS NOT NULL ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), with_err AS ( SELECT f.*, COALESCE(fe.err_kind, NULLIF(f.\"Тип ошибки\", ''), NULLIF(f.\"Сводка ошибки\", ''), CASE WHEN f.\"Статус (код)\" = 'success' THEN '(успешно)' ELSE NULL END) AS err_kind, fe.json_error_text FROM filtered f LEFT JOIN first_err fe ON fe.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 AND NULLIF(TRIM(err_kind), '') IS NOT NULL ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -828,7 +835,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -971,7 +978,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"День (тренд)\" AS \"Дата\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE \"Статус\" IN ('success', 'error') [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 1 ASC",
+          "query": "SELECT \"День (тренд)\" AS \"Дата\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

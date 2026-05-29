@@ -20,12 +20,18 @@ SELECT
         WHEN d.status IN ('async_error', 'network_error') THEN 'error'
         ELSE 'waiting'
     END AS "Статус",
+    -- Единая нотификация статуса документа для всех карточек (4 значения).
+    -- «Статус (код)» (см. ниже) — машинный код для фильтров/агрегаций.
     CASE
-        WHEN d.status = 'success' THEN 'Успешный ответ'
+        WHEN d.status = 'success' THEN 'Успешно зарегистрирован'
         WHEN d.status = 'network_error' THEN 'Ошибка связи'
-        WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа'
+        WHEN d.status = 'async_error' THEN 'Ошибка асинхронного ответа РЭМД'
         ELSE 'В обработке'
     END AS "Статус (отчёт)",
+    CASE
+        WHEN d.status IN ('success', 'async_error', 'network_error', 'waiting') THEN d.status
+        ELSE 'waiting'
+    END AS "Статус (код)",
     CASE
         WHEN d.status = 'network_error' THEN 'Сетевая ошибка'
         WHEN d.status = 'async_error' THEN d.error_type
@@ -135,34 +141,3 @@ CREATE INDEX ON public.v_egisz_documents_daily_ui (day);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (jid);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (semd_code);
 CREATE INDEX ON public.v_egisz_documents_daily_ui (status);
-
-CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
-SELECT
-    "Обработано IPS",
-    "День (тренд)",
-    "LOGID журнала EXCHANGELOG",
-    "Документ (ключ учёта)",
-    "localUid СЭМД",
-    "Рег. номер РЭМД (emdrid)",
-    "Связанное сообщение",
-    "JID клиники",
-    "Тип СЭМД (код · НСИ)",
-    "Статус",
-    CASE
-        WHEN "Статус" = 'success' THEN 'Успешный ответ'
-        WHEN "Статус" = 'error' THEN COALESCE(NULLIF("Исходный текст ошибки", ''), '(нет текста)')
-        ELSE ''
-    END AS "Исходный текст ошибки",
-    CASE
-        WHEN "Статус" = 'success' THEN 'Успешный ответ'
-        WHEN "Статус" = 'error' THEN COALESCE(NULLIF("Сводка ошибки", ''), 'Неизвестная ошибка')
-        ELSE ''
-    END AS "Интерпретация ошибки",
-    CASE
-        WHEN "Статус" = 'success' THEN 'Успешный ответ'
-        WHEN "Статус" = 'error' THEN "Тип ошибки"
-        ELSE ''
-    END AS "Тип ошибки",
-    CASE WHEN "Статус" = 'error' THEN 1::bigint ELSE NULL::bigint END AS "Порядок ошибки"
-FROM public.v_egisz_documents_enriched_ui
-WHERE "Статус" IN ('success', 'error');

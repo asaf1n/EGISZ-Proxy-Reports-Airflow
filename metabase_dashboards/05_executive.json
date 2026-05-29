@@ -98,11 +98,11 @@
     },
     {
       "name": "05 · % успеха",
-      "description": "Доля документов со статусом «Успешный ответ»: success / (success + error).",
+      "description": "Доля документов со статусом «Успешно зарегистрирован»: success / (success + ошибки), без «В обработке».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -140,7 +140,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -382,7 +382,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error'))::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error'))::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
           "template-tags": {}
         },
         "database": 1
@@ -410,11 +410,11 @@
     },
     {
       "name": "05 · Распределение статусов по месяцам",
-      "description": "Stacked bar за 12 месяцев: Успешный ответ / Ошибка асинхронного ответа / Ошибка связи.",
+      "description": "Stacked bar за 12 месяцев: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", CASE WHEN \"Статус\" = 'success' THEN 'Успешный ответ' WHEN \"Статус\" = 'error' AND \"Тип ошибки\" = 'Сетевая ошибка' THEN 'Ошибка связи' WHEN \"Статус\" = 'error' THEN 'Ошибка асинхронного ответа' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
+          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
           "template-tags": {}
         },
         "database": 1
@@ -451,7 +451,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -515,7 +515,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" IN ('success', 'error'))::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус\" = 'error')::bigint AS errs FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
+          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error'))::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",

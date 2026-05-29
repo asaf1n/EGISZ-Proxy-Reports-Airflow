@@ -593,6 +593,23 @@ BEGIN
         doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.fact_egisz_documents.doctor_hash),
         updated_at = now();
 
+    -- Колбэк может прийти без KIND в XML, а тип СЭМД уже известен из getDocumentFile (gdf).
+    UPDATE public.fact_egisz_documents d
+    SET
+        semd_code = src.semd_code,
+        updated_at = now()
+    FROM (
+        SELECT DISTINCT ON (t.document_key)
+            t.document_key,
+            public.egisz_normalize_semd_code(t.semd_code) AS semd_code
+        FROM public.fact_egisz_transactions t
+        WHERE t.document_key IS NOT NULL
+          AND NULLIF(btrim(t.semd_code), '') IS NOT NULL
+        ORDER BY t.document_key, t.log_date DESC NULLS LAST, t.exchangelog_log_id DESC
+    ) src
+    WHERE d.document_key = src.document_key
+      AND NULLIF(btrim(d.semd_code), '') IS NULL;
+
     -- Инкрементальное сопровождение обогащённой витрины: пересобираем строки только по
     -- document_key, реально изменённым в этой транзакции (updated_at = now()), вместо
     -- полного REFRESH MATERIALIZED VIEW каждые 5 минут — стоимость O(батч), а не O(архив).

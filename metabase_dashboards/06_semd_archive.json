@@ -1,7 +1,7 @@
 {
   "name": "06 Архив СЭМД",
   "width": "full",
-  "description": "Библиотека документов СЭМД. **Терминология:** **СЭМД** — структурированный меддокумент; идентификаторы в обмене — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** в XML — коррелятор «запрос ↔ колбэк» (**«Связанное сообщение»** в таблицах), не подменяет UID СЭМД. Архив показывает распознанные документы с callback-статусом; очередь без callback вынесена в дашборд 03. пустой код СЭМД квалифицируется в колонке **«СЭМД (архив)»**. Field filter `dwh_date` по **«Дата обработки»**.",
+  "description": "Библиотека документов СЭМД. **Терминология:** **СЭМД** — структурированный меддокумент; идентификаторы в обмене — **localUid** / **DOCUMENTID**, **emdrId**; **relatesToMessage** в XML — коррелятор «запрос ↔ колбэк» (**«Связанное сообщение»** в таблицах), не подменяет UID СЭМД. Единый документный универсум (4 статуса) — `v_rpt_semd_archive_ui`; счётчики и срезы (топы, по дням) считают один и тот же COUNT(DISTINCT «Документ (ключ учёта)»). Пустой код СЭМД — в колонке **«СЭМД (архив)»**. Field filter `dwh_date` по **«Дата обработки»**.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -63,7 +63,7 @@
   "cards": [
     {
       "name": "06 · Всего документов",
-      "description": "Общее количество уникальных документов в архиве за выбранный период.",
+      "description": "Общее количество уникальных документов в архиве за выбранный период (все 4 статуса; тот же универсум, что у топов и графика по дням).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -125,11 +125,11 @@
     },
     {
       "name": "06 · Топ по типу СЭМД",
-      "description": "Топ-8 типов СЭМД по количеству документов.",
+      "description": "Топ-8 типов СЭМД по количеству документов. Тот же документный универсум, что у «Всего документов» (включая документы без кода НСИ — в срезе «СЭМД (архив)»).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(без кода)') AS \"СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 8",
+          "query": "WITH per_semd AS ( SELECT \"СЭМД (архив)\" AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_semd ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -198,7 +198,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), \"JID клиники\", '(без JID)') AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 8",
+          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), \"JID клиники\", '(без JID)') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
