@@ -116,8 +116,7 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 
 ```text
 sync_dimensions
-  -> extract_cursor_batches
-  -> load_to_dwh
+  -> extract_and_load_batch
   -> analyze_staging
   -> transform_data
   -> refresh_materialized_views
@@ -127,23 +126,23 @@ sync_dimensions
 | Задача | Результат |
 |---|---|
 | `sync_dimensions` | Обновляет `dim_organizations` и `dim_licenses` из Firebird. |
-| `extract_cursor_batches` | Забирает курсорную партию `EXCHANGELOG` по `LOGID`. Бизнес-события ЭМД и callback'и читаются из XML в `EXCHANGELOG.msgtext` / `logtext`. |
-| `load_to_dwh` | Выполняет UPSERT журнальных payload'ов в `exchangelog_raw`. |
+| `extract_and_load_batch` | Keyset-выборка `EXCHANGELOG` по `LOGID` из Firebird и сразу UPSERT в `exchangelog_raw` в одном таске (payload не уходит в XCom). |
 | `analyze_staging` | Обновляет статистику PostgreSQL для `exchangelog_raw` после загрузки. |
 | `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`, заполняет центральный факт `fact_egisz_documents`, lineage-таблицу `fact_egisz_transactions` и инкрементально сопровождает витрину `v_egisz_documents_enriched_ui` по затронутым `document_key`. |
 | `refresh_materialized_views` | Обновляет дневной rollup `v_egisz_documents_daily_ui`, затем запускает `ANALYZE`. Обогащённая витрина `v_egisz_documents_enriched_ui` сопровождается инкрементально в `transform_data`, а не полным REFRESH. |
 | `update_watermark` | Продвигает `last_logid` в `elt_state` через `GREATEST(current, new)`. |
 
-XCom-контракт между задачами:
+XCom-контракт между задачами (только метаданные батча, без строк журнала):
 
 ```python
 {
     "count": int,
     "last_logid": int,
     "cursor_logid": int,
-    "rows": list[dict],
 }
 ```
+
+Опционально после `transform_data`: `"transformed": int`. Полезная нагрузка `EXCHANGELOG` (включая `logtext`/`msgtext`) остаётся в памяти таска `extract_and_load_batch` и не сериализуется в metadata-БД Airflow.
 
 ## DWH-модель
 

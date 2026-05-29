@@ -97,7 +97,7 @@ def fetch_exchangelog_after_cursor(
     limit: int,
     created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch a JSON-serializable EXCHANGELOG batch for Airflow XComs."""
+    """Fetch an EXCHANGELOG batch for in-process E+L load (not for XCom)."""
     if limit <= 0:
         return []
 

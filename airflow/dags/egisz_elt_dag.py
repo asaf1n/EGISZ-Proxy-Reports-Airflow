@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import NotRequired, TypedDict
 
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
@@ -30,6 +30,16 @@ BATCH_SIZE = 3000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 SOURCE_MIN_CREATED_AT = datetime(2026, 5, 18)
+
+
+class BatchMetadata(TypedDict):
+    count: int
+    last_logid: int
+    cursor_logid: int
+
+
+class PipelineBatchInfo(BatchMetadata, total=False):
+    transformed: int
 
 
 def _dwh_connection():
@@ -74,64 +84,53 @@ def egisz_elt_pipeline() -> None:
             pg_conn.close()
 
     @task
-    def extract_cursor_batches() -> dict[str, Any]:
+    def extract_and_load_batch() -> BatchMetadata:
         pg_conn = _dwh_connection()
         try:
             cursor_state = get_cursors(pg_conn, PIPELINE)
-        finally:
-            pg_conn.close()
+            last_logid = int(cursor_state.get("last_logid", 0))
 
-        last_logid = int(cursor_state.get("last_logid", 0))
+            fb_conn = _proxy_connection()
+            try:
+                started_at = time.monotonic()
+                log_rows = fetch_exchangelog_after_cursor(
+                    fb_conn,
+                    after_logid=last_logid,
+                    limit=BATCH_SIZE,
+                    created_from=SOURCE_MIN_CREATED_AT,
+                )
+                log.info(
+                    "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
+                    len(log_rows),
+                    last_logid,
+                    time.monotonic() - started_at,
+                )
+                cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_logid)
+            finally:
+                fb_conn.close()
 
-        fb_conn = _proxy_connection()
-        try:
-            started_at = time.monotonic()
-            log_rows = fetch_exchangelog_after_cursor(
-                fb_conn,
-                after_logid=last_logid,
-                limit=BATCH_SIZE,
-                created_from=SOURCE_MIN_CREATED_AT,
-            )
+            if log_rows:
+                load_raw_logs(pg_conn, log_rows)
+                log.info(
+                    "Loaded %s EXCHANGELOG row(s) into exchangelog_raw.",
+                    len(log_rows),
+                )
+
             log.info(
-                "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
+                "Extract+load complete: %s row(s), next LOGID cursor=%s.",
                 len(log_rows),
-                last_logid,
-                time.monotonic() - started_at,
+                cursor_logid,
             )
-            cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_logid)
-        finally:
-            fb_conn.close()
-
-        log.info(
-            "Extracted %s EXCHANGELOG row(s), next LOGID cursor=%s.",
-            len(log_rows),
-            cursor_logid,
-        )
-        return {
-            "count": len(log_rows),
-            "last_logid": last_logid,
-            "cursor_logid": cursor_logid,
-            "rows": log_rows,
-        }
-
-    @task
-    def load_to_dwh(extraction_result: dict[str, Any]) -> dict[str, Any]:
-        if extraction_result["count"] <= 0:
-            return extraction_result
-
-        pg_conn = _dwh_connection()
-        try:
-            load_raw_logs(pg_conn, extraction_result["rows"])
-            log.info(
-                "Loaded %s EXCHANGELOG row(s) into exchangelog_raw.",
-                extraction_result["count"],
-            )
+            return {
+                "count": len(log_rows),
+                "last_logid": last_logid,
+                "cursor_logid": cursor_logid,
+            }
         finally:
             pg_conn.close()
-        return extraction_result
 
     @task
-    def analyze_staging(load_info: dict[str, Any]) -> dict[str, Any]:
+    def analyze_staging(load_info: BatchMetadata) -> BatchMetadata:
         """Освежает planner-статистику для raw-таблиц после bulk-загрузки.
 
         Без этого PostgreSQL planner использует pg_class.reltuples=0 после первичного
@@ -157,7 +156,7 @@ def egisz_elt_pipeline() -> None:
         return load_info
 
     @task
-    def transform_data(load_info: dict[str, Any]) -> dict[str, Any]:
+    def transform_data(load_info: BatchMetadata) -> PipelineBatchInfo:
         if int(load_info.get("cursor_logid", 0)) <= int(load_info.get("last_logid", 0)):
             return {**load_info, "transformed": 0}
 
@@ -179,7 +178,7 @@ def egisz_elt_pipeline() -> None:
         return {**load_info, "transformed": transformed}
 
     @task
-    def refresh_materialized_views(load_info: dict[str, Any]) -> dict[str, Any]:
+    def refresh_materialized_views(load_info: PipelineBatchInfo) -> PipelineBatchInfo:
         if load_info.get("transformed", 0) <= 0:
             log.info("Skipping MV refresh: transform produced 0 rows.")
             return load_info
@@ -201,7 +200,7 @@ def egisz_elt_pipeline() -> None:
         return load_info
 
     @task
-    def update_watermark(load_info: dict[str, Any]) -> None:
+    def update_watermark(load_info: BatchMetadata) -> None:
         cursor_logid = int(load_info.get("cursor_logid", 0))
         if cursor_logid <= int(load_info.get("last_logid", 0)):
             return
@@ -218,14 +217,13 @@ def egisz_elt_pipeline() -> None:
             pg_conn.close()
 
     dimensions = sync_dimensions()
-    extraction = extract_cursor_batches()
-    loading = load_to_dwh(extraction)
-    analyzed = analyze_staging(loading)
+    loaded = extract_and_load_batch()
+    analyzed = analyze_staging(loaded)
     transformed = transform_data(analyzed)
     refreshed = refresh_materialized_views(transformed)
     watermark = update_watermark(refreshed)
 
-    dimensions >> extraction >> loading >> analyzed >> transformed >> refreshed >> watermark
+    dimensions >> loaded >> analyzed >> transformed >> refreshed >> watermark
 
 
 egisz_elt_pipeline()
