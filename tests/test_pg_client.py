@@ -149,12 +149,15 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "SET oid = code" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_local_uid_norm" in sql
-    assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_document_id_norm" in sql
+    # DOCUMENTID-парсинг снят вместе с EGISZ_MESSAGES: индекс и реквизит должны быть удалены.
+    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm" in sql
+    assert "DOCUMENTID" not in sql
     assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_message_id_norm" in sql
     assert "candidate_log_ids AS" in sql
     assert "public.egisz_xml_text(r.msgtext, 'KIND') AS kind_xml" in sql
     assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'localUid')) AS local_uid_xml" in sql
-    assert "public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'DOCUMENTID')) AS document_id_xml" in sql
+    # Канонический ключ — всегда lower(localUid), без fallback на DOCUMENTID/emdrId.
+    assert "public.egisz_document_key(public.egisz_xml_text(r.msgtext, 'localUid')) AS document_key_xml" in sql
     assert "COALESCE(r.local_uid_xml, exch_ref.local_uid, gdf_ref.local_uid) AS local_uid_semd" in transform_sql
     assert "public.egisz_clean_text_value(d.local_uid)" in sql
     assert "status_category = CASE" in sql
@@ -225,7 +228,11 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     sql = _read_dwh_init_sql()
     transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
 
-    assert "Прокси не отдаёт отдельный статус для синхронного приёма" in sql
+    # Синхронный RegisterDocumentResponse = только приём запроса (pending);
+    # регистрация подтверждается асинхронным callback'ом.
+    assert "приём запроса РЭМД, а не регистрацию документа" in sql
+    assert "public.egisz_xml_text(p_msgtext, 'documentStatus') ~* 'зарегистр'" in sql
+    assert "'RegisterDocumentResponse'" in sql
     assert "THEN 'success'" in sql
     assert "THEN 'sent'" not in sql
     assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql

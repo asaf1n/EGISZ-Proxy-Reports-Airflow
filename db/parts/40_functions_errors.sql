@@ -307,11 +307,6 @@ AS $$
     SELECT COALESCE(NULLIF(types, ''), 'Неизвестная ошибка') FROM aggregated;
 $$;
 
--- Старая функция-бакетатор egisz_error_group_type убрана: десятка bucket-категорий
--- заменена плоской таксономией (см. egisz_error_classify). Возможные внешние
--- ссылки на неё уже переписаны в этом же файле.
-DROP FUNCTION IF EXISTS public.egisz_error_group_type(text, text);
-
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_row(p_errors jsonb)
 RETURNS text
 LANGUAGE sql

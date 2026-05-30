@@ -135,7 +135,7 @@ def egisz_elt_pipeline() -> None:
 
         Без этого PostgreSQL planner использует pg_class.reltuples=0 после первичного
         COPY и выбирает seq-scan по exchangelog_raw даже когда функциональные индексы
-        (msgid_norm, document_id_norm) уже существуют.
+        (msgid_norm, local_uid_norm) уже существуют.
         Autovacuum не запустит ANALYZE, пока не накопится достаточно изменений после
         bulk-загрузки — на спокойном пайплайне это могут быть дни, и к тому моменту
         запросы Metabase уже виснут на 8-16 минут. Свежий ANALYZE на каждом батче

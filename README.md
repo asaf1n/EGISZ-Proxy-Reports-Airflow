@@ -47,9 +47,9 @@
 
 **СЭМД** — структурированный электронный медицинский документ: выписной эпикриз, протокол, направление, заключение и другие типы медицинских документов.
 
-Обмен с РЭМД асинхронный. МИС формирует CDA-документ, подписывает его, отправляет через интеграционный шлюз и получает технический ответ о приёме. Аналитические статусы строятся по итоговым записям: документ зарегистрирован и получил `emdrId`, отклонён с ошибками регистрации или не дошёл из-за ошибки связи.
+Обмен с РЭМД асинхронный. МИС формирует CDA-документ, подписывает его, отправляет через интеграционный шлюз методом `RegisterDocument`. На запрос приходит **синхронный** SOAP-ответ `RegisterDocumentResponse` со `<status>success</status>` — он подтверждает только приём запроса РЭМД (валидный синтаксис), но **не регистрацию документа**. Регистрация подтверждается отдельным **асинхронным** callback'ом `registerDocumentResult` со `<documentStatus>Зарегистрировано</documentStatus>` (или `<status>OK</status>`) и присвоенным `emdrId`. Аналитические статусы строятся по итоговым записям: документ зарегистрирован и получил `emdrId`, отклонён с ошибками регистрации или не дошёл из-за ошибки связи; синхронный приём остаётся в статусе «в обработке» до асинхронного ответа.
 
-Одна бизнес-операция обычно представлена несколькими техническими сообщениями. Поэтому сервис восстанавливает цепочку обмена по нескольким идентификаторам: `messageId`, `relatesTo`, `relatesToMessage`, `localUid`, `DOCUMENTID`, `emdrId`, `MSGID`.
+Одна бизнес-операция обычно представлена несколькими техническими сообщениями. Поэтому сервис восстанавливает цепочку обмена по нескольким идентификаторам: `messageId`, `relatesTo`, `relatesToMessage`, `localUid`, `emdrId`, `MSGID`. Канонический ключ учёта документа — всегда `lower(localUid)`; `emdrId` (рег. номер РЭМД) и `OID` (код типа в справочнике НСИ / OID организации) — атрибуты, а не идентификатор экземпляра, и ключом документа быть не могут.
 
 ## Архитектура
 
@@ -114,7 +114,7 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 Последовательность задач:
 
 ```text
-sync_dimensions
+  -> sync_dimensions
   -> extract_and_load_batch
   -> analyze_staging
   -> transform_data
@@ -194,7 +194,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 | Статус (код) | Нотификация в колонке «Статус» | Значение |
 |---|---|---|
-| `success` | **Успешно зарегистрирован** | По документу получен `<ns2:status>` = success. |
+| `success` | **Успешно зарегистрирован** | Получен **асинхронный** callback регистрации: `<documentStatus>Зарегистрировано</documentStatus>` либо `<status>OK/success</status>` в `registerDocumentResult`. Синхронный `RegisterDocumentResponse` со `<status>success</status>` сюда **не** относится — он остаётся `waiting`. |
 | `async_error` | **Ошибка асинхронного ответа РЭМД** | По документу получен `<ns2:status>` = error — финальный отказ РЭМД в callback (`sendRegisterDocumentResult`). |
 | `network_error` | **Ошибка связи** | Последняя запись по идентифицируемому документу с `LOGSTATE = 3` (транспортная/сетевая ошибка канала). |
 | `waiting` | **В обработке** | Документ отправлен из МО в ЕГИСЗ и идентифицирован (клиника, тип СЭМД), но ответа или ошибки по нему ещё не было. |
@@ -209,11 +209,11 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 | Объект | Назначение |
 |---|---|
-| `dim_egisz_exchangelog_refs` | Одна строка на `LOGID`: ключ сообщения (`exchange_msgid_norm`) и реквизиты СЭМД (`local_uid`, `document_id`, `emdr_id`, `document_key`). |
-| `fact_egisz_documents` | Актуальное состояние документа; ключ учёта — `document_key` (обычно `lower(localUid)`). |
+| `dim_egisz_exchangelog_refs` | Одна строка на `LOGID`: ключ сообщения (`exchange_msgid_norm`) и реквизиты СЭМД (`local_uid`, `emdr_id`, `document_key`). |
+| `fact_egisz_documents` | Актуальное состояние документа; ключ учёта — `document_key` (всегда `lower(localUid)`). Колбэк без `localUid` не создаёт новый ключ, а обновляет существующую строку (резолв по `relatesToMessage` / `emdrId`). |
 | `fact_egisz_transactions` | Lineage событий: одна строка на callback/ошибку в журнале; поле `message` — сырой текст события. |
 
-Колбэк без `localUid` сопоставляется с документом через `relatesToMessage` → sibling-сообщение в EXCHANGELOG с тем же `exchange_msgid_norm`, затем по `emdrId` или `DOCUMENTID`.
+Колбэк без `localUid` сопоставляется с документом через `relatesToMessage` → sibling-сообщение в EXCHANGELOG с тем же `exchange_msgid_norm`, затем по `emdrId`. OID при этом не используется как ключ ни при каких условиях.
 
 ## Парсинг и классификация
 
@@ -397,8 +397,9 @@ db/dwh_erase.sql                   полная очистка DWH-схемы
 db/parts/*.sql                     модульная DWH-схема
 metabase_dashboards/*.json         дашборды Metabase
 metabase/setup-dashboards.sh       импорт дашбордов
-scripts/apply_metabase_field_filters.py
+scripts/apply_metabase_field_filters.py  настройка field-фильтров дашбордов
 scripts/audit_metabase_dashboards.py  проверка карточек и запросов Metabase
+scripts/export_dashboard.py        выгрузка дашборда из Metabase в JSON
 tests/                             pytest-тесты
 k8s/                               манифесты Airflow и Metabase
 up.ps1                             локальный запуск Kubernetes-стенда
@@ -420,7 +421,7 @@ up.ps1                             локальный запуск Kubernetes-с
 | `messageId` | Идентификатор SOAP/Ws-Addressing сообщения. |
 | `relatesTo` / `relatesToMessage` | Ссылка callback на исходное сообщение в цепочке EXCHANGELOG. |
 | `exchange_msgid_norm` | Нормализованный идентификатор сообщения в `dim_egisz_exchangelog_refs`. |
-| `document_key` | Ключ учёта документа в DWH (обычно `lower(localUid)`). |
+| `document_key` | Ключ учёта документа в DWH — всегда `lower(localUid)`; `emdrId` / `OID` ключом не являются. |
 | Watermark | Текущий курсор пайплайна по `LOGID` (`elt_state.last_logid`, продвигается через `GREATEST`). |
 | Raw layer | Временные staging-таблицы DWH с данными источника до предметной трансформации. |
 | Fact table | Таблица нормализованных транзакций обмена СЭМД. |

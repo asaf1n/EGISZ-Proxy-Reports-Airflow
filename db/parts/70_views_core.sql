@@ -69,7 +69,6 @@ SELECT
     lower(public.egisz_clean_text_value(d.local_uid)) AS "localUid СЭМД (канон)",
     d.emdr_id AS "Рег. номер РЭМД (emdrid)",
     d.emdr_id AS "Регистрационный номер РЭМД",
-    d.document_id AS "DOCUMENTID",
     d.error_text AS "Исходный текст ошибки",
     NULL::text AS patient_name_masked,
     NULL::text AS snils_masked,

@@ -4,8 +4,8 @@
 -- Loaded by db/dwh_init.sql via \i db/parts/75_views_stg.sql.
 -- ============================================================================
 
--- Совместимость с дашбордами 02/04: сетевые ошибки живут в fact_egisz_documents
--- (status=network_error), без отдельной fact_egisz_channel_errors.
+-- Источник для дашбордов 02/04: сетевые ошибки живут в fact_egisz_documents
+-- (status=network_error), отдельной таблицы канальных ошибок нет.
 CREATE OR REPLACE VIEW public.v_stg_channel_errors_by_document AS
 SELECT
     COALESCE(d.callback_log_id, d.source_logid) AS id,

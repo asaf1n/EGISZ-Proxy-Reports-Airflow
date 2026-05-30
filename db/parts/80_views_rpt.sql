@@ -13,7 +13,7 @@ SELECT
     d.message_id AS "MSGID обмена",
     d.document_key AS "Документ (ключ учёта)",
     d.relates_to_id AS "relatesToMessage (из текста журнала)",
-    d.local_uid AS "localUid / DOCUMENTID (из текста)",
+    d.local_uid AS "localUid (из текста)",
     d.emdr_id AS "emdrId (из текста)",
     public.egisz_clean_host(d.error_text) AS "Хост клиники (VPN ГОСТ)",
     d.jid::text AS "JID клиники",

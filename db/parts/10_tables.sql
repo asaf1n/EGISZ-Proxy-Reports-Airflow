@@ -9,63 +9,16 @@
 CREATE TABLE IF NOT EXISTS elt_state (
     pipeline text PRIMARY KEY,
     last_logid bigint DEFAULT 0,
+    source_min_created_at timestamptz,
     updated_at timestamptz DEFAULT now()
 );
 
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'elt_state'
-          AND column_name = 'last_log_id'
-    ) AND NOT EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'elt_state'
-          AND column_name = 'last_logid'
-    ) THEN
-        ALTER TABLE public.elt_state RENAME COLUMN last_log_id TO last_logid;
-    END IF;
-END
-$$;
-
-ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS last_logid bigint DEFAULT 0;
-ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS source_min_created_at timestamptz;
-ALTER TABLE elt_state DROP COLUMN IF EXISTS last_egmid;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'elt_state'
-          AND column_name = 'last_log_id'
-    ) THEN
-        EXECUTE 'UPDATE public.elt_state SET last_logid = GREATEST(COALESCE(last_logid, 0), COALESCE(last_log_id, 0))';
-        ALTER TABLE public.elt_state DROP COLUMN last_log_id;
-    END IF;
-END
-$$;
 
 INSERT INTO elt_state (pipeline, last_logid, source_min_created_at)
 VALUES ('egisz', 0, timestamptz '2026-05-18 00:00:00+00')
 ON CONFLICT (pipeline) DO UPDATE SET
     source_min_created_at = COALESCE(elt_state.source_min_created_at, EXCLUDED.source_min_created_at);
-
-DO $$
-BEGIN
-    IF to_regclass('public.exchangelog_raw') IS NULL AND to_regclass('public.egisz_raw') IS NOT NULL THEN
-        ALTER TABLE public.egisz_raw RENAME TO exchangelog_raw;
-    ELSIF to_regclass('public.exchangelog_raw') IS NULL AND to_regclass('public.exchangelog') IS NOT NULL THEN
-        ALTER TABLE public.exchangelog RENAME TO exchangelog_raw;
-    END IF;
-END
-$$;
 
 CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logid bigint PRIMARY KEY,
@@ -83,7 +36,6 @@ ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
 CREATE TABLE IF NOT EXISTS fact_egisz_documents (
     document_key text PRIMARY KEY,
     local_uid text,
-    document_id text,
     emdr_id text,
     semd_code text,
     status text,
@@ -108,7 +60,6 @@ CREATE TABLE IF NOT EXISTS fact_egisz_documents (
 );
 
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS local_uid text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS document_id text;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS semd_code text;
 ALTER TABLE fact_egisz_documents ALTER COLUMN semd_code DROP NOT NULL;
@@ -130,34 +81,7 @@ ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS first_sent_at timestam
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_status text;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS jid integer;
-ALTER TABLE fact_egisz_documents DROP COLUMN IF EXISTS first_egmid;
-ALTER TABLE fact_egisz_documents DROP COLUMN IF EXISTS last_egmid;
 ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-
--- Deprecated: сетевые ошибки пишутся в fact_egisz_documents (status=network_error).
--- Таблица оставлена для обратной совместимости существующих инсталляций; ELT в неё не пишет.
-CREATE TABLE IF NOT EXISTS fact_egisz_channel_errors (
-    id bigint PRIMARY KEY,
-    created_at timestamptz,
-    error_code text,
-    message text,
-    error_top_type text,
-    error_global_subcategory text,
-    error_group_label_ru text,
-    exchangelog_log_id bigint,
-    journal_msgid text,
-    relates_to_hint text,
-    local_uid_hint text,
-    emdr_id_hint text,
-    document_key text,
-    jid integer,
-    relates_to_id text,
-    updated_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE fact_egisz_channel_errors ADD COLUMN IF NOT EXISTS document_key text;
-ALTER TABLE fact_egisz_channel_errors ADD COLUMN IF NOT EXISTS jid integer;
-ALTER TABLE fact_egisz_channel_errors DROP COLUMN IF EXISTS egisz_messages_egmid;
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,
@@ -182,14 +106,14 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
 
 -- Индекс EXCHANGELOG: одна строка = одно сообщение журнала (logid).
 -- exchange_msgid_norm — ключ связи цепочки (relatesToMessage), не реквизит документа.
--- local_uid / document_id / emdr_id / document_key — реквизиты СЭМД, извлечённые из payload.
+-- local_uid / emdr_id / document_key — реквизиты СЭМД, извлечённые из payload.
+-- document_key канонический = lower(localUid); emdr_id — атрибут регистрации, не ключ.
 CREATE TABLE IF NOT EXISTS dim_egisz_exchangelog_refs (
     logid bigint PRIMARY KEY,
     created_at timestamptz,
     exchange_msgid text,
     exchange_msgid_norm text,
     local_uid text,
-    document_id text,
     emdr_id text,
     document_key text,
     updated_at timestamptz DEFAULT now()
@@ -198,44 +122,9 @@ CREATE TABLE IF NOT EXISTS dim_egisz_exchangelog_refs (
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS exchange_msgid text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS exchange_msgid_norm text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS local_uid text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_id text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_key text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'dim_egisz_exchangelog_refs'
-          AND column_name = 'msgid'
-    ) AND NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'dim_egisz_exchangelog_refs'
-          AND column_name = 'exchange_msgid'
-    ) THEN
-        ALTER TABLE public.dim_egisz_exchangelog_refs RENAME COLUMN msgid TO exchange_msgid;
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'dim_egisz_exchangelog_refs'
-          AND column_name = 'msgid_norm'
-    ) AND NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'dim_egisz_exchangelog_refs'
-          AND column_name = 'exchange_msgid_norm'
-    ) THEN
-        ALTER TABLE public.dim_egisz_exchangelog_refs RENAME COLUMN msgid_norm TO exchange_msgid_norm;
-    END IF;
-END $$;
-
-ALTER TABLE dim_egisz_exchangelog_refs DROP COLUMN IF EXISTS jid;
-ALTER TABLE dim_egisz_exchangelog_refs DROP COLUMN IF EXISTS msgid;
-ALTER TABLE dim_egisz_exchangelog_refs DROP COLUMN IF EXISTS msgid_norm;
 
 CREATE TABLE IF NOT EXISTS dim_semd_types (
     code text PRIMARY KEY,
@@ -251,22 +140,6 @@ CREATE TABLE IF NOT EXISTS dim_semd_types (
     version text,
     updated_at timestamptz DEFAULT now()
 );
-
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS type_code text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS level text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS format_code text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS start_date date;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS end_date date;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS implementation_guide text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS git_link text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS oid text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS version text;
-ALTER TABLE dim_semd_types ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-ALTER TABLE dim_semd_types ALTER COLUMN oid DROP NOT NULL;
-ALTER TABLE dim_semd_types ALTER COLUMN oid DROP DEFAULT;
-ALTER TABLE dim_semd_types ALTER COLUMN version DROP NOT NULL;
-ALTER TABLE dim_semd_types ALTER COLUMN version DROP DEFAULT;
-ALTER TABLE dim_semd_types DROP COLUMN IF EXISTS source_url;
 
 INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)
 VALUES
@@ -541,14 +414,8 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
     processed_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE fact_egisz_transactions DROP CONSTRAINT IF EXISTS fact_egisz_transactions_exchangelog_log_id_fkey;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS document_key text;
-ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS egmid;
-ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS errors_json CASCADE;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
--- error_subtype упразднён: его роль теперь играет плоский error_type
--- (см. egisz_error_classify). Колонка удаляется идемпотентно.
-ALTER TABLE fact_egisz_transactions DROP COLUMN IF EXISTS error_subtype;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_json_text text;
@@ -558,22 +425,6 @@ ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS doctor_name text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS patient_hash text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS doctor_hash text;
 ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS message text;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'fact_egisz_transactions'
-          AND column_name = 'error_message'
-    ) THEN
-        UPDATE public.fact_egisz_transactions
-        SET message = error_message
-        WHERE message IS NULL
-          AND error_message IS NOT NULL;
-        ALTER TABLE public.fact_egisz_transactions DROP COLUMN error_message;
-    END IF;
-END $$;
 
 -- ============================================================================
 -- Range partitioning (monthly) for monotonic time-series tables.
@@ -728,7 +579,6 @@ CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logs
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_semd_code ON fact_egisz_documents (semd_code);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_local_uid ON fact_egisz_documents (local_uid);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_document_id ON fact_egisz_documents (document_id);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id ON fact_egisz_documents (emdr_id);
 -- Резолвинг callback→документ (egisz_transform_raw_to_facts, emdr_ref) ищет по
 -- lower(btrim(emdr_id)); без функционального индекса это seq scan на каждую строку
@@ -747,10 +597,6 @@ CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_sent_at ON fact_egisz_docume
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_document_created_at ON fact_egisz_documents (document_created_at);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_registered_at ON fact_egisz_documents (registered_at);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_callback_log_id ON fact_egisz_documents (callback_log_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_top_type ON fact_egisz_channel_errors (error_top_type);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_document_key ON fact_egisz_channel_errors (document_key);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_created_at ON fact_egisz_channel_errors (created_at);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_channel_errors_jid ON fact_egisz_channel_errors (jid);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_document_key ON fact_egisz_transactions (document_key);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
@@ -768,8 +614,5 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_exchange_msgid_norm ON dim_egisz_exchangelog_refs (exchange_msgid_norm);
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_document_key ON dim_egisz_exchangelog_refs (document_key);
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_local_uid_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(local_uid), '')));
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_document_id_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(document_id), '')));
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_emdr_id_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(emdr_id), '')));
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_created_at ON dim_egisz_exchangelog_refs (created_at);
-
-DROP INDEX IF EXISTS idx_dim_egisz_exchangelog_refs_msgid_norm;
