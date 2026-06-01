@@ -1,7 +1,7 @@
 {
   "name": "05 Управленческий дашборд",
   "width": "full",
-  "description": "Операционные и финансовые показатели сервиса для руководства. Источники — **реальные данные** из `fact_egisz_documents`, `v_rpt_documents_ui`, `v_egisz_documents_enriched_ui` и `dim_organizations`. Тариф фиксированный: **1 активный JID = 10 000 ₽/мес**. MRR = COUNT(DISTINCT JID) × 10 000. Метрики считаются только по реальным фактам DWH; CAC/LTV/SLA/MTTR без исходных финансовых и тикетных данных не строятся.",
+  "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `v_rpt_documents_ui`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Динамика (MRR Waterfall / NRR / Logo retention) появится после накопления ≥2 закрытых месяцев.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -15,19 +15,19 @@
   "cards": [
     {
       "display": "text",
-      "text": "## Операционные показатели\nСчётчики по фильтру «Период». Базовые объёмы документооборота и распределение по статусам — по документному факту `fact_egisz_documents`.",
+      "text": "## North Star — ценность сервиса\nЕдиная метрика ценности интеграции: сколько СЭМД реально зарегистрировано в РЭМД. Рядом — общий объём и сквозной first-pass acceptance (success / все документы, включая «в обработке»). Реагируют на фильтр «Период».",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
       "col": 0
     },
     {
-      "name": "05 · Активных JID",
-      "description": "COUNT(DISTINCT JID клиники) по реальным транзакциям в выбранном периоде. Включает клиники, у которых был хотя бы один callback от РЭМД или документы в очереди без callback.",
+      "name": "05 · Успешных СЭМД (NSM)",
+      "description": "North Star: COUNT(DISTINCT документ) со статусом «Успешно зарегистрирован» за период. Единственная метрика ценности сервиса.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"JID клиники\")::bigint AS \"Активных JID\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]]",
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Успешных СЭМД\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" = 'success' [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -43,12 +43,12 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Активных JID\"]": {
+          "[\"name\",\"Успешных СЭМД\"]": {
             "number_separators": " "
           }
         }
       },
-      "sizeX": 4,
+      "sizeX": 8,
       "sizeY": 3,
       "row": 1,
       "col": 0,
@@ -60,8 +60,8 @@
       }
     },
     {
-      "name": "05 · Документов за период",
-      "description": "COUNT(DISTINCT «Документ (ключ учёта)») по распознанным документам с callback-статусом.",
+      "name": "05 · Всего документов за период",
+      "description": "COUNT(DISTINCT документ) по всем статусам, включая «в обработке». Знаменатель для честного first-pass acceptance.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -86,10 +86,10 @@
           }
         }
       },
-      "sizeX": 4,
+      "sizeX": 8,
       "sizeY": 3,
       "row": 1,
-      "col": 4,
+      "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -98,12 +98,12 @@
       }
     },
     {
-      "name": "05 · % успеха",
-      "description": "Доля документов со статусом «Успешно зарегистрирован»: success / (success + ошибки), без «В обработке».",
+      "name": "05 · First-pass acceptance, %",
+      "description": "Сквозная конверсия: success / ВСЕ документы (включая «в обработке»). Честная цифра доставки, в отличие от доли успеха только среди финализированных.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"First-pass acceptance, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -119,15 +119,15 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"% успеха\"]": {
+          "[\"name\",\"First-pass acceptance, %\"]": {
             "suffix": " %"
           }
         }
       },
-      "sizeX": 4,
+      "sizeX": 8,
       "sizeY": 3,
       "row": 1,
-      "col": 8,
+      "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -136,12 +136,165 @@
       }
     },
     {
-      "name": "05 · % ошибок",
-      "description": "Доля документов со статусом error: РЭМД отверг документ либо сетевая ошибка. Без сетевых ошибок из транспорта (только колбэки).",
+      "display": "text",
+      "text": "## Деньги (trailing-30 дней)\nФикс-тариф **10 000 ₽/JID/мес**. MRR = активных JID за последние 30 дней × 10 000 ₽. **Не зависит от фильтра «Период»** и не использует календарный месяц — иначе на 1-е число счётчик активных JID коллапсирует. ARR = MRR × 12.",
+      "sizeX": 24,
+      "sizeY": 2,
+      "row": 4,
+      "col": 0
+    },
+    {
+      "name": "05 · MRR (trailing-30d), ₽",
+      "description": "MRR = COUNT(DISTINCT JID, активного за последние 30 дней) × 10 000 ₽. Trailing-30d вместо календарного месяца — устраняет обнуление счётчика 1-го числа.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM active_jid",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"MRR, ₽\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
+          }
+        }
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 6,
+      "col": 0
+    },
+    {
+      "name": "05 · ARR (MRR × 12), ₽",
+      "description": "ARR = MRR (trailing-30d) × 12. Годовая выручка при сохранении текущей активной базы JID.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM active_jid",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"ARR, ₽\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
+          }
+        }
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 6,
+      "col": 6
+    },
+    {
+      "name": "05 · Активных JID (30 дн)",
+      "description": "COUNT(DISTINCT JID), у которых был хотя бы один документ за последние 30 дней. Драйвер MRR при плоском тарифе.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT COUNT(*)::bigint AS \"Активных JID\" FROM active_jid",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Активных JID\"]": {
+            "number_separators": " "
+          }
+        }
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 6,
+      "col": 12
+    },
+    {
+      "name": "05 · Эфф. цена успешного СЭМД, ₽",
+      "description": "MRR (trailing-30d) / успешные СЭМД за 30 дней. Стоимость неэффективности: насколько дорого обходится один зарегистрированный документ на текущей подписке.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days'), success AS (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") AS ok FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" = 'success' AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT ROUND((SELECT COUNT(*) FROM active_jid) * 10000.0 / NULLIF(success.ok, 0), 1) AS \"₽ за успешный СЭМД\" FROM success",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"₽ за успешный СЭМД\"]": {
+            "suffix": " ₽",
+            "decimals": 1
+          }
+        }
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 6,
+      "col": 18
+    },
+    {
+      "display": "text",
+      "text": "## Здоровье сервиса\nСервисные guardrail-метрики (без тела документа). Реагируют на фильтр «Период». Цель: «зависших >72 ч» → вниз, «отказов РЭМД» и «ошибок связи» → вниз.",
+      "sizeX": 24,
+      "sizeY": 2,
+      "row": 9,
+      "col": 0
+    },
+    {
+      "name": "05 · Зависших >72 ч, %",
+      "description": "Доля документов в статусе «в обработке» дольше 72 часов (нет колбэка от РЭМД) от всех документов. Главный операционный риск — скрытый при расчёте «% успеха только по финализированным».",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting' AND now() - \"Дата обработки\" > INTERVAL '72 hours') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Зависших >72 ч, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000004",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Зависших >72 ч, %\"]": {
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 11,
+      "col": 0,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
+        }
+      }
+    },
+    {
+      "name": "05 · Отказов РЭМД, %",
+      "description": "Доля документов, отклонённых асинхронным ответом РЭМД (async_error), среди финализированных (success + ошибки). Сигнал качества интеграции.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'async_error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Отказов РЭМД, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -157,14 +310,52 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"% ошибок\"]": {
+          "[\"name\",\"Отказов РЭМД, %\"]": {
             "suffix": " %"
           }
         }
       },
-      "sizeX": 4,
+      "sizeX": 8,
       "sizeY": 3,
-      "row": 1,
+      "row": 11,
+      "col": 8,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
+        }
+      }
+    },
+    {
+      "name": "05 · Ошибок связи, %",
+      "description": "Доля документов с сетевой ошибкой (network_error) среди финализированных. Сигнал состояния транспортного канала (VPN ГОСТ).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'network_error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Ошибок связи, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000006",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Ошибок связи, %\"]": {
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 11,
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -175,102 +366,61 @@
     },
     {
       "display": "text",
-      "text": "## Финансовая модель\nАбонентская плата фиксирована: **1 активный JID = 10 000 ₽/мес**. MRR (Monthly Recurring Revenue) = количество активных JID в текущем месяце × 10 000 ₽. ARR = MRR × 12. Все расчёты — на реальных данных, без захардкоженных констант в SQL view.",
+      "text": "## Выручка под риском\nПод плоским тарифом выручка равномерна по JID, а ценность — нет. Сегменты показывают, где концентрируется риск оттока в рублях. «Ноль ценности» (платят, но ни одного успешного СЭМД) и «затык канала» (>80 % документов зависли) — приоритетные очереди для Customer Success.",
       "sizeX": 24,
       "sizeY": 2,
-      "row": 4,
+      "row": 14,
       "col": 0
     },
     {
-      "name": "05 · MRR (текущий месяц), ₽",
-      "description": "MRR = COUNT(DISTINCT JID, у которых был хотя бы один распознанный документ в текущем месяце) × 10 000 ₽.",
+      "name": "05 · Сегменты ценности (MRR × ₽/успех)",
+      "description": "Разбивка JID по объёму потока. Под фикс-тарифом каждый JID = 10 000 ₽/мес, поэтому «₽ за успешный СЭМД» резко растёт у спящих клиник — это самая высокомаржинальная и одновременно самая рисковая на отток выручка.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) AND \"Дата обработки\" < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM active_jid",
-          "template-tags": {}
+          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT CASE WHEN docs >= 1000 THEN 'Тяжёлые (>=1000 док)' WHEN docs >= 50 THEN 'Средние (50-999)' ELSE 'Спящие (<50)' END AS \"Сегмент\", COUNT(DISTINCT jid)::bigint AS \"Клиник\", (COUNT(DISTINCT jid) * 10000)::bigint AS \"MRR, ₽\", SUM(ok)::bigint AS \"Успешных СЭМД\", ROUND(COUNT(DISTINCT jid) * 10000.0 / NULLIF(SUM(ok), 0), 0) AS \"₽ за успешный СЭМД\" FROM per_jid GROUP BY 1 ORDER BY MIN(docs) DESC",
+          "template-tags": {
+            "mgmt_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "05e10000-0000-4000-8000-000000000007",
+              "name": "mgmt_period",
+              "type": "dimension"
+            }
+          }
         },
         "database": 1
       },
-      "display": "scalar",
+      "display": "table",
       "visualization_settings": {
-        "scalar.segments": [
-          {
-            "min": 0,
-            "max": 1000000,
-            "color": "#F7CBA9",
-            "label": ""
-          },
-          {
-            "min": 1000000,
-            "max": 2000000,
-            "color": "#689636",
-            "label": ""
-          },
-          {
-            "min": 2000000,
-            "max": 4000000,
-            "color": "#8A5EB0",
-            "label": ""
-          },
-          {
-            "min": 4000000,
-            "max": 8000000,
-            "color": "#E75454",
-            "label": ""
-          },
-          {
-            "min": 8000000,
-            "max": 16000000,
-            "color": "#227FD2",
-            "label": ""
-          }
-        ],
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
-            "number_separators": ", ",
+            "number_separators": " ",
+            "suffix": " ₽"
+          },
+          "[\"name\",\"₽ за успешный СЭМД\"]": {
             "suffix": " ₽"
           }
         }
       },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 6,
-      "col": 0
-    },
-    {
-      "name": "05 · ARR (текущий MRR × 12), ₽",
-      "description": "ARR (Annual Recurring Revenue) = MRR текущего месяца × 12. Показывает годовую выручку при сохранении текущего числа активных JID.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH active_jid AS ( SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) AND \"Дата обработки\" < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month' ) SELECT (COUNT(*) * 10000 * 12)::numeric(14, 2) AS \"ARR, ₽\" FROM active_jid",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.segments": [],
-        "column_settings": {
-          "[\"name\",\"ARR, ₽\"]": {
-            "number_separators": ", ",
-            "suffix": " ₽"
-          }
+      "sizeX": 24,
+      "sizeY": 5,
+      "row": 16,
+      "col": 0,
+      "metabase-field-filters": {
+        "mgmt_period": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
         }
-      },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 6,
-      "col": 6
+      }
     },
     {
-      "name": "05 · Цена за документ, ₽",
-      "description": "Стоимость отправки одного документа за выбранный период: (Активных JID × 10 000 ₽) / общее число документов. Показывает, во сколько обходится один СЭМД на текущей подписке.",
+      "name": "05 · Выручка под риском «ноль ценности», ₽",
+      "description": "Сумма абонплаты JID, у которых за период ноль успешно зарегистрированных СЭМД. Платят, но не получают ценности — очередь №1 на отток.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(active_jid.active * 10000 / NULLIF(docs.total, 0), 4) AS \"₽ / документ\" FROM active_jid, docs",
+          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -286,16 +436,16 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"₽ / документ\"]": {
-            "suffix": " ₽",
-            "decimals": 2
+          "[\"name\",\"₽ под риском\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 8,
       "sizeY": 3,
-      "row": 6,
-      "col": 12,
+      "row": 21,
+      "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -304,12 +454,12 @@
       }
     },
     {
-      "name": "05 · Документов на 1 ₽ выручки",
-      "description": "Productivity-метрика: общее число документов за период / (Активных JID × 10 000). Показывает, сколько документов «снимается» с одного рубля абонплаты.",
+      "name": "05 · Выручка под риском «затык канала», ₽",
+      "description": "Сумма абонплаты JID, у которых >80 % документов зависли в «обработке». Доставка фактически не работает — риск оттока + эскалация в техподдержку.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS ( SELECT COUNT(DISTINCT \"JID клиники\")::numeric AS active FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] ), docs AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]] ) SELECT ROUND(docs.total / NULLIF(active_jid.active * 10000, 0), 4) AS \"Документов / ₽\" FROM active_jid, docs",
+          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting') AS waiting FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN waiting::numeric / NULLIF(docs, 0) > 0.8 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском (затык)\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -325,15 +475,16 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Документов / ₽\"]": {
-            "decimals": 4
+          "[\"name\",\"₽ под риском (затык)\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 8,
       "sizeY": 3,
-      "row": 6,
-      "col": 18,
+      "row": 21,
+      "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -342,117 +493,12 @@
       }
     },
     {
-      "display": "text",
-      "text": "## Тренды (последние 12 месяцев)\nДинамика выручки, доли успеха и распределения статусов по месяцам. На графиках — все JID, фильтры «Период» не применяются (тренд имеет смысл только на полном горизонте).",
-      "sizeX": 24,
-      "sizeY": 2,
-      "row": 9,
-      "col": 0
-    },
-    {
-      "name": "05 · Динамика MRR по месяцам",
-      "description": "MRR за каждый из последних 12 месяцев: для каждого месяца считается COUNT(DISTINCT JID, активного в этом месяце) × 10 000 ₽.",
+      "name": "05 · Клиник без единого успеха",
+      "description": "Число JID, у которых за период ноль успешных СЭМД. Размер очереди Customer Success.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH months AS ( SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '11 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS month ), jid_per_month AS ( SELECT date_trunc('month', \"Дата обработки\")::date AS month, \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' ) SELECT m.month AS \"Месяц\", COALESCE(COUNT(DISTINCT j.jid), 0)::bigint AS \"Активных JID\", (COALESCE(COUNT(DISTINCT j.jid), 0) * 10000)::numeric(14, 2) AS \"MRR, ₽\" FROM months m LEFT JOIN jid_per_month j ON j.month = m.month GROUP BY m.month ORDER BY m.month",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Месяц"
-        ],
-        "graph.show_values": false,
-        "graph.x_axis.scale": "timeseries",
-        "graph.metrics": [
-          "MRR, ₽",
-          "Активных JID"
-        ]
-      },
-      "sizeX": 12,
-      "sizeY": 8,
-      "row": 11,
-      "col": 0
-    },
-    {
-      "name": "05 · % успеха по месяцам",
-      "description": "Доля документов со статусом success в каждом месяце последних 12 месяцев.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error'))::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1 ORDER BY 1",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Месяц"
-        ],
-        "graph.metrics": [
-          "% успеха"
-        ],
-        "graph.show_values": true,
-        "graph.x_axis.scale": "timeseries",
-        "column_settings": {
-          "[\"name\",\"% успеха\"]": {
-            "suffix": " %"
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 8,
-      "row": 11,
-      "col": 12
-    },
-    {
-      "name": "05 · Распределение статусов по месяцам",
-      "description": "Stacked bar за 12 месяцев: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT date_trunc('month', \"Дата обработки\")::date AS \"Месяц\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE \"Дата обработки\" >= date_trunc('month', CURRENT_DATE) - INTERVAL '11 months' GROUP BY 1, 2 ORDER BY 1, 2",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "bar",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Месяц",
-          "Статус"
-        ],
-        "graph.show_values": false,
-        "graph.x_axis.scale": "timeseries",
-        "stackable.stack_type": "stacked",
-        "graph.metrics": [
-          "Документов"
-        ]
-      },
-      "sizeX": 24,
-      "sizeY": 8,
-      "row": 19,
-      "col": 0
-    },
-    {
-      "display": "text",
-      "text": "## Топ-клиенты\nКто формирует основной поток, у кого больше всего ошибок, у кого зависшие документы. Фильтр «Период» применяется к таблицам объёма и ошибок.",
-      "sizeX": 24,
-      "sizeY": 2,
-      "row": 27,
-      "col": 0
-    },
-    {
-      "name": "05 · Топ-20 клиник по объёму документов",
-      "description": "Лидеры документооборота за выбранный период по распознанным документам. Показывает % успеха и % ошибок.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID\", MAX(\"Наименование клиники\") AS \"Клиника\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% успеха\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY \"JID клиники\" ORDER BY 3 DESC LIMIT 20",
+          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)::bigint AS \"Клиник без успеха\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -465,44 +511,18 @@
         },
         "database": 1
       },
-      "display": "table",
+      "display": "scalar",
       "visualization_settings": {
-        "table.column_formatting": [
-          {
-            "color": "#84BB4C",
-            "columns": [
-              "% успеха"
-            ],
-            "operator": ">=",
-            "type": "single",
-            "value": 90
-          },
-          {
-            "color": "#EF8C8C",
-            "columns": [
-              "% ошибок"
-            ],
-            "operator": ">=",
-            "type": "single",
-            "value": 10
-          }
-        ],
         "column_settings": {
-          "[\"name\",\"% успеха\"]": {
-            "suffix": " %"
-          },
-          "[\"name\",\"% в обработке\"]": {
-            "suffix": " %"
-          },
-          "[\"name\",\"% ошибок\"]": {
-            "suffix": " %"
+          "[\"name\",\"Клиник без успеха\"]": {
+            "number_separators": " "
           }
         }
       },
-      "sizeX": 12,
-      "sizeY": 10,
-      "row": 29,
-      "col": 0,
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 21,
+      "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -511,12 +531,12 @@
       }
     },
     {
-      "name": "05 · Топ-10 клиник с высокой долей ошибок",
-      "description": "Клиники с долей ошибок > 10%, отсортированные по убыванию. Учитываются только клиники с объёмом ≥ 50 документов за период — чтобы не показывать шумные значения у мелких клиник.",
+      "name": "05 · Очередь оттока: JID с нулём успехов",
+      "description": "Платящие клиники без единого успешного СЭМД за период, по убыванию объёма попыток. Прямой список для проактивного обзвона Customer Success.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT \"JID клиники\"::text AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error'))::bigint AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1 ) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Документов\", errs AS \"Ошибок\", ROUND(100.0 * errs / NULLIF(docs, 0), 2) AS \"% ошибок\" FROM per_clinic WHERE docs >= 50 AND errs > 0 ORDER BY 100.0 * errs / NULLIF(docs, 0) DESC NULLS LAST, errs DESC LIMIT 10",
+          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting') AS waiting FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Попыток\", waiting AS \"В обработке\", 10000 AS \"MRR, ₽\" FROM per_jid WHERE ok = 0 AND docs > 0 ORDER BY docs DESC LIMIT 15",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -532,21 +552,30 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"% ошибок\"]": {
-            "suffix": " %"
+          "[\"name\",\"MRR, ₽\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
           }
         }
       },
-      "sizeX": 12,
-      "sizeY": 10,
-      "row": 29,
-      "col": 12,
+      "sizeX": 24,
+      "sizeY": 7,
+      "row": 24,
+      "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         }
       }
+    },
+    {
+      "display": "text",
+      "text": "## Динамика (появится после накопления данных)\nMRR Waterfall (New + Reactivated − Churned), NRR и Logo retention требуют ≥2 закрытых календарных месяцев. Сейчас данные охватывают ~1 месяц — помесячные тренды и retention-матрица не строятся, чтобы не показывать vanity-графики на одной точке (см. учебник «Продуктовая аналитика», §10, §18). Блок включается, когда накопится второй закрытый месяц.",
+      "sizeX": 24,
+      "sizeY": 3,
+      "row": 31,
+      "col": 0
     }
   ]
 }

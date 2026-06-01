@@ -1,7 +1,7 @@
 {
   "name": "08 Клиентский дашборд. BI-аналитика ЭМД",
   "width": "full",
-  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. Медицинские показатели — уникальные пациенты/врачи, распределения, потоки. Финансовые показатели в этом дашборде — только количественные, в формате «потенциальная выручка» (количество СЭМД с пометкой; реальная стоимость зависит от тарифов ОМС/ДМС вашего региона). Источник — `v_rpt_client_documents_ui` (PII маскируется, для уникального счёта используются `patient_hash` / `doctor_hash`).",
+  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. Верхний блок — операционные показатели на реальных данных DWH (объём, first-pass acceptance, доставка, структура типов СЭМД). Медицинские показатели (уникальные пациенты/врачи) считаются по `patient_hash` / `doctor_hash`, но **тело СЭМД сейчас не захватывается в журнал ЕГИСЗ**, поэтому эти карты пусты до доработки upstream-захвата. Источник — `v_rpt_client_documents_ui` (PII маскируется).",
   "parameters": [
     {
       "id": "08b00000-0000-4000-8000-000000000001",
@@ -30,24 +30,24 @@
   "cards": [
     {
       "display": "text",
-      "text": "## BI-аналитика ЭМД — медицинские показатели\nУникальный счёт пациентов/врачей считается по хэшу (`md5(ФИО · СНИЛС)`), сами имена и СНИЛС не покидают DWH.",
+      "text": "## Операционные показатели клиента (реальные данные)\nОбъём документооборота, сквозная регистрация и скорость доставки СЭМД до РЭМД. Считается на фактических данных DWH, реагирует на фильтры «Период» и «Тип документа».",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
       "col": 0
     },
     {
-      "name": "08 · Уникальных пациентов",
-      "description": "COUNT(DISTINCT patient_hash). Хэш собирается из ФИО + цифр СНИЛС, поэтому коллизии минимальны.",
+      "name": "08 · СЭМД за период",
+      "description": "COUNT(DISTINCT документ) клиники за период. Базовый объём документооборота.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT document_key)::bigint AS \"СЭМД за период\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b10000-0000-4000-8000-000000000003",
+              "id": "08c10000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -55,14 +55,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b10000-0000-4000-8000-000000000001",
+              "id": "08c10000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b10000-0000-4000-8000-000000000002",
+              "id": "08c10000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -73,7 +73,7 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Пациентов\"]": {
+          "[\"name\",\"СЭМД за период\"]": {
             "decimals": 0,
             "number_separators": ". "
           }
@@ -95,17 +95,17 @@
       }
     },
     {
-      "name": "08 · Уникальных врачей",
-      "description": "COUNT(DISTINCT doctor_hash). Если в СЭМД ФИО врача не заполнено — не учитывается.",
+      "name": "08 · First-pass acceptance, %",
+      "description": "Доля успешно зарегистрированных СЭМД среди финализированных (success / (success + ошибки)). Качество интеграции клиники с РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"First-pass acceptance, %\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b20000-0000-4000-8000-000000000003",
+              "id": "08c20000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -113,14 +113,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b20000-0000-4000-8000-000000000001",
+              "id": "08c20000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b20000-0000-4000-8000-000000000002",
+              "id": "08c20000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -131,9 +131,8 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Врачей\"]": {
-            "decimals": 0,
-            "number_separators": ". "
+          "[\"name\",\"First-pass acceptance, %\"]": {
+            "suffix": " %"
           }
         }
       },
@@ -153,17 +152,17 @@
       }
     },
     {
-      "name": "08 · ЭМД на пациента (среднее)",
-      "description": "documents_total / unique_patients. Показывает, насколько активно клиника наблюдает каждого пациента.",
+      "name": "08 · Медиана доставки, мин",
+      "description": "P50 времени от создания СЭМД до обработки IPS (по успешным документам с измеренной задержкой). Скорость доставки в РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 2) AS \"ЭМД/пациент\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds::double precision))::numeric / 60.0, 1) AS \"Медиана доставки, мин\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b30000-0000-4000-8000-000000000003",
+              "id": "08c30000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -171,14 +170,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b30000-0000-4000-8000-000000000001",
+              "id": "08c30000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b30000-0000-4000-8000-000000000002",
+              "id": "08c30000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -189,8 +188,8 @@
       "display": "scalar",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"ЭМД/пациент\"]": {
-            "decimals": 2
+          "[\"name\",\"Медиана доставки, мин\"]": {
+            "decimals": 1
           }
         }
       },
@@ -220,7 +219,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b40000-0000-4000-8000-000000000003",
+              "id": "08c40000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -228,14 +227,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b40000-0000-4000-8000-000000000001",
+              "id": "08c40000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b40000-0000-4000-8000-000000000002",
+              "id": "08c40000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -267,6 +266,14 @@
       }
     },
     {
+      "display": "text",
+      "text": "## Структура и качество потока (реальные данные)\nРаспределение объёма по типам СЭМД, доля успеха по типам, скорость доставки и журнал отклонённых документов.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 4,
+      "col": 0
+    },
+    {
       "name": "08 · Динамика по типам СЭМД (месяцы)",
       "description": "Stacked bar: объём по типам СЭМД помесячно. Показывает сезонность и сдвиги в номенклатуре документов.",
       "dataset_query": {
@@ -277,7 +284,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b50000-0000-4000-8000-000000000003",
+              "id": "08c50000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -285,14 +292,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b50000-0000-4000-8000-000000000001",
+              "id": "08c50000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b50000-0000-4000-8000-000000000002",
+              "id": "08c50000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -313,7 +320,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 4,
+      "row": 5,
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
@@ -337,7 +344,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b60000-0000-4000-8000-000000000003",
+              "id": "08c60000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -345,14 +352,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b60000-0000-4000-8000-000000000001",
+              "id": "08c60000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b60000-0000-4000-8000-000000000002",
+              "id": "08c60000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -372,67 +379,8 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 4,
+      "row": 5,
       "col": 12,
-      "metabase-field-filters": {
-        "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
-        },
-        "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
-        }
-      }
-    },
-    {
-      "name": "08 · Распределение пациентов по числу ЭМД",
-      "description": "Histogram: сколько у клиники пациентов с 1, 2-3, 4-10, 11+ документами. Признак приверженности наблюдению.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT document_key)::int AS doc_cnt FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
-          "template-tags": {
-            "client_jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "08b70000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "type": "text"
-            },
-            "client_period": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "08b70000-0000-4000-8000-000000000001",
-              "name": "client_period",
-              "type": "dimension"
-            },
-            "client_document_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип документа",
-              "id": "08b70000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "bar",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Документов на пациента"
-        ],
-        "graph.metrics": [
-          "Пациентов"
-        ],
-        "graph.show_values": true
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 11,
-      "col": 0,
       "metabase-field-filters": {
         "client_period": {
           "table_ref": "public.v_rpt_client_documents_ui",
@@ -455,7 +403,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b80000-0000-4000-8000-000000000003",
+              "id": "08c70000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -463,14 +411,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b80000-0000-4000-8000-000000000001",
+              "id": "08c70000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b80000-0000-4000-8000-000000000002",
+              "id": "08c70000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -488,10 +436,301 @@
         ],
         "graph.show_values": true
       },
+      "sizeX": 24,
+      "sizeY": 6,
+      "row": 12,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_ts"
+        },
+        "client_document_type": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_type"
+        }
+      }
+    },
+    {
+      "name": "08 · Журнал документов с ошибками регистрации",
+      "description": "Последние 50 СЭМД, отклонённых РЭМД, с маскированными PII и текстом ошибки ЕГИСЗ.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT document_ts AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", document_type AS \"Тип СЭМД\", error_text AS \"Текст ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND status_code IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY document_ts DESC NULLS LAST LIMIT 50",
+          "template-tags": {
+            "client_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "08c80000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "type": "text"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "08c80000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "08c80000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {},
+      "sizeX": 24,
+      "sizeY": 7,
+      "row": 18,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_ts"
+        },
+        "client_document_type": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_type"
+        }
+      }
+    },
+    {
+      "display": "text",
+      "text": "## Медицинские показатели — ожидают захвата тела СЭМД (upstream)\n⏳ Карты ниже считают уникальных пациентов/врачей по `patient_hash` / `doctor_hash` (`md5(ФИО · СНИЛС)`). Журнал ЕГИСЗ сейчас хранит только конверты обмена и колбэки РЭМД, **без тела СЭМД**, поэтому хэши пусты и карты показывают 0. Включатся автоматически после доработки upstream-захвата клинического документа (recordTarget / assignedAuthor).",
+      "sizeX": 24,
+      "sizeY": 2,
+      "row": 25,
+      "col": 0
+    },
+    {
+      "name": "08 · Уникальных пациентов",
+      "description": "⏳ Ожидает захвата тела СЭМД (upstream). COUNT(DISTINCT patient_hash) — пока NULL, счёт пустой.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "template-tags": {
+            "client_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "08c90000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "type": "text"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "08c90000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "08c90000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Пациентов\"]": {
+            "decimals": 0,
+            "number_separators": ". "
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 27,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_ts"
+        },
+        "client_document_type": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_type"
+        }
+      }
+    },
+    {
+      "name": "08 · Уникальных врачей",
+      "description": "⏳ Ожидает захвата тела СЭМД (upstream). COUNT(DISTINCT doctor_hash) — пока NULL, счёт пустой.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "template-tags": {
+            "client_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "08ca0000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "type": "text"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "08ca0000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "08ca0000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Врачей\"]": {
+            "decimals": 0,
+            "number_separators": ". "
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 27,
+      "col": 8,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_ts"
+        },
+        "client_document_type": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_type"
+        }
+      }
+    },
+    {
+      "name": "08 · ЭМД на пациента (среднее)",
+      "description": "⏳ Ожидает захвата тела СЭМД (upstream). documents_total / unique_patients — пока без знаменателя.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 2) AS \"ЭМД/пациент\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "template-tags": {
+            "client_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "08cb0000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "type": "text"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "08cb0000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "08cb0000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"ЭМД/пациент\"]": {
+            "decimals": 2
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 27,
+      "col": 16,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_ts"
+        },
+        "client_document_type": {
+          "table_ref": "public.v_rpt_client_documents_ui",
+          "field_name": "document_type"
+        }
+      }
+    },
+    {
+      "name": "08 · Распределение пациентов по числу ЭМД",
+      "description": "⏳ Ожидает захвата тела СЭМД (upstream). Histogram: пациенты с 1, 2-3, 4-10, 11+ документами — пока пусто.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT document_key)::int AS doc_cnt FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
+          "template-tags": {
+            "client_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "08cc0000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "type": "text"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "08cc0000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "08cc0000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "bar",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Документов на пациента"
+        ],
+        "graph.metrics": [
+          "Пациентов"
+        ],
+        "graph.show_values": true
+      },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 11,
-      "col": 12,
+      "row": 30,
+      "col": 0,
       "metabase-field-filters": {
         "client_period": {
           "table_ref": "public.v_rpt_client_documents_ui",
@@ -505,7 +744,7 @@
     },
     {
       "name": "08 · Топ-10 врачей по объёму СЭМД",
-      "description": "Лидерборд по отправленным документам и % успешных регистраций. Анонимизация снимается на этапе подключения МИС.",
+      "description": "⏳ Ожидает захвата тела СЭМД (upstream). Лидерборд по отправленным документам и % успешных регистраций — пока пусто (doctor_hash NULL).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -514,7 +753,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08b90000-0000-4000-8000-000000000003",
+              "id": "08cd0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -522,14 +761,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08b90000-0000-4000-8000-000000000001",
+              "id": "08cd0000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08b90000-0000-4000-8000-000000000002",
+              "id": "08cd0000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -554,10 +793,10 @@
           }
         }
       },
-      "sizeX": 24,
+      "sizeX": 12,
       "sizeY": 6,
-      "row": 17,
-      "col": 0,
+      "row": 30,
+      "col": 12,
       "metabase-field-filters": {
         "client_period": {
           "table_ref": "public.v_rpt_client_documents_ui",
@@ -571,10 +810,10 @@
     },
     {
       "display": "text",
-      "text": "## Потенциальная выручка — количественная оценка\nЦифры ниже — **количество** СЭМД по типам. Реальная выручка клиники = количество × тариф ОМС/ДМС вашего региона. Конкретные тарифы не подтягиваются: подключение к финансовой базе клиники не предусмотрено.",
+      "text": "## Потенциальная выручка — количественная оценка\nЦифры ниже — **количество** СЭМД по типам. Реальная выручка клиники = количество × тариф ОМС/ДМС вашего региона. Конкретные тарифы не подтягиваются: подключение к финансовой базе клиники не предусмотрено. Колонка «Пациентов» наполнится после upstream-захвата тела СЭМД.",
       "sizeX": 24,
       "sizeY": 2,
-      "row": 23,
+      "row": 36,
       "col": 0
     },
     {
@@ -588,7 +827,7 @@
             "client_jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
-              "id": "08ba0000-0000-4000-8000-000000000003",
+              "id": "08ce0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
               "type": "text"
@@ -596,14 +835,14 @@
             "client_period": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "08ba0000-0000-4000-8000-000000000001",
+              "id": "08ce0000-0000-4000-8000-000000000001",
               "name": "client_period",
               "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "08ba0000-0000-4000-8000-000000000002",
+              "id": "08ce0000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             }
@@ -630,58 +869,7 @@
       },
       "sizeX": 24,
       "sizeY": 6,
-      "row": 25,
-      "col": 0,
-      "metabase-field-filters": {
-        "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
-        },
-        "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
-        }
-      }
-    },
-    {
-      "name": "08 · Журнал документов с ошибками регистрации",
-      "description": "Последние 50 СЭМД, отклонённых РЭМД, с маскированными PII и текстом ошибки ЕГИСЗ.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT document_ts AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", document_type AS \"Тип СЭМД\", error_text AS \"Текст ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND status_code IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY document_ts DESC NULLS LAST LIMIT 50",
-          "template-tags": {
-            "client_jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "08bb0000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "type": "text"
-            },
-            "client_period": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "08bb0000-0000-4000-8000-000000000001",
-              "name": "client_period",
-              "type": "dimension"
-            },
-            "client_document_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип документа",
-              "id": "08bb0000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {},
-      "sizeX": 24,
-      "sizeY": 7,
-      "row": 31,
+      "row": 38,
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
