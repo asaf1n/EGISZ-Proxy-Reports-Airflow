@@ -68,6 +68,13 @@ def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str,
     }
 
 
+def get_raw_logids(con: psycopg2.extensions.connection) -> set[int]:
+    """Return every LOGID already present in exchangelog_raw (for reconcile set-diff)."""
+    with con.cursor() as cur:
+        cur.execute("SELECT logid FROM exchangelog_raw")
+        return {int(row[0]) for row in cur.fetchall()}
+
+
 def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:
     """Load EXCHANGELOG rows into exchangelog_raw without transforming them in Python."""
     values: list[tuple[Any, ...]] = []

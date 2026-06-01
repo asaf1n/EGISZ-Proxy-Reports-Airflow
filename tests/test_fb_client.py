@@ -5,6 +5,8 @@ from typing import Any
 
 from egisz_elt.fb_client import (
     fetch_exchangelog_after_cursor,
+    fetch_exchangelog_by_logids,
+    fetch_exchangelog_logids,
     fetch_organizations,
 )
 
@@ -89,3 +91,59 @@ def test_fetch_exchangelog_after_cursor_applies_created_cutoff() -> None:
 
     assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
     assert con.cursor_instance.params == (100, cutoff, 500)
+
+
+def test_fetch_exchangelog_logids_applies_created_cutoff_and_returns_ints() -> None:
+    cutoff = datetime(2026, 5, 18)
+    con = FakeConnection([(101,), (102,)])
+
+    logids = fetch_exchangelog_logids(con, created_from=cutoff)
+
+    assert logids == [101, 102]
+    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (cutoff,)
+
+
+def test_fetch_exchangelog_logids_without_cutoff_scans_all() -> None:
+    con = FakeConnection([(7,)])
+
+    assert fetch_exchangelog_logids(con) == [7]
+    assert "WHERE" not in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == ()
+
+
+def test_fetch_exchangelog_by_logids_serializes_rows() -> None:
+    con = FakeConnection([(101, None, None, "msg-1", 1, "log", "<xml/>")])
+
+    rows = fetch_exchangelog_by_logids(con, [101])
+
+    assert rows == [
+        {
+            "logid": 101,
+            "logdate": None,
+            "createdate": None,
+            "msgid": "msg-1",
+            "logstate": 1,
+            "logtext": "log",
+            "msgtext": "<xml/>",
+        }
+    ]
+    assert "WHERE LOGID IN (?)" in con.cursor_instance.executed_sql
+
+
+def test_fetch_exchangelog_by_logids_chunks_in_lists() -> None:
+    con = FakeConnection([(1, None, None, "m", 1, "l", "x")])
+
+    fetch_exchangelog_by_logids(con, [1, 2, 3], chunk_size=2)
+
+    # Two chunks => two IN-list queries with 2 and 1 placeholders respectively.
+    assert len(con.executed_sql) == 2
+    assert "WHERE LOGID IN (?, ?)" in con.executed_sql[0]
+    assert "WHERE LOGID IN (?)" in con.executed_sql[1]
+
+
+def test_fetch_exchangelog_by_logids_empty_returns_empty_without_query() -> None:
+    con = FakeConnection([])
+
+    assert fetch_exchangelog_by_logids(con, []) == []
+    assert con.executed_sql == []

@@ -11,12 +11,15 @@ from airflow.hooks.base import BaseHook
 from egisz_elt.fb_client import (
     connect_fb,
     fetch_exchangelog_after_cursor,
+    fetch_exchangelog_by_logids,
+    fetch_exchangelog_logids,
     fetch_licenses,
     fetch_organizations,
 )
 from egisz_elt.pg_client import (
     connect_pg,
     get_cursors,
+    get_raw_logids,
     load_raw_logs,
     sync_directory,
     transform_raw_to_facts,
@@ -200,6 +203,68 @@ def egisz_elt_pipeline() -> None:
         return load_info
 
     @task
+    def reconcile_late_arrivals() -> int:
+        """Recover EXCHANGELOG rows that materialized *below* the watermark.
+
+        The proxy journal can write a row after the keyset cursor already advanced
+        past its LOGID (async СЭМД callbacks arrive late; the gateway also backfills
+        the journal in bulk). `extract_and_load_batch` reads `LOGID > last_logid`, so
+        those rows are invisible to it forever. Each cycle we diff the proxy's
+        date-eligible LOGID set against exchangelog_raw and load+transform whatever is
+        missing below the watermark — without moving the watermark, so GREATEST stays
+        the only writer of last_logid. Steady state finds nothing and is a no-op.
+        """
+        pg_conn = _dwh_connection()
+        try:
+            cursor_state = get_cursors(pg_conn, PIPELINE)
+            last_logid = int(cursor_state.get("last_logid", 0))
+            source_min_created_at = cursor_state.get("source_min_created_at")
+            raw_logids = get_raw_logids(pg_conn)
+
+            fb_conn = _proxy_connection()
+            try:
+                proxy_logids = fetch_exchangelog_logids(fb_conn, created_from=source_min_created_at)
+                missing = sorted(
+                    logid
+                    for logid in proxy_logids
+                    if logid <= last_logid and logid not in raw_logids
+                )
+                if not missing:
+                    log.info("Reconcile: no late-arriving rows below watermark LOGID=%s.", last_logid)
+                    return 0
+                log.info(
+                    "Reconcile: %s row(s) below watermark missing from raw (LOGID %s..%s).",
+                    len(missing),
+                    missing[0],
+                    missing[-1],
+                )
+                late_rows = fetch_exchangelog_by_logids(fb_conn, missing)
+            finally:
+                fb_conn.close()
+
+            load_raw_logs(pg_conn, late_rows)
+
+            pg_conn.set_session(autocommit=True)
+            with pg_conn.cursor() as cur:
+                cur.execute("ANALYZE public.exchangelog_raw")
+            pg_conn.set_session(autocommit=False)
+
+            reconciled = transform_raw_to_facts(
+                pg_conn,
+                from_logid=missing[0] - 1,
+                to_logid=missing[-1],
+            )
+
+            pg_conn.set_session(autocommit=True)
+            with pg_conn.cursor() as cur:
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_daily_ui")
+                cur.execute("ANALYZE public.fact_egisz_documents")
+            log.info("Reconcile: recovered %s late-arriving row(s) into document facts.", reconciled)
+            return reconciled
+        finally:
+            pg_conn.close()
+
+    @task
     def update_watermark(load_info: BatchMetadata) -> None:
         cursor_logid = int(load_info.get("cursor_logid", 0))
         if cursor_logid <= int(load_info.get("last_logid", 0)):
@@ -222,8 +287,9 @@ def egisz_elt_pipeline() -> None:
     transformed = transform_data(analyzed)
     refreshed = refresh_materialized_views(transformed)
     watermark = update_watermark(refreshed)
+    reconciled = reconcile_late_arrivals()
 
-    dimensions >> loaded >> analyzed >> transformed >> refreshed >> watermark
+    dimensions >> loaded >> analyzed >> transformed >> refreshed >> watermark >> reconciled
 
 
 egisz_elt_pipeline()

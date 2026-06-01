@@ -9,6 +9,7 @@ from egisz_elt.pg_client import (
     DIRECTORY_SYNC_PAGE_SIZE,
     DIRECTORY_SYNC_STATEMENT_TIMEOUT,
     get_cursors,
+    get_raw_logids,
     load_raw_logs,
     normalize_message_id,
     sync_directory,
@@ -367,6 +368,27 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
             return Cursor()
 
     assert get_cursors(Connection(), "egisz") == {"last_logid": 0, "source_min_created_at": None}
+
+
+def test_get_raw_logids_returns_deduplicated_int_set() -> None:
+    class Cursor:
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str) -> None:
+            assert "FROM exchangelog_raw" in sql
+
+        def fetchall(self) -> list[tuple[int]]:
+            return [(1,), (2,), (2,), (5,)]
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+    assert get_raw_logids(Connection()) == {1, 2, 5}
 
 
 def test_dwh_init_sql_seeds_source_min_created_at_in_elt_state() -> None:

@@ -143,6 +143,71 @@ def fetch_exchangelog_after_cursor(
         cur.close()
 
 
+def fetch_exchangelog_logids(con, *, created_from: Any | None = None) -> list[int]:
+    """Fetch the full set of date-eligible EXCHANGELOG LOGIDs for reconciliation.
+
+    The proxy journal materializes rows out of LOGID order: a row can appear *after*
+    the keyset cursor has already advanced past its LOGID (async СЭМД callbacks land
+    late, and the gateway occasionally backfills the journal). The forward cursor
+    (`LOGID > last_logid`) therefore loses such rows permanently. The reconcile task
+    diffs this id set against exchangelog_raw to recover them — see CLAUDE.md §2.
+    """
+    cur = con.cursor()
+    try:
+        query = "SELECT LOGID FROM EXCHANGELOG"
+        params: list[Any] = []
+        if created_from is not None:
+            query += " WHERE COALESCE(LOGDATE, CREATEDATE) >= ?"
+            params.append(created_from)
+        cur.execute(query, tuple(params))
+        return [int(row[0]) for row in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+def fetch_exchangelog_by_logids(
+    con,
+    logids: list[int] | set[int],
+    *,
+    chunk_size: int = 1000,
+) -> list[dict[str, Any]]:
+    """Fetch full EXCHANGELOG rows for an explicit set of LOGIDs (chunked IN-lists).
+
+    Serialization matches fetch_exchangelog_after_cursor so reconciled rows load
+    through the same load_raw_logs path.
+    """
+    ids = [int(value) for value in logids]
+    if not ids:
+        return []
+
+    cur = con.cursor()
+    rows: list[dict[str, Any]] = []
+    try:
+        for start in range(0, len(ids), chunk_size):
+            chunk = ids[start : start + chunk_size]
+            placeholders = ", ".join("?" * len(chunk))
+            cur.execute(
+                "SELECT LOGID, LOGDATE, CREATEDATE, MSGID, LOGSTATE, LOGTEXT, MSGTEXT "
+                f"FROM EXCHANGELOG WHERE LOGID IN ({placeholders})",
+                tuple(chunk),
+            )
+            for logid, logdate, createdate, msgid, logstate, logtext, msgtext in cur.fetchall():
+                rows.append(
+                    {
+                        "logid": int(logid),
+                        "logdate": logdate.isoformat() if logdate is not None else None,
+                        "createdate": createdate.isoformat() if createdate is not None else None,
+                        "msgid": msgid,
+                        "logstate": logstate,
+                        "logtext": _serialize_firebird_text(logtext),
+                        "msgtext": _serialize_firebird_text(msgtext),
+                    }
+                )
+        return rows
+    finally:
+        cur.close()
+
+
 def fetch_organizations(con) -> list[tuple[Any, ...]]:
     """Fetch organization directory rows from JPERSONS."""
     cur = con.cursor()
