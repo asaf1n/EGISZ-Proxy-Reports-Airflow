@@ -1,7 +1,7 @@
 {
   "name": "01 Оперативный мониторинг и динамика",
   "width": "full",
-  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**; период **ошибок связи (транспорт)** — отдельный фильтр `parse_created` по **«Дата создания документа»** (карточки «Статусы», «Доля по клиникам», «Ошибки по типу», «Доля по СЭМД»). Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -9,14 +9,7 @@
       "slug": "dwh_date_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past30days"
-    },
-    {
-      "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ac",
-      "name": "Период по «Дата создания документа» (ошибки канала)",
-      "slug": "parse_created_filter",
-      "type": "date/all-options",
-      "sectionId": "date"
+      "default": "past30days~"
     },
     {
       "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
@@ -75,7 +68,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT public.v_rpt_documents_ui.* FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(\"Связанное сообщение\"::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(\"Рег. номер РЭМД\"::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(\"Статус\"::text), '') = {{status}}]] [[AND NULLIF(TRIM(\"LOGID журнала EXCHANGELOG\"::text), '') = {{log_id}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 50",
+          "query": "SELECT public.v_rpt_documents_ui.* FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -396,7 +389,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
+          "query": "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -418,6 +411,46 @@
               "display-name": "Код СЭМД",
               "id": "f1000004-0004-4004-8004-000000000010",
               "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f1000004-0004-4004-8004-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f1000004-0004-4004-8004-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f1000004-0004-4004-8004-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f1000004-0004-4004-8004-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f1000004-0004-4004-8004-000000000016",
+              "name": "log_id",
               "required": false,
               "type": "dimension"
             }
@@ -513,6 +546,26 @@
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -522,7 +575,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT \"Тип СЭМД (код · НСИ)\" AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT \"Тип СЭМД (код · НСИ)\" AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_code ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"СЭМД\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -544,6 +597,46 @@
               "display-name": "Код СЭМД",
               "id": "fa000003-0003-4003-8003-000000000010",
               "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "fa000003-0003-4003-8003-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "fa000003-0003-4003-8003-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "fa000003-0003-4003-8003-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "fa000003-0003-4003-8003-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "fa000003-0003-4003-8003-000000000016",
+              "name": "log_id",
               "required": false,
               "type": "dimension"
             }
@@ -600,6 +693,26 @@
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -609,7 +722,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), ''), 24) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') AND NULLIF(TRIM(COALESCE(\"Тип ошибки\", \"Сводка ошибки\", '')), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -631,6 +744,46 @@
               "display-name": "Код СЭМД",
               "id": "fa000004-0004-4004-8004-000000000010",
               "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "fa000004-0004-4004-8004-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "fa000004-0004-4004-8004-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "fa000004-0004-4004-8004-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "fa000004-0004-4004-8004-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "fa000004-0004-4004-8004-000000000016",
+              "name": "log_id",
               "required": false,
               "type": "dimension"
             }
@@ -683,6 +836,26 @@
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -692,7 +865,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_kind, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Порядок ошибки\" IS NOT NULL ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), with_err AS ( SELECT f.*, COALESCE(fe.err_kind, NULLIF(f.\"Тип ошибки\", ''), NULLIF(f.\"Сводка ошибки\", ''), CASE WHEN f.\"Статус (код)\" = 'success' THEN '(успешно)' ELSE NULL END) AS err_kind, fe.json_error_text FROM filtered f LEFT JOIN first_err fe ON fe.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 AND NULLIF(TRIM(err_kind), '') IS NOT NULL ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_kind, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Порядок ошибки\" IS NOT NULL ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), with_err AS ( SELECT f.*, COALESCE(fe.err_kind, NULLIF(f.\"Тип ошибки\", ''), NULLIF(f.\"Сводка ошибки\", ''), CASE WHEN f.\"Статус (код)\" = 'success' THEN '(успешно)' ELSE NULL END) AS err_kind, fe.json_error_text FROM filtered f LEFT JOIN first_err fe ON fe.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 AND NULLIF(TRIM(err_kind), '') IS NOT NULL ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -714,6 +887,46 @@
               "display-name": "Код СЭМД",
               "id": "f9000004-0004-4004-8004-000000000010",
               "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f9000004-0004-4004-8004-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f9000004-0004-4004-8004-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f9000004-0004-4004-8004-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f9000004-0004-4004-8004-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f9000004-0004-4004-8004-000000000016",
+              "name": "log_id",
               "required": false,
               "type": "dimension"
             }
@@ -827,6 +1040,26 @@
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -836,13 +1069,69 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «День (тренд)»",
               "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
               "name": "dwh_date",
+              "type": "dimension"
+            },
+            "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "01060000-0006-4006-8006-000000000010",
+              "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "01060000-0006-4006-8006-000000000011",
+              "name": "top_clinic",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "01060000-0006-4006-8006-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "01060000-0006-4006-8006-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "01060000-0006-4006-8006-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "01060000-0006-4006-8006-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "01060000-0006-4006-8006-000000000016",
+              "name": "log_id",
+              "required": false,
               "type": "dimension"
             }
           }
@@ -858,6 +1147,20 @@
         "graph.show_values": true,
         "graph.x_axis.axis_enabled": "rotate-45",
         "stackable.stack_type": "stacked",
+        "series_settings": {
+          "Успешно зарегистрирован": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          },
+          "В обработке": {
+            "color": "#509EE3"
+          }
+        },
         "table": {
           "columns": {
             "[\"name\",\"clinic_id\"]": {
@@ -896,6 +1199,34 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "Дата обработки"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -905,7 +1236,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Тип ошибки\", \"Категория ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Количество\" FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "query": "SELECT \"Тип ошибки\", \"Категория ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Количество\" FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -979,13 +1310,69 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"День (тренд)\" AS \"Дата\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 1 ASC",
+          "query": "SELECT \"День (тренд)\" AS \"Дата\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 2) AS \"% ошибок\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ORDER BY 1 ASC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «День (тренд)»",
               "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
               "name": "dwh_date",
+              "type": "dimension"
+            },
+            "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "01080000-0008-4008-8008-000000000010",
+              "name": "top_semd",
+              "required": false,
+              "type": "dimension"
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "01080000-0008-4008-8008-000000000011",
+              "name": "top_clinic",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "01080000-0008-4008-8008-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "01080000-0008-4008-8008-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "01080000-0008-4008-8008-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "01080000-0008-4008-8008-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "01080000-0008-4008-8008-000000000016",
+              "name": "log_id",
+              "required": false,
               "type": "dimension"
             }
           }
@@ -1041,6 +1428,34 @@
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },

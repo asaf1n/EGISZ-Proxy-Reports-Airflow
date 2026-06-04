@@ -9,7 +9,7 @@
       "sectionId": "date",
       "slug": "dwh_date_filter",
       "type": "date/all-options",
-      "default": "past30days"
+      "default": "past30days~"
     },
     {
       "id": "b3c4d5e6-f7a8-4901-b234-56789abcdef0",
@@ -30,7 +30,8 @@
       "name": "Период по времени строки (healthcheck, журнал связи)",
       "sectionId": "date",
       "slug": "parse_created_filter",
-      "type": "date/all-options"
+      "type": "date/all-options",
+      "default": "past30days~"
     },
     {
       "id": "b3a4f5e6-d7c8-4901-9234-56789abcdef0",
@@ -71,11 +72,11 @@
   "cards": [
     {
       "name": "Сетевые ошибки (тренд)",
-      "description": "Динамика транспортных ошибок по часам: **COUNT(DISTINCT …)** по ключу группировки; ось — **«Дата создания документа»** (`v_rpt_network_errors_detail_ui`).",
+      "description": "Динамика транспортных ошибок по часам: **COUNT(DISTINCT …)** по ключу группировки; ось — **«Дата создания документа»** (`v_rpt_network_errors_detail_ui`). Период графика равен фильтру **«Период по времени строки»** (`parse_created`, по умолчанию 30 суток).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(\"Дата создания документа\") FROM public.v_rpt_network_errors_detail_ui), NOW()) AS mx ) SELECT date_trunc('hour', \"Дата создания документа\") AS \"Час\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui CROSS JOIN b WHERE \"Дата создания документа\" >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', \"Дата создания документа\") AS \"Час\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -122,11 +123,11 @@
     },
     {
       "name": "Ошибки регистрации в РЭМД ЕГИСЗ (тренд)",
-      "description": "Динамика **уникальных документов** со сбоем канала (`document_key`) по часам. Ось времени — **created_at** в `stg_channel_errors` (не IPS). Используйте фильтр по **created_at**; без него берётся окно **30 суток до MAX(created_at)** (не привязано к календарю сервера).",
+      "description": "Динамика **уникальных документов** со сбоем канала (`document_key`) по часам. Ось времени — **created_at** в `stg_channel_errors` (не IPS). Период графика равен фильтру **«Период по времени строки»** (`parse_created` по `created_at`, по умолчанию 30 суток).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH b AS ( SELECT COALESCE((SELECT MAX(created_at) FROM public.v_stg_channel_errors_by_document), NOW()) AS mx ) SELECT date_trunc('hour', created_at) AS \"Час\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document CROSS JOIN b WHERE created_at >= b.mx - INTERVAL '30 days' [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', created_at) AS \"Час\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",
@@ -196,7 +197,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Статус\" AS \"Тип\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT \"Статус\" AS \"Тип\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Уникальных документов\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('async_error', 'network_error') [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -218,6 +219,34 @@
               "id": "f3a00003-0003-4003-8003-000000099011",
               "name": "top_clinic",
               "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f3a00003-0003-4003-8003-000000099012",
+              "name": "local_uid",
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f3a00003-0003-4003-8003-000000099013",
+              "name": "relates_to",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f3a00003-0003-4003-8003-000000099014",
+              "name": "emdr_id",
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f3a00003-0003-4003-8003-000000099015",
+              "name": "log_id",
+              "type": "dimension"
             }
           }
         },
@@ -230,17 +259,17 @@
         "pie.dimension": "Тип",
         "pie.rows": [
           {
-            "color": "#51528D",
+            "color": "#A989C5",
             "defaultColor": false,
             "enabled": true,
             "hidden": false,
             "isOther": false,
-            "key": "Ошибка в асинхронном ответе РЭМД",
-            "name": "Ошибка в асинхронном ответе РЭМД",
-            "originalName": "Ошибка в асинхронном ответе РЭМД"
+            "key": "Ошибка асинхронного ответа РЭМД",
+            "name": "Ошибка асинхронного ответа РЭМД",
+            "originalName": "Ошибка асинхронного ответа РЭМД"
           },
           {
-            "color": "#ED8535",
+            "color": "#F2994A",
             "defaultColor": false,
             "enabled": true,
             "hidden": false,
@@ -277,6 +306,22 @@
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -357,7 +402,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', \"Дата обработки\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) AS err FROM public.v_rpt_documents_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', \"Дата обработки\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) AS err FROM public.v_rpt_documents_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -378,6 +423,34 @@
               "display-name": "Код СЭМД",
               "id": "f2000007-0007-4007-8007-000000000010",
               "name": "top_semd",
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f2000007-0007-4007-8007-000000000012",
+              "name": "local_uid",
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f2000007-0007-4007-8007-000000000013",
+              "name": "relates_to",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f2000007-0007-4007-8007-000000000014",
+              "name": "emdr_id",
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f2000007-0007-4007-8007-000000000015",
+              "name": "log_id",
               "type": "dimension"
             }
           }
@@ -431,6 +504,22 @@
         "top_semd": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -440,7 +529,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Наименование клиники\" AS \"Наименование клиники\", \"Доля ошибок, %\" AS \"Доля ошибок, %\", \"Документов за 24ч\" AS \"Документов за 24ч\", \"В очереди (документов)\" AS \"В очереди (документов)\", \"Уровень здоровья\" AS \"Уровень здоровья\" FROM public.v_health_by_clinic_ui WHERE \"Документов за 24ч\" >= 20 [[AND \"JID клиники\"::text = {{top_clinic}}]] ORDER BY \"Доля ошибок, %\" DESC NULLS LAST, \"Документов за 24ч\" DESC LIMIT 15",
+          "query": "SELECT \"Наименование клиники\" AS \"Наименование клиники\", \"Доля ошибок, %\" AS \"Доля ошибок, %\", \"Документов за 24ч\" AS \"Документов за 24ч\", \"В очереди (документов)\" AS \"В очереди (документов)\", \"Уровень здоровья\" AS \"Уровень здоровья\" FROM public.v_health_by_clinic_ui WHERE \"Документов за 24ч\" >= 20 [[AND {{top_clinic}}]] ORDER BY \"Доля ошибок, %\" DESC NULLS LAST, \"Документов за 24ч\" DESC LIMIT 15",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -493,7 +582,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -514,6 +603,34 @@
               "display-name": "Код СЭМД",
               "id": "f2000002-0002-4002-8002-000000000010",
               "name": "top_semd",
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f2000002-0002-4002-8002-000000000012",
+              "name": "local_uid",
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f2000002-0002-4002-8002-000000000013",
+              "name": "relates_to",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f2000002-0002-4002-8002-000000000014",
+              "name": "emdr_id",
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f2000002-0002-4002-8002-000000000015",
+              "name": "log_id",
               "type": "dimension"
             }
           }
@@ -572,6 +689,22 @@
         "top_semd": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -644,7 +777,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '(пусто)') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -665,6 +798,34 @@
               "display-name": "Код СЭМД",
               "id": "f2000001-0001-4001-8001-000000000010",
               "name": "top_semd",
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f2000001-0001-4001-8001-000000000012",
+              "name": "local_uid",
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f2000001-0001-4001-8001-000000000013",
+              "name": "relates_to",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f2000001-0001-4001-8001-000000000014",
+              "name": "emdr_id",
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f2000001-0001-4001-8001-000000000015",
+              "name": "log_id",
               "type": "dimension"
             }
           }
@@ -720,6 +881,22 @@
         "top_semd": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     },
@@ -767,7 +944,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(*)::bigint AS \"Строк в stg_channel_errors\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]]",
+          "query": "SELECT COUNT(*)::bigint AS \"Строк в stg_channel_errors\", COUNT(DISTINCT document_key)::bigint AS \"Уникальных документов с ошибкой\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND {{err_parse_code}}]]",
           "template-tags": {
             "err_parse_code": {
               "widget-type": "string/=",
@@ -819,7 +996,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT id AS \"Номер записи\", error_code AS \"Код ошибки\", LEFT(message, 200) AS \"Сообщение\", created_at AS \"Создано\", relates_to_hint AS \"relatesToMessage (из текста журнала)\", local_uid_hint AS \"localUid (из текста)\", emdr_id_hint AS \"emdrId (из текста)\", exchangelog_log_id AS \"EXCHANGELOG.LOGID\", journal_msgid AS \"EXCHANGELOG.MSGID\", document_key AS \"Документ (ключ учёта)\", relates_to_id AS \"relates_to_id (если есть)\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND error_code::text = {{err_parse_code}}]] [[AND NULLIF(TRIM(local_uid_hint::text), '') = {{local_uid}}]] [[AND NULLIF(TRIM(relates_to_hint::text), '') = {{relates_to}}]] [[AND NULLIF(TRIM(emdr_id_hint::text), '') = {{emdr_id}}]] [[AND NULLIF(TRIM(exchangelog_log_id::text), '') = {{log_id}}]] ORDER BY id DESC LIMIT 100",
+          "query": "SELECT id AS \"Номер записи\", error_code AS \"Код ошибки\", LEFT(message, 200) AS \"Сообщение\", created_at AS \"Создано\", relates_to_hint AS \"relatesToMessage (из текста журнала)\", local_uid_hint AS \"localUid (из текста)\", emdr_id_hint AS \"emdrId (из текста)\", exchangelog_log_id AS \"EXCHANGELOG.LOGID\", journal_msgid AS \"EXCHANGELOG.MSGID\", document_key AS \"Документ (ключ учёта)\", relates_to_id AS \"relates_to_id (если есть)\" FROM public.v_stg_channel_errors_by_document WHERE 1=1 [[AND {{parse_created}}]] [[AND {{err_parse_code}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] ORDER BY id DESC LIMIT 100",
           "template-tags": {
             "parse_created": {
               "widget-type": "date/all-options",

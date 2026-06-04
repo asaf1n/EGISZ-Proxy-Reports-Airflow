@@ -21,7 +21,8 @@
 # не прерывается, тип виджета остаётся из template-tags.
 #
 # Параметры дашборда: основной период (dwh_date_filter / mgmt_period_filter) по умолчанию
-# past30days, чтобы пустые query-параметры в URL (?dwh_date_filter=) не ломали карточки.
+# past30days~ (суффикс ~ = включая текущий день), чтобы пустые query-параметры
+# в URL (?dwh_date_filter=) не ломали карточки и документы за сегодня попадали в окно.
 # Клиентские дашборды 07/08: default JID для локальной среды (см. JSON).
 # Автоприменение при открытии: METABASE_AUTO_APPLY_FILTERS по умолчанию true
 # в setup-dashboards.sh; отключить — false.

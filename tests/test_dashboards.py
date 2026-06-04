@@ -335,7 +335,7 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
 
     assert dashboard["name"] == "07 Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ"
     assert any(p["name"] == "JID клиники" for p in dashboard["parameters"])
-    assert any(p["name"] == "Период" and p.get("default") == "past7days" for p in dashboard["parameters"])
+    assert any(p["name"] == "Период" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
     assert all("public.v_rpt_client_documents_ui" in query for query in queries)
     assert all("{{client_jid}}" in query for query in queries)

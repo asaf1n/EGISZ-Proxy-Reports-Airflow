@@ -9,7 +9,7 @@
       "slug": "client_period_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past7days"
+      "default": "past7days~"
     },
     {
       "id": "07c00000-0000-4000-8000-000000000002",
@@ -291,7 +291,21 @@
         "graph.metrics": [
           "Документов"
         ],
-        "graph.show_values": false
+        "graph.show_values": false,
+        "series_settings": {
+          "Успешно зарегистрирован": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          },
+          "В обработке": {
+            "color": "#509EE3"
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,

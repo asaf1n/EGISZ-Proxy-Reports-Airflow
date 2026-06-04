@@ -9,42 +9,15 @@
       "slug": "dwh_date_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past30days"
-    },
-    {
-      "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef02",
-      "name": "localUid СЭМД",
-      "slug": "local_uid_filter",
-      "type": "string/=",
-      "sectionId": "string"
-    },
-    {
-      "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef03",
-      "name": "Связанное сообщение (relatesToMessage)",
-      "slug": "relates_to_filter",
-      "type": "string/=",
-      "sectionId": "string"
-    },
-    {
-      "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef04",
-      "name": "Рег. номер РЭМД (emdrid)",
-      "slug": "emdr_id_filter",
-      "type": "string/=",
-      "sectionId": "string"
-    },
-    {
-      "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef05",
-      "name": "Статус",
-      "slug": "status_filter",
-      "type": "string/=",
-      "sectionId": "string"
+      "default": "past30days~"
     },
     {
       "id": "f5e6d7c8-b9a0-4123-cdef-012345678901",
       "name": "Период по «Дата создания документа» (транспорт)",
       "slug": "parse_created_filter",
       "type": "date/all-options",
-      "sectionId": "date"
+      "sectionId": "date",
+      "default": "past30days~"
     },
     {
       "id": "f5e6d7c8-b9a0-4123-cdef-012345678902",

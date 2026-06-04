@@ -9,7 +9,7 @@
       "slug": "client_period_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past30days"
+      "default": "past30days~"
     },
     {
       "id": "08b00000-0000-4000-8000-000000000002",

@@ -9,7 +9,7 @@
       "slug": "dwh_date_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past30days"
+      "default": "past30days~"
     },
     {
       "id": "f4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a2",
@@ -40,7 +40,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] ORDER BY \"Отправлено\" DESC NULLS LAST LIMIT 100",
+          "query": "SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] ORDER BY \"Отправлено\" DESC NULLS LAST LIMIT 100",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -148,7 +148,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
+          "query": "SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -250,7 +250,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 72 THEN '24–72 часа' ELSE 'просрочено (>72ч)' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] AND \"Отправлено\" IS NOT NULL ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 72 THEN '24–72 часа' ELSE 'просрочено (>72ч)' END AS \"Время ожидания\", COUNT(DISTINCT p.\"localUid СЭМД\")::bigint AS \"Документов\" FROM base p CROSS JOIN pend_ref GROUP BY 1 ORDER BY MIN(EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\")))",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -349,7 +349,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), NULLIF(TRIM(\"Код СЭМД\"), ''), '(неизвестно)') AS \"Наименование СЭМД\", COUNT(DISTINCT \"localUid СЭМД\")::bigint AS \"Документов\" FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 25",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -448,7 +448,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND NULLIF(TRIM(\"Код СЭМД\"), '') = {{top_semd}}]] [[AND \"JID клиники\"::text = {{top_clinic}}]] [[AND NULLIF(TRIM(\"localUid СЭМД\"::text), '') = {{local_uid}}]] ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT \"localUid СЭМД\" AS \"ИД документа\", COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS \"Код СЭМД\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)') AS \"Наименование СЭМД\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Клиника\", \"Отправлено\", CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\" FROM base p CROSS JOIN pend_ref ORDER BY p.\"Отправлено\" ASC NULLS LAST LIMIT 500",
+          "query": "WITH base AS ( SELECT * FROM public.v_rpt_documents_no_response_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] ), pend_ref AS ( SELECT COALESCE(MAX(\"Отправлено\"), NOW()) AS ref_ts FROM base ) SELECT \"localUid СЭМД\" AS \"ИД документа\", COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '(пусто)') AS \"Код СЭМД\", COALESCE(NULLIF(TRIM(\"Наименование СЭМД\"), ''), '(пусто)') AS \"Наименование СЭМД\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Клиника\", \"Отправлено\", CASE WHEN p.\"Отправлено\" IS NULL THEN 'дата неизвестна' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 1 THEN 'менее 1 часа' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 12 THEN '1–12 часов' WHEN EXTRACT(EPOCH FROM (pend_ref.ref_ts - p.\"Отправлено\"))/3600 < 24 THEN '12–24 часа' ELSE 'свыше 24 часов' END AS \"Время ожидания\" FROM base p CROSS JOIN pend_ref ORDER BY p.\"Отправлено\" ASC NULLS LAST LIMIT 500",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",

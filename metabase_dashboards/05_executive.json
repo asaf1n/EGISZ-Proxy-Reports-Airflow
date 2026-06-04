@@ -9,7 +9,7 @@
       "slug": "mgmt_period_filter",
       "type": "date/all-options",
       "sectionId": "date",
-      "default": "past30days"
+      "default": "past30days~"
     }
   ],
   "cards": [
