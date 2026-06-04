@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from egisz_elt.fb_client import (
     fetch_exchangelog_after_cursor,
     fetch_exchangelog_by_logids,
-    fetch_exchangelog_logids,
+    fetch_exchangelog_logids_in_band,
     fetch_organizations,
 )
 
@@ -83,33 +82,30 @@ def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytic
     assert con.cursor_instance.params == (100, 500)
 
 
-def test_fetch_exchangelog_after_cursor_applies_created_cutoff() -> None:
-    cutoff = datetime(2026, 5, 18)
+def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
     con = FakeConnection([])
 
-    fetch_exchangelog_after_cursor(con, after_logid=100, limit=500, created_from=cutoff)
+    fetch_exchangelog_after_cursor(con, after_logid=100, limit=500)
 
-    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (100, cutoff, 500)
+    assert "COALESCE(LOGDATE, CREATEDATE)" not in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (100, 500)
 
 
-def test_fetch_exchangelog_logids_applies_created_cutoff_and_returns_ints() -> None:
-    cutoff = datetime(2026, 5, 18)
+def test_fetch_exchangelog_logids_in_band_set_diffs_watermark_window() -> None:
     con = FakeConnection([(101,), (102,)])
 
-    logids = fetch_exchangelog_logids(con, created_from=cutoff)
+    result = fetch_exchangelog_logids_in_band(con, low_logid=100, high_logid=300)
 
-    assert logids == [101, 102]
-    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (cutoff,)
+    assert result == {101, 102}
+    assert "WHERE LOGID > ? AND LOGID <= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (100, 300)
 
 
-def test_fetch_exchangelog_logids_without_cutoff_scans_all() -> None:
-    con = FakeConnection([(7,)])
+def test_fetch_exchangelog_logids_in_band_empty_window_returns_empty_without_query() -> None:
+    con = FakeConnection([])
 
-    assert fetch_exchangelog_logids(con) == [7]
-    assert "WHERE" not in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == ()
+    assert fetch_exchangelog_logids_in_band(con, low_logid=300, high_logid=300) == set()
+    assert con.executed_sql == []
 
 
 def test_fetch_exchangelog_by_logids_serializes_rows() -> None:

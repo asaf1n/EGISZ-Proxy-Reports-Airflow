@@ -95,7 +95,6 @@ def fetch_exchangelog_after_cursor(
     *,
     after_logid: int,
     limit: int,
-    created_from: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch an EXCHANGELOG batch for in-process E+L load (not for XCom)."""
     if limit <= 0:
@@ -114,17 +113,10 @@ def fetch_exchangelog_after_cursor(
                 MSGTEXT
             FROM EXCHANGELOG
             WHERE LOGID > ?
-            """
-        params: list[Any] = [int(after_logid or 0)]
-        if created_from is not None:
-            query += " AND COALESCE(LOGDATE, CREATEDATE) >= ?"
-            params.append(created_from)
-        query += """
             ORDER BY LOGID
             ROWS ?
             """
-        params.append(int(limit))
-        cur.execute(query, tuple(params))
+        cur.execute(query, (int(after_logid or 0), int(limit)))
         rows: list[dict[str, Any]] = []
         for logid, logdate, createdate, msgid, logstate, logtext, msgtext in cur.fetchall():
             rows.append(
@@ -143,24 +135,31 @@ def fetch_exchangelog_after_cursor(
         cur.close()
 
 
-def fetch_exchangelog_logids(con, *, created_from: Any | None = None) -> list[int]:
-    """Fetch the full set of date-eligible EXCHANGELOG LOGIDs for reconciliation.
+def fetch_exchangelog_logids_in_band(
+    con,
+    *,
+    low_logid: int,
+    high_logid: int,
+) -> set[int]:
+    """Return EXCHANGELOG LOGIDs in the band ``(low_logid, high_logid]``.
 
-    The proxy journal materializes rows out of LOGID order: a row can appear *after*
-    the keyset cursor has already advanced past its LOGID (async СЭМД callbacks land
-    late, and the gateway occasionally backfills the journal). The forward cursor
-    (`LOGID > last_logid`) therefore loses such rows permanently. The reconcile task
-    diffs this id set against exchangelog_raw to recover them — see CLAUDE.md §2.
+    The proxy journal materializes rows out of LOGID order: async СЭМД callbacks and
+    gateway backfills appear *below* an already-advanced watermark, where the forward
+    cursor (`LOGID > last_logid`) never re-reads them. Reconcile set-diffs this band — a
+    fixed window just below the watermark — against exchangelog_raw to find the gaps. The
+    scan is LOGID-bounded (no date), so it stays cheap and bounded regardless of journal
+    size; the band must be wide enough to cover the out-of-order span. See CLAUDE.md §2.
     """
+    if high_logid <= low_logid:
+        return set()
+
     cur = con.cursor()
     try:
-        query = "SELECT LOGID FROM EXCHANGELOG"
-        params: list[Any] = []
-        if created_from is not None:
-            query += " WHERE COALESCE(LOGDATE, CREATEDATE) >= ?"
-            params.append(created_from)
-        cur.execute(query, tuple(params))
-        return [int(row[0]) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT LOGID FROM EXCHANGELOG WHERE LOGID > ? AND LOGID <= ?",
+            (int(low_logid), int(high_logid)),
+        )
+        return {int(row[0]) for row in cur.fetchall()}
     finally:
         cur.close()
 

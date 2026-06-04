@@ -12,16 +12,17 @@ from egisz_elt.fb_client import (
     connect_fb,
     fetch_exchangelog_after_cursor,
     fetch_exchangelog_by_logids,
-    fetch_exchangelog_logids,
+    fetch_exchangelog_logids_in_band,
     fetch_licenses,
     fetch_organizations,
 )
 from egisz_elt.pg_client import (
     connect_pg,
     get_cursors,
-    get_raw_logids,
+    get_raw_logids_in_band,
     load_raw_logs,
     sync_directory,
+    transform_missing_windows,
     transform_raw_to_facts,
     update_cursors,
 )
@@ -32,6 +33,12 @@ PIPELINE = "egisz"
 BATCH_SIZE = 5000
 DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
+
+# reconcile_late_arrivals ищет опоздавшие строки только в полосе LOGID непосредственно под
+# watermark: (last_logid - N) .. last_logid. N должен с запасом перекрывать типичный разброс
+# внеочередного наполнения журнала (инцидент 2026-06-01 — ~68k ниже watermark). Меняй ширину
+# полосы здесь; шире — надёжнее ловит совсем старые stragglers, но дороже скан Firebird.
+RECONCILE_WATERMARK_LOOKBACK_LOGIDS = 200000
 
 
 class BatchMetadata(TypedDict):
@@ -89,9 +96,7 @@ def egisz_elt_pipeline() -> None:
     def extract_and_load_batch() -> BatchMetadata:
         pg_conn = _dwh_connection()
         try:
-            cursor_state = get_cursors(pg_conn, PIPELINE)
-            last_logid = int(cursor_state.get("last_logid", 0))
-            source_min_created_at = cursor_state.get("source_min_created_at")
+            last_logid = int(get_cursors(pg_conn, PIPELINE).get("last_logid", 0))
 
             fb_conn = _proxy_connection()
             try:
@@ -100,7 +105,6 @@ def egisz_elt_pipeline() -> None:
                     fb_conn,
                     after_logid=last_logid,
                     limit=BATCH_SIZE,
-                    created_from=source_min_created_at,
                 )
                 log.info(
                     "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
@@ -204,37 +208,48 @@ def egisz_elt_pipeline() -> None:
 
     @task
     def reconcile_late_arrivals() -> int:
-        """Recover EXCHANGELOG rows that materialized *below* the watermark.
+        """Recover EXCHANGELOG rows that materialized out of LOGID order below the watermark.
 
-        The proxy journal can write a row after the keyset cursor already advanced
-        past its LOGID (async СЭМД callbacks arrive late; the gateway also backfills
-        the journal in bulk). `extract_and_load_batch` reads `LOGID > last_logid`, so
-        those rows are invisible to it forever. Each cycle we diff the proxy's
-        date-eligible LOGID set against exchangelog_raw and load+transform whatever is
-        missing below the watermark — without moving the watermark, so GREATEST stays
-        the only writer of last_logid. Steady state finds nothing and is a no-op.
+        The proxy journal can write a row after the keyset cursor already advanced past its
+        LOGID (async СЭМД callbacks arrive late; the gateway also backfills the journal in
+        bulk). `extract_and_load_batch` reads `LOGID > last_logid`, so those rows are
+        invisible to it forever. Each cycle we set-diff the proxy's LOGID band just below the
+        watermark — `(last_logid - RECONCILE_WATERMARK_LOOKBACK_LOGIDS, last_logid]` — against
+        exchangelog_raw and load+transform whatever is missing, **without moving the
+        watermark** (GREATEST stays the only writer of last_logid). The band is LOGID-bounded
+        (no date), so the scan is cheap and bounded; linkage of a recovered callback to its
+        parent document still happens by relatesToMessage inside the transform. Steady state
+        finds nothing and is a no-op. See CLAUDE.md §2.
         """
         pg_conn = _dwh_connection()
         try:
-            cursor_state = get_cursors(pg_conn, PIPELINE)
-            last_logid = int(cursor_state.get("last_logid", 0))
-            source_min_created_at = cursor_state.get("source_min_created_at")
-            raw_logids = get_raw_logids(pg_conn)
+            last_logid = int(get_cursors(pg_conn, PIPELINE).get("last_logid", 0))
+            if last_logid <= 0:
+                log.info("Reconcile: watermark not advanced yet; nothing to reconcile.")
+                return 0
+            low_logid = max(last_logid - RECONCILE_WATERMARK_LOOKBACK_LOGIDS, 0)
+            raw_logids = get_raw_logids_in_band(pg_conn, low_logid=low_logid, high_logid=last_logid)
 
             fb_conn = _proxy_connection()
             try:
-                proxy_logids = fetch_exchangelog_logids(fb_conn, created_from=source_min_created_at)
-                missing = sorted(
-                    logid
-                    for logid in proxy_logids
-                    if logid <= last_logid and logid not in raw_logids
+                band_logids = fetch_exchangelog_logids_in_band(
+                    fb_conn,
+                    low_logid=low_logid,
+                    high_logid=last_logid,
                 )
+                missing = sorted(band_logids - raw_logids)
                 if not missing:
-                    log.info("Reconcile: no late-arriving rows below watermark LOGID=%s.", last_logid)
+                    log.info(
+                        "Reconcile: band (LOGID %s..%s] fully present in raw.",
+                        low_logid,
+                        last_logid,
+                    )
                     return 0
                 log.info(
-                    "Reconcile: %s row(s) below watermark missing from raw (LOGID %s..%s).",
+                    "Reconcile: %s row(s) missing from raw in band (LOGID %s..%s], span %s..%s.",
                     len(missing),
+                    low_logid,
+                    last_logid,
                     missing[0],
                     missing[-1],
                 )
@@ -249,17 +264,13 @@ def egisz_elt_pipeline() -> None:
                 cur.execute("ANALYZE public.exchangelog_raw")
             pg_conn.set_session(autocommit=False)
 
-            reconciled = transform_raw_to_facts(
-                pg_conn,
-                from_logid=missing[0] - 1,
-                to_logid=missing[-1],
-            )
+            reconciled = transform_missing_windows(pg_conn, missing)
 
             pg_conn.set_session(autocommit=True)
             with pg_conn.cursor() as cur:
                 cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_daily_ui")
                 cur.execute("ANALYZE public.fact_egisz_documents")
-            log.info("Reconcile: recovered %s late-arriving row(s) into document facts.", reconciled)
+            log.info("Reconcile: recovered %s late chain message(s) into document facts.", reconciled)
             return reconciled
         finally:
             pg_conn.close()

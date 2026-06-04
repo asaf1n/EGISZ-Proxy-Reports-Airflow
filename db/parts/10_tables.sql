@@ -9,16 +9,17 @@
 CREATE TABLE IF NOT EXISTS elt_state (
     pipeline text PRIMARY KEY,
     last_logid bigint DEFAULT 0,
-    source_min_created_at timestamptz,
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS source_min_created_at timestamptz;
+-- Дата-отсечка источника снята: forward-выборка идёт только по LOGID-курсору, а
+-- дозагрузка опоздавших строк (reconcile_late_arrivals) ищет сообщения по
+-- relatesToMessage незавершённых документов безотносительно даты — см. CLAUDE.md §2.
+ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
 
-INSERT INTO elt_state (pipeline, last_logid, source_min_created_at)
-VALUES ('egisz', 0, timestamptz '2026-05-18 00:00:00+00')
-ON CONFLICT (pipeline) DO UPDATE SET
-    source_min_created_at = COALESCE(elt_state.source_min_created_at, EXCLUDED.source_min_created_at);
+INSERT INTO elt_state (pipeline, last_logid)
+VALUES ('egisz', 0)
+ON CONFLICT (pipeline) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logid bigint PRIMARY KEY,

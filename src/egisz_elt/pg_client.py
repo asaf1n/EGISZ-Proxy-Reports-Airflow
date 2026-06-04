@@ -23,6 +23,10 @@ DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 1000
 
+# Reconcile recovers scattered chain messages. Mirrors the transform's own -500
+# getDocumentFile lookback so coalesced windows scan no more raw than a single window.
+RECONCILE_WINDOW_MAX_GAP = 500
+
 
 def normalize_message_id(value: Any) -> Any:
     """Normalize EGISZ UUID wrappers while preserving empty/null values."""
@@ -49,29 +53,36 @@ def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
 
 
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
-    """Read pipeline cursor state including optional source lower bound."""
+    """Read pipeline watermark state (``last_logid``)."""
     with con.cursor() as cur:
         cur.execute(
-            """
-            SELECT last_logid, source_min_created_at
-            FROM elt_state
-            WHERE pipeline = %s
-            """,
+            "SELECT last_logid FROM elt_state WHERE pipeline = %s",
             (pipeline,),
         )
         row = cur.fetchone()
     if row is None:
-        return {"last_logid": 0, "source_min_created_at": None}
-    return {
-        "last_logid": int(row[0] or 0),
-        "source_min_created_at": row[1],
-    }
+        return {"last_logid": 0}
+    return {"last_logid": int(row[0] or 0)}
 
 
-def get_raw_logids(con: psycopg2.extensions.connection) -> set[int]:
-    """Return every LOGID already present in exchangelog_raw (for reconcile set-diff)."""
+def get_raw_logids_in_band(
+    con: psycopg2.extensions.connection,
+    *,
+    low_logid: int,
+    high_logid: int,
+) -> set[int]:
+    """Return LOGIDs present in exchangelog_raw within ``(low_logid, high_logid]``.
+
+    Banded to the same watermark window the reconcile set-diff scans, so it never reads the
+    whole staging table — see CLAUDE.md §2.
+    """
+    if high_logid <= low_logid:
+        return set()
     with con.cursor() as cur:
-        cur.execute("SELECT logid FROM exchangelog_raw")
+        cur.execute(
+            "SELECT logid FROM exchangelog_raw WHERE logid > %s AND logid <= %s",
+            (int(low_logid), int(high_logid)),
+        )
         return {int(row[0]) for row in cur.fetchall()}
 
 
@@ -128,6 +139,40 @@ def transform_raw_to_facts(
         transformed = int(cur.fetchone()[0] or 0)
     con.commit()
     return transformed
+
+
+def coalesce_logid_windows(
+    logids: list[int] | set[int],
+    *,
+    max_gap: int = RECONCILE_WINDOW_MAX_GAP,
+) -> list[tuple[int, int]]:
+    """Group LOGIDs into ``(lo, hi)`` windows, merging runs separated by ``<= max_gap``.
+
+    Transforming the single ``min..max`` span would re-parse everything between two distant
+    LOGIDs; per-id windows would issue one transform call per row. Coalescing into dense
+    windows bounds the re-transform to the actual gaps.
+    """
+    ordered = sorted({int(value) for value in logids})
+    windows: list[tuple[int, int]] = []
+    for logid in ordered:
+        if windows and logid - windows[-1][1] <= max_gap:
+            windows[-1] = (windows[-1][0], logid)
+        else:
+            windows.append((logid, logid))
+    return windows
+
+
+def transform_missing_windows(
+    con: psycopg2.extensions.connection,
+    missing: list[int] | set[int],
+    *,
+    max_gap: int = RECONCILE_WINDOW_MAX_GAP,
+) -> int:
+    """Run ``egisz_transform_raw_to_facts`` over each dense LOGID window of ``missing``."""
+    total = 0
+    for lo, hi in coalesce_logid_windows(missing, max_gap=max_gap):
+        total += transform_raw_to_facts(con, from_logid=lo - 1, to_logid=hi)
+    return total
 
 
 def sync_directory(con: psycopg2.extensions.connection, table_name: str, rows: list[tuple[Any, ...]]) -> None:

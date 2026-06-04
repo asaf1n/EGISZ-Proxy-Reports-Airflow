@@ -8,11 +8,13 @@ from egisz_elt.pg_client import (
     DIRECTORY_SYNC_LOCK_TIMEOUT,
     DIRECTORY_SYNC_PAGE_SIZE,
     DIRECTORY_SYNC_STATEMENT_TIMEOUT,
+    coalesce_logid_windows,
     get_cursors,
-    get_raw_logids,
+    get_raw_logids_in_band,
     load_raw_logs,
     normalize_message_id,
     sync_directory,
+    transform_missing_windows,
     transform_raw_to_facts,
     update_cursors,
 )
@@ -325,28 +327,33 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert con.committed is True
 
 
-def test_get_cursors_reads_last_logid_and_source_cutoff() -> None:
+def test_get_cursors_reads_last_logid_only() -> None:
     class Cursor:
+        def __init__(self) -> None:
+            self.sql = ""
+
         def __enter__(self) -> "Cursor":
             return self
 
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def execute(self, _sql: str, _params: tuple[object, ...]) -> None:
-            return None
+        def execute(self, sql: str, _params: tuple[object, ...]) -> None:
+            self.sql = sql
 
-        def fetchone(self) -> tuple[int, object]:
-            return (123, "2026-05-18T00:00:00+00:00")
+        def fetchone(self) -> tuple[int]:
+            return (123,)
 
     class Connection:
-        def cursor(self) -> Cursor:
-            return Cursor()
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {
-        "last_logid": 123,
-        "source_min_created_at": "2026-05-18T00:00:00+00:00",
-    }
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    con = Connection()
+    assert get_cursors(con, "egisz") == {"last_logid": 123}
+    assert "source_min_created_at" not in con.cursor_instance.sql
 
 
 def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
@@ -367,35 +374,106 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {"last_logid": 0, "source_min_created_at": None}
+    assert get_cursors(Connection(), "egisz") == {"last_logid": 0}
 
 
-def test_get_raw_logids_returns_deduplicated_int_set() -> None:
+def test_get_raw_logids_in_band_returns_int_set_within_window() -> None:
     class Cursor:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] | None = None
+
         def __enter__(self) -> "Cursor":
             return self
 
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def execute(self, sql: str) -> None:
-            assert "FROM exchangelog_raw" in sql
+        def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+            self.sql = sql
+            self.params = params
 
         def fetchall(self) -> list[tuple[int]]:
-            return [(1,), (2,), (2,), (5,)]
+            return [(101,), (102,), (102,)]
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    con = Connection()
+    assert get_raw_logids_in_band(con, low_logid=100, high_logid=300) == {101, 102}
+    cursor = con.cursor_instance
+    assert "FROM exchangelog_raw WHERE logid > %s AND logid <= %s" in cursor.sql
+    assert cursor.params == (100, 300)
+
+
+def test_get_raw_logids_in_band_empty_window_skips_query() -> None:
+    class Cursor:  # pragma: no cover - must not be reached
+        def __enter__(self) -> "Cursor":
+            raise AssertionError("empty band must not open a cursor")
 
     class Connection:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_raw_logids(Connection()) == {1, 2, 5}
+    assert get_raw_logids_in_band(Connection(), low_logid=300, high_logid=300) == set()
 
 
-def test_dwh_init_sql_seeds_source_min_created_at_in_elt_state() -> None:
+def test_coalesce_logid_windows_merges_runs_within_gap() -> None:
+    # 100..102 dense; 5000 far apart; default gap 500.
+    assert coalesce_logid_windows([102, 100, 101, 5000]) == [(100, 102), (5000, 5000)]
+
+
+def test_coalesce_logid_windows_merges_across_small_gaps() -> None:
+    # 100 and 300 are within max_gap=500 → one window; 1000 starts a new one.
+    assert coalesce_logid_windows([100, 300, 1000]) == [(100, 300), (1000, 1000)]
+
+
+def test_coalesce_logid_windows_empty() -> None:
+    assert coalesce_logid_windows([]) == []
+
+
+def test_transform_missing_windows_calls_transform_per_window() -> None:
+    calls: list[tuple[int, int]] = []
+
+    class FakeCursor:
+        def __enter__(self) -> "FakeCursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, _sql: str, params: tuple[int, int]) -> None:
+            calls.append(params)
+
+        def fetchone(self) -> tuple[int]:
+            return (2,)
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+        def commit(self) -> None:
+            return None
+
+    total = transform_missing_windows(FakeConnection(), [100, 101, 5000])
+
+    # Two dense windows: (100,101) and (5000,5000); from_logid = lo - 1.
+    assert calls == [(99, 101), (4999, 5000)]
+    assert total == 4
+
+
+def test_dwh_init_sql_drops_source_min_created_at_from_elt_state() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "10_tables.sql").read_text(encoding="utf-8")
 
-    assert "ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS source_min_created_at timestamptz" in sql
-    assert "INSERT INTO elt_state (pipeline, last_logid, source_min_created_at)" in sql
+    # Дата-отсечка источника снята целиком: ни колонки, ни date-seed.
+    assert "ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at" in sql
+    assert "source_min_created_at timestamptz" not in sql
+    assert "INSERT INTO elt_state (pipeline, last_logid)\nVALUES ('egisz', 0)" in sql
+    assert "2026-05-18" not in sql
     assert "SOURCE_MIN_CREATED_AT" not in sql
 
 
