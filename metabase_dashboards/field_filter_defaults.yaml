@@ -187,6 +187,12 @@ tags:
   # а не только от подстрок в query.
   dwh_date:
     rules:
+      - query_contains: [v_rpt_network_errors_detail_ui]
+        table_ref: public.v_rpt_network_errors_detail_ui
+        field_name: Дата создания документа
+      - query_contains: [v_stg_channel_errors_by_document]
+        table_ref: public.v_stg_channel_errors_by_document
+        field_name: created_at
       - query_contains: [v_rpt_error_category_breakdown_ui]
         table_ref: public.v_rpt_error_category_breakdown_ui
         field_name: Обработано IPS

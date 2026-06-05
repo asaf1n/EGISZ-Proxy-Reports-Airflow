@@ -193,7 +193,7 @@ The СЭМД type reference is seeded directly in `db/parts/10_tables.sql` (a la
 - Metabase version: **v0.60.2.5**, deployed to Kubernetes (`k8s/metabase/`).
 - **8 dashboards**, ~100 native cards total. JSON definitions — in `metabase_dashboards/`:
   - `01_operational.json` — operational monitoring of the outgoing flow
-  - `02_service.json` — ETL and channel healthcheck
+  - `02_service.json` — ETL healthcheck, hourly error trends, period KPIs, network-error drill-down (17 cards)
   - `03_documents_no_response.json` — escalation queue (callback not received)
   - `04_quality_and_errors.json` — detailed failure analysis (69-category classification)
   - `05_executive.json` — management summary. Операционные + финансовые KPI на реальных данных DWH. Финансовая модель — фикс-подписка **10 000 ₽/JID/мес** (MRR = `COUNT(DISTINCT jid) × 10 000`). Раньше дашборд опирался на заглушечные таблицы service_audit (CAC/LTV/SLA/MTTR/...) с захардкоженными константами; те таблицы и ~20 `v_rpt_service_audit_*` views удалены, метрики на придуманных данных сняты
@@ -205,7 +205,7 @@ The СЭМД type reference is seeded directly in `db/parts/10_tables.sql` (a la
 - Field filters for dashboards are configured by `scripts/apply_metabase_field_filters.py` using declarative rules in `metabase_dashboards/field_filter_defaults.yaml` (format — **version: 2**). This is a resolver, not business logic.
 - **Filter-propagation contract.** A dashboard parameter must reach every card whose source view physically has the column: add the `[[AND {{tag}}]]` clause **and** the `dimension` template-tag, then run `apply_metabase_field_filters.py` to fill `metabase-field-filters` (do not hand-write bindings the resolver can derive). A dashboard parameter maps to a card only when the card's template-tags contain a tag named `slug` minus the `_filter` suffix (see `metabase/setup-dashboards.sh`). Where the source view lacks the column (e.g. `v_rpt_error_category_breakdown_ui` has no `Статус`/`localUid`/`emdrId`/`LOGID`), do **not** wire the filter — the card keeps its own scope rather than silently ignoring it. "Now" snapshots (healthcheck, proxy-DB summary, 24h/72h windows) and trailing-30d KPIs (`MRR`/`ARR`) are intentionally period-independent and say so in the card name.
 - **Status color palette (fixed).** The four canonical statuses are colored identically across every chart (`pie.rows` / `series_settings`): `Успешно зарегистрирован` → `#84BB4C`, `Ошибка асинхронного ответа РЭМД` → `#A989C5`, `Ошибка связи` → `#F2994A`, `В обработке` → `#509EE3`. The series/slice key must be the exact RU `Статус` label from `v_rpt_documents_ui`, or the color will not bind.
-- **Trend period = filter.** Hourly trend cards bind their axis to the period filter, not a hardcoded `MAX(...) - INTERVAL` floor; give the bound date param a `past30days~` default so an empty filter does not scan full history (`parse_created_filter` on `02`/`04`).
+- **Trend period = filter.** Hourly trend cards on `02` bind to `dwh_date_filter` (Обработано IPS); default `past30days~` so an empty filter does not scan full history. Dashboard `04` keeps `parse_created_filter` for journal-row date on network-error detail cards.
 - Metabase uses its **own** PostgreSQL database `metabase_app` (StatefulSet `metabase-postgres`). Do not mix it with `dwh_egisz` or `airflow_db`.
 - When changing the DWH schema — verify compatibility with:
   1. Field-filter mapping in `metabase_dashboards/field_filter_defaults.yaml`

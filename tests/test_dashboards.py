@@ -84,6 +84,38 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
     assert '"Исходный текст ошибки"' in sql
 
 
+def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    for name in ("Сетевые ошибки (тренд)", "Ошибки регистрации в РЭМД ЕГИСЗ (тренд)"):
+        card = next(c for c in dashboard["cards"] if c["name"] == name)
+        query = card["dataset_query"]["native"]["query"]
+        assert "date_trunc('hour', \"Дата обработки\")" in query
+        assert "[[AND {{dwh_date}}]]" in query
+        assert card["visualization_settings"]["graph.dimensions"] == ["Час"]
+
+
+def test_service_async_vs_network_pie_uses_canonical_status_colors() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c["name"] == "async vs network")
+    query = card["dataset_query"]["native"]["query"]
+    assert 'SELECT "Статус"' in query
+    assert '"Статус" AS "Тип"' not in query
+    rows = card["visualization_settings"]["pie.rows"]
+    colors = {row["key"]: row["color"] for row in rows}
+    assert colors["Ошибка асинхронного ответа РЭМД"] == "#A989C5"
+    assert colors["Ошибка связи"] == "#F2994A"
+    assert card["visualization_settings"]["pie.dimension"] == ["Статус"]
+
+
+def test_service_healthcheck_pie_matches_signals_table_scope() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    pie = next(c for c in dashboard["cards"] if c["name"] == "Healthcheck")
+    table = next(c for c in dashboard["cards"] if c["name"] == "02 · Сигналы healthcheck")
+    scope = "\"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h')"
+    assert scope in pie["dataset_query"]["native"]["query"]
+    assert scope in table["dataset_query"]["native"]["query"]
+
+
 def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
@@ -196,7 +228,7 @@ def test_document_metric_cards_count_distinct_document_key() -> None:
         "v_rpt_client_documents_ui",
     )
     allowed_count_star = {
-        "02_service.json": {"v_health_signals_ui", "v_stg_channel_errors_by_document"},
+        "02_service.json": {"v_health_signals_ui"},
         "05_executive.json": {"active_jid"},
         "08_client_bianalytic.json": {"per_patient"},
     }

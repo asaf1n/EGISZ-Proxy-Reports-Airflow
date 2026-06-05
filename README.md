@@ -60,7 +60,7 @@
 | Источник | Firebird 5, база `proxy_egisz` | Журнал обмена шлюза и справочники клиник. |
 | Оркестратор | Apache Airflow 2.11.2 | Инкрементальная загрузка, запуск SQL-трансформации, refresh витрин, watermark, дозагрузка опоздавших строк журнала. |
 | DWH | PostgreSQL 16+, база `dwh_egisz` | Staging-слой, справочники, persistent facts, функции парсинга, аналитические view. |
-| BI | Metabase v0.60.2.5 | 8 дашбордов, 94 SQL-карточки. |
+| BI | Metabase v0.60.2.5 | 8 дашбордов, 96 SQL-карточек. |
 | Деплой | Kubernetes + Docker Desktop | Airflow через Helm, Metabase через манифест, запуск через `up.ps1`. |
 
 Локальные порты: Airflow `localhost:8080`, Metabase `localhost:3000`.
@@ -175,7 +175,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 | `50_transform.sql` | Основная функция `egisz_transform_raw_to_facts`. |
 | `60_drop_dependents.sql` | Идемпотентная пересборка зависимых view. |
 | `70_views_core.sql` | Источник витрины `v_egisz_documents_enriched_src`, persistent-витрина `v_egisz_documents_enriched_ui`, дневной rollup `v_egisz_documents_daily_ui`, `v_rpt_error_interpretations_ui`. |
-| `75_views_stg.sql` | Stage-view сетевых ошибок (`v_stg_channel_errors_by_document`) поверх `fact_egisz_documents` со `status = network_error` для дашбордов 02/04. |
+| `75_views_stg.sql` | Stage-view сетевых ошибок (`v_stg_channel_errors_by_document`) поверх `fact_egisz_documents` со `status = network_error` для дашборда 04. |
 | `80_views_rpt.sql` | Отчётные `v_rpt_*_ui`. |
 | `90_views_health_and_finalize.sql` | Healthcheck-view, ownership, первичное наполнение витрины, refresh дневного rollup и `ANALYZE`. |
 
@@ -378,14 +378,23 @@ JSON-описания дашбордов находятся в `metabase_dashboa
 
 **Единый принцип фильтрации.** Фильтр дашборда привязывается к каждой карточке, чья витрина-источник физически содержит соответствующую колонку (dimension field filter из `field_filter_defaults.yaml`). Где колонки нет, фильтр к карточке намеренно не привязывается — карточка сохраняет свой собственный охват, а не показывает молча нефильтрованный результат: например, `v_rpt_error_category_breakdown_ui` не содержит `Статус`/идентификаторов, поэтому «Ошибки по типу/виду» реагируют только на период/код СЭМД/JID. Снимки «сейчас» (healthcheck, сводка прокси-БД, окна 24ч/72ч) и метрики trailing-30d (`MRR`/`ARR`) от периода намеренно не зависят и помечены в названии. На `01`/`02`/`06` идентификаторы (`localUid`, `relatesToMessage`, `emdrId`, `LOGID`) и статус протянуты во все документные карточки, чтобы точечный поиск менял весь дашборд согласованно.
 
-**Период графика = фильтру.** Часовые тренды на `02` (`parse_created`) больше не имеют жёсткого окна «30 суток от максимума» — диапазон графика равен выбранному фильтру; чтобы при пустом фильтре график не уходил в полную историю, `parse_created_filter` на `02`/`04` по умолчанию `past30days~`.
+**Период графика = фильтру.** Почасовые тренды на `02` используют единый `dwh_date_filter` по **«Обработано IPS»** (ось X совпадает с выбранным периодом). На `04` отдельный `parse_created_filter` по **«Дата создания документа»** для блока транспортных ошибок.
 
 **Единая палитра статусов.** Четыре статуса окрашены одинаково во всех диаграммах (пироги, stacked-бары): Успешно зарегистрирован — зелёный `#84BB4C`, Ошибка асинхронного ответа РЭМД — фиолетовый `#A989C5`, Ошибка связи — оранжевый `#F2994A`, В обработке — синий `#509EE3`. Цвета зашиты в `visualization_settings` соответствующих карточек (`pie.rows` / `series_settings`).
+
+#### Компоновка `02_service` (сервис интеграции)
+
+| Зона | Карточки | Зависимость от периода |
+|---|---|---|
+| Верх | Почасовые тренды сетевых и async-ошибок; пирог «async vs network»; пирог уровней healthcheck | Тренды и пирог ошибок — да; healthcheck — снимок «сейчас» (в пироге те же сигналы, что в таблице, без очереди callback) |
+| Середина | Heatmap клиника × день; топ клиник по error rate (24ч); объём по клиникам | Heatmap и объём — да; 24ч — фиксированное окно |
+| Healthcheck | Таблица сигналов ELT (`queue_24h` / `pending_backlog_24h` скрыты — детализация на **03**) | Нет |
+| Низ | KPI за период (документов, % ошибок, успешно, в обработке); сводка прокси-БД и очереди; доля ошибок по дням; топ клиник за период; топ формулировок связи; последние 50 транспортных сбоев | KPI и динамика — да; «В обработке» и сводка прокси — снимок; детальный разбор отказов РЭМД — **04** |
 
 | Дашборд | Назначение | Карточек | Основные источники | Фильтры |
 |---|---|---|---|---|
 | `01_operational.json` | Операционный поток документов, статусы, ошибки, динамика. | 9 | `v_rpt_documents_ui`, `v_rpt_error_category_breakdown_ui` | Период, код СЭМД, JID, `localUid`/`relatesTo`/`emdrId`/`LOGID`, статус |
-| `02_service.json` | Healthcheck ETL, канала и прокси-БД. | 15 | `v_health_*_ui`, `v_rpt_documents_ui`, `v_stg_channel_errors_by_document`, `v_rpt_network_errors_detail_ui` | Период колбэков (IPS) и строк журнала, код СЭМД, JID, код ошибки канала, `localUid`/`relatesTo`/`emdrId`/`LOGID` |
+| `02_service.json` | Healthcheck ETL, качество потока и транспортные сбои. | 17 | `v_health_*_ui`, `v_rpt_documents_ui`, `v_rpt_network_errors_detail_ui` | Период по «Обработано IPS», код СЭМД, JID, `localUid`/`relatesTo`/`emdrId`/`LOGID` |
 | `03_documents_no_response.json` | Очередь документов без финального callback. | 5 | `v_rpt_documents_no_response_ui` | Период, код СЭМД, JID, `localUid` |
 | `04_quality_and_errors.json` | Качество данных и детализация отказов РЭМД. | 22 | `v_rpt_documents_ui`, `v_rpt_error_category_breakdown_ui`, `v_rpt_network_errors_detail_ui` | Период: колбэки (IPS) / транспорт / доступность |
 | `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу. | 20 (15 SQL) | `v_rpt_documents_ui` | Период (`past30days~`) |
