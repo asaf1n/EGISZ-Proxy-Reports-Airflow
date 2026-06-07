@@ -148,7 +148,7 @@ def fetch_exchangelog_logids_in_band(
     cursor (`LOGID > last_logid`) never re-reads them. Reconcile set-diffs this band — a
     fixed window just below the watermark — against exchangelog_raw to find the gaps. The
     scan is LOGID-bounded (no date), so it stays cheap and bounded regardless of journal
-    size; the band must be wide enough to cover the out-of-order span. See CLAUDE.md §2.
+    size; the band must be wide enough to cover the out-of-order span. See README.md §«Дозагрузка опоздавших строк».
     """
     if high_logid <= low_logid:
         return set()

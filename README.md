@@ -4,6 +4,8 @@
 
 Основной сценарий: каждые 5 минут Airflow забирает новые строки журналов Firebird, загружает raw-слой как временный staging, разбирает его в persistent DWH-таблицы, инкрементально сопровождает аналитические витрины и продвигает watermark. Пользователь видит состояние отправок, callback'ов, ошибок, очередей ожидания и здоровья ETL-контура по разложенным fact-таблицам, а не по raw.
 
+Единый источник описания проекта — этот файл (`README.md`): предметная область, архитектура, DWH, парсинг, дашборды и эксплуатация. При разработке и автоматизации (в том числе с ИИ-агентами) ориентироваться на README и общие инструкции репозитория; доменные детали в код и комментарии не дублировать — ссылаться на соответствующий раздел README.
+
 | Интерфейс | Адрес | Логин | Пароль |
 |---|---|---|---|
 | Metabase | `https://10.20.0.76:3000` | `admin@egisz.local` | `egisz` |
@@ -60,7 +62,7 @@
 | Источник | Firebird 5, база `proxy_egisz` | Журнал обмена шлюза и справочники клиник. |
 | Оркестратор | Apache Airflow 2.11.2 | Инкрементальная загрузка, запуск SQL-трансформации, refresh витрин, watermark, дозагрузка опоздавших строк журнала. |
 | DWH | PostgreSQL 16+, база `dwh_egisz` | Staging-слой, справочники, persistent facts, функции парсинга, аналитические view. |
-| BI | Metabase v0.60.2.5 | 8 дашбордов, 96 SQL-карточек. |
+| BI | Metabase v0.60.2.5 | 8 дашбордов, 106 SQL-карточек. |
 | Деплой | Kubernetes + Docker Desktop | Airflow через Helm, Metabase через манифест, запуск через `up.ps1`. |
 
 Локальные порты: Airflow `localhost:8080`, Metabase `localhost:3000`.
@@ -128,7 +130,7 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 | `sync_dimensions` | Обновляет `dim_organizations` и `dim_licenses` из Firebird. |
 | `extract_and_load_batch` | Keyset-выборка `EXCHANGELOG` по `LOGID` из Firebird и сразу UPSERT в `exchangelog_raw` в одном таске (payload не уходит в XCom). |
 | `analyze_staging` | Обновляет статистику PostgreSQL для `exchangelog_raw` после загрузки. |
-| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`, заполняет центральный факт `fact_egisz_documents`, lineage-таблицу `fact_egisz_transactions` и инкрементально сопровождает витрину `v_egisz_documents_enriched_ui` по затронутым `document_key`. |
+| `transform_data` | Вызывает `public.egisz_transform_raw_to_facts(...)`: разлагает payload батча в `dim_egisz_exchangelog_refs` (один проход XML на `LOGID`), заполняет `fact_egisz_documents`, lineage-таблицу `fact_egisz_transactions` и инкрементально сопровождает витрину `v_egisz_documents_enriched_ui` по затронутым `document_key`. |
 | `refresh_materialized_views` | Обновляет дневной rollup `v_egisz_documents_daily_ui`, затем запускает `ANALYZE`. Обогащённая витрина `v_egisz_documents_enriched_ui` сопровождается инкрементально в `transform_data`, а не полным REFRESH. |
 | `update_watermark` | Продвигает `last_logid` в `elt_state` через `GREATEST(current, new)`. |
 | `reconcile_late_arrivals` | Сетка безопасности от внеочередного наполнения журнала. Сравнивает полосу `LOGID` прокси непосредственно под watermark с `exchangelog_raw` и догружает+трансформирует недостающее, **не двигая** `last_logid`. В установившемся режиме — no-op. |
@@ -139,7 +141,7 @@ DAG: `airflow/dags/egisz_elt_dag.py`
 
 Поэтому `reconcile_late_arrivals` каждый цикл сравнивает множество `LOGID` прокси в полосе непосредственно под watermark — `(last_logid - RECONCILE_WATERMARK_LOOKBACK_LOGIDS, last_logid]` — с `exchangelog_raw` и догружает недостающее, не сдвигая `last_logid` назад. Единственным писателем курсора остаётся `GREATEST(current, new)` в `update_watermark`. Восстановленные `LOGID` трансформируются плотными окнами, а не одним диапазоном `min..max`.
 
-Полоса ограничена по `LOGID`, а не по дате: скан дешёвый и не зависит от размера журнала. Ширина полосы (`RECONCILE_WATERMARK_LOOKBACK_LOGIDS` в DAG) должна с запасом перекрывать типичный разброс внеочередного наполнения (инцидент 2026-06-01 — ~68k ниже watermark); шире — надёжнее ловит совсем старые строки, но дороже скан. Связь восстановленного callback'а с родительским документом по `relatesToMessage` происходит уже в transform.
+Полоса ограничена по `LOGID`, а не по дате: скан дешёвый и не зависит от размера журнала. Ширина полосы (`RECONCILE_WATERMARK_LOOKBACK_LOGIDS` в DAG, по умолчанию `200000`) должна с запасом перекрывать типичный разброс внеочередного наполнения (инцидент 2026-06-01 — ~68k ниже watermark); шире — надёжнее ловит совсем старые строки, но дороже скан. Связь восстановленного callback'а с родительским документом происходит в transform по уже разложенному `relates_to_id` → `dim_egisz_exchangelog_refs.exchange_msgid_norm`, без повторного сканирования `MSGTEXT`.
 
 XCom-контракт между задачами (только метаданные батча, без строк журнала):
 
@@ -169,13 +171,13 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 |---|---|
 | `00_bootstrap.sql` | Роль `egisz`, права на схему `public`. |
 | `10_tables.sql` | Таблицы, индексы, seed `dim_semd_types`. |
-| `20_functions_parsing.sql` | XML-парсинг, нормализация идентификаторов, host/JID helpers. |
+| `20_functions_parsing.sql` | XML-парсинг (`egisz_xml_text`, `egisz_parse_exchangelog_row`), нормализация идентификаторов, классификация статуса, host/JID helpers. |
 | `30_error_rules.sql` | Декларативные правила интерпретации ошибок. |
 | `40_functions_errors.sql` | Функции классификации и подготовки error JSON. |
-| `50_transform.sql` | Основная функция `egisz_transform_raw_to_facts`. |
+| `50_transform.sql` | Основная функция `egisz_transform_raw_to_facts`: разложение в dim, сборка facts и инкрементальное сопровождение `v_egisz_documents_enriched_ui`. |
 | `60_drop_dependents.sql` | Идемпотентная пересборка зависимых view. |
 | `70_views_core.sql` | Источник витрины `v_egisz_documents_enriched_src`, persistent-витрина `v_egisz_documents_enriched_ui`, дневной rollup `v_egisz_documents_daily_ui`, `v_rpt_error_interpretations_ui`. |
-| `75_views_stg.sql` | Stage-view сетевых ошибок (`v_stg_channel_errors_by_document`) поверх `fact_egisz_documents` со `status = network_error` для дашборда 04. |
+| `75_views_stg.sql` | View сетевых ошибок (`v_stg_channel_errors_by_document`, alias `v_stg_channel_network_errors_by_document`) поверх `fact_egisz_documents` со `status = network_error` для дашбордов 02/04. Отдельной таблицы `fact_egisz_channel_errors` нет. |
 | `80_views_rpt.sql` | Отчётные `v_rpt_*_ui`. |
 | `90_views_health_and_finalize.sql` | Healthcheck-view, ownership, первичное наполнение витрины, refresh дневного rollup и `ANALYZE`. |
 
@@ -185,7 +187,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 |---|---|---|
 | Raw staging | `exchangelog_raw` | Временный входной слой для парсинга SOAP/XML журнала. Партиционирована по `createdate` (RANGE, помесячно + DEFAULT). Production может очищать старые партиции raw после разложения в facts. |
 | ELT state | `elt_state` | Watermark загрузки (`last_logid`) на конвейер. |
-| Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_egisz_exchangelog_refs` | Организации, лицензии, типы СЭМД, индекс сообщений EXCHANGELOG для связи callback с документом. |
+| Dimensions | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_egisz_exchangelog_refs` | Организации, лицензии, типы СЭМД, persistent-слой разложенного payload EXCHANGELOG (одна строка на `LOGID`) для связи callback с документом и всех последующих шагов transform. |
 | Fact | `fact_egisz_documents`, `fact_egisz_transactions` | Центральный документный факт СЭМД и lineage callback/ошибок (включая `network_error` и `async_error`). `fact_egisz_transactions` партиционирована по `log_date` (RANGE, помесячно + DEFAULT). |
 | Витрины | `v_egisz_documents_enriched_ui` (persistent-таблица + источник `v_egisz_documents_enriched_src`), `v_egisz_documents_daily_ui` (materialized view) | Быстрые витрины Metabase поверх document-grain facts. `enriched_ui` сопровождается инкрементально в `egisz_transform_raw_to_facts` по затронутым `document_key`, без полного REFRESH; дневной rollup `daily_ui` остаётся materialized view. |
 | Reporting views | `v_rpt_*_ui`, `v_health_*_ui` | Готовые SQL-интерфейсы для карточек. |
@@ -215,35 +217,70 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 Запись об ЭМД появляется в `fact_egisz_documents` при наличии минимального набора реквизитов — **localUid + JID + KIND**. Поля могут приходить разными сообщениями одного документа: трансформация собирает их по `document_key` из getDocumentFile-сообщений (окно батча и lookback назад), запись создаётся при полном наборе. Сетевые ошибки (`LOGSTATE=3`) фиксируются по наличию `localUid` независимо от KIND.
 
-Связь callback с документом восстанавливается по цепочке сообщений в `EXCHANGELOG`:
+Связь callback с документом восстанавливается по уже разложенным данным `dim_egisz_exchangelog_refs`, а не повторным парсингом `MSGTEXT`:
 
 | Объект | Назначение |
 |---|---|
-| `dim_egisz_exchangelog_refs` | Одна строка на `LOGID`: ключ сообщения (`exchange_msgid_norm`) и реквизиты СЭМД (`local_uid`, `emdr_id`, `document_key`). |
-| `fact_egisz_documents` | Актуальное состояние документа; ключ учёта — `document_key` (всегда `lower(localUid)`). Колбэк без `localUid` не создаёт новый ключ, а обновляет существующую строку (резолв по `relatesToMessage` / `emdrId`). |
+| `dim_egisz_exchangelog_refs` | Одна строка на `LOGID`: результат единственного прохода `egisz_parse_exchangelog_row` — ключи связи (`exchange_msgid_norm`, `relates_to_id`), реквизиты СЭМД (`local_uid`, `emdr_id`, `document_key`, `kind_xml`, `action`, …), поля статуса/ошибки и BI-хэшируемые атрибуты. |
+| `fact_egisz_documents` | Актуальное состояние документа; ключ учёта — `document_key` (всегда `lower(localUid)`). Колбэк без `localUid` не создаёт новый ключ, а обновляет существующую строку (резолв по `relates_to_id` / `emdrId` / предыдущему getDocumentFile). |
 | `fact_egisz_transactions` | Lineage событий: одна строка на callback/ошибку в журнале; поле `message` — сырой текст события. |
 
-Колбэк без `localUid` сопоставляется с документом через `relatesToMessage` → sibling-сообщение в EXCHANGELOG с тем же `exchange_msgid_norm`, затем по `emdrId`. OID при этом не используется как ключ ни при каких условиях.
+Колбэк без `localUid` сопоставляется с документом через `relates_to_id` → строка dim с тем же `exchange_msgid_norm`, затем по `emdr_id`, затем по предыдущему getDocumentFile той же клиники (`jid_from_payload`). OID при этом не используется как ключ ни при каких условиях.
 
 ## Парсинг и классификация
 
 Парсинг SOAP/XML выполняется в PostgreSQL. Python не содержит предметной логики разбора payload — он только загружает raw и вызывает `egisz_transform_raw_to_facts`.
 
+### Поток разложения (один проход на LOGID)
+
+Каждый XML-тег и regex-маркер статуса извлекаются **ровно один раз** на строку журнала. Повторного вызова `egisz_xml_text` по `MSGTEXT` внутри transform нет.
+
+```text
+exchangelog_raw
+    → egisz_parse_exchangelog_row(msgtext, msgid, logtext)   # единственный проход regex/XML
+    → dim_egisz_exchangelog_refs                             # persistent разложение
+    → document_attributes / gdf_events / callback matching / fact_egisz_*
+```
+
+Первый шаг `egisz_transform_raw_to_facts`:
+
+1. Разлагает все `LOGID` текущего батча `(from_logid, to_logid]` через `egisz_parse_exchangelog_row` и UPSERT в `dim_egisz_exchangelog_refs`.
+2. Догружает lookback до 500 `LOGID` назад только для строк, ещё отсутствующих в dim (нужно для сборки getDocumentFile-реквизитов).
+3. Все последующие CTE (сборка `localUid`+`JID`+`KIND`, `gdf_events`, фильтрация callback'ов, JOIN по `relates_to_id` / `emdr_id`) читают **только** `dim_egisz_exchangelog_refs` плюс не-XML поля из `exchangelog_raw` (`logstate`, `logtext`, `logdate`, `createdate`).
+
+Исключение: разбор `<item>` внутри error-payload (`egisz_xml_error_items`) вызывается только для строк с `final_status = 'error'` при построении `error_json_text`.
+
 ### Утилитные функции
 
 | Функция | Назначение |
 |---|---|
-| `egisz_xml_text(payload, tag_name)` | Извлекает текст из XML-тега без привязки к namespace prefix. Базовая функция для всех остальных. |
+| `egisz_xml_text(payload, tag_name)` | Низкоуровневое извлечение текста из XML-тега без привязки к namespace prefix. Вызывается только внутри `egisz_parse_exchangelog_row` и `egisz_xml_error_items`, не в transform напрямую. |
+| `egisz_parse_exchangelog_row(msgtext, msgid, logtext)` | Полное разложение одной строки EXCHANGELOG: все теги, нормализованные идентификаторы, `jid_from_payload`, BI-поля и boolean-маркеры для `egisz_classify_async_status`. |
 | `egisz_normalize_message_id(value)` | Приводит `<urn:uuid:...>`, `urn:uuid:...` и bare UUID к единой форме. |
+| `egisz_document_key(local_uid)` | Канонический ключ документа — `lower(localUid)`. |
 | `safe_cast_timestamptz(text)` | Безопасно приводит текст к `timestamptz`, возвращает `NULL` вместо исключения (даты приходят в нескольких форматах). |
 | `egisz_clean_host(text)` | Нормализует endpoint/host callback для JOIN со справочником `dim_licenses`. |
 | `egisz_extract_jid_from_endpoint(text)` | Извлекает JID из GOST endpoint вида `gost-1234.<домен>` → `1234`. |
 | `egisz_clean_text_value(text)` | Нормализует пробелы, удаляет BOM и неразрывные пробелы. |
 | `egisz_normalize_semd_code(text)` | Приводит код СЭМД к канонической форме (разные шаблоны используют разные префиксы/суффиксы). |
+| `egisz_classify_async_status(...)` | Финальный статус callback'а по разложенным полям (`raw_status`, `document_status`, boolean-маркеры payload). Не перечитывает `MSGTEXT`. |
+| `egisz_network_error_type(text)` | Сворачивает текст LOGSTATE=3 в канонический тип: URL, `gost-*` endpoint, UUID, IP и значения в `[…]` заменяются плейсхолдерами для топов на дашбордах 02/04. |
+
+### Слой `dim_egisz_exchangelog_refs`
+
+| Группа колонок | Примеры | Назначение |
+|---|---|---|
+| Ключи связи | `exchange_msgid_norm`, `relates_to_id` | JOIN callback → исходное сообщение / документ. |
+| Реквизиты СЭМД | `local_uid`, `emdr_id`, `document_key`, `kind_xml`, `action` | Идентификация документа и сборка getDocumentFile. |
+| Статус и ошибка | `raw_status`, `document_status`, `error_code`, `xml_message`, `has_*_marker` | Классификация и построение fact-строк. |
+| Контекст | `jid_from_payload`, `creation_date`, `org_oid`, `doc_number` | Обогащение и fallback-связка по клинике. |
+| BI (хэшируемые) | `raw_patient_name`, `raw_snils`, `raw_doctor_name` | Маскирование и `patient_hash` / `doctor_hash` без повторного парсинга. |
+
+Индексы: `exchange_msgid_norm`, `relates_to_id`, `document_key`, `local_uid`, `emdr_id`, `(action, logid DESC)` для getDocumentFile.
 
 ### Нормализация идентификаторов
 
-Один и тот же идентификатор сообщения встречается в трёх формах; все приводятся к bare UUID, а JOIN между `exchangelog_raw`, `dim_egisz_exchangelog_refs` и fact-таблицами идёт по функциональным индексам на нормализованном значении (`idx_fact_egisz_message_id_norm`, `idx_fact_egisz_relates_to_norm`).
+Один и тот же идентификатор сообщения встречается в трёх формах; все приводятся к bare UUID при разложении в dim. Связка callback с документом идёт по `dim_egisz_exchangelog_refs` (`relates_to_id` → `exchange_msgid_norm`, `emdr_id`, `document_key`); fact-таблицы `fact_egisz_transactions` индексируются по `message_id` / `relates_to_id` (`idx_fact_egisz_message_id_norm`, `idx_fact_egisz_relates_to_norm`). Функциональные индексы на `exchangelog_raw` остаются для совместимости и не используются в transform.
 
 | Форма | Пример |
 |---|---|
@@ -550,9 +587,11 @@ up.ps1                             локальный запуск Kubernetes-с
 | `emdrId` | Регистрационный номер документа в РЭМД. |
 | `messageId` | Идентификатор SOAP/Ws-Addressing сообщения. |
 | `relatesTo` / `relatesToMessage` | Ссылка callback на исходное сообщение в цепочке EXCHANGELOG. |
-| `exchange_msgid_norm` | Нормализованный идентификатор сообщения в `dim_egisz_exchangelog_refs`. |
+| `exchange_msgid_norm` | Нормализованный идентификатор сообщения в `dim_egisz_exchangelog_refs` (ключ связи цепочки). |
+| `relates_to_id` | Нормализованный `relatesToMessage` / `relatesTo` из разложенного payload; используется для JOIN callback → родительское сообщение. |
+| `dim_egisz_exchangelog_refs` | Persistent-слой разложенного EXCHANGELOG: один проход XML на `LOGID`, источник для всей связки документов в transform. |
 | `document_key` | Ключ учёта документа в DWH — всегда `lower(localUid)`; `emdrId` / `OID` ключом не являются. |
 | Watermark | Текущий курсор пайплайна по `LOGID` (`elt_state.last_logid`, продвигается через `GREATEST`). |
 | Raw layer | Временные staging-таблицы DWH с данными источника до предметной трансформации. |
 | Fact table | Таблица нормализованных транзакций обмена СЭМД. |
-| Materialized view | Предрасчитанная витрина PostgreSQL для быстрых BI-запросов. |
+| Materialized view | Предрасчитанная витрина PostgreSQL для быстрых BI-запросов (`v_egisz_documents_daily_ui`). Обогащённая витрина `v_egisz_documents_enriched_ui` — persistent-таблица, сопровождаемая инкрементально в transform. |

@@ -217,9 +217,9 @@ def egisz_elt_pipeline() -> None:
         watermark — `(last_logid - RECONCILE_WATERMARK_LOOKBACK_LOGIDS, last_logid]` — against
         exchangelog_raw and load+transform whatever is missing, **without moving the
         watermark** (GREATEST stays the only writer of last_logid). The band is LOGID-bounded
-        (no date), so the scan is cheap and bounded; linkage of a recovered callback to its
-        parent document still happens by relatesToMessage inside the transform. Steady state
-        finds nothing and is a no-op. See CLAUDE.md §2.
+        (no date), so the scan is cheap and bounded; linkage of a recovered callback uses
+        dim_egisz_exchangelog_refs inside the transform. Steady state finds nothing and is
+        a no-op. See README.md §«Дозагрузка опоздавших строк».
         """
         pg_conn = _dwh_connection()
         try:

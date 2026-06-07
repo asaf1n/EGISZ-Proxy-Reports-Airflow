@@ -2,8 +2,8 @@
 -- 80_views_rpt.sql — v_rpt_network_errors_detail_ui + v_rpt_documents_no_response_ui + v_rpt_semd_archive_ui + connectivity views
 -- Source: db/dwh_init.sql, lines [1506..1744).
 -- Loaded by db/dwh_init.sql via \i db/parts/80_views_rpt.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
+-- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 CREATE OR REPLACE VIEW public.v_rpt_network_errors_detail_ui AS
@@ -23,6 +23,7 @@ SELECT
     public.egisz_semd_type_report_label(d.semd_code, NULL) AS "Тип СЭМД (код · НСИ)",
     public.egisz_normalize_semd_code(d.semd_code) AS "Код СЭМД",
     d.error_summary AS "Сводка ошибки регистрации",
+    public.egisz_network_error_type(d.error_text) AS "Тип сетевой ошибки",
     d.error_text AS "Текст сетевой ошибки",
     d.error_text AS "Сообщение",
     d.error_type AS "Подтип ошибки канала",

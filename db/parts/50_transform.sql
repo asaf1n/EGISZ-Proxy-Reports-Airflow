@@ -2,8 +2,8 @@
 -- 50_transform.sql — egisz_transform_raw_to_facts
 -- Source: db/dwh_init.sql, lines [1055..1254).
 -- Loaded by db/dwh_init.sql via \i db/parts/50_transform.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
+-- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 DROP FUNCTION IF EXISTS public.egisz_transform_raw_to_facts(bigint, bigint);
@@ -19,29 +19,84 @@ DECLARE
     affected integer := 0;
     inserted_rows integer := 0;
 BEGIN
+    -- Разложение payload: каждый LOGID батча (и недостающий lookback для getDocumentFile)
+    -- парсится ровно один раз в dim_egisz_exchangelog_refs; дальше transform читает только таблицу.
+    WITH candidate_log_ids AS (
+        SELECT r.logid
+        FROM exchangelog_raw r
+        WHERE r.logid > from_logid
+          AND r.logid <= to_logid
+    ),
+    batch_min AS (
+        SELECT COALESCE(MIN(c.logid), from_logid) AS min_logid
+        FROM candidate_log_ids c
+    ),
+    parse_targets AS (
+        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext
+        FROM exchangelog_raw r
+        WHERE r.logid > from_logid
+          AND r.logid <= to_logid
+
+        UNION
+
+        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext
+        FROM exchangelog_raw r
+        CROSS JOIN batch_min bm
+        WHERE r.logid >= GREATEST(bm.min_logid - 500, 0)
+          AND r.logid <= from_logid
+          AND NOT EXISTS (
+              SELECT 1
+              FROM public.dim_egisz_exchangelog_refs d
+              WHERE d.logid = r.logid
+          )
+    )
     INSERT INTO public.dim_egisz_exchangelog_refs (
         logid, created_at, exchange_msgid, exchange_msgid_norm,
-        local_uid, emdr_id, document_key, updated_at
+        local_uid, emdr_id, document_key,
+        action, relates_to_id, kind_xml, doc_number, org_oid,
+        error_code, xml_message, raw_status, document_status,
+        jid_from_payload, creation_date,
+        raw_patient_name, raw_snils, raw_doctor_name,
+        has_fault_marker, has_register_response, has_register_result,
+        has_processing_marker, has_error_ilike,
+        updated_at
     )
     SELECT
-        r.logid,
-        COALESCE(r.createdate, r.loaded_at) AS created_at,
-        r.msgid,
-        public.egisz_normalize_message_id(
-            COALESCE(NULLIF(btrim(r.msgid), ''), public.egisz_xml_text(r.msgtext, 'messageId'))
-        ) AS exchange_msgid_norm,
-        public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'localUid')) AS local_uid,
-        public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'emdrId')) AS emdr_id,
-        public.egisz_document_key(public.egisz_xml_text(r.msgtext, 'localUid')) AS document_key,
+        t.logid,
+        COALESCE(t.createdate, t.loaded_at) AS created_at,
+        t.msgid,
+        p.exchange_msgid_norm,
+        p.local_uid,
+        p.emdr_id,
+        p.document_key,
+        p.action,
+        p.relates_to_id,
+        p.kind_xml,
+        p.doc_number,
+        p.org_oid,
+        p.error_code,
+        p.xml_message,
+        p.raw_status,
+        p.document_status,
+        p.jid_from_payload,
+        p.creation_date,
+        p.raw_patient_name,
+        p.raw_snils,
+        p.raw_doctor_name,
+        p.has_fault_marker,
+        p.has_register_response,
+        p.has_register_result,
+        p.has_processing_marker,
+        p.has_error_ilike,
         now()
-    FROM public.exchangelog_raw r
-    WHERE r.logid > from_logid
-      AND r.logid <= to_logid
-      AND (
-          public.egisz_normalize_message_id(COALESCE(NULLIF(btrim(r.msgid), ''), public.egisz_xml_text(r.msgtext, 'messageId'))) IS NOT NULL
-          OR NULLIF(btrim(r.msgid), '') IS NOT NULL
-          OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'localUid')), '') IS NOT NULL
-          OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'emdrId')), '') IS NOT NULL
+    FROM parse_targets t
+    CROSS JOIN LATERAL public.egisz_parse_exchangelog_row(t.msgtext, t.msgid, t.logtext) p
+    WHERE (
+          p.exchange_msgid_norm IS NOT NULL
+          OR NULLIF(btrim(t.msgid), '') IS NOT NULL
+          OR NULLIF(btrim(p.local_uid), '') IS NOT NULL
+          OR NULLIF(btrim(p.emdr_id), '') IS NOT NULL
+          OR COALESCE(p.action, '') = 'getDocumentFile'
       )
     ON CONFLICT (logid) DO UPDATE SET
         created_at = EXCLUDED.created_at,
@@ -50,15 +105,34 @@ BEGIN
         local_uid = COALESCE(EXCLUDED.local_uid, public.dim_egisz_exchangelog_refs.local_uid),
         emdr_id = COALESCE(EXCLUDED.emdr_id, public.dim_egisz_exchangelog_refs.emdr_id),
         document_key = COALESCE(EXCLUDED.document_key, public.dim_egisz_exchangelog_refs.document_key),
+        action = COALESCE(EXCLUDED.action, public.dim_egisz_exchangelog_refs.action),
+        relates_to_id = COALESCE(EXCLUDED.relates_to_id, public.dim_egisz_exchangelog_refs.relates_to_id),
+        kind_xml = COALESCE(EXCLUDED.kind_xml, public.dim_egisz_exchangelog_refs.kind_xml),
+        doc_number = COALESCE(EXCLUDED.doc_number, public.dim_egisz_exchangelog_refs.doc_number),
+        org_oid = COALESCE(EXCLUDED.org_oid, public.dim_egisz_exchangelog_refs.org_oid),
+        error_code = COALESCE(EXCLUDED.error_code, public.dim_egisz_exchangelog_refs.error_code),
+        xml_message = COALESCE(EXCLUDED.xml_message, public.dim_egisz_exchangelog_refs.xml_message),
+        raw_status = COALESCE(EXCLUDED.raw_status, public.dim_egisz_exchangelog_refs.raw_status),
+        document_status = COALESCE(EXCLUDED.document_status, public.dim_egisz_exchangelog_refs.document_status),
+        jid_from_payload = COALESCE(EXCLUDED.jid_from_payload, public.dim_egisz_exchangelog_refs.jid_from_payload),
+        creation_date = COALESCE(EXCLUDED.creation_date, public.dim_egisz_exchangelog_refs.creation_date),
+        raw_patient_name = COALESCE(EXCLUDED.raw_patient_name, public.dim_egisz_exchangelog_refs.raw_patient_name),
+        raw_snils = COALESCE(EXCLUDED.raw_snils, public.dim_egisz_exchangelog_refs.raw_snils),
+        raw_doctor_name = COALESCE(EXCLUDED.raw_doctor_name, public.dim_egisz_exchangelog_refs.raw_doctor_name),
+        has_fault_marker = COALESCE(EXCLUDED.has_fault_marker, public.dim_egisz_exchangelog_refs.has_fault_marker),
+        has_register_response = COALESCE(EXCLUDED.has_register_response, public.dim_egisz_exchangelog_refs.has_register_response),
+        has_register_result = COALESCE(EXCLUDED.has_register_result, public.dim_egisz_exchangelog_refs.has_register_result),
+        has_processing_marker = COALESCE(EXCLUDED.has_processing_marker, public.dim_egisz_exchangelog_refs.has_processing_marker),
+        has_error_ilike = COALESCE(EXCLUDED.has_error_ilike, public.dim_egisz_exchangelog_refs.has_error_ilike),
         updated_at = now();
 
     WITH document_source_rows AS (
-        SELECT sr.logid
-        FROM public.exchangelog_raw sr
-        WHERE COALESCE(public.egisz_xml_text(sr.msgtext, 'action'), '') = 'getDocumentFile'
-          AND sr.logid > from_logid
-          AND sr.logid <= to_logid
-          AND NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL
+        SELECT ref.logid
+        FROM public.dim_egisz_exchangelog_refs ref
+        WHERE COALESCE(ref.action, '') = 'getDocumentFile'
+          AND ref.logid > from_logid
+          AND ref.logid <= to_logid
+          AND NULLIF(btrim(ref.local_uid), '') IS NOT NULL
     ),
     -- Минимальный набор реквизитов ЭМД (localUid + JID + KIND) может приходить
     -- разными getDocumentFile-сообщениями одного документа. Собираем реквизиты по
@@ -66,13 +140,13 @@ BEGIN
     -- дозагружались по мере поступления, а запись об ЭМД появлялась при их полном наборе.
     document_attributes AS (
         SELECT
-            public.egisz_document_key(public.egisz_xml_text(gr.msgtext, 'localUid')) AS document_key,
-            (array_agg(public.egisz_clean_text_value(public.egisz_xml_text(gr.msgtext, 'localUid')) ORDER BY gr.logid)
-                FILTER (WHERE NULLIF(btrim(public.egisz_xml_text(gr.msgtext, 'localUid')), '') IS NOT NULL))[1] AS local_uid,
-            (array_agg(public.egisz_normalize_semd_code(public.egisz_xml_text(gr.msgtext, 'KIND')) ORDER BY gr.logid)
-                FILTER (WHERE public.egisz_normalize_semd_code(public.egisz_xml_text(gr.msgtext, 'KIND')) IS NOT NULL))[1] AS semd_code,
-            (array_agg(NULLIF((regexp_match(COALESCE(gr.logtext, '') || ' ' || COALESCE(gr.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '')::integer ORDER BY gr.logid)
-                FILTER (WHERE NULLIF((regexp_match(COALESCE(gr.logtext, '') || ' ' || COALESCE(gr.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '') IS NOT NULL))[1] AS jid,
+            ref.document_key,
+            (array_agg(ref.local_uid ORDER BY gr.logid)
+                FILTER (WHERE NULLIF(btrim(ref.local_uid), '') IS NOT NULL))[1] AS local_uid,
+            (array_agg(public.egisz_normalize_semd_code(ref.kind_xml) ORDER BY gr.logid)
+                FILTER (WHERE public.egisz_normalize_semd_code(ref.kind_xml) IS NOT NULL))[1] AS semd_code,
+            (array_agg(ref.jid_from_payload ORDER BY gr.logid)
+                FILTER (WHERE ref.jid_from_payload IS NOT NULL))[1] AS jid,
             min(COALESCE(gr.createdate, gr.logdate)) AS sent_at,
             max(gr.logid) AS source_logid,
             bool_or(gr.logstate = 3) AS has_network_error,
@@ -80,14 +154,15 @@ BEGIN
             max(COALESCE(gr.createdate, gr.logdate)) FILTER (WHERE gr.logstate = 3) AS network_at,
             (array_agg(COALESCE(NULLIF(btrim(gr.logtext), ''), NULLIF(btrim(gr.msgtext), ''), 'Сетевая ошибка') ORDER BY gr.logid DESC)
                 FILTER (WHERE gr.logstate = 3))[1] AS network_message
-        FROM public.exchangelog_raw gr
-        WHERE COALESCE(public.egisz_xml_text(gr.msgtext, 'action'), '') = 'getDocumentFile'
+        FROM public.dim_egisz_exchangelog_refs ref
+        JOIN public.exchangelog_raw gr ON gr.logid = ref.logid
+        WHERE COALESCE(ref.action, '') = 'getDocumentFile'
           AND gr.logid <= to_logid
           AND gr.logid >= GREATEST(
                 (SELECT COALESCE(MIN(logid), from_logid) FROM document_source_rows) - 500,
                 0
               )
-          AND NULLIF(btrim(public.egisz_xml_text(gr.msgtext, 'localUid')), '') IS NOT NULL
+          AND NULLIF(btrim(ref.local_uid), '') IS NOT NULL
         GROUP BY 1
         -- только документы, по которым было сообщение в текущем батче
         HAVING max(gr.logid) > from_logid
@@ -162,18 +237,19 @@ BEGIN
     gdf_events AS (
         SELECT
             gr.logid,
-            NULLIF((regexp_match(COALESCE(gr.logtext, '') || ' ' || COALESCE(gr.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '')::integer AS jid,
-            public.egisz_document_key(public.egisz_xml_text(gr.msgtext, 'localUid')) AS document_key,
-            public.egisz_clean_text_value(public.egisz_xml_text(gr.msgtext, 'localUid')) AS local_uid
-        FROM public.exchangelog_raw gr
-        WHERE COALESCE(public.egisz_xml_text(gr.msgtext, 'action'), '') = 'getDocumentFile'
+            ref.jid_from_payload AS jid,
+            ref.document_key,
+            ref.local_uid
+        FROM public.dim_egisz_exchangelog_refs ref
+        JOIN public.exchangelog_raw gr ON gr.logid = ref.logid
+        WHERE COALESCE(ref.action, '') = 'getDocumentFile'
           AND gr.logid <= to_logid
           AND gr.logid >= GREATEST(
                 (SELECT COALESCE(MIN(c.logid), from_logid) FROM candidate_log_ids c) - 500,
                 0
               )
-          AND NULLIF(btrim(public.egisz_xml_text(gr.msgtext, 'localUid')), '') IS NOT NULL
-          AND NULLIF((regexp_match(COALESCE(gr.logtext, '') || ' ' || COALESCE(gr.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '') IS NOT NULL
+          AND NULLIF(btrim(ref.local_uid), '') IS NOT NULL
+          AND ref.jid_from_payload IS NOT NULL
     ),
     raw_parsed AS (
         SELECT
@@ -184,64 +260,47 @@ BEGIN
             r.logstate,
             r.logtext,
             r.msgtext,
-            public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'messageId'), r.msgid)) AS message_id,
-            public.egisz_normalize_message_id(COALESCE(public.egisz_xml_text(r.msgtext, 'relatesToMessage'), public.egisz_xml_text(r.msgtext, 'relatesTo'))) AS relates_to_id,
-            public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'localUid')) AS local_uid_xml,
-            public.egisz_document_key(public.egisz_xml_text(r.msgtext, 'localUid')) AS document_key_xml,
-            public.egisz_xml_text(r.msgtext, 'KIND') AS kind_xml,
-            public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'emdrId')) AS emdr_id,
-            public.egisz_clean_text_value(public.egisz_xml_text(r.msgtext, 'documentNumber')) AS doc_number,
-            public.egisz_clean_text_value(COALESCE(public.egisz_xml_text(r.msgtext, 'organization'), public.egisz_xml_text(r.msgtext, 'organizationOid'))) AS org_oid,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'errorCode'), public.egisz_xml_text(r.msgtext, 'code')) AS error_code,
-            COALESCE(public.egisz_xml_text(r.msgtext, 'errorMessage'), public.egisz_xml_text(r.msgtext, 'message'), public.egisz_xml_text(r.msgtext, 'faultstring')) AS xml_message,
-            lower(COALESCE(public.egisz_xml_text(r.msgtext, 'status'), '')) AS raw_status,
-            NULLIF((regexp_match(COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, ''), 'gost-([0-9]+)', 'i'))[1], '')::integer AS jid_from_payload,
-            public.safe_cast_timestamptz(COALESCE(public.egisz_xml_text(r.msgtext, 'creationDateTime'), public.egisz_xml_text(r.msgtext, 'creationDate'))) AS creation_date,
-            COALESCE(
-                public.egisz_xml_text(r.msgtext, 'patientName'),
-                public.egisz_xml_text(r.msgtext, 'patientFio'),
-                public.egisz_xml_text(r.msgtext, 'fio'),
-                public.egisz_xml_text(r.msgtext, 'patient'),
-                public.egisz_xml_text(r.msgtext, 'PatientName'),
-                NULLIF(concat_ws(
-                    ' ',
-                    public.egisz_xml_text(r.msgtext, 'familyName'),
-                    public.egisz_xml_text(r.msgtext, 'givenName'),
-                    public.egisz_xml_text(r.msgtext, 'patronymic')
-                ), '')
-            ) AS raw_patient_name,
-            COALESCE(
-                public.egisz_xml_text(r.msgtext, 'snils'),
-                public.egisz_xml_text(r.msgtext, 'SNILS'),
-                public.egisz_xml_text(r.msgtext, 'patientSnils')
-            ) AS raw_snils,
-            COALESCE(
-                public.egisz_xml_text(r.msgtext, 'doctorName'),
-                public.egisz_xml_text(r.msgtext, 'doctorFio'),
-                public.egisz_xml_text(r.msgtext, 'physicianName'),
-                public.egisz_xml_text(r.msgtext, 'medicalWorkerName'),
-                public.egisz_xml_text(r.msgtext, 'authorName'),
-                public.egisz_xml_text(r.msgtext, 'doctor')
-            ) AS raw_doctor_name
+            ref.exchange_msgid_norm AS message_id,
+            ref.relates_to_id,
+            ref.local_uid AS local_uid_xml,
+            ref.document_key AS document_key_xml,
+            ref.kind_xml,
+            ref.emdr_id,
+            ref.doc_number,
+            ref.org_oid,
+            ref.error_code,
+            ref.xml_message,
+            ref.raw_status,
+            ref.jid_from_payload,
+            ref.creation_date,
+            ref.raw_patient_name,
+            ref.raw_snils,
+            ref.raw_doctor_name,
+            ref.document_status,
+            ref.has_fault_marker,
+            ref.has_register_response,
+            ref.has_register_result,
+            ref.has_processing_marker,
+            ref.has_error_ilike
         FROM exchangelog_raw r
         JOIN candidate_log_ids c ON c.logid = r.logid
+        JOIN public.dim_egisz_exchangelog_refs ref ON ref.logid = r.logid
         WHERE (
-              COALESCE(public.egisz_xml_text(r.msgtext, 'action'), '') <> 'getDocumentFile'
+              COALESCE(ref.action, '') <> 'getDocumentFile'
               OR r.logstate = 3
           )
           AND (
               r.logstate = 3
               OR public.egisz_normalize_message_id(r.msgid) IS NOT NULL
-              OR public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'messageId')) IS NOT NULL
-              OR public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'relatesToMessage')) IS NOT NULL
-              OR public.egisz_normalize_message_id(public.egisz_xml_text(r.msgtext, 'relatesTo')) IS NOT NULL
-              OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'localUid')), '') IS NOT NULL
-              OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'emdrId')), '') IS NOT NULL
-              OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'documentNumber')), '') IS NOT NULL
-              OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'KIND')), '') IS NOT NULL
-              OR NULLIF(btrim(public.egisz_xml_text(r.msgtext, 'status')), '') IS NOT NULL
-              OR NULLIF(btrim(COALESCE(public.egisz_xml_text(r.msgtext, 'errorCode'), public.egisz_xml_text(r.msgtext, 'code'))), '') IS NOT NULL
-              OR NULLIF(btrim(COALESCE(public.egisz_xml_text(r.msgtext, 'errorMessage'), public.egisz_xml_text(r.msgtext, 'message'), public.egisz_xml_text(r.msgtext, 'faultstring'))), '') IS NOT NULL
+              OR ref.exchange_msgid_norm IS NOT NULL
+              OR ref.relates_to_id IS NOT NULL
+              OR NULLIF(btrim(ref.local_uid), '') IS NOT NULL
+              OR NULLIF(btrim(ref.emdr_id), '') IS NOT NULL
+              OR NULLIF(btrim(ref.doc_number), '') IS NOT NULL
+              OR NULLIF(btrim(ref.kind_xml), '') IS NOT NULL
+              OR NULLIF(btrim(ref.raw_status), '') IS NOT NULL
+              OR NULLIF(btrim(ref.error_code), '') IS NOT NULL
+              OR NULLIF(btrim(ref.xml_message), '') IS NOT NULL
           )
     ),
     source_documents AS (
@@ -281,6 +340,12 @@ BEGIN
             r.raw_patient_name,
             r.raw_snils,
             r.raw_doctor_name,
+            r.document_status,
+            r.has_fault_marker,
+            r.has_register_response,
+            r.has_register_result,
+            r.has_processing_marker,
+            r.has_error_ilike,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
         LEFT JOIN LATERAL (
@@ -345,7 +410,16 @@ BEGIN
                 p.semd_code,
                 p.source_document_semd_code
             ) AS resolved_semd_code,
-            public.egisz_classify_async_status(p.logstate, p.raw_status, p.msgtext, p.logtext) AS final_status,
+            public.egisz_classify_async_status(
+                p.logstate,
+                p.raw_status,
+                p.document_status,
+                p.has_fault_marker,
+                p.has_register_response,
+                p.has_register_result,
+                p.has_processing_marker,
+                p.has_error_ilike
+            ) AS final_status,
             CASE
                 WHEN p.logstate = 3 THEN 'Сетевая ошибка: ' || COALESCE(NULLIF(p.logtext, ''), 'нет деталей')
                 ELSE p.xml_message

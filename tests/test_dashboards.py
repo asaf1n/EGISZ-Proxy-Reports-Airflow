@@ -25,6 +25,29 @@ def test_all_dashboards_default_to_full_width() -> None:
         assert payload.get("width") == "full", f"{path.name} must default to full width"
 
 
+def test_service_network_top_groups_by_typed_label() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c["name"] == "02 · Топ сетевых формулировок")
+    query = card["dataset_query"]["native"]["query"]
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+
+    assert '"Тип сетевой ошибки"' in query
+    assert 'public.egisz_network_error_type(d.error_text) AS "Тип сетевой ошибки"' in sql
+    assert "GROUP BY 1" in query
+
+
+def test_quality_network_pie_groups_by_typed_label() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    card = next(
+        c for c in dashboard["cards"]
+        if c["name"] == "04 · Ошибки связи: доля по формулировке LOGSTATE=3"
+    )
+    query = card["dataset_query"]["native"]["query"]
+
+    assert '"Тип сетевой ошибки"' in query
+    assert "per_kind AS" in query
+
+
 def test_operational_error_types_include_network_slice() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     card = next(card for card in dashboard["cards"] if card["name"] == "Ошибки по типу")
@@ -79,7 +102,8 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
     transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
 
     assert 'NULLIF(TRIM("localUid СЭМД"), \'\') IS NOT NULL' not in sql
-    assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in transform_sql
+    assert "NULLIF(btrim(ref.local_uid), '') IS NOT NULL" in transform_sql
+    assert "egisz_xml_text" not in transform_sql
     assert '"ИНН клиники"' in sql
     assert '"Исходный текст ошибки"' in sql
 
@@ -295,7 +319,8 @@ def test_dashboards_do_not_expose_technical_document_key_fallbacks() -> None:
 
 def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
     transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
-    assert "NULLIF(btrim(public.egisz_xml_text(sr.msgtext, 'localUid')), '') IS NOT NULL" in transform_sql
+    assert "NULLIF(btrim(ref.local_uid), '') IS NOT NULL" in transform_sql
+    assert "egisz_xml_text" not in transform_sql
     assert "pending_source AS" not in transform_sql
 
     quality = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))

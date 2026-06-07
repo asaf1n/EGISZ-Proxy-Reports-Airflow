@@ -1439,11 +1439,11 @@
     },
     {
       "name": "02 · Топ сетевых формулировок",
-      "description": "Топ текстов транспортных ошибок за период. Детальный разбор — дашборд 04.",
+      "description": "Топ **типов** транспортных ошибок за период (URL, gost-endpoint, UUID и IP в тексте свёрнуты в плейсхолдеры). Сырой текст — карточка «Последние ошибки связи» и дашборд 04.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Текст сетевой ошибки\"), ''), '(без текста)'), 140) AS \"Сетевая ошибка\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+          "query": "SELECT LEFT(COALESCE(NULLIF(TRIM(\"Тип сетевой ошибки\"), ''), '(без текста)'), 140) AS \"Сетевая ошибка\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{dwh_date}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",

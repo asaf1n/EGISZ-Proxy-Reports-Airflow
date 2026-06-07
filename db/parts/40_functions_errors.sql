@@ -2,8 +2,8 @@
 -- 40_functions_errors.sql — Error classification functions + xml_error_items + build_errors_json + semd_type_report_label
 -- Source: db/dwh_init.sql, lines [650..1055).
 -- Loaded by db/dwh_init.sql via \i db/parts/40_functions_errors.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
+-- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_schematron_chunk(p_chunk text)
@@ -418,6 +418,53 @@ AS $$
         ELSE '[]'::jsonb
     END
     FROM xml_items;
+$$;
+
+-- Сворачивает формулировки LOGSTATE=3 в канонический тип: URL, gost-endpoint,
+-- UUID и IP не должны раздувать кардинальность топов на дашбордах 02/04.
+CREATE OR REPLACE FUNCTION public.egisz_network_error_type(p_text text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT COALESCE(
+        NULLIF(
+            left(
+                btrim(
+                    regexp_replace(
+                        regexp_replace(
+                            regexp_replace(
+                                regexp_replace(
+                                    regexp_replace(
+                                        regexp_replace(
+                                            btrim(COALESCE(p_text, '')),
+                                            'https?://[^\s<>"'',;]+',
+                                            '<endpoint>',
+                                            'gi'
+                                        ),
+                                        '(?i)gost-[0-9]+\.[a-z0-9._-]+(?::[0-9]+)?',
+                                        '<gost-endpoint>'
+                                    ),
+                                    '(?i)(?:<urn:uuid:|<uuid:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}>?',
+                                    '<uuid>'
+                                ),
+                                '\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?',
+                                '<ip>'
+                            ),
+                            '\[[^\]]{1,200}\]',
+                            '[…]'
+                        ),
+                        '\s+',
+                        ' ',
+                        'g'
+                    )
+                ),
+                220
+            ),
+            ''
+        ),
+        '(без текста)'
+    );
 $$;
 
 CREATE OR REPLACE FUNCTION public.egisz_semd_type_report_label(semd_code text, semd_name text)

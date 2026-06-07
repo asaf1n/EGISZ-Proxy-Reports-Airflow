@@ -2,8 +2,8 @@
 -- 30_error_rules.sql — egisz_error_interpretation_rules table + seed
 -- Source: db/dwh_init.sql, lines [536..650).
 -- Loaded by db/dwh_init.sql via \i db/parts/30_error_rules.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
+-- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (

@@ -74,7 +74,7 @@ def get_raw_logids_in_band(
     """Return LOGIDs present in exchangelog_raw within ``(low_logid, high_logid]``.
 
     Banded to the same watermark window the reconcile set-diff scans, so it never reads the
-    whole staging table — see CLAUDE.md §2.
+    whole staging table — see README.md §«Дозагрузка опоздавших строк».
     """
     if high_logid <= low_logid:
         return set()

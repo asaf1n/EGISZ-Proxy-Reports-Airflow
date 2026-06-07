@@ -2,8 +2,8 @@
 -- 10_tables.sql — Tables, dim_semd_types seed, fact + indexes
 -- Source: db/dwh_init.sql, lines [27..417).
 -- Loaded by db/dwh_init.sql via \i db/parts/10_tables.sql.
--- See AGENTS.md §4 for the contract: idempotent DDL (CREATE ... IF NOT EXISTS,
--- CREATE OR REPLACE, ALTER ... IF EXISTS).
+-- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS elt_state (
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS elt_state (
 );
 
 -- Дата-отсечка источника снята: forward-выборка идёт только по LOGID-курсору, а
--- дозагрузка опоздавших строк (reconcile_late_arrivals) ищет сообщения по
--- relatesToMessage незавершённых документов безотносительно даты — см. CLAUDE.md §2.
+-- дозагрузка опоздавших строк (reconcile_late_arrivals) сравнивает полосу LOGID
+-- под watermark с exchangelog_raw — см. README.md §«Дозагрузка опоздавших строк».
 ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
 
 INSERT INTO elt_state (pipeline, last_logid)
@@ -126,6 +126,25 @@ ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS local_uid text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_key text;
 ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS action text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS relates_to_id text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS kind_xml text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS doc_number text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS org_oid text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS error_code text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS xml_message text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_status text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_status text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS jid_from_payload integer;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS creation_date timestamptz;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_patient_name text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_snils text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_doctor_name text;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_fault_marker boolean;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_register_response boolean;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_register_result boolean;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_processing_marker boolean;
+ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_error_ilike boolean;
 
 CREATE TABLE IF NOT EXISTS dim_semd_types (
     code text PRIMARY KEY,
@@ -617,3 +636,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_document_key ON dim_eg
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_local_uid_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(local_uid), '')));
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_emdr_id_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(emdr_id), '')));
 CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_created_at ON dim_egisz_exchangelog_refs (created_at);
+CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_relates_to_id ON dim_egisz_exchangelog_refs (relates_to_id)
+    WHERE relates_to_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_action_gdf ON dim_egisz_exchangelog_refs (action, logid DESC)
+    WHERE action = 'getDocumentFile';

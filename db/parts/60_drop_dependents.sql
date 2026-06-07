@@ -2,7 +2,7 @@
 -- 60_drop_dependents.sql — DROP dependent views/marts before re-creating them.
 -- Объекты с изменяемой сигнатурой колонок нельзя пересоздать через
 -- CREATE OR REPLACE, поэтому снимаем их здесь в порядке leaf→base, после чего
--- 70..90 пересобирают их заново. См. AGENTS.md §4 (идемпотентный DDL-контракт).
+-- 70..90 пересобирают их заново (идемпотентный DDL — README.md §DWH-модель).
 -- ============================================================================
 
 DROP VIEW IF EXISTS public.v_health_by_clinic_ui;
