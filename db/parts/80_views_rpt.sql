@@ -27,7 +27,7 @@ SELECT
     d.error_text AS "Текст сетевой ошибки",
     d.error_text AS "Сообщение",
     d.error_type AS "Подтип ошибки канала",
-    'да'::text AS "Связанный колбэк найден в аналитике",
+    'да'::text AS "Связанный колбэк в аналитике",
     COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID записи ответа",
     d.relates_to_id AS "Связанное сообщение (ответ РЭМД)",
     d.local_uid AS "Идентификатор документа (localUid)",

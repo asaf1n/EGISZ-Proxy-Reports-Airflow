@@ -48,24 +48,20 @@ AS $$
     SELECT NULLIF(regexp_replace(trim(both '<>' from btrim(COALESCE(value, ''))), '^urn:uuid:', '', 'i'), '');
 $$;
 
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid_norm_logid_desc
-    ON exchangelog_raw (public.egisz_normalize_message_id(msgid), logid DESC)
-    WHERE msgid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_message_id_norm
-    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'messageId')), logid DESC)
-    WHERE public.egisz_xml_text(msgtext, 'messageId') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_relates_to_message_norm
-    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'relatesToMessage')), logid DESC)
-    WHERE public.egisz_xml_text(msgtext, 'relatesToMessage') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_relates_to_norm
-    ON exchangelog_raw (public.egisz_normalize_message_id(public.egisz_xml_text(msgtext, 'relatesTo')), logid DESC)
-    WHERE public.egisz_xml_text(msgtext, 'relatesTo') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_local_uid_norm
-    ON exchangelog_raw (lower(NULLIF(btrim(public.egisz_xml_text(msgtext, 'localUid')), '')), logid DESC)
-    WHERE NULLIF(btrim(public.egisz_xml_text(msgtext, 'localUid')), '') IS NOT NULL;
+-- Связка цепочки и реквизиты СЭМД читаются из dim_egisz_exchangelog_refs (один проход XML
+-- на LOGID), а не повторным разбором msgtext в exchangelog_raw. Функциональные индексы по
+-- XML-выражениям над msgtext выполняли egisz_xml_text на КАЖДОЙ вставке в самый горячий
+-- staging-слой и при этом не использовались ни одним запросом — это была чистая
+-- write-amplification. JOIN'ы transform идут по PK-полосе logid и по индексам dim/fact ниже.
+DROP INDEX IF EXISTS idx_exchangelog_raw_msgid_norm_logid_desc;
+DROP INDEX IF EXISTS idx_exchangelog_raw_xml_message_id_norm;
+DROP INDEX IF EXISTS idx_exchangelog_raw_xml_relates_to_message_norm;
+DROP INDEX IF EXISTS idx_exchangelog_raw_xml_relates_to_norm;
+DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm;
+DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm;
+
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(message_id));
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to_norm ON fact_egisz_transactions (public.egisz_normalize_message_id(relates_to_id));
-DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm;
 
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
 RETURNS timestamptz

@@ -1,7 +1,7 @@
 {
   "name": "05 Управленческий дашборд",
   "width": "full",
-  "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `v_rpt_documents_ui`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Динамика (MRR Waterfall / NRR / Logo retention) появится после накопления ≥2 закрытых месяцев.",
+  "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `v_rpt_documents_ui`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Дневная динамика MRR/ARR/активных JID — trailing-30d на каждую дату (последние 90 дней, без фильтра «Период»). Помесячные MRR Waterfall / NRR / Logo retention — после ≥2 закрытых месяцев.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -244,10 +244,149 @@
     },
     {
       "display": "text",
+      "text": "## Динамика финансовых показателей (trailing-30d по дням)\nНа каждую дату: активные JID с документом за предыдущие 30 дней → MRR и ARR по фикс-тарифу. Окно **последние 90 дней**, **не зависит от фильтра «Период»** — та же логика, что у скаляров выше.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 9,
+      "col": 0
+    },
+    {
+      "name": "05 · Динамика MRR (trailing-30d), ₽",
+      "description": "MRR на конец каждого дня: COUNT(DISTINCT JID с активностью за предыдущие 30 дней) × 10 000 ₽. Trailing-30d, не календарный месяц.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "graph.metrics": [
+          "MRR, ₽"
+        ],
+        "graph.x_axis.scale": "timeseries",
+        "graph.show_values": false,
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"MRR, ₽\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
+          }
+        },
+        "series_settings": {
+          "MRR, ₽": {
+            "color": "#509EE3",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 6,
+      "row": 10,
+      "col": 0
+    },
+    {
+      "name": "05 · Динамика ARR (trailing-30d), ₽",
+      "description": "ARR на конец каждого дня: MRR (trailing-30d) × 12. Годовая выручка при сохранении активной базы JID на эту дату.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "graph.metrics": [
+          "ARR, ₽"
+        ],
+        "graph.x_axis.scale": "timeseries",
+        "graph.show_values": false,
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"ARR, ₽\"]": {
+            "number_separators": " ",
+            "suffix": " ₽"
+          }
+        },
+        "series_settings": {
+          "ARR, ₽": {
+            "color": "#88BF4D",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 6,
+      "row": 10,
+      "col": 8
+    },
+    {
+      "name": "05 · Динамика активных JID (trailing-30d)",
+      "description": "COUNT(DISTINCT JID) с хотя бы одним документом за предыдущие 30 дней на конец каждого дня. Драйвер MRR при плоском тарифе.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", COUNT(DISTINCT ja.jid)::bigint AS \"Активных JID\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "graph.metrics": [
+          "Активных JID"
+        ],
+        "graph.x_axis.scale": "timeseries",
+        "graph.show_values": false,
+        "column_settings": {
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          },
+          "[\"name\",\"Активных JID\"]": {
+            "number_separators": " "
+          }
+        },
+        "series_settings": {
+          "Активных JID": {
+            "color": "#A989C5",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 6,
+      "row": 10,
+      "col": 16
+    },
+    {
+      "display": "text",
       "text": "## Здоровье сервиса\nСервисные guardrail-метрики (без тела документа). Реагируют на фильтр «Период». Цель: «зависших >72 ч» → вниз, «отказов РЭМД» и «ошибок связи» → вниз.",
       "sizeX": 24,
       "sizeY": 2,
-      "row": 9,
+      "row": 16,
       "col": 0
     },
     {
@@ -279,7 +418,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 11,
+      "row": 18,
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -317,7 +456,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 11,
+      "row": 18,
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -355,7 +494,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 11,
+      "row": 18,
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -369,7 +508,7 @@
       "text": "## Выручка под риском\nПод плоским тарифом выручка равномерна по JID, а ценность — нет. Сегменты показывают, где концентрируется риск оттока в рублях. «Ноль ценности» (платят, но ни одного успешного СЭМД) и «затык канала» (>80 % документов зависли) — приоритетные очереди для Customer Success.",
       "sizeX": 24,
       "sizeY": 2,
-      "row": 14,
+      "row": 21,
       "col": 0
     },
     {
@@ -405,7 +544,7 @@
       },
       "sizeX": 24,
       "sizeY": 5,
-      "row": 16,
+      "row": 23,
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -444,7 +583,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 21,
+      "row": 28,
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -483,7 +622,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 21,
+      "row": 28,
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -521,7 +660,7 @@
       },
       "sizeX": 8,
       "sizeY": 3,
-      "row": 21,
+      "row": 28,
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -560,7 +699,7 @@
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 24,
+      "row": 31,
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
@@ -571,10 +710,10 @@
     },
     {
       "display": "text",
-      "text": "## Динамика (появится после накопления данных)\nMRR Waterfall (New + Reactivated − Churned), NRR и Logo retention требуют ≥2 закрытых календарных месяцев. Сейчас данные охватывают ~1 месяц — помесячные тренды и retention-матрица не строятся, чтобы не показывать vanity-графики на одной точке (см. учебник «Продуктовая аналитика», §10, §18). Блок включается, когда накопится второй закрытый месяц.",
+      "text": "## Помесячная динамика (появится после накопления данных)\nMRR Waterfall (New + Reactivated − Churned), NRR и Logo retention требуют ≥2 закрытых календарных месяцев. Дневные графики MRR/ARR/активных JID выше уже доступны; помесячные когортные метрики включаются, когда накопится второй закрытый месяц.",
       "sizeX": 24,
-      "sizeY": 3,
-      "row": 31,
+      "sizeY": 2,
+      "row": 38,
       "col": 0
     }
   ]

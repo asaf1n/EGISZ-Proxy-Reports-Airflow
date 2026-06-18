@@ -594,8 +594,11 @@ BEGIN
 END
 $$;
 
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_msgid ON exchangelog_raw (msgid);
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logstate ON exchangelog_raw (logstate);
+-- msgid/logstate на raw не использовались ни одним запросом (transform идёт по PK-полосе
+-- logid; нормализованный msgid берётся из dim). createdate оставлен как ключ партиционирования
+-- и единственный полезный для ad-hoc/ретеншн-операций индекс над staging.
+DROP INDEX IF EXISTS idx_exchangelog_raw_msgid;
+DROP INDEX IF EXISTS idx_exchangelog_raw_logstate;
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_semd_code ON fact_egisz_documents (semd_code);
 CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_local_uid ON fact_egisz_documents (local_uid);

@@ -151,11 +151,14 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "oid = EXCLUDED.code" in sql
     assert "SET oid = code" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid" in sql
-    assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_local_uid_norm" in sql
+    # Функциональные XML-индексы по msgtext не используются transform (связка идёт через
+    # dim_egisz_exchangelog_refs) и удалены как write-amplification на горячем staging-слое.
+    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm" in sql
     # DOCUMENTID-парсинг снят вместе с EGISZ_MESSAGES: индекс и реквизит должны быть удалены.
     assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm" in sql
     assert "DOCUMENTID" not in sql
-    assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml_message_id_norm" in sql
+    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_message_id_norm" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml" not in sql
     assert "candidate_log_ids AS" in sql
     assert "CREATE OR REPLACE FUNCTION public.egisz_parse_exchangelog_row" in sql
     assert "CROSS JOIN LATERAL public.egisz_parse_exchangelog_row" in transform_sql

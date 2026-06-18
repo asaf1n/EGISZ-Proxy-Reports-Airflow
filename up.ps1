@@ -206,6 +206,36 @@ function Initialize-AirflowConnections {
     }
 }
 
+function Initialize-HelmAirflowRepo {
+    if (-not (Get-Command helm -ErrorAction SilentlyContinue)) {
+        throw "helm не найден в PATH. Установите Helm: https://helm.sh/docs/intro/install/"
+    }
+
+    $repoName = "apache-airflow"
+    $repoUrl = "https://airflow.apache.org/charts"
+    $existingRepos = @()
+    try {
+        $existingRepos = @(
+            helm repo list -o json 2>$null | ConvertFrom-Json |
+                ForEach-Object { $_.name }
+        )
+    } catch {
+        $existingRepos = @()
+    }
+
+    if ($existingRepos -notcontains $repoName) {
+        Write-Host "Adding Helm repo $repoName..."
+        Invoke-Checked "Add Helm repo $repoName" {
+            helm repo add $repoName $repoUrl
+        }
+    }
+
+    Write-Host "Updating Helm repo index..."
+    Invoke-Checked "Update Helm repos" {
+        helm repo update
+    }
+}
+
 function Install-Airflow {
     Initialize-SecretFiles
     Test-KubernetesConnection
@@ -228,6 +258,8 @@ function Install-Airflow {
     }
 
     Initialize-AirflowInternalMetadataDatabase
+
+    Initialize-HelmAirflowRepo
 
     Write-Host "Installing Airflow..."
     Invoke-Checked "Install Airflow Helm release" {

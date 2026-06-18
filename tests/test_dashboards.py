@@ -144,7 +144,7 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
-    trend_card = next(card for card in dashboard["cards"] if card["name"] == "01 · Транзакции по дням и статусам")
+    trend_card = next(card for card in dashboard["cards"] if card["name"] == "Транзакции по дням и статусам")
     latest_query = latest_card["dataset_query"]["native"]["query"]
     query = card["dataset_query"]["native"]["query"]
     trend_query = trend_card["dataset_query"]["native"]["query"]
