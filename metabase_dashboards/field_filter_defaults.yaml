@@ -183,6 +183,37 @@ tags:
       - table_ref: public.v_stg_channel_errors_by_document
         field_name: error_code
 
+  # Семантические dimension-фильтры дашборда 04 (имя тега = суть фильтра, без
+  # legacy-приставки top_*). jid — JID клиники, semd_type — тип СЭМД по коду НСИ.
+  # Статус документа фильтруется существующим тегом `status` (поле «Статус»):
+  # статус ≠ категория ошибки (`egisz_error_category`) ≠ тип ошибки (`error_type`).
+  jid:
+    rules:
+      - query_contains: [v_rpt_error_category_breakdown_ui]
+        table_ref: public.v_rpt_error_category_breakdown_ui
+        field_name: JID клиники
+      - query_contains: [v_rpt_clinic_connectivity_daily_ui]
+        table_ref: public.v_rpt_clinic_connectivity_daily_ui
+        field_name: JID клиники
+      - query_contains: [v_rpt_network_errors_detail_ui]
+        table_ref: public.v_rpt_network_errors_detail_ui
+        field_name: JID клиники
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: JID клиники
+
+  semd_type:
+    rules:
+      - query_contains: [v_rpt_error_category_breakdown_ui]
+        table_ref: public.v_rpt_error_category_breakdown_ui
+        field_name: Код СЭМД
+      - query_contains: [v_rpt_network_errors_detail_ui]
+        table_ref: public.v_rpt_network_errors_detail_ui
+        field_name: Код СЭМД
+      - query_contains: [v_rpt_documents_ui]
+        table_ref: public.v_rpt_documents_ui
+        field_name: Код СЭМД
+
   # dwh_date — особый случай: выбор поля зависит от display-name template-tag,
   # а не только от подстрок в query.
   dwh_date:

@@ -500,13 +500,18 @@ JSON-описания дашбордов — в `metabase_dashboards/`. Импо
 
 #### Компоновка `04_quality_and_errors` (ошибки и качество)
 
+24 карточки (18 SQL + 6 text-заголовков разделов). Единые фильтры дашборда: период (`dwh_date_filter` по «Обработано IPS» для колбэков, `parse_created_filter` по «Дата создания документа» для транспорта, `connectivity_day_filter` по календарному дню для доступности), **JID клиники** (`jid_filter` → tag `jid`), **Тип СЭМД** по коду НСИ (`semd_type_filter` → tag `semd_type`) и **статус документа** (`status_filter` → tag `status`, поле «Статус»). Имена тегов отражают суть фильтра (без legacy-приставки `top_*`). Фильтры JID/СЭМД привязаны ко всем документным и транспортным карточкам; статус — к таблицам успешности. **Статус ≠ категория ошибки ≠ тип ошибки:** «Статус» — жизненный цикл документа (`success` / `async_error` / `network_error` / `waiting`); «Категория ошибки» (`egisz_error_category`, ~10 групп) и «Тип ошибки» (`error_type`, атомарные виды) — классификация ошибок *внутри* статусов-ошибок, они живут только в `v_rpt_error_category_breakdown_ui` (bar-чарты и сводная матрица).
+
 | Блок | Карточки | Источник | Фильтр периода |
 |---|---|---|---|
-| Категории и виды ошибок | Двойной пирог «категория → тип»; топ видов ошибок | `v_rpt_error_category_breakdown_ui` | «Обработано IPS» (`dwh_date_filter`) |
-| Успешность | Таблицы и рейтинги по клиникам и типам СЭМД; доли ошибок | `v_rpt_documents_ui` | «Обработано IPS» |
-| Транспорт | Детализация сетевых сбоев, доступность канала | `v_rpt_network_errors_detail_ui`, `v_rpt_clinic_connectivity_daily_ui` | «Дата создания документа» (`parse_created_filter`) или календарный день (доступность) |
+| Сводка ошибок | KPI-скаляры: документов с ошибкой, доля ошибок %, % успеха, клиник с ошибками | `v_rpt_documents_ui` | «Обработано IPS» (`dwh_date_filter`) |
+| Качество данных | Таблица проверок (5 строк: без JID / OID / localUid / кода СЭМД / успех без даты) с тепловой подсветкой | `v_rpt_documents_ui` | «Обработано IPS» |
+| Структура ошибок | Bar «Ошибки по категории»; bar «Топ видов ошибок» (12); stacked-bar «Виды ошибок по типам СЭМД» (все типы, доля от общего числа ошибок, %; виды ошибок — цветные сегменты) | `v_rpt_error_category_breakdown_ui` | «Обработано IPS» |
+| Успешность | Таблицы по клиникам и типам СЭМД (сортировка по % успеха, условное форматирование, **все срезы без ограничения числа строк**); срез «% ошибок: клиника × тип СЭМД» (пары клиника × тип СЭМД с ≥1 ошибкой, тепловая подсветка доли ошибок) | `v_rpt_documents_ui` | «Обработано IPS» |
+| Транспорт | Bar топ клиник и формулировок LOGSTATE=3, тренд по дням, детализация (без трассировочных идентификаторов) | `v_rpt_network_errors_detail_ui` | «Дата создания документа» (`parse_created_filter`) |
+| Доступность | Объёмы и доля доступности по дням, сводка день × JID | `v_rpt_connectivity_global_daily_ui`, `v_rpt_clinic_connectivity_daily_ui` | Календарный день (`connectivity_day_filter`) |
 
-Универсум ошибок — документы со статусом `async_error` или `network_error`. Составной `error_type` (несколько видов в одном callback, разделитель ` · `) разворачивается в `v_rpt_error_category_breakdown_ui` через `unnest`.
+Универсум ошибок — документы со статусом `async_error` или `network_error`. Составной `error_type` (несколько видов в одном callback, разделитель ` · `) разворачивается в `v_rpt_error_category_breakdown_ui` через `unnest`. Группировки по JID / коду / типу СЭМД отсекают пустоты через `COALESCE(NULLIF(TRIM(...), ''), 'Неизвестно')` и фильтруют мусорные строки в `WHERE`.
 
 #### Компоновка `06_semd_archive` (архив СЭМД)
 
@@ -548,7 +553,7 @@ JSON-описания дашбордов — в `metabase_dashboards/`. Импо
 | `01_operational.json` | Операционный поток документов, статусы, ошибки, динамика. | 9 | `v_rpt_documents_ui`, `v_rpt_error_category_breakdown_ui` | Период, код СЭМД, JID, `localUid`/`relatesTo`/`emdrId`/`LOGID`, статус |
 | `02_service.json` | Healthcheck ETL, качество потока и транспортные сбои. | 17 | `v_health_*_ui`, `v_rpt_documents_ui`, `v_rpt_network_errors_detail_ui` | Период по «Обработано IPS», код СЭМД, JID, `localUid`/`relatesTo`/`emdrId`/`LOGID` |
 | `03_documents_no_response.json` | Очередь документов без финального callback. | 5 | `v_rpt_documents_no_response_ui` | Период, код СЭМД, JID, `localUid` |
-| `04_quality_and_errors.json` | Качество данных и детализация отказов РЭМД. | 22 | `v_rpt_documents_ui`, `v_rpt_error_category_breakdown_ui`, `v_rpt_network_errors_detail_ui` | Период: колбэки (IPS) / транспорт / доступность |
+| `04_quality_and_errors.json` | Качество данных и детализация отказов РЭМД. | 24 (18 SQL) | `v_rpt_documents_ui`, `v_rpt_error_category_breakdown_ui`, `v_rpt_network_errors_detail_ui` | Период: колбэки (IPS) / транспорт / доступность; JID, тип СЭМД, статус документа |
 | `05_executive.json` | Управленческие KPI: активные JID, объёмы, статусы, MRR/ARR по фикс-тарифу, дневная динамика финансов. | 23 (18 SQL) | `v_rpt_documents_ui` | Период (`past30days~`) |
 | `06_semd_archive.json` | Архив документов и поиск по идентификаторам. | 6 | `v_rpt_semd_archive_ui` | Период, JID, код СЭМД, `localUid`, `emdrId`, `LOGID`, связанное сообщение, статус |
 | `07_client_service.json` | Клиентский мониторинг по одному JID. | 9 (8 SQL) | `v_rpt_client_documents_ui` | JID (обязателен), период, тип документа |

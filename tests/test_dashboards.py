@@ -36,14 +36,15 @@ def test_service_network_top_groups_by_typed_label() -> None:
     assert "GROUP BY 1" in query
 
 
-def test_quality_network_pie_groups_by_typed_label() -> None:
+def test_quality_network_top_groups_by_typed_label() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     card = next(
         c for c in dashboard["cards"]
-        if c["name"] == "04 · Ошибки связи: доля по формулировке LOGSTATE=3"
+        if c.get("name") == "Топ формулировок сетевых ошибок"
     )
     query = card["dataset_query"]["native"]["query"]
 
+    assert card["display"] == "row"
     assert '"Тип сетевой ошибки"' in query
     assert "per_kind AS" in query
 
@@ -211,11 +212,42 @@ def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None
 
 def test_quality_error_totals_use_async_and_network_codes() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
-    card = next(card for card in dashboard["cards"] if card["name"] == "04 · Итоги по ошибкам за период")
+    card = next(card for card in dashboard["cards"] if card.get("name") == "Документов с ошибкой")
     query = card["dataset_query"]["native"]["query"]
+    assert card["display"] == "scalar"
     assert "v_rpt_documents_ui" in query
     assert '"Статус (код)" IN (\'async_error\', \'network_error\')' in query
     assert "WHERE 1=1" in query
+
+
+def test_quality_success_slices_are_uncapped() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    for name in ("Успешность по клиникам", "Успешность по типам СЭМД"):
+        card = next(c for c in dashboard["cards"] if c.get("name") == name)
+        query = card["dataset_query"]["native"]["query"]
+        assert "LIMIT 50" not in query, f"{name} должен показывать все срезы без ограничения в 50 строк"
+        assert "v_rpt_documents_ui" in query
+
+
+def test_quality_error_rate_clinic_by_semd_card() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: клиника × тип СЭМД")
+    query = card["dataset_query"]["native"]["query"]
+
+    assert card["display"] == "table"
+    assert "v_rpt_documents_ui" in query
+    # Срез по парам клиника × тип СЭМД с долей ошибок по документному универсуму.
+    assert "GROUP BY 1, 3" in query
+    assert '"Статус (код)" IN (\'async_error\', \'network_error\')' in query
+    assert '"Статус (код)" IN (\'success\', \'async_error\', \'network_error\')' in query
+    assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in query
+    # Показываем только пары с хотя бы одной ошибкой и без ограничения числа строк.
+    assert "HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0" in query
+    assert "LIMIT" not in query
+    assert card["metabase-field-filters"]["dwh_date"] == {
+        "table_ref": "public.v_rpt_documents_ui",
+        "field_name": "Дата обработки",
+    }
 
 
 def test_archive_top_semd_uses_same_document_universe_as_total() -> None:
