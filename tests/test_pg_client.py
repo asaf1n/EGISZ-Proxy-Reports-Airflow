@@ -4,19 +4,23 @@ import pytest
 
 from pathlib import Path
 
-from egisz_elt.pg_client import (
+from egisz_elt.common import (
+    get_cursors,
+    load_raw_logs,
+    normalize_message_id,
+    transform_raw_to_facts,
+    update_cursors,
+)
+from egisz_elt.dimensions import (
     DIRECTORY_SYNC_LOCK_TIMEOUT,
     DIRECTORY_SYNC_PAGE_SIZE,
     DIRECTORY_SYNC_STATEMENT_TIMEOUT,
-    coalesce_logid_windows,
-    get_cursors,
-    get_raw_logids_in_band,
-    load_raw_logs,
-    normalize_message_id,
     sync_directory,
+)
+from egisz_elt.reconcile import (
+    coalesce_logid_windows,
+    get_all_raw_logids,
     transform_missing_windows,
-    transform_raw_to_facts,
-    update_cursors,
 )
 
 DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
@@ -26,11 +30,11 @@ def _read_dwh_init_sql() -> str:
     # Находим папку db/parts
     parts_dir = DWH_INIT_SQL_PATH.parent / "parts"
     sql_contents = []
-    
+
     # Читаем все SQL-файлы и склеиваем их
     for sql_file in sorted(parts_dir.glob("*.sql")):
         sql_contents.append(sql_file.read_text(encoding="utf-8"))
-        
+
     return "\n".join(sql_contents)
 
 
@@ -122,6 +126,15 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert 'd.jid::text AS "JID клиники"' in sql
 
 
+def test_error_interpretation_matches_all_rules_independently() -> None:
+    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "40_functions_errors.sql").read_text(encoding="utf-8")
+    assert "egisz_error_matching_rule_labels" in sql
+    assert "ORDER BY r.rule_code" in sql
+    assert "ORDER BY r.priority" not in sql
+    matching_fn = sql.split("egisz_error_matching_rule_labels")[1].split("egisz_error_interpretation_item")[0]
+    assert "LIMIT 1" not in matching_fn
+
+
 def test_enriched_mart_is_incrementally_maintained_table_not_full_refresh() -> None:
     sql = _read_dwh_init_sql()
     transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
@@ -135,10 +148,11 @@ def test_enriched_mart_is_incrementally_maintained_table_not_full_refresh() -> N
     assert "REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_enriched_ui" not in sql
     assert "REFRESH MATERIALIZED VIEW public.v_egisz_documents_enriched_ui" not in sql
 
-    # transform сопровождает витрину инкрементально по затронутым document_key (updated_at = now()).
+    # transform сопровождает витрину инкрементально по затронутым document_key; полная сверка — maintain_enriched_ui.
+    assert "egisz_refresh_enriched_documents" in transform_sql
+    assert "egisz_reconcile_enriched_ui" in transform_sql
     assert "INSERT INTO public.v_egisz_documents_enriched_ui" in transform_sql
     assert "FROM public.v_egisz_documents_enriched_src" in transform_sql
-    assert "WHERE d.updated_at = now()" in transform_sql
     # Дневной rollup остаётся materialized view.
     assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui" in sql
 
@@ -172,7 +186,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     # Запись об ЭМД (waiting) появляется при минимальном наборе localUid + JID + KIND,
     # которые собираются по document_key из разных сообщений getDocumentFile.
     assert "document_attributes AS" in transform_sql
-    assert "OR (a.jid IS NOT NULL AND a.semd_code IS NOT NULL)" in transform_sql
+    assert "OR (COALESCE(a.jid, public.egisz_jid_from_oid(a.org_oid)) IS NOT NULL AND a.semd_code IS NOT NULL)" in transform_sql
     # Документный факт по колбэкам по-прежнему строится в document-grain (DISTINCT ON).
     assert "SELECT DISTINCT ON (f.document_key)" in sql
     assert "public.egisz_normalize_semd_code(r.kind_xml) AS semd_code" in sql
@@ -319,7 +333,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
         captured["values"] = values
         captured["page_size"] = page_size
 
-    monkeypatch.setattr("egisz_elt.pg_client.execute_values", fake_execute_values)
+    monkeypatch.setattr("egisz_elt.dimensions.execute_values", fake_execute_values)
 
     sync_directory(con, "dim_organizations", [(1, "Clinic", "1234567890", "Address")])
 
@@ -384,11 +398,10 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
     assert get_cursors(Connection(), "egisz") == {"last_logid": 0}
 
 
-def test_get_raw_logids_in_band_returns_int_set_within_window() -> None:
+def test_get_all_raw_logids_returns_int_set_over_full_table() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.sql = ""
-            self.params: tuple[object, ...] | None = None
 
         def __enter__(self) -> "Cursor":
             return self
@@ -398,7 +411,6 @@ def test_get_raw_logids_in_band_returns_int_set_within_window() -> None:
 
         def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
             self.sql = sql
-            self.params = params
 
         def fetchall(self) -> list[tuple[int]]:
             return [(101,), (102,), (102,)]
@@ -411,22 +423,9 @@ def test_get_raw_logids_in_band_returns_int_set_within_window() -> None:
             return self.cursor_instance
 
     con = Connection()
-    assert get_raw_logids_in_band(con, low_logid=100, high_logid=300) == {101, 102}
-    cursor = con.cursor_instance
-    assert "FROM exchangelog_raw WHERE logid > %s AND logid <= %s" in cursor.sql
-    assert cursor.params == (100, 300)
-
-
-def test_get_raw_logids_in_band_empty_window_skips_query() -> None:
-    class Cursor:  # pragma: no cover - must not be reached
-        def __enter__(self) -> "Cursor":
-            raise AssertionError("empty band must not open a cursor")
-
-    class Connection:
-        def cursor(self) -> Cursor:
-            return Cursor()
-
-    assert get_raw_logids_in_band(Connection(), low_logid=300, high_logid=300) == set()
+    assert get_all_raw_logids(con) == {101, 102}
+    # Full-table scan: no banded LOGID window.
+    assert con.cursor_instance.sql == "SELECT logid FROM exchangelog_raw"
 
 
 def test_coalesce_logid_windows_merges_runs_within_gap() -> None:
@@ -502,9 +501,9 @@ def test_dwh_init_sql_partitions_time_series_tables() -> None:
 def test_load_raw_logs_uses_partitioned_upsert_target() -> None:
     import inspect
 
-    from egisz_elt import pg_client
+    from egisz_elt import common
 
-    source = inspect.getsource(pg_client.load_raw_logs)
+    source = inspect.getsource(common.load_raw_logs)
     assert "ON CONFLICT (logid, createdate)" in source
 
 

@@ -6,7 +6,82 @@
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
+DROP FUNCTION IF EXISTS public.egisz_reconcile_enriched_ui();
+DROP FUNCTION IF EXISTS public.egisz_refresh_enriched_documents(text[]);
 DROP FUNCTION IF EXISTS public.egisz_transform_raw_to_facts(bigint, bigint);
+
+-- Точечная пересборка строк persistent-витрины из v_egisz_documents_enriched_src.
+-- NULL в p_document_keys — reconcile: все строки, где витрина разошлась с источником
+-- (смена справочников, статуса, типа СЭМД, ошибок без повторного transform батча).
+CREATE OR REPLACE FUNCTION public.egisz_refresh_enriched_documents(p_document_keys text[] DEFAULT NULL)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    refreshed bigint := 0;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = 'v_egisz_documents_enriched_ui'
+          AND c.relkind = 'r'
+    ) OR to_regclass('public.v_egisz_documents_enriched_src') IS NULL THEN
+        RETURN 0;
+    END IF;
+
+    IF p_document_keys IS NULL THEN
+        SELECT COALESCE(array_agg(t.document_key), ARRAY[]::text[])
+        INTO p_document_keys
+        FROM (
+            SELECT e."Документ (ключ учёта)" AS document_key
+            FROM public.v_egisz_documents_enriched_ui e
+            INNER JOIN public.v_egisz_documents_enriched_src s
+                ON s."Документ (ключ учёта)" = e."Документ (ключ учёта)"
+            WHERE e."Наименование клиники" IS DISTINCT FROM s."Наименование клиники"
+               OR e."Статус (код)" IS DISTINCT FROM s."Статус (код)"
+               OR e."Статус (отчёт)" IS DISTINCT FROM s."Статус (отчёт)"
+               OR e."Наименование СЭМД" IS DISTINCT FROM s."Наименование СЭМД"
+               OR e."Тип СЭМД (код · НСИ)" IS DISTINCT FROM s."Тип СЭМД (код · НСИ)"
+               OR e."Тип ошибки" IS DISTINCT FROM s."Тип ошибки"
+               OR e."Сводка ошибки" IS DISTINCT FROM s."Сводка ошибки"
+               OR e."ИНН клиники" IS DISTINCT FROM s."ИНН клиники"
+               OR e."OID клиники" IS DISTINCT FROM s."OID клиники"
+               OR e."Хост клиники (VPN ГОСТ)" IS DISTINCT FROM s."Хост клиники (VPN ГОСТ)"
+
+            UNION
+
+            SELECT s."Документ (ключ учёта)"
+            FROM public.v_egisz_documents_enriched_src s
+            LEFT JOIN public.v_egisz_documents_enriched_ui e
+                ON e."Документ (ключ учёта)" = s."Документ (ключ учёта)"
+            WHERE e."Документ (ключ учёта)" IS NULL
+        ) t;
+    END IF;
+
+    IF COALESCE(cardinality(p_document_keys), 0) = 0 THEN
+        RETURN 0;
+    END IF;
+
+    DELETE FROM public.v_egisz_documents_enriched_ui e
+    WHERE e."Документ (ключ учёта)" = ANY (p_document_keys);
+
+    INSERT INTO public.v_egisz_documents_enriched_ui
+    SELECT s.*
+    FROM public.v_egisz_documents_enriched_src s
+    WHERE s."Документ (ключ учёта)" = ANY (p_document_keys);
+
+    GET DIAGNOSTICS refreshed = ROW_COUNT;
+    RETURN refreshed;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_reconcile_enriched_ui()
+RETURNS bigint
+LANGUAGE sql
+AS $$
+    SELECT public.egisz_refresh_enriched_documents(NULL::text[]);
+$$;
 
 CREATE OR REPLACE FUNCTION public.egisz_transform_raw_to_facts(
     from_logid bigint,
@@ -147,6 +222,8 @@ BEGIN
                 FILTER (WHERE public.egisz_normalize_semd_code(ref.kind_xml) IS NOT NULL))[1] AS semd_code,
             (array_agg(ref.jid_from_payload ORDER BY gr.logid)
                 FILTER (WHERE ref.jid_from_payload IS NOT NULL))[1] AS jid,
+            (array_agg(ref.org_oid ORDER BY gr.logid)
+                FILTER (WHERE NULLIF(btrim(ref.org_oid), '') IS NOT NULL))[1] AS org_oid,
             min(COALESCE(gr.createdate, gr.logdate)) AS sent_at,
             max(gr.logid) AS source_logid,
             bool_or(gr.logstate = 3) AS has_network_error,
@@ -184,7 +261,7 @@ BEGIN
         a.source_logid,
         CASE WHEN a.has_network_error THEN a.network_logid END,
         CASE WHEN a.has_network_error THEN a.network_at END,
-        a.jid,
+        COALESCE(a.jid, public.egisz_jid_from_oid(a.org_oid)),
         CASE WHEN a.has_network_error THEN 'Сетевая ошибка' END,
         CASE WHEN a.has_network_error THEN LEFT(a.network_message, 500) END,
         CASE WHEN a.has_network_error THEN a.network_message END,
@@ -194,7 +271,7 @@ BEGIN
       AND a.local_uid IS NOT NULL
       AND (
           a.has_network_error
-          OR (a.jid IS NOT NULL AND a.semd_code IS NOT NULL)
+          OR (COALESCE(a.jid, public.egisz_jid_from_oid(a.org_oid)) IS NOT NULL AND a.semd_code IS NOT NULL)
       )
     ON CONFLICT (document_key) DO UPDATE SET
         local_uid = COALESCE(EXCLUDED.local_uid, public.fact_egisz_documents.local_uid),
@@ -405,7 +482,10 @@ BEGIN
     enriched AS (
         SELECT
             p.*,
-            p.jid_from_payload AS resolved_jid,
+            COALESCE(
+                p.jid_from_payload,
+                public.egisz_jid_from_oid(p.org_oid)
+            ) AS resolved_jid,
             COALESCE(
                 p.semd_code,
                 p.source_document_semd_code
@@ -652,24 +732,13 @@ BEGIN
     -- полного REFRESH MATERIALIZED VIEW каждые 5 минут — стоимость O(батч), а не O(архив).
     -- Защита от полумигрированной БД: работаем, только если витрина уже persistent-таблица
     -- и источник доступен; иначе первичное наполнение делает dwh_init (90_..._finalize.sql).
-    IF EXISTS (
-        SELECT 1 FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relname = 'v_egisz_documents_enriched_ui'
-          AND c.relkind = 'r'
-    ) AND to_regclass('public.v_egisz_documents_enriched_src') IS NOT NULL THEN
-        DELETE FROM public.v_egisz_documents_enriched_ui e
-        WHERE e."Документ (ключ учёта)" IN (
-            SELECT d.document_key FROM public.fact_egisz_documents d WHERE d.updated_at = now()
-        );
-
-        INSERT INTO public.v_egisz_documents_enriched_ui
-        SELECT s.* FROM public.v_egisz_documents_enriched_src s
-        WHERE s."Документ (ключ учёта)" IN (
-            SELECT d.document_key FROM public.fact_egisz_documents d WHERE d.updated_at = now()
-        );
-    END IF;
+    PERFORM public.egisz_refresh_enriched_documents(
+        ARRAY(
+            SELECT d.document_key::text
+            FROM public.fact_egisz_documents d
+            WHERE d.updated_at = transaction_timestamp()
+        )
+    );
 
     RETURN affected;
 END;

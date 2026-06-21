@@ -13,6 +13,7 @@
 - [Архитектура и поток данных](#архитектура-и-поток-данных)
 - [Источник: прокси-БД интегратора (Firebird `proxy_egisz`)](#источник-прокси-бд-интегратора-firebird-proxy_egisz)
 - [ELT-конвейер Airflow](#elt-конвейер-airflow)
+- [Полная сверка константности источник↔raw](#полная-сверка-константности-источникraw)
 - [Парсинг и нормализация payload](#парсинг-и-нормализация-payload)
 - [Сборка документа из сообщений](#сборка-документа-из-сообщений)
 - [Классификация ошибок](#классификация-ошибок)
@@ -72,7 +73,7 @@
 | Компонент | База / технология | Роль |
 | --------- | ----------------- | ---- |
 | Источник | Firebird 5, БД `proxy_egisz` | Журнал обмена шлюза (только чтение) |
-| Оркестратор | Apache Airflow 2.11.2, DAG `egisz_elt_dag` | Каждые 5 минут: дельта журнала → raw → трансформация → mat-view → watermark |
+| Оркестратор | Apache Airflow 2.11.2, три DAG: `egisz_extract_dag` (`*/5`), `egisz_dimensions_dag` (`@hourly`), `egisz_reconcile_dag` (`@daily`) | Extract: дельта журнала → raw → трансформация → mat-view → watermark. Dimensions: справочники + сверка витрины. Reconcile: полная сверка источник↔raw |
 | DWH | PostgreSQL, БД `dwh_egisz` | Raw, справочники, разбор сообщений, факты, правила ошибок, view для BI |
 | Визуализация | Metabase v0.60.2.5 | 8 дашбордов поверх `v_egisz_documents_*_ui` и `v_rpt_*_ui` |
 | Деплой | Kubernetes (Docker Desktop по умолчанию) | Helm-чарт Airflow + манифест Metabase, скрипт `up.ps1` |
@@ -94,7 +95,7 @@
 | Таблица источника | Что это                | Ключевые поля                                                        | Как используется                                                                                  |
 | ----------------- | ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `EXCHANGELOG`     | Основной журнал обмена | `LOGID` (PK, монотонный bigint), `LOGDATE`, `CREATEDATE`, `MSGID`, `LOGSTATE`, `LOGTEXT`, `MSGTEXT` | Каждая строка — одно сообщение между шлюзом и РЭМД (исходящее или callback). `MSGTEXT` (полный SOAP/XML payload) — основной материал для парсинга. |
-| `JPERSONS`        | Справочник организаций | `JID`, `JNAME`, `JINN`, `JADDR`                                     | Грузится в `dim_organizations` (`jid`, `name`, `inn`, `address`). Даёт человекочитаемое имя клиники по `JID`. |
+| `JPERSONS`        | Справочник организаций | `JID`, `JNAME`, `JINN`, `JADDR`                                     | Грузится в `dim_organizations` (`jid`, `name`, `inn`, `address`). Даёт человекочитаемое имя клиники по `JID`. Если `JID` есть в фактах, но отсутствует в `JPERSONS`, в дашбордах остаётся fallback `Клиника JID: <id>` до появления записи в источнике; задача `maintain_enriched_ui` подтягивает имя для уже загруженного архива после sync. |
 | `EGISZ_LICENSES`  | Справочник лицензий    | `mo_uid`, `JID`                                                     | Грузится в `dim_licenses`. Связывает OID организации (`mo_uid`) с внутренним `JID` для обогащения callback'ов. |
 
 `MSGTEXT` хранит полный SOAP/XML payload как BLOB: из него извлекаются идентификаторы документа, код и название СЭМД, статус и ошибки. `EXCHANGELOG.LOGDATE` — служебная дата журнала и для аналитики документов не используется.
@@ -103,33 +104,106 @@
 
 ## ELT-конвейер Airflow
 
-DAG `egisz_elt_dag` собран на TaskFlow API, запускается каждые 5 минут (`*/5 * * * *`), `max_active_runs=1` — параллельные прогоны запрещены, что исключает гонку за watermark. Метаданные батча передаются между задачами через XCom. Размер батча задан константой `BATCH_SIZE = 5000`.
+Контур разнесён на **три независимых DAG** на TaskFlow API — по природе и частоте процесса. Каждый
+DAG `max_active_runs=1` (параллельные прогоны запрещены, что исключает гонку за watermark) и тянет из
+`src/egisz_elt/` только свои функции. Метаданные батча передаются между задачами через XCom (без сырых
+строк). Секреты — только Airflow Connections (`proxy_egisz_fb`, `dwh_egisz_pg`), connection между
+тасками не шарится. Расписания и операционные литералы вынесены в Airflow Variables (см.
+[Конфигурация через Variables](#конфигурация-через-variables)).
 
 DWH-схема создаётся **не задачей DAG**, а отдельным прогоном `db/dwh_init.sql` (см. [DWH-модель](#dwh-модель)).
 
-Последовательность задач:
+### Извлечение и загрузка (Extract) — `egisz_extract_dag`
+
+Основной поток фактов. Расписание `egisz_extract_schedule` (дефолт `*/5 * * * *`).
+Модули: `egisz_elt.common`, `egisz_elt.extract`.
 
 ```
-sync_dimensions
-  ▸ extract_and_load_batch
-    ▸ analyze_staging
-      ▸ transform_data
-        ▸ refresh_materialized_views
-          ▸ update_watermark
-            ▸ reconcile_late_arrivals
+load_exchangelog_batch ▸ build_document_facts ▸ refresh_materialized_views ▸ advance_logid_watermark
 ```
 
 | Задача                       | Что делает                                                                                                                                            | Идемпотентность / гарантии                                                                          |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `sync_dimensions`            | Полная синхронизация справочников `dim_organizations` (из `JPERSONS`) и `dim_licenses` (из `EGISZ_LICENSES`). Стоит первой, чтобы остальные шаги работали с актуальными справочниками. | UPSERT через `ON CONFLICT`; новые клиники и лицензии видны сразу в первом же прогоне.                |
-| `extract_and_load_batch`     | Читает курсор `last_logid` из `elt_state`, берёт батч `EXCHANGELOG` по `LOGID > last_logid` и в том же шаге грузит сырые строки в `exchangelog_raw`.  | UPSERT `INSERT ... ON CONFLICT DO UPDATE` (PK `logid`): повторный батч не даёт дублей.               |
-| `analyze_staging`            | `ANALYZE` raw-таблиц, в которые в этом батче что-то загружалось.                                                                                      | Освежает planner-статистику после bulk-загрузки; обязательный шаг перед трансформацией.              |
-| `transform_data`            | Парсит сырой `MSGTEXT` в `dim_egisz_exchangelog_refs`, собирает документы и обновляет `fact_egisz_documents`. Затем `ANALYZE` фактовых таблиц.        | Парсинг каждой строки журнала ровно один раз; UPSERT по `document_key` собирает все сообщения документа в одну запись. |
-| `refresh_materialized_views` | Обновляет материализованные витрины через `REFRESH MATERIALIZED VIEW CONCURRENTLY`, затем `ANALYZE` обновлённых mat-view.                            | `CONCURRENTLY` не блокирует SELECT'ы от Metabase (требует уникального индекса на mat-view).          |
-| `update_watermark`           | UPSERT курсора `last_logid` в `elt_state`.                                                                                                            | Сдвиг через `GREATEST(current, new)`: сбой порядка прогонов или ручной запуск старого батча не откатят курсор назад. |
-| `reconcile_late_arrivals`    | Догружает строки `EXCHANGELOG`, которые материализовались в источнике уже **ниже** текущего watermark (вне порядка `LOGID`), сверяя полосу под курсором с `exchangelog_raw`. | Закрывает «дыры» от опоздавших строк без отката курсора; повторный прогон безопасен.                 |
+| `load_exchangelog_batch`     | Читает курсор `last_logid` из `elt_state`, берёт батч `EXCHANGELOG` по `LOGID > last_logid` (размер — `egisz_batch_size`), грузит сырые строки в `exchangelog_raw` и **в хвосте** делает `ANALYZE exchangelog_raw`. | UPSERT `ON CONFLICT` (PK `logid, createdate`): повторный батч не даёт дублей. `ANALYZE` освежает planner-статистику после bulk-загрузки — обязательный шаг перед трансформацией (без него seq-scan и зависания Metabase). |
+| `build_document_facts`       | Парсит сырой `MSGTEXT` в `dim_egisz_exchangelog_refs`, собирает документы и обновляет `fact_egisz_documents`. Затем `ANALYZE` фактовых таблиц.        | Парсинг каждой строки журнала ровно один раз; UPSERT по `document_key` собирает все сообщения документа в одну запись. |
+| `refresh_materialized_views` | Обновляет суточный rollup `v_egisz_documents_daily_ui` через `REFRESH MATERIALIZED VIEW CONCURRENTLY`, затем `ANALYZE`. Обогащённая витрина сопровождается инкрементально внутри transform. | `CONCURRENTLY` не блокирует SELECT'ы от Metabase. |
+| `advance_logid_watermark`    | UPSERT курсора `last_logid` в `elt_state`.                                                                                                            | Сдвиг через `GREATEST(current, new)` — **единственный writer** `last_logid` во всём контуре: сбой порядка прогонов или ручной запуск старого батча не откатят курсор назад. |
 
-Watermark двигается только после успешной трансформации и обновления витрин: при падении любого шага те же данные перечитываются на следующем прогоне.
+Watermark двигается только после успешной трансформации и обновления витрин: при падении любого шага
+те же данные перечитываются на следующем прогоне.
+
+### Синхронизация справочников — `egisz_dimensions_dag`
+
+Справочники и сопровождение обогащённой витрины. Расписание `egisz_dimensions_schedule` (дефолт `@hourly`).
+Модули: `egisz_elt.common`, `egisz_elt.dimensions`.
+
+```
+sync_dimensions ▸ maintain_enriched_ui
+```
+
+| Задача                 | Что делает                                                                                                                                            | Идемпотентность / гарантии                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `sync_dimensions`      | Полная синхронизация `dim_organizations` (из `JPERSONS`) и `dim_licenses` (из `EGISZ_LICENSES`).                                                      | UPSERT через `ON CONFLICT`; новые клиники и лицензии видны сразу в первом же прогоне.                |
+| `maintain_enriched_ui` | Сверяет persistent-таблицу `v_egisz_documents_enriched_ui` с live-view `v_egisz_documents_enriched_src` и пересобирает расходящиеся строки (имена клиник, статусы, типы СЭМД, ошибки). | Идемпотентно: без дрейфа — no-op. Живёт здесь, потому что дрейф витрины вызывают именно справочники; цена O(архив) — раз в час, а не каждые 5 минут. После пересборки обновляет `v_egisz_documents_daily_ui`. |
+
+### Сверка константности — `egisz_reconcile_dag`
+
+Полная сверка источник↔raw, закрывает «дыры» от опоздавших строк. Расписание `egisz_reconcile_schedule`
+(дефолт `@daily`). Модули: `egisz_elt.common`, `egisz_elt.reconcile`. Подробно — в разделе
+[Полная сверка константности источник↔raw](#полная-сверка-константности-источникraw).
+
+```
+reconcile_proxy_raw
+```
+
+| Задача               | Что делает                                                                                                                                            | Идемпотентность / гарантии                                                                          |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `reconcile_proxy_raw`| Сверяет **весь** набор LOGID источника (`EXCHANGELOG`) с **всем** набором `exchangelog_raw`, догружает отсутствующие и трансформирует их.              | Watermark **не двигает** (writer — только forward). В сверённом состоянии находит 0 missing и no-op. При превышении порога `egisz_reconcile_max_logids` — hard-skip с warning (защита от OOM). |
+
+### Конфигурация через Variables
+
+Операционные литералы вынесены в Airflow Variables; дефолт через `default_var` — документированный
+контракт, а не хардкод. Расписания читаются на parse-time, остальное — в теле задач на runtime.
+
+| Variable                          | Дефолт          | Назначение                                                            |
+| --------------------------------- | --------------- | -------------------------------------------------------------------- |
+| `egisz_extract_schedule`          | `*/5 * * * *`   | Расписание extract-DAG.                                              |
+| `egisz_dimensions_schedule`       | `@hourly`       | Расписание DAG синхронизации справочников.                           |
+| `egisz_reconcile_schedule`        | `@daily`        | Расписание DAG сверки.                                               |
+| `egisz_batch_size`                | `5000`          | Размер батча `load_exchangelog_batch`.                              |
+| `egisz_reconcile_window_max_gap`  | `500`           | Ширина склейки LOGID-окон при ре-трансформации в сверке.            |
+| `egisz_reconcile_max_logids`      | `20000000`      | Порог memory-guard сверки: выше — hard-skip вместо set-diff.        |
+
+---
+
+## Полная сверка константности источник↔raw
+
+**ЗАЧЕМ.** Прокси-журнал шлюза наполняется **не по порядку `LOGID`**: асинхронные callback'и РЭМД и
+массовый backfill шлюза материализуют строки *ниже* уже сдвинутого watermark. Forward читает только
+`LOGID > last_logid` и такие строки не видит **никогда** (инцидент 2026-06-01 — десятки тысяч строк
+ниже курсора). Прежняя версия сверяла лишь полосу `(last_logid − N, last_logid]` с угаданной
+константой `N`; всё, что появилось ниже полосы, оставалось невидимым навсегда.
+
+**КАКОЙ ПРОЦЕСС.** `reconcile_proxy_raw` берёт множество LOGID источника целиком и множество LOGID
+`exchangelog_raw` целиком, считает `missing = источник − raw`, догружает все отсутствующие строки в
+`exchangelog_raw` (UPSERT `ON CONFLICT`, тот же путь, что у forward) и запускает трансформацию по
+дозагруженным LOGID (склейка в плотные окна, ширина — `egisz_reconcile_window_max_gap`). **Watermark
+не двигается** — `GREATEST`/`advance_logid_watermark` остаётся writer'ом только extract-DAG. В
+сверённом состоянии `missing` пусто и таск — no-op.
+
+**КАКИЕ ДАННЫЕ нужны.** Два множества LOGID: из Firebird (`EXCHANGELOG` целиком) и из Postgres
+(`exchangelog_raw` целиком). Связка дозагруженного callback'а с документом выполняется внутри
+трансформации через `dim_egisz_exchangelog_refs` — вспомогательный реестр для самой сверки не нужен.
+
+**ГДЕ ГАРАНТИЯ наличия данных.** Источник истины — сам журнал шлюза (`EXCHANGELOG`), он содержит все
+строки по определению. `exchangelog_raw` наполняется extract-потоком, а его load идемпотентен, поэтому
+дозагрузка отсутствующих строк не создаёт дублей и не зависит от порядка прогонов.
+
+**Известное ограничение (память).** «Всё одним множеством» означает загрузку всех LOGID источника и
+raw в память воркера — на большом журнале это тяжёлый set-diff. Это сознательный выбор для суточного
+таска. Перед сверкой `reconcile_proxy_raw` считает `COUNT(*)` источника и при превышении
+`egisz_reconcile_max_logids` делает **hard-skip** (warning + no-op), чтобы не уронить воркер по памяти.
+Точка расширения — батчинг по диапазонам LOGID; в этой итерации не вводится.
 
 ---
 
@@ -145,6 +219,7 @@ Watermark двигается только после успешной транс
 | `egisz_normalize_message_id(value)`  | Приводит идентификаторы вида `<urn:uuid:...>`, `urn:uuid:...`, голый UUID к одной нормализованной форме. На неё повешены функциональные индексы для быстрых JOIN-ов по идентификаторам. |
 | `safe_cast_timestamptz(text)`        | Безопасный каст текста в `timestamptz` (возвращает `NULL` вместо исключения) — даты в payload приходят в разных форматах. |
 | `egisz_clean_host` / `egisz_extract_jid_from_endpoint` | Разбирают эндпоинт callback вида `gost-<JID>....` — вытаскивают `JID` клиники и нормализуют хост для JOIN со справочником. |
+| `egisz_jid_from_oid(org_oid)`        | Резолвит `JID` клиники по OID организации (`<organization>`) через `dim_licenses.mo_uid` — fallback, когда в сообщении нет эндпоинта `gost-<JID>`. |
 | `egisz_clean_text_value(text)`       | Общая нормализация текстового поля (схлопывание whitespace, удаление BOM/неразрывных пробелов), чтобы в UI не появлялись «дубликаты» из-за пробельного шума. |
 | `egisz_normalize_semd_code(text)`    | Нормализация кода СЭМД (приходит с разными префиксами/суффиксами шаблонов).                                       |
 
@@ -162,7 +237,7 @@ Watermark двигается только после успешной транс
 | Название СЭМД       | XML `<name>` / `<documentName>`                   | Человекочитаемая подпись типа документа.                                          |
 | Код / текст ошибки  | XML `<code>` / `<message>`, для `LOGSTATE = 3` — `LOGTEXT` | Вход для классификации ошибок.                                            |
 | Дата создания СЭМД  | XML `<creationDateTime>` / `<creationDate>`       | Приводится к `timestamptz` безопасным cast.                                       |
-| JID клиники         | эндпоинт callback, pattern `gost-<JID>`           | Поздняя подсказка: один хост может обслуживать несколько клиник.                  |
+| JID клиники         | эндпоинт callback, pattern `gost-<JID>`; fallback — OID организации через `dim_licenses.mo_uid` | Один хост может обслуживать несколько клиник. Если gost-токена в сообщении нет (например, транспортная ошибка канала), JID резолвится по OID организации (`egisz_jid_from_oid`). |
 
 **Нормализация статуса** вычисляется в SQL: `LOGSTATE = 3` всегда трактуется как `error` (транспортная ошибка канала); XML-статус `success` даёт `success`; XML-статус `error` или payload, содержащий `error`, даёт `error`; всё остальное — `unknown`.
 
@@ -174,13 +249,13 @@ Watermark двигается только после успешной транс
 
 Одна логическая отправка СЭМД распределена по нескольким строкам `EXCHANGELOG` (исходящее сообщение, технический ответ, поздний callback). Сервис сводит их в одну запись документа в два слоя:
 
-1. **Разбор сообщения** — `transform_data` парсит каждую новую строку `exchangelog_raw` ровно один раз и складывает разобранные поля в `dim_egisz_exchangelog_refs` (PK `logid`). Дальше трансформация читает только этот разобранный слой, а не сырой XML.
+1. **Разбор сообщения** — `build_document_facts` парсит каждую новую строку `exchangelog_raw` ровно один раз и складывает разобранные поля в `dim_egisz_exchangelog_refs` (PK `logid`). Дальше трансформация читает только этот разобранный слой, а не сырой XML.
 
 2. **Ключ документа.** Все сообщения, относящиеся к одному СЭМД, сводятся под общий `document_key`, который вычисляется по приоритету идентификаторов: `localUid` / `DOCUMENTID` → `emdrId` → `relatesToMessage` → номер документа → `messageId`. Идентификаторы предварительно нормализуются (`egisz_normalize_message_id`), поэтому callback склеивается с исходным сообщением независимо от формы записи UUID.
 
 3. **Запись документа** — UPSERT в `fact_egisz_documents` (PK `document_key`). Одна строка = один документ. Она накапливает временны́е метки (`first_sent_at`, `last_callback_at`, `registered_at`), финальный статус (`last_status`, `status_category`), идентификаторы (`local_uid`, `emdr_id`, `message_id`, `relates_to_id`), привязку к клинике (`jid`) и поля ошибок.
 
-Опоздавшие callback'и, материализовавшиеся в источнике ниже watermark, добираются задачей `reconcile_late_arrivals` и обновляют уже существующую запись документа — без отката курсора.
+Опоздавшие callback'и, материализовавшиеся в источнике ниже watermark, добираются задачей `reconcile_proxy_raw` (DAG `egisz_reconcile_dag`) и обновляют уже существующую запись документа — без отката курсора. См. [Полная сверка константности источник↔raw](#полная-сверка-константности-источникraw).
 
 ---
 
@@ -190,9 +265,12 @@ Watermark двигается только после успешной транс
 
 **Решение:** декларативный классификатор в DWH. Правила лежат в `egisz_error_interpretation_rules` (`db/parts/30_error_rules.sql`) и применяются функциями из `db/parts/40_functions_errors.sql`:
 
-1. Перебрать активные правила по возрастанию `priority`. Выигрывает первое, у которого совпали и `match_code` (если задан), и `match_pattern` (regex по тексту сообщения).
+1. Для каждого `<item>` проверяются **все активные правила независимо**: правило срабатывает, если одновременно совпали `match_code` (если задан) и `match_pattern` (regex по тексту сообщения). Каждое сработавшее правило даёт свой `interpretation`; уникальные интерпретации склеиваются через ` - `.
 2. Если ни одно правило не сработало — code-fallback'и (`RUNTIME_ERROR`/`INTERNAL_ERROR`, `CA_INACCESSIBILITY`/`CA_UNAVAILABLE`, `ASYNC_RESPONSE_TIMEOUT`/`TIMEOUT`).
-3. Иначе — `Неизвестная ошибка` (сигнал дополнить правила; смотреть в `04_quality_and_errors.json`).
+3. Для Schematron-текста — разбор фрагментов и эвристики `egisz_error_interpretation_schematron_chunk`.
+4. Иначе — `Неизвестная ошибка` (сигнал дополнить правила; смотреть в `04_quality_and_errors.json`).
+
+Колонка `priority` в seed-таблице — **устаревший порядок загрузки**, на выбор правил не влияет.
 
 В одном callback несколько `<item>` дедуплицируются и склеиваются через `·`.
 
@@ -251,7 +329,7 @@ psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 | Представление                        | Тип       | Назначение                                                                                     |
 | ------------------------------------ | --------- | ---------------------------------------------------------------------------------------------- |
 | `v_egisz_documents_enriched_src`     | view      | Обогащённая запись документа: факт + справочники, русскоязычные алиасы колонок. База для mat-view. |
-| `v_egisz_documents_enriched_ui`      | mat-view  | Главная аналитическая витрина для Metabase (читается как таблица).                              |
+| `v_egisz_documents_enriched_ui`      | table     | Главная аналитическая витрина для Metabase (persistent-таблица). Инкрементально обновляется в transform; полная сверка с источником — в `maintain_enriched_ui`. |
 | `v_egisz_documents_daily_ui`         | mat-view  | Суточные агрегаты документов для динамики.                                                      |
 | `v_stg_channel_errors_by_document`   | view      | Агрегат ошибок канала на уровне документа.                                                     |
 | `v_rpt_documents_no_response_ui`     | view      | Очередь документов без найденного callback (норматив >24 ч).                                   |
@@ -297,7 +375,7 @@ Copy-Item k8s/metabase/metabase-connections-secret.example.yaml k8s/metabase/met
 | Firebird source `proxy_egisz`  | Внешняя БД, не поднимается этим проектом. Для Docker Desktop ожидается `host.docker.internal:3050`, alias `proxy_egisz`. | `k8s/airflow/airflow-connections-secret.yaml`, ключ `AIRFLOW_CONN_PROXY_EGISZ_FB`.                          |
 | PostgreSQL DWH `dwh_egisz`     | Внешняя PostgreSQL-БД. Airflow пишет пользователем `egisz`, Metabase читает BI-пользователем `postgres`.               | Airflow: `AIRFLOW_CONN_DWH_EGISZ_PG`. Metabase: ключи `DWH_DB_*` и `DWH_BI_*`. Bootstrap прав в `up.ps1` читает `EGISZ_PG_*`, `EGISZ_DWH_*`. |
 | Airflow metadata DB `airflow_db`| PostgreSQL Helm chart внутри кластера (`airflow-postgresql-0`, данные в Kubernetes PVC). Служебная БД Airflow, не DWH. | `k8s/airflow/values.yaml`, блоки `data.metadataConnection` и `postgresql`.                                   |
-| Airflow сервисы                | Helm release `airflow`: webserver, scheduler, worker, triggerer. Образ собирается локально как `egisz-airflow-worker`. | `k8s/airflow/values.yaml`, `k8s/airflow/Dockerfile`, `airflow/dags/egisz_elt_dag.py`, `src/egisz_elt/`.      |
+| Airflow сервисы                | Helm release `airflow`: webserver, scheduler, worker, triggerer. Образ собирается локально как `egisz-airflow-worker`. | `k8s/airflow/values.yaml`, `k8s/airflow/Dockerfile`, `airflow/dags/egisz_*_dag.py`, `src/egisz_elt/`.      |
 | Metabase application DB `metabase_app` | Внешняя PostgreSQL-БД для внутренних таблиц Metabase. DWH для этого не используется.                            | `k8s/metabase/metabase-connections-secret.yaml`, ключи `METABASE_DB_*`.                                      |
 | Metabase сервис                | Kubernetes deployment/service `metabase`, образ `egisz-metabase`, web UI на порту `3000`.                              | `k8s/metabase/metabase.yaml`, `metabase/Dockerfile`, `metabase/provision.sh`, `metabase/setup-dashboards.sh`. |
 
@@ -331,7 +409,7 @@ CREATE DATABASE dwh_egisz OWNER postgres;
 
 После `helm uninstall airflow` служебные PVC могут остаться в кластере; чтобы начать metadata DB с нуля, удалите PVC Airflow PostgreSQL отдельно (`kubectl get pvc` → `kubectl delete pvc <name>`).
 
-**Мониторинг здоровья.** Основная точка — дашборд `02_service.json`. Смотреть в первую очередь: время последнего `update_watermark` (lag DAG — в пределах нескольких минут), значение `last_logid` в `elt_state` (должно расти), долю ошибочных DAG-runs в Airflow UI. Сигнал `data_freshness` в `v_health_signals_ui` переходит в красный, если последний документ старше 24 ч.
+**Мониторинг здоровья.** Основная точка — дашборд `02_service.json`. Смотреть в первую очередь: время последнего `advance_logid_watermark` в `egisz_extract_dag` (lag DAG — в пределах нескольких минут), значение `last_logid` в `elt_state` (должно расти), долю ошибочных DAG-runs в Airflow UI. Сигнал `data_freshness` в `v_health_signals_ui` переходит в красный, если последний документ старше 24 ч.
 
 **Типовые сценарии «жалоба → куда смотреть»:**
 
@@ -348,10 +426,14 @@ CREATE DATABASE dwh_egisz OWNER postgres;
 ## Структура репозитория
 
 ```
-airflow/dags/egisz_elt_dag.py     — единственный DAG, ELT-конвейер
+airflow/dags/egisz_extract_dag.py          — извлечение и загрузка (поток фактов), расписание */5
+airflow/dags/egisz_dimensions_dag.py       — синхронизация справочников + сверка витрины, @hourly
+airflow/dags/egisz_reconcile_dag.py        — полная сверка константности источник↔raw, @daily
 airflow/Dockerfile                 — образ Airflow-воркера
-src/egisz_elt/fb_client.py         — клиент Firebird: выборки EXCHANGELOG/JPERSONS/EGISZ_LICENSES
-src/egisz_elt/pg_client.py         — клиент PostgreSQL: raw-load, watermark, вызов трансформации
+src/egisz_elt/common.py            — общий слой: подключения, watermark, raw-load, вызов трансформации, mart-reconcile
+src/egisz_elt/extract.py           — выборка EXCHANGELOG (keyset по LOGID)
+src/egisz_elt/dimensions.py        — справочники: выборки JPERSONS/EGISZ_LICENSES, UPSERT в dim_*
+src/egisz_elt/reconcile.py         — полнодиапазонные выборки LOGID и ре-трансформация по окнам
 db/dwh_init.sql                    — сборка DWH через \i (подключение модулей db/parts/)
 db/dwh_erase.sql                   — полная очистка схемы DWH
 db/parts/                          — 11 модулей DWH (см. раздел DWH-модель)
@@ -425,100 +507,100 @@ README.md                          — этот документ
 
 **Как из сырого callback получается `error_type`.** РЭМД кладёт ошибки в массив `<item>` с полями `code` (SOAP faultcode) и `message` (текст). На каждый item вызывается `egisz_error_interpretation_item(code, message)`:
 
-1. **Правила из таблицы ниже** — активные строки `egisz_error_interpretation_rules` по возрастанию `priority`. Правило срабатывает, если одновременно: `match_code` пустой **или** равен `code` item'а; `message` совпадает с `match_pattern` (оператор PostgreSQL `~*`, без учёта регистра).
-2. **Захардкоженные code-fallback'и** — если таблица не сработала: `RUNTIME_ERROR` / `INTERNAL_ERROR`, `CA_INACCESSIBILITY` / `CA_UNAVAILABLE`, `ASYNC_RESPONSE_TIMEOUT` / `TIMEOUT`, а также ряд кодов (`DISABLED_RMIS`, `GET_DOCUMENT_FILE_ERROR`, …) — только по коду, без проверки текста.
+1. **Правила из таблицы ниже** — проверяются **все** активные строки `egisz_error_interpretation_rules` независимо (порядок — по `rule_code`, не по `priority`). Правило срабатывает, если одновременно: `match_code` пустой **или** равен `code` item'а; `message` совпадает с `match_pattern` (оператор PostgreSQL `~*`, без учёта регистра). Все сработавшие интерпретации дедуплицируются и склеиваются.
+2. **Захардкоженные code-fallback'и** — если таблица не сработала: `RUNTIME_ERROR` / `INTERNAL_ERROR`, `CA_INACCESSIBILITY` / `CA_UNAVAILABLE`, `ASYNC_RESPONSE_TIMEOUT` / `TIMEOUT`.
 3. **Schematron** — если в `message` есть «Schematron» / «схематрон», текст режется на фрагменты по префиксу «Ошибка валидации Schematron:»; каждый фрагмент классифицируется `egisz_error_interpretation_schematron_chunk` (эвристики по полям CDA — `patientRole`, `assignedAuthor`, `birthTime` и т.д.; см. `db/parts/40_functions_errors.sql`).
 4. Иначе для item без Schematron возвращается сырой `message`; на уровне документа несматченные формулировки агрегируются как **«Неизвестная ошибка»**.
 
 Несколько item'ов в одном callback дают несколько типов ошибок; уникальные значения дедуплицируются и склеиваются в `error_type` через `·`.
 
-Колонка **Условие сопоставления** описывает логику строки правила. Точный regex — в seed `db/parts/30_error_rules.sql` (`rule_code`, `match_pattern`).
+Колонка **Условие сопоставления** описывает логику строки правила. Точный regex — в seed `db/parts/30_error_rules.sql` (`rule_code`, `match_pattern`). Колонка `priority` в seed — устаревший порядок загрузки, на выбор правил не влияет.
 
-| Приоритет | Тип ошибки | Категория | Условие сопоставления |
-| ---: | --- | --- | --- |
-| 10 | Не указан адрес пациента | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(Schematron\|схематрон).*patientRole.*addr.*address:Type` |
-| 11 | Несоответствие данных организации в ФРМО | Ошибки организации / ИС | код fault — любой; текст `<message>` ~* `(?is)(ОГРН\|ОКПО\|КПП\|ИНН).*(СЭМД\|ФРМО).*(не совпада\|не соответств)\|ОГРН МО.*не совпада\|ФРМО.*(не совпада\|не соответств).*организац` |
-| 11 | Организация не привязана к РМИС | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)не привязана к РМИС` |
-| 12 | Некорректно заполнен телефон | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(telecom).*(не пустым значением\|@value)\|Ошибка заполнения номера телефона` |
-| 13 | Специальность врача не соответствует справочнику НСИ | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*code.*codeSystem\|assignedAuthor.*specialit\|специальност.*автор\|автор.*специальност)` |
-| 14 | СНИЛС автора (врача) не заполнен или некорректен | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*(SNILS\|СНИЛС\|snils)\|author.*(СНИЛС\|snils))` |
-| 15 | Дата рождения пациента не заполнена или некорректна | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)Дата рождения пациента\|birthTime` |
-| 15 | Дата рождения пациента не заполнена или некорректна | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*birthTime\|birthTime.*patient)` |
-| 16 | ФИО пациента не заполнено или некорректно | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*(name\|given\|family)\|(given\|family).*patientRole)` |
-| 17 | СНИЛС пациента не заполнен или некорректен | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*(SNILS\|СНИЛС)\|patient.*(SNILS\|СНИЛС))` |
-| 18 | Данные заверителя документа не заполнены или некорректны | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)legalAuthenticator` |
-| 19 | Дата/время создания документа не заполнены или некорректны | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(creationTime.*(не заполнен\|некорректн\|не указан\|обязател))` |
-| 20 | Ошибка XSD-валидации XML | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)(\bcvc-\|XML_VALIDATION_ERROR\|xsd\|Invalid content was found\|not complete\|not valid)` |
-| 21 | Код типа документа не соответствует справочнику НСИ | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(ClinicalDocument/code\|тип документа.*(справочник\|OID\|codeSystem))` |
-| 22 | Данные хранителя документа не заполнены | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(custodian\|representedCustodianOrganization)` |
-| 23 | Данные организации автора документа не заполнены | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*representedOrganization\|representedOrganization.*author)` |
-| 24 | Ошибка XSD-валидации XML | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)cvc-datatype-valid\|cvc-pattern-valid\|cvc-type\|cvc-complex-type\|cvc-attribute\|cvc-elt\|cvc-identity-constraint\|cvc-particle\|cvc-enumer...` |
-| 25 | Документ уже зарегистрирован в РЭМД | Ошибки регистрации в РЭМД | код fault = `NOT_UNIQUE_PROVIDED_ID`; текст `<message>` — любой |
-| 26 | Данные пациента не соответствуют ГИП | Данные пациента | код fault = `PATIENT_MPI_MISMATCH`; текст `<message>` — любой |
-| 27 | Должность врача не соответствует данным ФРМР | Данные медработника | код fault = `PERSON_POST_IN_FRMR_MISMATCH`; текст `<message>` — любой |
-| 28 | Медработник не найден в ФРМР | Данные медработника | код fault = `PERSON_NOT_FOUND`; текст `<message>` — любой |
-| 29 | Данные медработника не соответствуют ФРМР | Данные медработника | код fault = `VALUE_MISMATCH_METADATA_AND_FRMR`; текст `<message>` — любой |
-| 30 | Подписант из сертификата не найден в ФРМР | Данные медработника | код fault = `VALUE_MISMATCH_METADATA_AND_CERTIFICATE`; текст `<message>` ~* `(?is)не найдена актуальная.*карточка МР` |
-| 31 | Подпись роли не соответствует требованиям РЭМД | Ошибки ЭП и сертификатов | код fault = `ROLE_OCCURRENCE_MISMATCH`; текст `<message>` — любой |
-| 31 | Данные подписи не соответствуют данным документа | Ошибки ЭП и сертификатов | код fault = `VALUE_MISMATCH_METADATA_AND_CERTIFICATE`; текст `<message>` — любой |
-| 32 | Неактуальная версия справочника НСИ | Ошибки справочника НСИ | код fault = `INVALID_DICTIONARY_OID`; текст `<message>` — любой |
-| 33 | Код отсутствует в справочнике НСИ | Ошибки справочника НСИ | код fault = `INVALID_ELEMENT_VALUE_CODE`; текст `<message>` — любой |
-| 34 | Наименование не соответствует справочнику НСИ | Ошибки справочника НСИ | код fault = `INVALID_ELEMENT_VALUE_NAME`; текст `<message>` — любой |
-| 35 | Ошибка справочника НСИ | Ошибки справочника НСИ | код fault — любой; текст `<message>` ~* `(?is)(Справочник OID\|codeSystem\|codeSystemVersion\|верси[яи].*справочник\|значени[ея].*НСИ\|не соответствует наименованию элемента в НСИ\|спр...` |
-| 36 | Документ не найден в РЭМД | Ошибки регистрации в РЭМД | код fault = `DOCUMENT_NOT_FOUND`; текст `<message>` — любой |
-| 37 | Неверный идентификатор документа РЭМД | Ошибки регистрации в РЭМД | код fault = `INVALID_EMDR_ID`; текст `<message>` — любой |
-| 38 | Организация не найдена в реестре РЭМД | Ошибки организации / ИС | код fault = `ORGANIZATION_NOT_FOUND`; текст `<message>` — любой |
-| 39 | Доступ к операции запрещён в РЭМД | Ошибки регистрации в РЭМД | код fault = `ACCESS_DENIED`; текст `<message>` — любой |
-| 40 | ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС | Ошибки организации / ИС | код fault = `DISABLED_RMIS`; текст `<message>` — любой |
-| 41 | ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные | Ошибки организации / ИС | код fault = `NO_RMIS`; текст `<message>` — любой |
-| 42 | Дублирующий запрос | Ошибки регистрации в РЭМД | код fault = `DUPLICATE_REQUEST`; текст `<message>` — любой |
-| 43 | Неподдерживаемый тип СЭМД в РЭМД | Ошибки регистрации в РЭМД | код fault = `UNSUPPORTED_DOCUMENT_TYPE`; текст `<message>` — любой |
-| 44 | Неверный формат запроса | Ошибки регистрации в РЭМД | код fault = `INVALID_REQUEST_FORMAT`; текст `<message>` — любой |
-| 45 | Лицензия организации не найдена | Ошибки организации / ИС | код fault = `ORGANIZATION_LICENSE_NOT_FOUND`; текст `<message>` — любой |
-| 46 | Неверный формат или контрольная сумма СНИЛС | Данные пациента | код fault = `INVALID_SNILS`; текст `<message>` — любой |
-| 47 | Организация не зарегистрирована в РЭМД | Ошибки организации / ИС | код fault = `ORGANIZATION_NOT_REGISTERED`; текст `<message>` — любой |
-| 48 | Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Дата создания документа в ЭМД \[.*?\] отличается` |
-| 48 | Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Уникальный идентификатор документа в ЭМД \[.*?\] отличается` |
-| 49 | Дата подписи МО позже даты поступления запроса на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Дата и время создания подписи МО \[.*?\] не может быть позже` |
-| 49 | Для данного вида ЭМД запрещена регистрация новых версий | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)запрещена регистрация новых версий` |
-| 49 | Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)не совпадает с СП providerOrganization` |
-| 49 | Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)не совпадает с СП representedOrganization` |
-| 50 | Метаописание документа не соответствует зарегистрированному в РЭМД | Ошибки регистрации в РЭМД | код fault = `ATTRIBUTE_MISMATCH`; текст `<message>` — любой |
-| 50 | Метаописание документа не соответствует зарегистрированному в РЭМД | Ошибки регистрации в РЭМД | код fault = `ATTRIBUTE_NOT_FOUND`; текст `<message>` — любой |
-| 51 | Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile | Ошибки получения файла ЭМД | код fault = `MIS_NOT_AVAILABLE`; текст `<message>` — любой |
-| 52 | Запрашиваемая запись ЭМД не найдена в предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `REGISTRY_ITEM_NOT_FOUND`; текст `<message>` — любой |
-| 53 | ИС не передала файл ЭМД в ответе getDocumentFile | Ошибки получения файла ЭМД | код fault = `FILE_WAS_NOT_SENT`; текст `<message>` — любой |
-| 54 | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `RMIS_ERROR`; текст `<message>` — любой |
-| 55 | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `GET_DOCUMENT_FILE_ERROR`; текст `<message>` — любой |
-| 56 | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault — любой; текст `<message>` ~* `(?is)(getDocumentFile\|получения файла ЭМД\|файлового хранилища)` |
-| 56 | Срок действия сертификата организации истек | Ошибки ЭП и сертификатов | код fault = `CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT`; текст `<message>` — любой |
-| 57 | Сертификат ЭП истёк | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(сертификат.*истёк\|истекш.*сертификат\|срок.*действи.*сертификат.*истёк\|certificate.*expired)` |
-| 58 | Сертификат ЭП отозван | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(сертификат.*отозван\|certificate.*revoked\|revoked.*certificate)` |
-| 60 | Недействительный сертификат подписи | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(CANT_BUILD_CERT_CHAIN\|цепочк.*сертификат\|аккредитованн.*УЦ)` |
-| 61 | Сертификат подписи недействителен на дату создания документа | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(DOC_DATE_MISMATCH_CERT_NOT_BEFORE\|сертификат.*не действителен.*дат[уы] создания)` |
-| 62 | Не удалось проверить электронную подпись | Ошибки ЭП и сертификатов | код fault = `SIGNATURE_VERIFICATION_ERROR`; текст `<message>` — любой |
-| 63 | Недоступен сервис проверки статуса сертификата (CRL/OCSP) | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(CRL\|список.*отозванн\|OCSP\|сервис.*проверк.*сертификат)` |
-| 64 | Таймаут асинхронной обработки на стороне РЭМД | Технические ошибки РЭМД | код fault = `ASYNC_RESPONSE_TIMEOUT`; текст `<message>` — любой |
-| 65 | Недоступен сервис проверки подписи (УЦ) на стороне РЭМД | Технические ошибки РЭМД | код fault = `CA_UNAVAILABLE`; текст `<message>` — любой |
-| 66 | Недоступен сервис проверки подписи (УЦ) на стороне РЭМД | Технические ошибки РЭМД | код fault = `CA_INACCESSIBILITY`; текст `<message>` — любой |
-| 67 | Документ аннулирован | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)(аннулирован.*документ\|документ.*аннулирован)` |
-| 68 | Ошибка разбора XML-структуры документа | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)(SAXParseException\|org\.xml\|ParseError\|XML.*parse.*error)` |
-| 69 | Неверный формат или контрольная сумма СНИЛС | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(СНИЛС.*неверн\|неверн.*СНИЛС\|СНИЛС.*контрольн\|контрольн.*СНИЛС)` |
-| 70 | СНИЛС не найден или не соответствует данным пациента/медработника | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(СНИЛС\|SNILS)` |
-| 71 | Должность врача не соответствует данным ФРМР | Данные медработника | код fault — любой; текст `<message>` ~* `(?is)(ФРМР\|FRMR).*(должност\|specialit\|специальност)\|(должност\|specialit\|специальност).*(ФРМР\|FRMR)\|(должност\|specialit\|специальност).*(не...` |
-| 72 | Данные пациента не соответствуют ГИП | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(ГИП\|GIP).*(пациент\|patient)\|(пациент\|patient).*(ГИП\|GIP)\|(данн\|сведени).*(пациент\|patient).*(не соответств\|не совпад\|не найден)` |
-| 72 | Пол пациента в ЭМД не соответствует данным ЕГИСЗ | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)Пол пациента в ЭМД \[.*?\] отличается` |
-| 72 | ФИО пациента в ЭМД не соответствует данным ЕГИСЗ | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(Имя\|Фамилия\|Отчество) пациента в ЭМД \[.*?\] отличается` |
-| 73 | Данные медработника не соответствуют ФРМР | Данные медработника | код fault — любой; текст `<message>` ~* `(?is)(ФРМР\|медработник\|автор\|author)` |
-| 74 | Получатель из запроса не найден в СЭМД | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)RECIPIENT_INFO_MISMATCH\|Получатель.*не найден` |
-| 74 | Получатель из запроса не найден в СЭМД | Данные пациента | код fault = `RECIPIENT_INFO_MISMATCH`; текст `<message>` — любой |
-| 75 | Вид документа не актуален на дату создания | Ошибки регистрации в РЭМД | код fault = `NO_DOCUMENT_KIND_ON_DATE`; текст `<message>` — любой |
-| 76 | Подразделение или запись справочника не найдены на дату документа | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Подразделение.*(идентификатор\|не найден)\|подразделение.*не найден` |
-| 76 | Подразделение или запись справочника не найдены на дату документа | Ошибки регистрации в РЭМД | код fault = `OBJECT_NOT_FOUND`; текст `<message>` — любой |
-| 77 | Отчество врача не соответствует данным СЭМД | Данные медработника | код fault = `INVALID_DOCTOR_PATRONYMIC`; текст `<message>` — любой |
-| 78 | Документ, удостоверяющий личность пациента: некорректные реквизиты | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)ДУЛ[^А-Яа-я]\|реквизит.*удостоверени` |
-| 79 | РЭМД не смог обработать запрос | Технические ошибки РЭМД | код fault = `RUNTIME_ERROR`; текст `<message>` ~* `(?is)Невозможно обработать запрос` |
-| 80 | Техническая ошибка на стороне РЭМД | Технические ошибки РЭМД | код fault — любой; текст `<message>` ~* `(?is)(INTERNAL_ERROR\|RUNTIME_ERROR\|внутренн.*ошиб\|непредвиденн.*ошиб\|невозможно обработать)` |
-| 80 | Техническая ошибка на стороне РЭМД | Технические ошибки РЭМД | код fault — любой; текст `<message>` ~* `(?is)(INTERNAL_ERROR\|RUNTIME_ERROR\|внутренн.*ошиб\|непредвиденн.*ошиб)` |
-| 90 | Сетевая ошибка | Ошибки связи | код fault — любой; текст `<message>` ~* `(?is)(network\|connection\|transport\|timeout\|timed out\|соединени\|таймаут\|сетевая ошибка)` |
-| 95 | Ошибки организации | Ошибки организации / ИС | код fault — любой; текст `<message>` ~* `(?is)(организаци\|ОГРН\|ФРМО\|лицензи)` |
+| Код правила | Тип ошибки | Категория | Условие сопоставления |
+| --- | --- | --- | --- |
+| `schematron_patient_address_type` | Не указан адрес пациента | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(Schematron|схематрон).*patientRole.*addr.*address:Type` |
+| `schematron_org_not_linked_rmis` | Организация не привязана к РМИС | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)не привязана к РМИС` |
+| `schematron_telecom_missing` | Некорректно заполнен телефон | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(telecom).*(не пустым значением|@value)|Ошибка заполнения номера телефона` |
+| `xsd_validation` | Ошибка XSD-валидации XML | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)(\bcvc-|XML_VALIDATION_ERROR|xsd|Invalid content was found|not complete|not valid)` |
+| `document_already_registered` | Документ уже зарегистрирован в РЭМД | Ошибки регистрации в РЭМД | код fault = `NOT_UNIQUE_PROVIDED_ID`; текст `<message>` — любой |
+| `patient_data_gip` | Данные пациента не соответствуют ГИП | Данные пациента | код fault = `PATIENT_MPI_MISMATCH`; текст `<message>` — любой |
+| `doctor_position_frmr` | Должность врача не соответствует данным ФРМР | Данные медработника | код fault = `PERSON_POST_IN_FRMR_MISMATCH`; текст `<message>` — любой |
+| `person_not_found_frmr` | Медработник не найден в ФРМР | Данные медработника | код fault = `PERSON_NOT_FOUND`; текст `<message>` — любой |
+| `staff_data_frmr` | Данные медработника не соответствуют ФРМР | Данные медработника | код fault = `VALUE_MISMATCH_METADATA_AND_FRMR`; текст `<message>` — любой |
+| `signature_metadata_certificate` | Подписант из сертификата не найден в ФРМР | Данные медработника | код fault = `VALUE_MISMATCH_METADATA_AND_CERTIFICATE`; текст `<message>` ~* `(?is)не найдена актуальная.*карточка МР` |
+| `signature_metadata_certificate_mismatch` | Данные подписи не соответствуют данным документа | Ошибки ЭП и сертификатов | код fault = `VALUE_MISMATCH_METADATA_AND_CERTIFICATE`; текст `<message>` — любой |
+| `nsi_dictionary_version` | Неактуальная версия справочника НСИ | Ошибки справочника НСИ | код fault = `INVALID_DICTIONARY_OID`; текст `<message>` — любой |
+| `nsi_dictionary_code` | Код отсутствует в справочнике НСИ | Ошибки справочника НСИ | код fault = `INVALID_ELEMENT_VALUE_CODE`; текст `<message>` — любой |
+| `nsi_dictionary_name` | Наименование не соответствует справочнику НСИ | Ошибки справочника НСИ | код fault = `INVALID_ELEMENT_VALUE_NAME`; текст `<message>` — любой |
+| `nsi_dictionary_value` | Ошибка справочника НСИ | Ошибки справочника НСИ | код fault — любой; текст `<message>` ~* `(?is)(Справочник OID|codeSystem|codeSystemVersion|верси[яи].*справочник|значени[ея].*НСИ|не соответствует наименовани...` |
+| `rmis_registration_disabled` | ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС | Ошибки организации / ИС | код fault = `DISABLED_RMIS`; текст `<message>` — любой |
+| `rmis_registration_missing` | ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные | Ошибки организации / ИС | код fault = `NO_RMIS`; текст `<message>` — любой |
+| `document_metadata_mismatch` | Метаописание документа не соответствует зарегистрированному в РЭМД | Ошибки регистрации в РЭМД | код fault = `ATTRIBUTE_MISMATCH`; текст `<message>` — любой |
+| `document_provider_unavailable` | Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile | Ошибки получения файла ЭМД | код fault = `MIS_NOT_AVAILABLE`; текст `<message>` — любой |
+| `document_registry_item_missing` | Запрашиваемая запись ЭМД не найдена в предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `REGISTRY_ITEM_NOT_FOUND`; текст `<message>` — любой |
+| `document_file_not_sent` | ИС не передала файл ЭМД в ответе getDocumentFile | Ошибки получения файла ЭМД | код fault = `FILE_WAS_NOT_SENT`; текст `<message>` — любой |
+| `document_provider_response_error` | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `RMIS_ERROR`; текст `<message>` — любой |
+| `document_file_get_error` | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault = `GET_DOCUMENT_FILE_ERROR`; текст `<message>` — любой |
+| `document_file_runtime_error` | Не удалось получить файл ЭМД из предоставляющей ИС | Ошибки получения файла ЭМД | код fault — любой; текст `<message>` ~* `(?is)(getDocumentFile|получения файла ЭМД|файлового хранилища)` |
+| `signature_certificate_chain` | Недействительный сертификат подписи | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(CANT_BUILD_CERT_CHAIN|цепочк.*сертификат|аккредитованн.*УЦ)` |
+| `signature_doc_date_mismatch` | Сертификат подписи недействителен на дату создания документа | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(DOC_DATE_MISMATCH_CERT_NOT_BEFORE|сертификат.*не действителен.*дат[уы] создания)` |
+| `signature_verification_error` | Не удалось проверить электронную подпись | Ошибки ЭП и сертификатов | код fault = `SIGNATURE_VERIFICATION_ERROR`; текст `<message>` — любой |
+| `person_snils` | СНИЛС не найден или не соответствует данным пациента/медработника | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(СНИЛС|SNILS)` |
+| `doctor_position_frmr_text` | Должность врача не соответствует данным ФРМР | Данные медработника | код fault — любой; текст `<message>` ~* `(?is)(ФРМР|FRMR).*(должност|specialit|специальност)|(должност|specialit|специальност).*(ФРМР|FRMR)|(должност|speciali...` |
+| `patient_data_gip_text` | Данные пациента не соответствуют ГИП | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(ГИП|GIP).*(пациент|patient)|(пациент|patient).*(ГИП|GIP)|(данн|сведени).*(пациент|patient).*(не соответств|не с...` |
+| `person_frmr` | Данные медработника не соответствуют ФРМР | Данные медработника | код fault — любой; текст `<message>` ~* `(?is)(ФРМР|медработник|автор|author)` |
+| `recipient_mismatch` | Получатель из запроса не найден в СЭМД | Данные пациента | код fault = `RECIPIENT_INFO_MISMATCH`; текст `<message>` — любой |
+| `document_kind_not_actual` | Вид документа не актуален на дату создания | Ошибки регистрации в РЭМД | код fault = `NO_DOCUMENT_KIND_ON_DATE`; текст `<message>` — любой |
+| `object_not_found` | Подразделение или запись справочника не найдены на дату документа | Ошибки регистрации в РЭМД | код fault = `OBJECT_NOT_FOUND`; текст `<message>` — любой |
+| `doctor_patronymic_mismatch` | Отчество врача не соответствует данным СЭМД | Данные медработника | код fault = `INVALID_DOCTOR_PATRONYMIC`; текст `<message>` — любой |
+| `runtime_request_processing` | РЭМД не смог обработать запрос | Технические ошибки РЭМД | код fault = `RUNTIME_ERROR`; текст `<message>` ~* `(?is)Невозможно обработать запрос` |
+| `remd_internal` | Техническая ошибка на стороне РЭМД | Технические ошибки РЭМД | код fault — любой; текст `<message>` ~* `(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб)` |
+| `schematron_author_specialty` | Специальность врача не соответствует справочнику НСИ | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*code.*codeSystem|assignedAuthor.*specialit|специальност.*автор|автор.*специальност)` |
+| `schematron_author_snils` | СНИЛС автора (врача) не заполнен или некорректен | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*(SNILS|СНИЛС|snils)|author.*(СНИЛС|snils))` |
+| `schematron_patient_birth` | Дата рождения пациента не заполнена или некорректна | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*birthTime|birthTime.*patient)` |
+| `schematron_patient_name` | ФИО пациента не заполнено или некорректно | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*(name|given|family)|(given|family).*patientRole)` |
+| `schematron_patient_snils` | СНИЛС пациента не заполнен или некорректен | Данные пациента | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(patientRole.*(SNILS|СНИЛС)|patient.*(SNILS|СНИЛС))` |
+| `schematron_legal_auth` | Данные заверителя документа не заполнены или некорректны | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)legalAuthenticator` |
+| `schematron_creation_time` | Дата/время создания документа не заполнены или некорректны | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(creationTime.*(не заполнен|некорректн|не указан|обязател))` |
+| `schematron_doc_code` | Код типа документа не соответствует справочнику НСИ | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(ClinicalDocument/code|тип документа.*(справочник|OID|codeSystem))` |
+| `schematron_custodian` | Данные хранителя документа не заполнены | Ошибки структуры и валидации | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(custodian|representedCustodianOrganization)` |
+| `schematron_org_repr` | Данные организации автора документа не заполнены | Данные медработника | код fault = `VALIDATION_ERROR`; текст `<message>` ~* `(?is)(assignedAuthor.*representedOrganization|representedOrganization.*author)` |
+| `document_not_found_remd` | Документ не найден в РЭМД | Ошибки регистрации в РЭМД | код fault = `DOCUMENT_NOT_FOUND`; текст `<message>` — любой |
+| `invalid_emdr_id` | Неверный идентификатор документа РЭМД | Ошибки регистрации в РЭМД | код fault = `INVALID_EMDR_ID`; текст `<message>` — любой |
+| `organization_not_found` | Организация не найдена в реестре РЭМД | Ошибки организации / ИС | код fault = `ORGANIZATION_NOT_FOUND`; текст `<message>` — любой |
+| `access_denied_remd` | Доступ к операции запрещён в РЭМД | Ошибки регистрации в РЭМД | код fault = `ACCESS_DENIED`; текст `<message>` — любой |
+| `duplicate_request` | Дублирующий запрос | Ошибки регистрации в РЭМД | код fault = `DUPLICATE_REQUEST`; текст `<message>` — любой |
+| `unsupported_document_type` | Неподдерживаемый тип СЭМД в РЭМД | Ошибки регистрации в РЭМД | код fault = `UNSUPPORTED_DOCUMENT_TYPE`; текст `<message>` — любой |
+| `invalid_request_format` | Неверный формат запроса | Ошибки регистрации в РЭМД | код fault = `INVALID_REQUEST_FORMAT`; текст `<message>` — любой |
+| `organization_license_not_found` | Лицензия организации не найдена | Ошибки организации / ИС | код fault = `ORGANIZATION_LICENSE_NOT_FOUND`; текст `<message>` — любой |
+| `invalid_snils_code` | Неверный формат или контрольная сумма СНИЛС | Данные пациента | код fault = `INVALID_SNILS`; текст `<message>` — любой |
+| `organization_not_registered` | Организация не зарегистрирована в РЭМД | Ошибки организации / ИС | код fault = `ORGANIZATION_NOT_REGISTERED`; текст `<message>` — любой |
+| `certificate_expired` | Сертификат ЭП истёк | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(сертификат.*истёк|истекш.*сертификат|срок.*действи.*сертификат.*истёк|certificate.*expired)` |
+| `certificate_revoked` | Сертификат ЭП отозван | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(сертификат.*отозван|certificate.*revoked|revoked.*certificate)` |
+| `crl_unavailable` | Недоступен сервис проверки статуса сертификата (CRL/OCSP) | Ошибки ЭП и сертификатов | код fault — любой; текст `<message>` ~* `(?is)(CRL|список.*отозванн|OCSP|сервис.*проверк.*сертификат)` |
+| `async_response_timeout_code` | Таймаут асинхронной обработки на стороне РЭМД | Технические ошибки РЭМД | код fault = `ASYNC_RESPONSE_TIMEOUT`; текст `<message>` — любой |
+| `ca_unavailable_code` | Недоступен сервис проверки подписи (УЦ) на стороне РЭМД | Технические ошибки РЭМД | код fault = `CA_UNAVAILABLE`; текст `<message>` — любой |
+| `ca_inaccessibility_code` | Недоступен сервис проверки подписи (УЦ) на стороне РЭМД | Технические ошибки РЭМД | код fault = `CA_INACCESSIBILITY`; текст `<message>` — любой |
+| `document_revoked_text` | Документ аннулирован | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)(аннулирован.*документ|документ.*аннулирован)` |
+| `xml_parse_error` | Ошибка разбора XML-структуры документа | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)(SAXParseException|org\.xml|ParseError|XML.*parse.*error)` |
+| `snils_invalid_text` | Неверный формат или контрольная сумма СНИЛС | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(СНИЛС.*неверн|неверн.*СНИЛС|СНИЛС.*контрольн|контрольн.*СНИЛС)` |
+| `transport_network` | Сетевая ошибка | Ошибки связи | код fault — любой; текст `<message>` ~* `(?is)(network|connection|transport|timeout|timed out|соединени|таймаут|сетевая ошибка)` |
+| `cvc_datatype_extended` | Ошибка XSD-валидации XML | Ошибки структуры и валидации | код fault — любой; текст `<message>` ~* `(?is)cvc-datatype-valid|cvc-pattern-valid|cvc-type|cvc-complex-type|cvc-attribute|cvc-elt|cvc-identity-constraint|cvc...` |
+| `attribute_not_found_code` | Метаописание документа не соответствует зарегистрированному в РЭМД | Ошибки регистрации в РЭМД | код fault = `ATTRIBUTE_NOT_FOUND`; текст `<message>` — любой |
+| `role_occurrence_mismatch_code` | Подпись роли не соответствует требованиям РЭМД | Ошибки ЭП и сертификатов | код fault = `ROLE_OCCURRENCE_MISMATCH`; текст `<message>` — любой |
+| `object_not_found_text_extra` | Подразделение или запись справочника не найдены на дату документа | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Подразделение.*(идентификатор|не найден)|подразделение.*не найден` |
+| `recipient_text_extra` | Получатель из запроса не найден в СЭМД | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)RECIPIENT_INFO_MISMATCH|Получатель.*не найден` |
+| `dul_patient_text` | Документ, удостоверяющий личность пациента: некорректные реквизиты | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)ДУЛ[^А-Яа-я]|реквизит.*удостоверени` |
+| `patient_birth_text` | Дата рождения пациента не заполнена или некорректна | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)Дата рождения пациента|birthTime` |
+| `remd_runtime_internal` | Техническая ошибка на стороне РЭМД | Технические ошибки РЭМД | код fault — любой; текст `<message>` ~* `(?is)(INTERNAL_ERROR|RUNTIME_ERROR|внутренн.*ошиб|непредвиденн.*ошиб|невозможно обработать)` |
+| `cert_org_validity_expired` | Срок действия сертификата организации истек | Ошибки ЭП и сертификатов | код fault = `CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT`; текст `<message>` — любой |
+| `org_ogrn_frmo_mismatch` | Несоответствие данных организации в ФРМО | Ошибки организации / ИС | код fault — любой; текст `<message>` ~* `(?is)(ОГРН|ОКПО|КПП|ИНН).*(СЭМД|ФРМО).*(не совпада|не соответств)|ОГРН МО.*не совпада|ФРМО.*(не совпада|не соответств...` |
+| `org_generic_fallback` | Ошибки организации | Ошибки организации / ИС | код fault — любой; текст `<message>` ~* `(?is)(организаци|ОГРН|ФРМО|лицензи)` |
+| `patient_fio_mismatch` | ФИО пациента в ЭМД не соответствует данным ЕГИСЗ | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)(Имя|Фамилия|Отчество) пациента в ЭМД \[.*?\] отличается` |
+| `patient_gender_mismatch` | Пол пациента в ЭМД не соответствует данным ЕГИСЗ | Данные пациента | код fault — любой; текст `<message>` ~* `(?is)Пол пациента в ЭМД \[.*?\] отличается` |
+| `document_uid_mismatch_request` | Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Уникальный идентификатор документа в ЭМД \[.*?\] отличается` |
+| `document_creation_date_mismatch_request` | Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Дата создания документа в ЭМД \[.*?\] отличается` |
+| `signature_mo_date_after_request` | Дата подписи МО позже даты поступления запроса на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)Дата и время создания подписи МО \[.*?\] не может быть позже` |
+| `provider_org_mismatch_request` | Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)не совпадает с СП providerOrganization` |
+| `represented_org_mismatch_request` | Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)не совпадает с СП representedOrganization` |
+| `emd_version_registration_forbidden` | Для данного вида ЭМД запрещена регистрация новых версий | Ошибки регистрации в РЭМД | код fault — любой; текст `<message>` ~* `(?is)запрещена регистрация новых версий` |

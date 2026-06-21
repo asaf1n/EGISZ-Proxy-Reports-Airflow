@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS elt_state (
 );
 
 -- Дата-отсечка источника снята: forward-выборка идёт только по LOGID-курсору, а
--- дозагрузка опоздавших строк (reconcile_late_arrivals) сравнивает полосу LOGID
--- под watermark с exchangelog_raw — см. README.md §«Дозагрузка опоздавших строк».
+-- reconcile_proxy_raw (DAG egisz_reconcile_dag) делает полный set-diff константности
+-- источник↔raw по всем LOGID (не полосу) без сдвига watermark —
+-- см. README.md §«Полная сверка константности источник↔raw».
 ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
 
 INSERT INTO elt_state (pipeline, last_logid)

@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (
 ALTER TABLE egisz_error_interpretation_rules
     ADD COLUMN IF NOT EXISTS error_category text NOT NULL DEFAULT 'Прочие';
 
+COMMENT ON COLUMN egisz_error_interpretation_rules.priority IS
+'Устаревший порядок загрузки seed-данных; на выбор правил в egisz_error_matching_rule_labels не влияет.';
+
 INSERT INTO egisz_error_interpretation_rules (rule_code, priority, match_code, match_pattern, interpretation, error_category)
 VALUES
     ('schematron_patient_address_type', 10, 'VALIDATION_ERROR', '(?is)(Schematron|схематрон).*patientRole.*addr.*address:Type', 'Не указан адрес пациента', 'Данные пациента'),

@@ -1,5 +1,5 @@
 {
-  "name": "05 Управленческий дашборд",
+  "name": "Управленческий дашборд",
   "width": "full",
   "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `v_rpt_documents_ui`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Дневная динамика MRR/ARR/активных JID — trailing-30d на каждую дату (последние 90 дней, без фильтра «Период»). Помесячные MRR Waterfall / NRR / Logo retention — после ≥2 закрытых месяцев.",
   "parameters": [
@@ -22,7 +22,7 @@
       "col": 0
     },
     {
-      "name": "05 · Успешных СЭМД (NSM)",
+      "name": "Успешных СЭМД (NSM)",
       "description": "North Star: COUNT(DISTINCT документ) со статусом «Успешно зарегистрирован» за период. Единственная метрика ценности сервиса.",
       "dataset_query": {
         "type": "native",
@@ -60,7 +60,7 @@
       }
     },
     {
-      "name": "05 · Всего документов за период",
+      "name": "Всего документов за период",
       "description": "COUNT(DISTINCT документ) по всем статусам, включая «в обработке». Знаменатель для честного first-pass acceptance.",
       "dataset_query": {
         "type": "native",
@@ -98,7 +98,7 @@
       }
     },
     {
-      "name": "05 · First-pass acceptance, %",
+      "name": "First-pass acceptance, %",
       "description": "Сквозная конверсия: success / ВСЕ документы (включая «в обработке»). Честная цифра доставки, в отличие от доли успеха только среди финализированных.",
       "dataset_query": {
         "type": "native",
@@ -144,7 +144,7 @@
       "col": 0
     },
     {
-      "name": "05 · MRR (trailing-30d), ₽",
+      "name": "MRR (trailing-30d), ₽",
       "description": "MRR = COUNT(DISTINCT JID, активного за последние 30 дней) × 10 000 ₽. Trailing-30d вместо календарного месяца — устраняет обнуление счётчика 1-го числа.",
       "dataset_query": {
         "type": "native",
@@ -169,7 +169,7 @@
       "col": 0
     },
     {
-      "name": "05 · ARR (MRR × 12), ₽",
+      "name": "ARR (MRR × 12), ₽",
       "description": "ARR = MRR (trailing-30d) × 12. Годовая выручка при сохранении текущей активной базы JID.",
       "dataset_query": {
         "type": "native",
@@ -194,7 +194,7 @@
       "col": 6
     },
     {
-      "name": "05 · Активных JID (30 дн)",
+      "name": "Активных JID (30 дн)",
       "description": "COUNT(DISTINCT JID), у которых был хотя бы один документ за последние 30 дней. Драйвер MRR при плоском тарифе.",
       "dataset_query": {
         "type": "native",
@@ -218,7 +218,7 @@
       "col": 12
     },
     {
-      "name": "05 · Эфф. цена успешного СЭМД, ₽",
+      "name": "Эфф. цена успешного СЭМД, ₽",
       "description": "MRR (trailing-30d) / успешные СЭМД за 30 дней. Стоимость неэффективности: насколько дорого обходится один зарегистрированный документ на текущей подписке.",
       "dataset_query": {
         "type": "native",
@@ -251,7 +251,7 @@
       "col": 0
     },
     {
-      "name": "05 · Динамика MRR (trailing-30d), ₽",
+      "name": "Динамика MRR (trailing-30d), ₽",
       "description": "MRR на конец каждого дня: COUNT(DISTINCT JID с активностью за предыдущие 30 дней) × 10 000 ₽. Trailing-30d, не календарный месяц.",
       "dataset_query": {
         "type": "native",
@@ -289,57 +289,13 @@
           }
         }
       },
-      "sizeX": 8,
+      "sizeX": 12,
       "sizeY": 6,
       "row": 10,
       "col": 0
     },
     {
-      "name": "05 · Динамика ARR (trailing-30d), ₽",
-      "description": "ARR на конец каждого дня: MRR (trailing-30d) × 12. Годовая выручка при сохранении активной базы JID на эту дату.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
-          "template-tags": {}
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Дата"
-        ],
-        "graph.metrics": [
-          "ARR, ₽"
-        ],
-        "graph.x_axis.scale": "timeseries",
-        "graph.show_values": false,
-        "column_settings": {
-          "[\"name\",\"Дата\"]": {
-            "column_title": "Дата"
-          },
-          "[\"name\",\"ARR, ₽\"]": {
-            "number_separators": " ",
-            "suffix": " ₽"
-          }
-        },
-        "series_settings": {
-          "ARR, ₽": {
-            "color": "#88BF4D",
-            "line.interpolate": "linear",
-            "line.size": "M",
-            "line.style": "solid"
-          }
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 6,
-      "row": 10,
-      "col": 8
-    },
-    {
-      "name": "05 · Динамика активных JID (trailing-30d)",
+      "name": "Динамика активных JID (trailing-30d)",
       "description": "COUNT(DISTINCT JID) с хотя бы одним документом за предыдущие 30 дней на конец каждого дня. Драйвер MRR при плоском тарифе.",
       "dataset_query": {
         "type": "native",
@@ -376,10 +332,10 @@
           }
         }
       },
-      "sizeX": 8,
+      "sizeX": 12,
       "sizeY": 6,
       "row": 10,
-      "col": 16
+      "col": 12
     },
     {
       "display": "text",
@@ -390,7 +346,7 @@
       "col": 0
     },
     {
-      "name": "05 · Зависших >72 ч, %",
+      "name": "Зависших >72 ч, %",
       "description": "Доля документов в статусе «в обработке» дольше 72 часов (нет колбэка от РЭМД) от всех документов. Главный операционный риск — скрытый при расчёте «% успеха только по финализированным».",
       "dataset_query": {
         "type": "native",
@@ -428,7 +384,7 @@
       }
     },
     {
-      "name": "05 · Отказов РЭМД, %",
+      "name": "Отказов РЭМД, %",
       "description": "Доля документов, отклонённых асинхронным ответом РЭМД (async_error), среди финализированных (success + ошибки). Сигнал качества интеграции.",
       "dataset_query": {
         "type": "native",
@@ -466,7 +422,7 @@
       }
     },
     {
-      "name": "05 · Ошибок связи, %",
+      "name": "Ошибок связи, %",
       "description": "Доля документов с сетевой ошибкой (network_error) среди финализированных. Сигнал состояния транспортного канала (VPN ГОСТ).",
       "dataset_query": {
         "type": "native",
@@ -512,7 +468,7 @@
       "col": 0
     },
     {
-      "name": "05 · Сегменты ценности (MRR × ₽/успех)",
+      "name": "Сегменты ценности (MRR × ₽/успех)",
       "description": "Разбивка JID по объёму потока. Под фикс-тарифом каждый JID = 10 000 ₽/мес, поэтому «₽ за успешный СЭМД» резко растёт у спящих клиник — это самая высокомаржинальная и одновременно самая рисковая на отток выручка.",
       "dataset_query": {
         "type": "native",
@@ -554,7 +510,7 @@
       }
     },
     {
-      "name": "05 · Выручка под риском «ноль ценности», ₽",
+      "name": "Выручка под риском «ноль ценности», ₽",
       "description": "Сумма абонплаты JID, у которых за период ноль успешно зарегистрированных СЭМД. Платят, но не получают ценности — очередь №1 на отток.",
       "dataset_query": {
         "type": "native",
@@ -593,7 +549,7 @@
       }
     },
     {
-      "name": "05 · Выручка под риском «затык канала», ₽",
+      "name": "Выручка под риском «затык канала», ₽",
       "description": "Сумма абонплаты JID, у которых >80 % документов зависли в «обработке». Доставка фактически не работает — риск оттока + эскалация в техподдержку.",
       "dataset_query": {
         "type": "native",
@@ -632,7 +588,7 @@
       }
     },
     {
-      "name": "05 · Клиник без единого успеха",
+      "name": "Клиник без единого успеха",
       "description": "Число JID, у которых за период ноль успешных СЭМД. Размер очереди Customer Success.",
       "dataset_query": {
         "type": "native",
@@ -670,7 +626,7 @@
       }
     },
     {
-      "name": "05 · Очередь оттока: JID с нулём успехов",
+      "name": "Очередь оттока: JID с нулём успехов",
       "description": "Платящие клиники без единого успешного СЭМД за период, по убыванию объёма попыток. Прямой список для проактивного обзвона Customer Success.",
       "dataset_query": {
         "type": "native",

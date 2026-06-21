@@ -25,3 +25,4 @@ tmp_*.sql
 .airflow-image-tag
 .metabase-image-tag
 .dwh-init.last.log
+audit_metabase_report.json

@@ -191,19 +191,40 @@ function Initialize-EgiszEltNamespace {
     }
 }
 
-function Initialize-AirflowConnections {
-    Write-Host "Ensuring Airflow connections are stored in metadata DB..."
-    $schedulerPod = kubectl get pods -n $Namespace -l component=scheduler,release=airflow --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
-    if ([string]::IsNullOrWhiteSpace($schedulerPod)) {
-        throw "Cannot find running Airflow scheduler pod in namespace '$Namespace' to apply connections."
+function Test-AirflowConnectionsFromSecret {
+    Write-Host "Verifying Airflow connections from Kubernetes secret..."
+    $connectionEnvVars = @(
+        "AIRFLOW_CONN_DWH_EGISZ_PG",
+        "AIRFLOW_CONN_PROXY_EGISZ_FB"
+    )
+    $podsToCheck = @(
+        @{
+            Label = "scheduler"
+            Selector = "component=scheduler,release=airflow"
+            Container = "scheduler"
+        },
+        @{
+            Label = "worker"
+            Selector = "component=worker,release=airflow"
+            Container = "worker"
+        }
+    )
+
+    foreach ($podSpec in $podsToCheck) {
+        $podName = kubectl get pods -n $Namespace -l $podSpec.Selector --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>$null
+        if ([string]::IsNullOrWhiteSpace($podName)) {
+            throw "Cannot find running Airflow $($podSpec.Label) pod in namespace '$Namespace' to verify connections."
+        }
+
+        foreach ($envVar in $connectionEnvVars) {
+            $value = kubectl exec -n $Namespace --request-timeout=30s pod/$podName -c $podSpec.Container -- printenv $envVar 2>$null
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($value)) {
+                throw "Airflow connection env $envVar is not set in $($podSpec.Label) pod '$podName'. Check k8s/airflow/airflow-connections-secret.yaml and Helm values extraEnvFrom."
+            }
+        }
     }
 
-    Invoke-Checked "Upsert Airflow DWH connection" {
-        kubectl exec -n $Namespace pod/$schedulerPod -c scheduler -- /bin/bash -lc "airflow connections delete dwh_egisz_pg >/dev/null 2>&1 || true; airflow connections add dwh_egisz_pg --conn-uri 'postgres://egisz:egisz@host.docker.internal:5432/dwh_egisz?sslmode=disable'"
-    }
-    Invoke-Checked "Upsert Airflow Firebird connection" {
-        kubectl exec -n $Namespace pod/$schedulerPod -c scheduler -- /bin/bash -lc "airflow connections delete proxy_egisz_fb >/dev/null 2>&1 || true; airflow connections add proxy_egisz_fb --conn-uri 'firebird://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251'"
-    }
+    Write-Host "Airflow connections dwh_egisz_pg and proxy_egisz_fb are available via airflow-connections secret."
 }
 
 function Initialize-HelmAirflowRepo {
@@ -329,9 +350,9 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 '@ | py -
     }
 
-    Initialize-AirflowConnections
+    Test-AirflowConnectionsFromSecret
 
-    Write-Host "Airflow is ready. Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' to initialize the DWH, then unpause egisz_elt_dag."
+    Write-Host "Airflow is ready. Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' to initialize the DWH, then unpause egisz_extract_dag, egisz_dimensions_dag and egisz_reconcile_dag."
 }
 
 function Install-Metabase {

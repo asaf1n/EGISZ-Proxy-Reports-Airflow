@@ -100,6 +100,24 @@ AS $$
     SELECT NULLIF((regexp_match(COALESCE(p_text, ''), 'gost-([0-9]+)', 'i'))[1], '');
 $$;
 
+-- Резолв JID клиники по OID медорганизации (<organization> в payload) через
+-- справочник лицензий. Fallback к gost-токену: транспортные ошибки канала и часть
+-- callback'ов приходят без эндпоинта gost-<JID>, но несут OID организации.
+-- Один mo_uid может иметь несколько лицензий — берём последнюю по modifydate, как
+-- и обогащение во view (db/parts/70_views_core.sql).
+CREATE OR REPLACE FUNCTION public.egisz_jid_from_oid(p_org_oid text)
+RETURNS integer
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT dl.jid
+    FROM public.dim_licenses dl
+    WHERE dl.mo_uid = NULLIF(btrim(p_org_oid), '')
+      AND dl.jid IS NOT NULL
+    ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
+    LIMIT 1;
+$$;
+
 CREATE OR REPLACE FUNCTION public.egisz_clean_text_value(p_text text)
 RETURNS text
 LANGUAGE sql

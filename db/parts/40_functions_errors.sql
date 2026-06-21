@@ -102,6 +102,53 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.egisz_error_join_deduped(parts text[], sep text DEFAULT ' - ')
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+    deduped text[] := ARRAY[]::text[];
+    p text;
+BEGIN
+    IF parts IS NULL OR COALESCE(array_length(parts, 1), 0) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    FOREACH p IN ARRAY parts
+    LOOP
+        IF p IS NULL OR btrim(p) = '' OR p = ANY (deduped) THEN
+            CONTINUE;
+        END IF;
+        deduped := array_append(deduped, p);
+    END LOOP;
+
+    IF COALESCE(array_length(deduped, 1), 0) = 0 THEN
+        RETURN NULL;
+    END IF;
+
+    RETURN array_to_string(deduped, sep);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.egisz_error_matching_rule_labels(p_code text, p_message text)
+RETURNS text[]
+LANGUAGE sql
+STABLE
+AS $$
+    WITH normalized AS (
+        SELECT
+            upper(btrim(COALESCE(p_code, ''))) AS c,
+            btrim(COALESCE(p_message, '')) AS m
+    )
+    SELECT COALESCE(array_agg(r.interpretation ORDER BY r.rule_code), ARRAY[]::text[])
+    FROM normalized n
+    JOIN public.egisz_error_interpretation_rules r ON r.is_active
+    WHERE n.m <> ''
+      AND (r.match_code IS NULL OR r.match_code = n.c)
+      AND n.m ~* r.match_pattern;
+$$;
+
 CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_item(p_code text, p_message text)
 RETURNS text
 LANGUAGE plpgsql
@@ -113,6 +160,7 @@ DECLARE
     parts text[];
     chunk text;
     interpreted text;
+    rule_labels text[];
     out_parts text[] := ARRAY[]::text[];
     deduped text[] := ARRAY[]::text[];
     p text;
@@ -127,17 +175,9 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    SELECT r.interpretation
-    INTO interpreted
-    FROM egisz_error_interpretation_rules r
-    WHERE r.is_active
-      AND (r.match_code IS NULL OR r.match_code = c)
-      AND m ~* r.match_pattern
-    ORDER BY r.priority
-    LIMIT 1;
-
-    IF interpreted IS NOT NULL THEN
-        RETURN interpreted;
+    rule_labels := public.egisz_error_matching_rule_labels(c, m);
+    IF COALESCE(array_length(rule_labels, 1), 0) > 0 THEN
+        RETURN public.egisz_error_join_deduped(rule_labels, ' - ');
     END IF;
 
     IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR') THEN
@@ -148,18 +188,6 @@ BEGIN
     END IF;
     IF c IN ('ASYNC_RESPONSE_TIMEOUT', 'TIMEOUT') THEN
         RETURN 'Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже';
-    END IF;
-    IF c IN ('DISABLED_RMIS', 'NO_RMIS', 'ATTRIBUTE_MISMATCH', 'MIS_NOT_AVAILABLE', 'REGISTRY_ITEM_NOT_FOUND', 'FILE_WAS_NOT_SENT', 'RMIS_ERROR', 'GET_DOCUMENT_FILE_ERROR') THEN
-        SELECT r.interpretation
-        INTO interpreted
-        FROM egisz_error_interpretation_rules r
-        WHERE r.is_active
-          AND r.match_code = c
-        ORDER BY r.priority
-        LIMIT 1;
-        IF interpreted IS NOT NULL THEN
-            RETURN interpreted;
-        END IF;
     END IF;
 
     IF m !~* 'schematron' AND m !~* 'схематрон' THEN
@@ -246,7 +274,6 @@ BEGIN
     SELECT r.error_category INTO cat
     FROM egisz_error_interpretation_rules r
     WHERE r.is_active AND r.interpretation = t
-    ORDER BY r.priority
     LIMIT 1;
 
     IF cat IS NOT NULL THEN

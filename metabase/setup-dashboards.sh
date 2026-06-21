@@ -321,6 +321,30 @@ archive_stale_collection_cards() {
   rm -f "${expected_file}" >/dev/null 2>&1 || true
 }
 
+expected_dashboard_names() {
+  jq -r '.name' "${DASHBOARDS_DIR}"/*.json | sort -u
+}
+
+# Импорт матчит дашборды по имени и обновляет на месте, но при переименовании дашборда в JSON
+# старый (со старым именем) остаётся в коллекции дублем. Архивируем дашборды коллекции, чьих
+# имён больше нет в JSON — зеркало archive_stale_collection_cards для дашбордов.
+archive_stale_collection_dashboards() {
+  local expected_file dashboard_id dashboard_name
+  expected_file="$(mktemp)"
+  expected_dashboard_names > "${expected_file}"
+  while IFS=$'\t' read -r dashboard_id dashboard_name; do
+    [ -n "${dashboard_id}" ] || continue
+    if ! grep -Fxq "${dashboard_name}" "${expected_file}"; then
+      log_info "Archiving stale dashboard ${dashboard_id}: ${dashboard_name}"
+      api_request PUT "/api/dashboard/${dashboard_id}" '{"archived":true}' >/dev/null
+    fi
+  done < <(
+    api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
+      jq -r '.data[]? | select(.model == "dashboard") | [.id, .name] | @tsv'
+  )
+  rm -f "${expected_file}" >/dev/null 2>&1 || true
+}
+
 dashboard_payload() {
   local file="$1"
   jq --argjson db "${APP_DB_ID}" --argjson col "${COL_ID}" --slurpfile meta_file "${DB_METADATA_FILE}" '
@@ -612,6 +636,8 @@ for file in "${DASHBOARDS_DIR}"/*.json; do
   create_or_update_dashboard "${file}" >/dev/null
   log_info "Imported ${dashboard_name}"
 done
+
+archive_stale_collection_dashboards
 
 verify_collection_contents
 verify_dashboard_cards

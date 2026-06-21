@@ -441,7 +441,7 @@
     },
     {
       "name": "Healthcheck",
-      "description": "Сводка уровней сигналов ELT (те же строки, что в таблице «Сигналы healthcheck»; без очереди callback — она на дашборде 03).",
+      "description": "Сводка уровней сигналов ELT (те же строки, что в таблице «Сигналы healthcheck»; без очереди callback — она на дашборде «Документы без ответа»).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -595,7 +595,7 @@
       }
     },
     {
-      "name": "02 · Топ клиник по error rate (24ч)",
+      "name": "Топ клиник по error rate (24ч)",
       "description": "Top-15 клиник по доле ошибок РЭМД за последние 24ч. Используется для эскалации в L2.",
       "dataset_query": {
         "type": "native",
@@ -648,7 +648,7 @@
       }
     },
     {
-      "name": "02 · Объём по клиникам (поток)",
+      "name": "Объём по клиникам (поток)",
       "description": "Топ клиник по числу **документов** (DISTINCT «Документ (ключ учёта)»), все статусы; JID в подписи — как на оперативном мониторинге.",
       "dataset_query": {
         "type": "native",
@@ -780,8 +780,8 @@
       }
     },
     {
-      "name": "02 · Сигналы healthcheck",
-      "description": "Сигналы ELT-контура без очереди документов без callback; эта очередь вынесена в дашборд 03.",
+      "name": "Сигналы healthcheck",
+      "description": "Сигналы ELT-контура без очереди документов без callback; эта очередь вынесена в дашборд «Документы без ответа».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -843,7 +843,7 @@
       "col": 0
     },
     {
-      "name": "02 · Документов за период",
+      "name": "Документов за период",
       "description": "Все статусы в выбранном фильтре — знаменатель для доли ошибок и нагрузки на сервис.",
       "dataset_query": {
         "type": "native",
@@ -947,7 +947,7 @@
       }
     },
     {
-      "name": "02 · Доля ошибок, %",
+      "name": "Доля ошибок за период, %",
       "description": "Доля документов с async_error или network_error среди финализированных за период.",
       "dataset_query": {
         "type": "native",
@@ -1051,7 +1051,7 @@
       }
     },
     {
-      "name": "02 · Успешно за период",
+      "name": "Успешно за период",
       "description": "Документы со статусом success в выбранном периоде.",
       "dataset_query": {
         "type": "native",
@@ -1155,8 +1155,8 @@
       }
     },
     {
-      "name": "02 · В обработке",
-      "description": "Документы waiting в DWH (снимок очереди, без фильтра периода). Детализация — дашборд 03.",
+      "name": "В обработке",
+      "description": "Документы waiting в DWH (снимок очереди, без фильтра периода). Детализация — дашборд «Документы без ответа».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1179,8 +1179,8 @@
       "col": 18
     },
     {
-      "name": "02 · Сводка прокси-БД и очереди",
-      "description": "Снимок ELT и очереди callback. Очередь без ответа — дашборд 03.",
+      "name": "Сводка прокси-БД и очереди",
+      "description": "Снимок ELT и очереди callback. Очередь без ответа — дашборд «Документы без ответа».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1197,7 +1197,7 @@
       "col": 0
     },
     {
-      "name": "02 · Доля ошибок по дням",
+      "name": "Доля ошибок по дням",
       "description": "Календарная динамика качества за период (те же фильтры, что у heatmap).",
       "dataset_query": {
         "type": "native",
@@ -1304,7 +1304,7 @@
       }
     },
     {
-      "name": "02 · Топ клиник по ошибкам (период)",
+      "name": "Топ клиник по ошибкам (период)",
       "description": "Клиники с наибольшей долей ошибок в периоде (мин. 20 документов). Дополняет срез «24ч» выше.",
       "dataset_query": {
         "type": "native",
@@ -1402,8 +1402,8 @@
       }
     },
     {
-      "name": "02 · Топ сетевых формулировок",
-      "description": "Топ **типов** транспортных ошибок за период (URL, gost-endpoint, UUID и IP в тексте свёрнуты в плейсхолдеры). Сырой текст — карточка «Последние ошибки связи» и дашборд 04.",
+      "name": "Топ сетевых формулировок",
+      "description": "Топ **типов** транспортных ошибок за период (URL, gost-endpoint, UUID и IP в тексте свёрнуты в плейсхолдеры). Сырой текст — карточка «Последние ошибки связи» и дашборд «Ошибки и качество данных».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1442,7 +1442,7 @@
       }
     },
     {
-      "name": "02 · Последние ошибки связи",
+      "name": "Последние ошибки связи",
       "description": "Последние 50 транспортных сбоев за период для L2 (LOGID/MSGID).",
       "dataset_query": {
         "type": "native",
@@ -1487,6 +1487,95 @@
         },
         "top_clinic": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
+          "field_name": "JID клиники"
+        }
+      }
+    },
+    {
+      "name": "Объём СЭМД по дням и статусам",
+      "description": "Объём СЭМД (уникальных по «Документ (ключ учёта)») по календарным дням и статусам: дата обработки IPS из EXCHANGELOG.CREATEDATE. Фильтры дашборда — период «Обработано IPS», JID клиники, Код СЭМД.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "dwh_date",
+              "type": "dimension"
+            },
+            "top_semd": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "top_semd",
+              "type": "dimension",
+              "required": false
+            },
+            "top_clinic": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "top_clinic",
+              "type": "dimension",
+              "required": false
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "bar",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата",
+          "Статус"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "stackable.stack_type": "stacked",
+        "graph.show_values": false,
+        "series_settings": {
+          "Успешно зарегистрирован": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          },
+          "В обработке": {
+            "color": "#509EE3"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 6,
+      "row": 48,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Дата обработки"
+        },
+        "top_semd": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
+          "field_name": "Код СЭМД"
+        },
+        "top_clinic": {
+          "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "JID клиники"
         }
       }

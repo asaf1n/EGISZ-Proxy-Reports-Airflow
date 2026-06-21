@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from egisz_elt.fb_client import (
-    fetch_exchangelog_after_cursor,
+from egisz_elt.dimensions import fetch_organizations
+from egisz_elt.extract import fetch_exchangelog_after_cursor
+from egisz_elt.reconcile import (
+    count_exchangelog_rows,
     fetch_exchangelog_by_logids,
-    fetch_exchangelog_logids_in_band,
-    fetch_organizations,
+    fetch_exchangelog_logids,
 )
 
 
@@ -28,6 +29,9 @@ class FakeCursor:
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.result
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self.result[0] if self.result else None
 
     def close(self) -> None:
         self.closed = True
@@ -91,21 +95,23 @@ def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
     assert con.cursor_instance.params == (100, 500)
 
 
-def test_fetch_exchangelog_logids_in_band_set_diffs_watermark_window() -> None:
-    con = FakeConnection([(101,), (102,)])
+def test_count_exchangelog_rows_returns_int() -> None:
+    con = FakeConnection([(42,)])
 
-    result = fetch_exchangelog_logids_in_band(con, low_logid=100, high_logid=300)
+    assert count_exchangelog_rows(con) == 42
+    assert "SELECT COUNT(*) FROM EXCHANGELOG" in con.cursor_instance.executed_sql
+
+
+def test_fetch_exchangelog_logids_scans_full_range_without_band() -> None:
+    con = FakeConnection([(101,), (102,), (102,)])
+
+    result = fetch_exchangelog_logids(con)
 
     assert result == {101, 102}
-    assert "WHERE LOGID > ? AND LOGID <= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (100, 300)
-
-
-def test_fetch_exchangelog_logids_in_band_empty_window_returns_empty_without_query() -> None:
-    con = FakeConnection([])
-
-    assert fetch_exchangelog_logids_in_band(con, low_logid=300, high_logid=300) == set()
-    assert con.executed_sql == []
+    # Full-range constancy check: no banded LOGID window in the query.
+    assert "SELECT LOGID FROM EXCHANGELOG" in con.cursor_instance.executed_sql
+    assert "WHERE" not in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params is None
 
 
 def test_fetch_exchangelog_by_logids_serializes_rows() -> None:

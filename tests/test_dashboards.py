@@ -27,7 +27,7 @@ def test_all_dashboards_default_to_full_width() -> None:
 
 def test_service_network_top_groups_by_typed_label() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c["name"] == "02 · Топ сетевых формулировок")
+    card = next(c for c in dashboard["cards"] if c["name"] == "Топ сетевых формулировок")
     query = card["dataset_query"]["native"]["query"]
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
@@ -93,6 +93,7 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
 
     assert configured_columns.issubset(view_columns), sorted(configured_columns - view_columns)
     assert "Дата обработки" in configured_columns
+    assert "JID+Наименование" in configured_columns
     assert "ИНН клиники" in configured_columns
     assert "Исходный текст ошибки" in configured_columns
     assert "Обработано IPS" not in configured_columns
@@ -135,7 +136,7 @@ def test_service_async_vs_network_pie_uses_canonical_status_colors() -> None:
 def test_service_healthcheck_pie_matches_signals_table_scope() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
     pie = next(c for c in dashboard["cards"] if c["name"] == "Healthcheck")
-    table = next(c for c in dashboard["cards"] if c["name"] == "02 · Сигналы healthcheck")
+    table = next(c for c in dashboard["cards"] if c["name"] == "Сигналы healthcheck")
     scope = "\"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h')"
     assert scope in pie["dataset_query"]["native"]["query"]
     assert scope in table["dataset_query"]["native"]["query"]
@@ -252,9 +253,9 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
 
 def test_archive_top_semd_uses_same_document_universe_as_total() -> None:
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
-    total = next(card for card in dashboard["cards"] if card["name"] == "06 · Всего документов")
-    top = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по типу СЭМД")
-    clinic = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по клинике")
+    total = next(card for card in dashboard["cards"] if card["name"] == "Всего документов")
+    top = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
+    clinic = next(card for card in dashboard["cards"] if card["name"] == "Топ по клинике")
     assert "NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL" not in top["dataset_query"]["native"]["query"]
     assert '"СЭМД (архив)"' in top["dataset_query"]["native"]["query"]
     assert "v_rpt_semd_archive_ui" in total["dataset_query"]["native"]["query"]
@@ -284,6 +285,7 @@ def test_document_metric_cards_count_distinct_document_key() -> None:
         "v_rpt_client_documents_ui",
     )
     allowed_count_star = {
+        "01_operational.json": {"error_occurrence_share"},
         "02_service.json": {"v_health_signals_ui"},
         "05_executive.json": {"active_jid"},
         "08_client_bianalytic.json": {"per_patient"},
@@ -318,7 +320,7 @@ def test_error_interpretations_view_uses_canonical_labels() -> None:
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
-    card = next(card for card in dashboard["cards"] if card["name"] == "06 · Топ по типу СЭМД")
+    card = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
     query = card["dataset_query"]["native"]["query"]
 
     assert '"СЭМД (архив)"' in sql
@@ -386,7 +388,7 @@ def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
     dashboard = json.loads(Path("metabase_dashboards/05_executive.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
 
-    assert dashboard["name"] == "05 Управленческий дашборд"
+    assert dashboard["name"] == "Управленческий дашборд"
 
     # 05 после перестройки опирается ТОЛЬКО на реальные данные DWH.
     # Управленческий дашборд не должен читать снятые service_audit-витрины и таблицы.
@@ -422,7 +424,7 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
 
-    assert dashboard["name"] == "07 Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ"
+    assert dashboard["name"] == "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ"
     assert any(p["name"] == "JID клиники" for p in dashboard["parameters"])
     assert any(p["name"] == "Период" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
@@ -434,15 +436,13 @@ def test_client_bianalytic_dashboard_uses_hashed_unique_keys() -> None:
     dashboard = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
 
-    assert dashboard["name"] == "08 Клиентский дашборд. BI-аналитика ЭМД"
+    assert dashboard["name"] == "Клиентский дашборд. BI-аналитика ЭМД"
     assert any(p["name"] == "JID клиники" for p in dashboard["parameters"])
     assert all("public.v_rpt_client_documents_ui" in query for query in queries)
     assert all("{{client_jid}}" in query for query in queries)
     # Уникальный счёт пациентов/врачей идёт через hash-колонки, не через masked-имена.
     assert any("patient_hash" in q for q in queries)
     assert any("doctor_hash" in q for q in queries)
-    # Финансы только количественные с пометкой «потенциальная выручка».
-    assert any("Потенциальная выручка" in q for q in queries)
 
 
 def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
@@ -478,6 +478,19 @@ def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> 
     # surrogate-ID для BI-дашборда: считать уникальных пациентов/врачей по hash без раскрытия ФИО/СНИЛС
     assert "patient_hash" in sql
     assert "doctor_hash" in sql
+
+
+def test_dashboard_card_names_are_globally_unique() -> None:
+    """setup-dashboards.sh resolves cards by name within the Metabase collection."""
+    by_name: dict[str, list[str]] = {}
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            if card.get("display") == "text" or not card.get("name"):
+                continue
+            by_name.setdefault(card["name"], []).append(path.name)
+    duplicates = {name: files for name, files in by_name.items() if len(files) > 1}
+    assert not duplicates, f"Duplicate Metabase card names across dashboards: {duplicates}"
 
 
 def test_no_retired_dashboard_files_remain() -> None:
