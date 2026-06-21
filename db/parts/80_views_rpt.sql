@@ -153,7 +153,11 @@ COMMENT ON VIEW public.v_rpt_documents_ui IS
 'Единая документная витрина: одна актуальная строка на "Документ (ключ учёта)". Документы без localUid не попадают в fact_egisz_documents на этапе transform (getDocumentFile). Очередь без ответа — v_rpt_documents_no_response_ui (дашборд 03).';
 
 -- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
--- Unnest'ит составной error_type (разделитель ' · ') → одна строка = один вид ошибки.
+-- Атомизирует составной error_type до одного вида на строку. Разделители два:
+-- ' · ' между разными <item> ответа (egisz_error_classify) и ' - ' между правилами,
+-- сработавшими на одном <item> (egisz_error_interpretation_item). Канонические
+-- интерпретации правил пробела-дефиса-пробела внутри себя не содержат, поэтому
+-- split по ' [·-] ' лосслесс. Итог: одна строка = один атомарный вид ошибки.
 CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
 WITH remd_errors AS (
     SELECT
@@ -165,11 +169,9 @@ WITH remd_errors AS (
         d."Тип СЭМД (код · НСИ)",
         trim(err_item)                                                                AS "Тип ошибки"
     FROM public.v_rpt_documents_ui d
-    CROSS JOIN LATERAL unnest(
-        string_to_array(
-            COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
-            ' · '
-        )
+    CROSS JOIN LATERAL regexp_split_to_table(
+        COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
+        ' [·-] '
     ) AS err_item
     WHERE d."Статус (код)" IN ('async_error', 'network_error')
       AND d."Тип ошибки" IS NOT NULL
