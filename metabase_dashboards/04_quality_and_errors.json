@@ -1,20 +1,12 @@
 {
   "name": "Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество интеграции и передачи СЭМД.** **СЭМД** — структурированный меддокумент; учёт экземпляра — **COUNT(DISTINCT «Документ (ключ учёта)»)**; «Тип СЭМД (код · НСИ)» — паспорт НСИ 1520. **Единые фильтры дашборда:** период (**«Обработано IPS»** `dwh_date_filter` для колбэков / **«Дата создания документа»** `parse_created_filter` для транспорта / календарный день `connectivity_day_filter` для доступности), **JID клиники** (`jid_filter`), **Тип СЭМД** по коду НСИ (`semd_type_filter`) и **статус документа** (`status_filter` → 4 значения «Статуса», в т.ч. «Ошибка асинхронного ответа РЭМД» и «Ошибка связи»). Статус — это жизненный цикл документа, не путать с **категорией ошибки** (`egisz_error_category`, ~10 групп внутри статусов-ошибок) и **видом/типом ошибки** (`error_type`, атомарные виды). **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_rpt_documents_ui` со «Статус (код)» IN ('async_error','network_error'); эталон — «Итоги по ошибкам», к нему сходятся рейтинги. **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` разбит по «·» на конкретные виды и сведён в категории через `egisz_error_category`); один документ с N видами учитывается N раз. Сунбёрст «Ошибки по виду» и stacked-bar «Виды ошибок по типам СЭМД» используют (б). **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3) из `v_rpt_network_errors_detail_ui`, не текст отказа регистрации в XML ответа РЭМД. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` / `v_rpt_clinic_connectivity_daily_ui` — прокси успехи/(успехи+ошибки связи).",
+  "description": "**Качество интеграции и передачи СЭМД.** **СЭМД** — структурированный меддокумент; учёт экземпляра — **COUNT(DISTINCT «Документ (ключ учёта)»)**; «Тип СЭМД (код · НСИ)» — паспорт НСИ 1520. **Единые фильтры дашборда:** период (**«Обработано IPS»** `dwh_date_filter` для колбэков / календарный день `connectivity_day_filter` для доступности; карточки транспорта/ошибок связи без фильтра по дате — весь доступный период), **JID клиники** (`jid_filter`), **Тип СЭМД** по коду НСИ (`semd_type_filter`) и **статус документа** (`status_filter` → 4 значения «Статуса», в т.ч. «Ошибка асинхронного ответа РЭМД» и «Ошибка связи»). Статус — это жизненный цикл документа, не путать с **категорией ошибки** (`egisz_error_category`, ~10 групп внутри статусов-ошибок) и **видом/типом ошибки** (`error_type`, атомарные виды). **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_rpt_documents_ui` со «Статус (код)» IN ('async_error','network_error'); эталон — «Итоги по ошибкам», к нему сходятся рейтинги. **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` атомизирован по «·» и «-» на конкретные виды и сведён в категории через `egisz_error_category`); один документ с N видами учитывается N раз. Сунбёрст «Ошибки по виду» и stacked-bar «Виды ошибок по типам СЭМД» используют (б). **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3) из `v_rpt_network_errors_detail_ui`, не текст отказа регистрации в XML ответа РЭМД. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` / `v_rpt_clinic_connectivity_daily_ui` — прокси успехи/(успехи+ошибки связи).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
       "name": "Период по «Обработано IPS» (колбэки)",
       "slug": "dwh_date_filter",
-      "type": "date/all-options",
-      "sectionId": "date",
-      "default": "past30days~"
-    },
-    {
-      "id": "f5e6d7c8-b9a0-4123-cdef-012345678901",
-      "name": "Период по «Дата создания документа» (транспорт)",
-      "slug": "parse_created_filter",
       "type": "date/all-options",
       "sectionId": "date",
       "default": "past30days~"
@@ -771,7 +763,7 @@
     },
     {
       "name": "Виды ошибок по типам СЭМД",
-      "description": "**Горизонтальный stacked-bar:** полоса — тип СЭМД (код · НСИ), сегменты — атомарные **виды ошибки** (`v_rpt_error_category_breakdown_ui`, композитные `error_type` разбиты по «·»), длина сегмента — **доля от общего числа ошибок, %** = COUNT(DISTINCT «Документ (ключ учёта)») сегмента к суммарному числу пар «документ × вид ошибки» во всём срезе (после фильтров). Показаны **топ-15 типов СЭМД по объёму ошибок** (хвост типов с пренебрежимо малой долей скрыт ради читаемости), по убыванию объёма; один документ с N видами учитывается N раз.",
+      "description": "**Горизонтальный stacked-bar:** полоса — тип СЭМД (код · НСИ), сегменты — атомарные **виды ошибки** (`v_rpt_error_category_breakdown_ui`, композитные `error_type` атомизированы по «·» между item'ами и «-» между правилами одного item), длина сегмента — **доля от общего числа ошибок, %** = COUNT(DISTINCT «Документ (ключ учёта)») сегмента к суммарному числу пар «документ × вид ошибки» во всём срезе (после фильтров). Показаны **топ-15 типов СЭМД по объёму ошибок** (хвост типов с пренебрежимо малой долей скрыт ради читаемости), по убыванию объёма; один документ с N видами учитывается N раз.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -977,7 +969,7 @@
     },
     {
       "display": "text",
-      "text": "## Ошибки связи (транспорт)\nСбой канала LOGSTATE=3, не текст отказа регистрации в XML. Период — **«Дата создания документа»** (`parse_created_filter`).",
+      "text": "## Ошибки связи (транспорт)\nСбой канала LOGSTATE=3, не текст отказа регистрации в XML. Без фильтра по дате — весь доступный период; срез только по **JID клиники** и **Типу СЭМД**.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 51,
@@ -985,19 +977,12 @@
     },
     {
       "name": "Топ клиник по ошибкам связи",
-      "description": "Сбой доставки/транспорта (LOGSTATE=3), не содержимое ответа РЭМД. **Клиника (транспорт)** — связанный колбэк в аналитике либо МО по числовому JID из `gost-…` в журнале. Период — **«Дата создания документа»** (`parse_created_filter`).",
+      "description": "Сбой доставки/транспорта (LOGSTATE=3), не содержимое ответа РЭМД. **Клиника (транспорт)** — связанный колбэк в аналитике либо МО по числовому JID из `gost-…` в журнале. Без фильтра по дате — весь доступный период.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), 'Неизвестно') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), 'Неизвестно') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
-            "parse_created": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "id": "fb040901-0901-4901-8901-000000000001",
-              "name": "parse_created",
-              "type": "dimension"
-            },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
@@ -1045,10 +1030,6 @@
       "row": 52,
       "col": 0,
       "metabase-field-filters": {
-        "parse_created": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Дата создания документа"
-        },
         "jid": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "JID клиники"
@@ -1061,19 +1042,12 @@
     },
     {
       "name": "Топ формулировок сетевых ошибок",
-      "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности — **COUNT(DISTINCT «Документ (ключ учёта)»)**. Период — **«Дата создания документа»**.",
+      "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности — **COUNT(DISTINCT «Документ (ключ учёта)»)**. Без фильтра по дате — весь доступный период.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(\"Тип сетевой ошибки\"), ''), 'Неизвестно'), 120) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(\"Тип сетевой ошибки\"), ''), 'Неизвестно'), 120) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
-            "parse_created": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "id": "fb041001-1001-4001-8a01-000000000001",
-              "name": "parse_created",
-              "type": "dimension"
-            },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
@@ -1121,10 +1095,6 @@
       "row": 52,
       "col": 12,
       "metabase-field-filters": {
-        "parse_created": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Дата создания документа"
-        },
         "jid": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "JID клиники"
@@ -1137,19 +1107,12 @@
     },
     {
       "name": "Тренд ошибок связи по дням",
-      "description": "Транспорт по календарным дням: **COUNT(DISTINCT «Документ (ключ учёта)»)**; ось — **«Дата создания документа»** (`parse_created_filter`).",
+      "description": "Транспорт по календарным дням: **COUNT(DISTINCT «Документ (ключ учёта)»)**; ось — **«Дата создания документа»**. Без фильтра по дате — весь доступный период.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('day', \"Дата создания документа\")::date AS \"День\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов с ошибкой связи\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('day', \"Дата создания документа\")::date AS \"День\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов с ошибкой связи\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
-            "parse_created": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "id": "fb041101-1101-4101-8b01-000000000001",
-              "name": "parse_created",
-              "type": "dimension"
-            },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
@@ -1190,10 +1153,6 @@
       "row": 58,
       "col": 0,
       "metabase-field-filters": {
-        "parse_created": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Дата создания документа"
-        },
         "jid": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "JID клиники"
@@ -1206,19 +1165,12 @@
     },
     {
       "name": "Детализация ошибок связи",
-      "description": "Транспорт: фрагмент текста канала и нормализованный тип сетевой ошибки для разбора инцидента. Колонка «Сводка ошибки регистрации» относится к **уже доставленному** ответу (если удалось сопоставить) и не объясняет сбой доставки. Период — **«Дата создания документа»**. Технические трассировочные идентификаторы (relatesToMessage / localUid / emdrId / MSGID / LOGID) убраны — поиск по ним на дашборде «Архив СЭМД».",
+      "description": "Транспорт: фрагмент текста канала и нормализованный тип сетевой ошибки для разбора инцидента. Колонка «Сводка ошибки регистрации» относится к **уже доставленному** ответу (если удалось сопоставить) и не объясняет сбой доставки. Без фильтра по дате — весь доступный период. Технические трассировочные идентификаторы (relatesToMessage / localUid / emdrId / MSGID / LOGID) убраны — поиск по ним на дашборде «Архив СЭМД».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Дата создания документа\", \"Клиника (транспорт)\", \"JID клиники\", \"Тип СЭМД (код · НСИ)\", \"Тип сетевой ошибки\", LEFT(\"Текст сетевой ошибки\", 160) AS \"Сеть (фрагмент)\", \"Сводка ошибки регистрации\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{parse_created}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 150",
+          "query": "SELECT \"Дата создания документа\", \"Клиника (транспорт)\", \"JID клиники\", \"Тип СЭМД (код · НСИ)\", \"Тип сетевой ошибки\", LEFT(\"Текст сетевой ошибки\", 160) AS \"Сеть (фрагмент)\", \"Сводка ошибки регистрации\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 150",
           "template-tags": {
-            "parse_created": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Дата создания документа» (ошибки связи)",
-              "id": "fb041201-1201-4201-8c01-000000000001",
-              "name": "parse_created",
-              "type": "dimension"
-            },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
@@ -1250,10 +1202,6 @@
       "row": 63,
       "col": 0,
       "metabase-field-filters": {
-        "parse_created": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Дата создания документа"
-        },
         "jid": {
           "table_ref": "public.v_rpt_network_errors_detail_ui",
           "field_name": "JID клиники"
