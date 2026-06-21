@@ -595,59 +595,6 @@
       }
     },
     {
-      "name": "Топ клиник по error rate (24ч)",
-      "description": "Top-15 клиник по доле ошибок РЭМД за последние 24ч. Используется для эскалации в L2.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"Наименование клиники\" AS \"Наименование клиники\", \"Доля ошибок, %\" AS \"Доля ошибок, %\", \"Документов за 24ч\" AS \"Документов за 24ч\", \"В очереди (документов)\" AS \"В очереди (документов)\", \"Уровень здоровья\" AS \"Уровень здоровья\" FROM public.v_health_by_clinic_ui WHERE \"Документов за 24ч\" >= 20 [[AND {{top_clinic}}]] ORDER BY \"Доля ошибок, %\" DESC NULLS LAST, \"Документов за 24ч\" DESC LIMIT 15",
-          "template-tags": {
-            "top_clinic": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "h1100001-1001-4101-8101-000000000010",
-              "name": "top_clinic",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Наименование клиники"
-        ],
-        "graph.show_values": true,
-        "table": {
-          "columns": {
-            "[\"name\",\"clinic_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"service_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"transaction_id\"]": {
-              "display_as": null
-            }
-          }
-        },
-        "graph.metrics": [
-          "Доля ошибок, %"
-        ]
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 15,
-      "col": 0,
-      "metabase-field-filters": {
-        "top_clinic": {
-          "table_ref": "public.v_health_by_clinic_ui",
-          "field_name": "JID клиники"
-        }
-      }
-    },
-    {
       "name": "Объём по клиникам (поток)",
       "description": "Топ клиник по числу **документов** (DISTINCT «Документ (ключ учёта)»), все статусы; JID в подписи — как на оперативном мониторинге.",
       "dataset_query": {
@@ -744,10 +691,10 @@
           "Документов"
         ]
       },
-      "sizeX": 12,
+      "sizeX": 24,
       "sizeY": 6,
       "row": 15,
-      "col": 12,
+      "col": 0,
       "metabase-field-filters": {
         "top_clinic": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -1011,6 +958,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Доля ошибок, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }
@@ -1492,7 +1440,7 @@
       }
     },
     {
-      "name": "Объём СЭМД по дням и статусам",
+      "name": "Транзакции по дням и статусам",
       "description": "Объём СЭМД (уникальных по «Документ (ключ учёта)») по календарным дням и статусам: дата обработки IPS из EXCHANGELOG.CREATEDATE. Фильтры дашборда — период «Обработано IPS», JID клиники, Код СЭМД.",
       "dataset_query": {
         "type": "native",

@@ -132,6 +132,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }

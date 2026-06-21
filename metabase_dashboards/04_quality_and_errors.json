@@ -403,12 +403,12 @@
       "col": 0
     },
     {
-      "name": "Ошибки по категории",
-      "description": "Топ категорий (`egisz_error_category`). Горизонтальные столбцы удобнее сунбёрста для сравнения долей.",
+      "name": "Виды ошибок по категориям",
+      "description": "Атомарные **виды ошибки** (`error_type`), цвет сегмента — **категория** (`egisz_error_category`). Топ-15 видов по числу документов; метрика — COUNT(DISTINCT «Документ (ключ учёта)»). Объединяет прежние карточки «по категории» и «по виду»: и конкретный вид, и его класс читаются в одной полосе.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Категория ошибки\"), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Вид ошибки\", COALESCE(NULLIF(TRIM(\"Категория ошибки\"), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -438,17 +438,16 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
+          "Вид ошибки",
           "Категория ошибки"
         ],
         "graph.metrics": [
           "Документов"
         ],
+        "stackable.stack_type": "stacked",
         "graph.show_values": true,
-        "series_settings": {
-          "Документов": {
-            "color": "#A989C5"
-          }
-        },
+        "graph.x_axis.title_text": "Документов",
+        "graph.y_axis.title_text": "Вид ошибки",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
@@ -456,83 +455,10 @@
           }
         }
       },
-      "sizeX": 12,
-      "sizeY": 7,
+      "sizeX": 24,
+      "sizeY": 9,
       "row": 11,
       "col": 0,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
-          "field_name": "Обработано IPS"
-        },
-        "jid": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "name": "Топ видов ошибок",
-      "description": "12 наиболее частых атомарных видов ошибки. Детальная матрица «тип СЭМД × вид» — ниже.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Вид ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
-          "template-tags": {
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fb040201-0201-4201-8201-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb040201-0201-4201-8201-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb040201-0201-4201-8201-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Вид ошибки"
-        ],
-        "graph.metrics": [
-          "Документов"
-        ],
-        "graph.show_values": true,
-        "series_settings": {
-          "Документов": {
-            "color": "#87BCEC"
-          }
-        },
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 11,
-      "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_rpt_error_category_breakdown_ui",
@@ -553,7 +479,7 @@
       "text": "## Успешность по срезам\nСортировка по возрастанию % успеха — проблемные клиники и типы СЭМД наверху. «Всего» включает все 4 статуса; % успеха — только среди финализированных.",
       "sizeX": 24,
       "sizeY": 1,
-      "row": 18,
+      "row": 20,
       "col": 0
     },
     {
@@ -689,7 +615,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 19,
+      "row": 21,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -822,7 +748,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 19,
+      "row": 21,
       "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
@@ -845,11 +771,11 @@
     },
     {
       "name": "Виды ошибок по типам СЭМД",
-      "description": "**Горизонтальный stacked-bar:** полоса — тип СЭМД (код · НСИ), цветные сегменты — атомарные **виды ошибки** из `v_rpt_error_category_breakdown_ui` (композитные `error_type` разбиты по «·»), длина сегмента — **доля от общего числа ошибок, %** = COUNT(DISTINCT «Документ (ключ учёта)») сегмента к суммарному числу пар «документ × вид ошибки» во всём срезе (после фильтров). Один документ с N видами попадает в N сегментов. Показаны **все** типы СЭМД с ошибками (по убыванию объёма), сумма долей по карточке = 100 %; список листается вертикальным скроллом. Сменил прежнюю широкую pivot-матрицу — без горизонтального скролла, проблемные типы и их структура читаются сверху вниз.",
+      "description": "**Горизонтальный stacked-bar:** полоса — тип СЭМД (код · НСИ), сегменты — атомарные **виды ошибки** (`v_rpt_error_category_breakdown_ui`, композитные `error_type` разбиты по «·»), длина сегмента — **доля от общего числа ошибок, %** = COUNT(DISTINCT «Документ (ключ учёта)») сегмента к суммарному числу пар «документ × вид ошибки» во всём срезе (после фильтров). Показаны **топ-15 типов СЭМД по объёму ошибок** (хвост типов с пренебрежимо малой долей скрыт ради читаемости), по убыванию объёма; один документ с N видами учитывается N раз.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS k, \"Документ (ключ учёта)\" AS doc FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), grand AS ( SELECT SUM(cnt) AS total FROM ( SELECT COUNT(DISTINCT doc) AS cnt FROM base GROUP BY t, k ) s ) SELECT b.t AS \"Тип СЭМД\", b.k AS \"Вид ошибки\", ROUND(100.0 * COUNT(DISTINCT b.doc) / NULLIF((SELECT total FROM grand), 0), 2)::numeric AS \"% ошибок\" FROM base b JOIN totals tt ON tt.t = b.t GROUP BY 1, 2, tt.total ORDER BY tt.total DESC, 1, 2",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS k, \"Документ (ключ учёта)\" AS doc FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), grand AS ( SELECT SUM(cnt) AS total FROM ( SELECT COUNT(DISTINCT doc) AS cnt FROM base GROUP BY t, k ) s ) SELECT b.t AS \"Тип СЭМД\", b.k AS \"Вид ошибки\", ROUND(100.0 * COUNT(DISTINCT b.doc) / NULLIF((SELECT total FROM grand), 0), 2)::numeric AS \"% ошибок\" FROM base b JOIN ranked r ON r.t = b.t WHERE r.rn <= 15 GROUP BY 1, 2, r.total, r.rn ORDER BY r.rn, 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -892,7 +818,7 @@
         "column_settings": {
           "[\"name\",\"% ошибок\"]": {
             "column_title": "% ошибок",
-            "decimals": 2,
+            "decimals": 1,
             "number_separators": ".",
             "suffix": " %"
           },
@@ -905,8 +831,8 @@
         }
       },
       "sizeX": 24,
-      "sizeY": 22,
-      "row": 27,
+      "sizeY": 13,
+      "row": 29,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -1032,7 +958,7 @@
       },
       "sizeX": 24,
       "sizeY": 9,
-      "row": 49,
+      "row": 42,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -1054,7 +980,7 @@
       "text": "## Ошибки связи (транспорт)\nСбой канала LOGSTATE=3, не текст отказа регистрации в XML. Период — **«Дата создания документа»** (`parse_created_filter`).",
       "sizeX": 24,
       "sizeY": 1,
-      "row": 58,
+      "row": 51,
       "col": 0
     },
     {
@@ -1116,7 +1042,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 59,
+      "row": 52,
       "col": 0,
       "metabase-field-filters": {
         "parse_created": {
@@ -1192,7 +1118,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 59,
+      "row": 52,
       "col": 12,
       "metabase-field-filters": {
         "parse_created": {
@@ -1261,7 +1187,7 @@
       },
       "sizeX": 24,
       "sizeY": 5,
-      "row": 65,
+      "row": 58,
       "col": 0,
       "metabase-field-filters": {
         "parse_created": {
@@ -1321,7 +1247,7 @@
       },
       "sizeX": 24,
       "sizeY": 8,
-      "row": 70,
+      "row": 63,
       "col": 0,
       "metabase-field-filters": {
         "parse_created": {
@@ -1343,7 +1269,7 @@
       "text": "## Доступность транспорта\nПрокси: успехи / (успехи + ошибки связи). Ось — календарный день (`connectivity_day_filter`).",
       "sizeX": 24,
       "sizeY": 1,
-      "row": 78,
+      "row": 71,
       "col": 0
     },
     {
@@ -1389,7 +1315,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 79,
+      "row": 72,
       "col": 0,
       "metabase-field-filters": {
         "connectivity_day": {
@@ -1430,7 +1356,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 79,
+      "row": 72,
       "col": 12,
       "metabase-field-filters": {
         "connectivity_day": {
@@ -1484,7 +1410,7 @@
       },
       "sizeX": 24,
       "sizeY": 8,
-      "row": 85,
+      "row": 78,
       "col": 0,
       "metabase-field-filters": {
         "connectivity_day": {

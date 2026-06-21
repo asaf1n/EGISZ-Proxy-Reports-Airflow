@@ -1,7 +1,7 @@
 {
   "name": "Оперативный мониторинг и динамика",
   "width": "full",
-  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck и детализация журнала — дашборд **02**. Тренды по **«День (тренд)»**; «Объём по часам» — окно 72 ч без общего фильтра дашборда.",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck, тренды и динамика сервиса (в т.ч. транзакции по дням) — дашборд **02**.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -640,7 +640,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 8,
+      "row": 16,
       "col": 0,
       "metabase-field-filters": {
         "top_clinic": {
@@ -765,14 +765,14 @@
             "number_separators": " "
           },
           "[\"name\",\"% ошибок\"]": {
-            "decimals": 2,
+            "decimals": 1,
             "suffix": " %"
           }
         }
       },
-      "sizeX": 16,
+      "sizeX": 24,
       "sizeY": 8,
-      "row": 16,
+      "row": 8,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -805,174 +805,6 @@
         },
         "log_id": {
           "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "LOGID журнала EXCHANGELOG"
-        }
-      }
-    },
-    {
-      "name": "Транзакции по дням и статусам",
-      "description": "Количество **СЭМД** (уникальных по **«Документ (ключ учёта)»**, не путать с **relatesToMessage**) по календарным дням: дата обработки IPS из EXCHANGELOG.CREATEDATE. Тот же фильтр периода, по оси «День (тренд)».",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT DATE(\"Дата обработки\") AS \"Дата\", \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1, 2 ORDER BY 1 ASC",
-          "template-tags": {
-            "top_clinic": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "01060000-0006-4006-8006-000000000011",
-              "name": "top_clinic",
-              "required": false,
-              "type": "dimension"
-            },
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «День (тренд)»",
-              "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. номер РЭМД (emdrid)",
-              "id": "01060000-0006-4006-8006-000000000014",
-              "name": "emdr_id",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "01060000-0006-4006-8006-000000000012",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID журнала EXCHANGELOG",
-              "id": "01060000-0006-4006-8006-000000000016",
-              "name": "log_id",
-              "required": false,
-              "type": "dimension"
-            },
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение (relatesToMessage)",
-              "id": "01060000-0006-4006-8006-000000000013",
-              "name": "relates_to",
-              "required": false,
-              "type": "dimension"
-            },
-            "status": {
-              "widget-type": "string/=",
-              "display-name": "Статус",
-              "id": "01060000-0006-4006-8006-000000000015",
-              "name": "status",
-              "required": false,
-              "type": "dimension"
-            },
-            "top_semd": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "01060000-0006-4006-8006-000000000010",
-              "name": "top_semd",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "bar",
-      "visualization_settings": {
-        "graph.show_values": true,
-        "table": {
-          "columns": {
-            "[\"name\",\"clinic_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"service_id\"]": {
-              "display_as": null
-            },
-            "[\"name\",\"transaction_id\"]": {
-              "display_as": null
-            }
-          }
-        },
-        "graph.x_axis.axis_enabled": "rotate-45",
-        "graph.metrics": [
-          "Документов"
-        ],
-        "column_settings": {
-          "[\"name\",\"Дата\"]": {
-            "column_title": "Дата"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Статус\"]": {
-            "column_title": "Статус"
-          }
-        },
-        "series_settings": {
-          "В обработке": {
-            "color": "#509EE3"
-          },
-          "Ошибка асинхронного ответа РЭМД": {
-            "color": "#A989C5"
-          },
-          "Ошибка связи": {
-            "color": "#F2994A"
-          },
-          "Успешно зарегистрирован": {
-            "color": "#84BB4C"
-          }
-        },
-        "graph.x_axis.scale": "timeseries",
-        "graph.dimensions": [
-          "Дата",
-          "Статус"
-        ],
-        "stackable.stack_type": "stacked"
-      },
-      "sizeX": 12,
-      "sizeY": 8,
-      "row": 8,
-      "col": 12,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "Дата обработки"
-        },
-        "top_semd": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "Код СЭМД"
-        },
-        "top_clinic": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "JID клиники"
-        },
-        "local_uid": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "localUid СЭМД"
-        },
-        "relates_to": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "Связанное сообщение"
-        },
-        "emdr_id": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "Рег. номер РЭМД"
-        },
-        "status": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
-          "field_name": "Статус"
-        },
-        "log_id": {
-          "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
@@ -1073,10 +905,10 @@
           }
         }
       },
-      "sizeX": 8,
+      "sizeX": 12,
       "sizeY": 8,
       "row": 16,
-      "col": 16,
+      "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_ui",

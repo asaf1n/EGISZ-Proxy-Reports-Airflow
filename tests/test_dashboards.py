@@ -146,7 +146,9 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
-    trend_card = next(card for card in dashboard["cards"] if card["name"] == "Транзакции по дням и статусам")
+    # Тренд «Транзакции по дням и статусам» относится к динамике сервиса — живёт в дашборде 02.
+    service = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    trend_card = next(card for card in service["cards"] if card["name"] == "Транзакции по дням и статусам")
     latest_query = latest_card["dataset_query"]["native"]["query"]
     query = card["dataset_query"]["native"]["query"]
     trend_query = trend_card["dataset_query"]["native"]["query"]
@@ -382,6 +384,40 @@ def test_error_analytics_use_raw_json_column_for_grouping() -> None:
     assert any("v_rpt_error_category_breakdown_ui" in query for query in queries)
     assert all("fact_egisz_transactions" not in query for query in queries)
     assert all("\"Ошибки JSON raw\"" not in query for query in queries)
+
+
+def test_quality_error_structure_section_is_single_category_colored_card() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    names = {c.get("name") for c in dashboard["cards"]}
+    # Прежняя пара карточек свёрнута в одну: виды ошибок, цвет сегмента — категория.
+    assert "Ошибки по категории" not in names
+    assert "Топ видов ошибок" not in names
+
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Виды ошибок по категориям")
+    query = card["dataset_query"]["native"]["query"]
+    viz = card["visualization_settings"]
+
+    assert card["display"] == "row"
+    assert card["sizeX"] == 24
+    assert "v_rpt_error_category_breakdown_ui" in query
+    assert "GROUP BY 1, 2" in query and "LIMIT 15" in query
+    assert viz["graph.dimensions"] == ["Вид ошибки", "Категория ошибки"]
+    assert viz["stackable.stack_type"] == "stacked"
+    # Цвет должен наследоваться от категории — фиксированного series-цвета быть не должно.
+    assert "series_settings" not in viz
+
+
+def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Виды ошибок по типам СЭМД")
+    query = card["dataset_query"]["native"]["query"]
+
+    assert card["display"] == "row"
+    # Хвост типов СЭМД с пренебрежимо малой долей ошибок отсекается top-15 по объёму.
+    assert "ROW_NUMBER() OVER (ORDER BY total DESC" in query
+    assert "WHERE r.rn <= 15" in query
+    # Знаменатель остаётся общим числом ошибок (доля честно «от всех»).
+    assert "(SELECT total FROM grand)" in query
 
 
 def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:

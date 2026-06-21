@@ -120,6 +120,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }
@@ -368,6 +369,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Зависших >72 ч, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }
@@ -406,6 +408,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Отказов РЭМД, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }
@@ -444,6 +447,7 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Ошибок связи, %\"]": {
+            "decimals": 1,
             "suffix": " %"
           }
         }
