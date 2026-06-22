@@ -1,7 +1,7 @@
 {
   "name": "Оперативный мониторинг и динамика",
   "width": "full",
-  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Сигналы healthcheck, тренды и динамика сервиса (в т.ч. транзакции по дням) — дашборд **02**.",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Детализация healthcheck, тренды и динамика сервиса (в т.ч. транзакции по дням) — дашборд **02**.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -306,7 +306,7 @@
             "column_title": "Рег. номер РЭМД (emdrid)"
           },
           "[\"name\",\"JID+Наименование\"]": {
-            "column_title": "JID+Наименование"
+            "column_title": "Клиника"
           },
           "[\"name\",\"localUid СЭМД\"]": {
             "column_title": "localUid СЭМД"
@@ -342,7 +342,7 @@
             "column_title": "ИНН клиники"
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника"
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "relatesToMessage (коррелятор XML, не UID СЭМД)"
@@ -491,32 +491,24 @@
         "graph.x_axis.axis_enabled": "rotate-45",
         "pie.rows": [
           {
-            "color": "#84BB4C",
-            "enabled": true,
             "key": "Успешно зарегистрирован",
             "name": "Успешно зарегистрирован",
-            "originalName": "Успешно зарегистрирован"
+            "color": "#88BF4D"
           },
           {
-            "color": "#A989C5",
-            "enabled": true,
             "key": "Ошибка асинхронного ответа РЭМД",
             "name": "Ошибка асинхронного ответа РЭМД",
-            "originalName": "Ошибка асинхронного ответа РЭМД"
+            "color": "#A989C5"
           },
           {
-            "color": "#F2994A",
-            "enabled": true,
             "key": "Ошибка связи",
             "name": "Ошибка связи",
-            "originalName": "Ошибка связи"
+            "color": "#F2994A"
           },
           {
-            "color": "#509EE3",
-            "enabled": true,
             "key": "В обработке",
             "name": "В обработке",
-            "originalName": "В обработке"
+            "color": "#509EE3"
           }
         ],
         "graph.metrics": [
@@ -676,14 +668,20 @@
         "column_settings": {
           "[\"name\",\"% ошибок\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": "."
           },
           "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника"
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Ошибок\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": "."
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
           }
         },
         "graph.metrics": [
@@ -855,7 +853,9 @@
         "table.pivot_column": "Документов",
         "column_settings": {
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
@@ -863,12 +863,13 @@
             "number_separators": "."
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника"
           },
           "[\"name\",\"%\"]": {
             "decimals": 1,
             "suffix": " %",
-            "column_title": "%"
+            "column_title": "%",
+            "number_separators": "."
           }
         },
         "graph.dimensions": [
@@ -964,7 +965,7 @@
           "[\"name\",\"Количество\"]": {
             "column_title": "Вхождений ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": "."
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
@@ -1102,12 +1103,13 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": "."
           },
           "[\"name\",\"%\"]": {
             "decimals": 1,
             "suffix": " %",
-            "column_title": "%"
+            "column_title": "%",
+            "number_separators": "."
           }
         },
         "version": 2
@@ -1257,7 +1259,8 @@
           "[\"name\",\"%\"]": {
             "decimals": 1,
             "suffix": " %",
-            "column_title": "%"
+            "column_title": "%",
+            "number_separators": "."
           }
         },
         "graph.dimensions": [
@@ -1443,13 +1446,16 @@
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок",
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": "."
           },
           "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки"
+            "column_title": "Сводка ошибки",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
+            "column_title": "Тип СЭМД"
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "СЭМД в срезе (все статусы)",
@@ -1457,16 +1463,24 @@
             "number_separators": "."
           },
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки"
+            "column_title": "Тип ошибки",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Исходный текст ошибки\"]": {
-            "column_title": "Исходный текст ошибки"
+            "column_title": "Исходный текст ошибки",
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },

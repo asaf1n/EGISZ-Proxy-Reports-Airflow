@@ -75,9 +75,10 @@
         "column_settings": {
           "[\"name\",\"СЭМД за период\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "СЭМД за период"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -95,12 +96,12 @@
       }
     },
     {
-      "name": "First-pass acceptance (по клинике), %",
+      "name": "Доля успеха с первой попытки (клиент), %",
       "description": "Доля успешно зарегистрированных СЭМД среди финализированных (success / (success + ошибки)). Качество интеграции клиники с РЭМД.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"First-pass acceptance, %\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -134,8 +135,14 @@
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
             "suffix": " %"
+          },
+          "[\"name\",\"Доля успеха с первой попытки (клиент), %\"]": {
+            "decimals": 1,
+            "suffix": " %",
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Доля успеха с первой попытки (клиент), %"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -190,9 +197,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Медиана доставки, мин\"]": {
-            "decimals": 1
+            "decimals": 0,
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Медиана доставки, мин"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -247,9 +256,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"ЭМД/сутки\"]": {
-            "decimals": 1
+            "decimals": 0,
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "ЭМД/сутки"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -317,7 +328,13 @@
         ],
         "graph.metrics": [
           "Документов"
-        ]
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -376,7 +393,18 @@
         "graph.metrics": [
           "% успеха"
         ],
-        "graph.show_values": true
+        "graph.show_values": true,
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {
+            "decimals": 1,
+            "suffix": " %",
+            "number_separators": "."
+          },
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -435,7 +463,17 @@
         "graph.metrics": [
           "Доставка, мин"
         ],
-        "graph.show_values": true
+        "graph.show_values": true,
+        "column_settings": {
+          "[\"name\",\"Доставка, мин\"]": {
+            "decimals": 1,
+            "number_separators": "."
+          },
+          "[\"name\",\"Документов с метрикой\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 24,
       "sizeY": 6,
@@ -487,7 +525,22 @@
         "database": 1
       },
       "display": "table",
-      "visualization_settings": {},
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Пациент\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Врач\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Текст ошибки\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
+      },
       "sizeX": 24,
       "sizeY": 7,
       "row": 18,
@@ -550,9 +603,10 @@
         "column_settings": {
           "[\"name\",\"Пациентов\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Пациентов"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -608,9 +662,10 @@
         "column_settings": {
           "[\"name\",\"Врачей\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Врачей"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -633,7 +688,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 2) AS \"ЭМД/пациент\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 1) AS \"ЭМД/пациент\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "widget-type": "string/=",
@@ -665,9 +720,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"ЭМД/пациент\"]": {
-            "decimals": 2
+            "decimals": 0,
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "ЭМД/пациент"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -726,7 +783,17 @@
         "graph.metrics": [
           "Пациентов"
         ],
-        "graph.show_values": true
+        "graph.show_values": true,
+        "column_settings": {
+          "[\"name\",\"Документов на пациента\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Пациентов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -782,15 +849,20 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           },
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "suffix": "%"
+            "suffix": " %",
+            "number_separators": "."
           },
           "[\"name\",\"Уникальных пациентов\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
+          },
+          "[\"name\",\"Врач\"]": {
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },

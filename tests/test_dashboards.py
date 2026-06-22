@@ -27,7 +27,7 @@ def test_all_dashboards_default_to_full_width() -> None:
 
 def test_service_network_top_groups_by_typed_label() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c["name"] == "Топ сетевых формулировок")
+    card = next(c for c in dashboard["cards"] if c["name"] == "Типы сетевых ошибок (за период)")
     query = card["dataset_query"]["native"]["query"]
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
@@ -40,7 +40,7 @@ def test_quality_network_top_groups_by_typed_label() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     card = next(
         c for c in dashboard["cards"]
-        if c.get("name") == "Топ формулировок сетевых ошибок"
+        if c.get("name") == "Типы сетевых ошибок (все дни)"
     )
     query = card["dataset_query"]["native"]["query"]
 
@@ -122,7 +122,7 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
 
 def test_service_async_vs_network_pie_uses_canonical_status_colors() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c["name"] == "async vs network")
+    card = next(c for c in dashboard["cards"] if c["name"] == "Отказы: асинхронный ответ vs связь")
     query = card["dataset_query"]["native"]["query"]
     assert 'SELECT "Статус"' in query
     assert '"Статус" AS "Тип"' not in query
@@ -131,12 +131,13 @@ def test_service_async_vs_network_pie_uses_canonical_status_colors() -> None:
     assert colors["Ошибка асинхронного ответа РЭМД"] == "#A989C5"
     assert colors["Ошибка связи"] == "#F2994A"
     assert card["visualization_settings"]["pie.dimension"] == ["Статус"]
+    assert card["visualization_settings"]["pie.metric"] == "Документов"
 
 
 def test_service_healthcheck_pie_matches_signals_table_scope() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    pie = next(c for c in dashboard["cards"] if c["name"] == "Healthcheck")
-    table = next(c for c in dashboard["cards"] if c["name"] == "Сигналы healthcheck")
+    pie = next(c for c in dashboard["cards"] if c["name"] == "Статус healthcheck")
+    table = next(c for c in dashboard["cards"] if c["name"] == "Детализация healthcheck")
     scope = "\"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h')"
     assert scope in pie["dataset_query"]["native"]["query"]
     assert scope in table["dataset_query"]["native"]["query"]

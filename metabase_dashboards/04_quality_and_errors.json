@@ -89,7 +89,8 @@
             "decimals": 0,
             "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Документов с ошибкой"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -151,74 +152,13 @@
             "number_separators": ".",
             "suffix": " %"
           }
-        }
+        },
+        "scalar.field": "Доля ошибок, %"
       },
       "sizeX": 6,
       "sizeY": 3,
       "row": 1,
       "col": 6,
-      "metabase-field-filters": {
-        "dwh_date": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
-        },
-        "jid": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "name": "% успеха",
-      "description": "Доля успешно зарегистрированных среди финализированных.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]",
-          "template-tags": {
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fb040103-0103-4103-8103-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb040103-0103-4103-8103-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb040103-0103-4103-8103-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"% успеха\"]": {
-            "decimals": 1,
-            "number_separators": ".",
-            "suffix": " %"
-          }
-        }
-      },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 1,
-      "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -274,12 +214,13 @@
             "decimals": 0,
             "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Клиник с ошибками"
       },
-      "sizeX": 6,
+      "sizeX": 12,
       "sizeY": 3,
       "row": 1,
-      "col": 18,
+      "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -297,19 +238,19 @@
     },
     {
       "display": "text",
-      "text": "## Heatmap клиники × дни (доля ошибок)\nДоля ошибок (%) по парам клиника × календарный день («Обработано IPS»). Красные ячейки — проблемные дни клиник.",
+      "text": "## Тепловая карта: клиника × день\nДоля ошибок (%) по парам клиника × календарный день («Обработано IPS»). Красные ячейки — проблемные дни клиник.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 4,
       "col": 0
     },
     {
-      "name": "Heatmap клиники × дни (доля ошибок)",
+      "name": "Тепловая карта: клиника × день",
       "description": "Тепловая карта по колбэкам: календарный день из **Обработано IPS**, клиника, доля ошибок (%). Учёт документов — COUNT(DISTINCT «Документ (ключ учёта)»), как в эталоне «Итоги по ошибкам». Фильтры дашборда: период **«Обработано IPS»**, **JID клиники**, **Тип СЭМД**; без выбранного периода даты в SQL не режутся.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', \"Дата обработки\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) AS err FROM public.v_rpt_documents_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 2) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', \"Дата обработки\")::date AS day, COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), 'JID ' || \"JID клиники\"::text) AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) AS err FROM public.v_rpt_documents_ui WHERE NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -365,7 +306,21 @@
           }
         ],
         "table.pivot": true,
-        "table.pivot_column": "День"
+        "table.pivot_column": "День",
+        "column_settings": {
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"Доля ошибок, %\"]": {
+            "decimals": 1,
+            "suffix": " %",
+            "number_separators": "."
+          },
+          "[\"name\",\"Клиника\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 24,
       "sizeY": 5,
@@ -444,6 +399,14 @@
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
             "number_separators": "."
+          },
+          "[\"name\",\"Вид ошибки\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Категория ошибки\"]": {
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -480,7 +443,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), 'Неизвестно') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), 'Неизвестно') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='async_error')::bigint AS \"Ошибок асинхронного ответа\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='network_error')::bigint AS \"Ошибок связи (транспорт)\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='waiting')::bigint AS \"В обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 8 ASC NULLS LAST, 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), 'Неизвестно') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), 'Неизвестно') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='async_error')::bigint AS \"Ошибок асинхронного ответа\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='network_error')::bigint AS \"Ошибок связи (транспорт)\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='waiting')::bigint AS \"В обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 8 ASC NULLS LAST, 3 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -553,10 +516,14 @@
         "table.cell_column": "Всего документов",
         "column_settings": {
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Всего документов\"]": {
             "column_title": "Всего документов",
@@ -584,6 +551,11 @@
             "number_separators": "."
           },
           "[\"name\",\"Процент успешных (по документам)\"]": {
+            "column_title": "% успеха",
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Процент успешных\"]": {
             "column_title": "% успеха"
           }
         },
@@ -634,7 +606,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего отправлено\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 2) AS \"Процент успешных\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 4 ASC, 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS \"Тип СЭМД (код · НСИ)\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего отправлено\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Процент успешных\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 4 ASC, 2 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -699,7 +671,7 @@
         ],
         "column_settings": {
           "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
+            "column_title": "Тип СЭМД"
           },
           "[\"name\",\"Всего отправлено\"]": {
             "column_title": "Всего отправлено",
@@ -717,7 +689,9 @@
             "number_separators": "."
           },
           "[\"name\",\"Процент успешных\"]": {
-            "column_title": "%"
+            "column_title": "% успеха",
+            "decimals": 0,
+            "number_separators": "."
           }
         },
         "table.column_formatting": [
@@ -767,7 +741,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS k, \"Документ (ключ учёта)\" AS doc FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), grand AS ( SELECT SUM(cnt) AS total FROM ( SELECT COUNT(DISTINCT doc) AS cnt FROM base GROUP BY t, k ) s ) SELECT b.t AS \"Тип СЭМД\", b.k AS \"Вид ошибки\", ROUND(100.0 * COUNT(DISTINCT b.doc) / NULLIF((SELECT total FROM grand), 0), 2)::numeric AS \"% ошибок\" FROM base b JOIN ranked r ON r.t = b.t WHERE r.rn <= 15 GROUP BY 1, 2, r.total, r.rn ORDER BY r.rn, 1, 2",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS k, \"Документ (ключ учёта)\" AS doc FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), grand AS ( SELECT SUM(cnt) AS total FROM ( SELECT COUNT(DISTINCT doc) AS cnt FROM base GROUP BY t, k ) s ) SELECT b.t AS \"Тип СЭМД\", b.k AS \"Вид ошибки\", ROUND(100.0 * COUNT(DISTINCT b.doc) / NULLIF((SELECT total FROM grand), 0), 1)::numeric AS \"% ошибок\" FROM base b JOIN ranked r ON r.t = b.t WHERE r.rn <= 15 GROUP BY 1, 2, r.total, r.rn ORDER BY r.rn, 1, 2",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -818,7 +792,12 @@
             "column_title": "Тип СЭМД"
           },
           "[\"name\",\"Вид ошибки\"]": {
-            "column_title": "Вид ошибки"
+            "column_title": "Вид ошибки",
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД"
           }
         }
       },
@@ -905,13 +884,17 @@
         ],
         "column_settings": {
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника"
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД (код · НСИ)"
+            "column_title": "Тип СЭМД"
           },
           "[\"name\",\"Всего\"]": {
             "column_title": "Всего",
@@ -928,6 +911,9 @@
             "decimals": 1,
             "number_separators": ".",
             "suffix": " %"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
           }
         },
         "table.column_formatting": [
@@ -976,7 +962,7 @@
       "col": 0
     },
     {
-      "name": "Топ клиник по ошибкам связи",
+      "name": "Топ клиник по сбоям транспорта",
       "description": "Сбой доставки/транспорта (LOGSTATE=3), не содержимое ответа РЭМД. **Клиника (транспорт)** — связанный колбэк в аналитике либо МО по числовому JID из `gost-…` в журнале. Без фильтра по дате — весь доступный период.",
       "dataset_query": {
         "type": "native",
@@ -1017,7 +1003,9 @@
         },
         "column_settings": {
           "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника"
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Количество\"]": {
             "decimals": 0,
@@ -1041,7 +1029,7 @@
       }
     },
     {
-      "name": "Топ формулировок сетевых ошибок",
+      "name": "Типы сетевых ошибок (все дни)",
       "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности — **COUNT(DISTINCT «Документ (ключ учёта)»)**. Без фильтра по дате — весь доступный период.",
       "dataset_query": {
         "type": "native",
@@ -1086,7 +1074,9 @@
             "number_separators": "."
           },
           "[\"name\",\"Тип сетевой ошибки\"]": {
-            "column_title": "Тип сетевой ошибки"
+            "column_title": "Тип сетевой ошибки",
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -1146,7 +1136,9 @@
         },
         "graph.metrics": [
           "Документов с ошибкой связи"
-        ]
+        ],
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Ошибок"
       },
       "sizeX": 24,
       "sizeY": 5,
@@ -1194,6 +1186,9 @@
         "column_settings": {
           "[\"name\",\"Сеть (фрагмент)\"]": {
             "column_title": "Сеть (фрагмент)"
+          },
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД"
           }
         }
       },
@@ -1259,7 +1254,9 @@
         "graph.metrics": [
           "Успешные ответы РЭМД (документов)",
           "Ошибки связи (документов)"
-        ]
+        ],
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Попыток"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -1300,7 +1297,16 @@
         "graph.x_axis.scale": "timeseries",
         "graph.metrics": [
           "Доступность транспорта (прибл.), %"
-        ]
+        ],
+        "column_settings": {
+          "[\"name\",\"Доступность транспорта (прибл.), %\"]": {
+            "decimals": 1,
+            "suffix": " %",
+            "number_separators": "."
+          }
+        },
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Доля доступности, %"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -1314,7 +1320,7 @@
       }
     },
     {
-      "name": "Доступность по клиникам (день × JID)",
+      "name": "Доступность транспорта: день × JID",
       "description": "Сводка ответов РЭМД и ошибок связи по JID и дню. Ключ JID для сети: колбэк или gost из журнала. Фильтр — `connectivity_day_filter` и **JID клиники**.",
       "dataset_query": {
         "type": "native",
@@ -1353,6 +1359,9 @@
           "[\"name\",\"Ошибки связи (документов)\"]": {
             "decimals": 0,
             "number_separators": "."
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
           }
         }
       },

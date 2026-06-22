@@ -138,7 +138,8 @@
             "decimals": 0,
             "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Документов"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -273,7 +274,8 @@
         "graph.dimensions": [
           "СЭМД",
           "Документов"
-        ]
+        ],
+        "pie.decimal_places": 1
       },
       "sizeX": 9,
       "sizeY": 6,
@@ -401,13 +403,19 @@
             "number_separators": "."
           },
           "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника",
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
           }
         },
         "graph.dimensions": [
           "Клиника",
           "Документов"
-        ]
+        ],
+        "pie.decimal_places": 1
       },
       "sizeX": 9,
       "sizeY": 6,
@@ -524,7 +532,8 @@
             "decimals": 0,
             "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Клиник"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -891,7 +900,7 @@
             "column_title": "JID клиники"
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника"
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "relatesToMessage (коррелятор XML)"

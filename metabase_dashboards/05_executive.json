@@ -44,9 +44,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Успешных СЭМД\"]": {
-            "number_separators": " "
+            "number_separators": ".",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "Успешных СЭМД"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -82,9 +84,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Документов\"]": {
-            "number_separators": " "
+            "number_separators": ".",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "Документов"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -98,12 +102,12 @@
       }
     },
     {
-      "name": "First-pass acceptance, %",
+      "name": "Доля успеха с первой попытки, %",
       "description": "Сквозная конверсия: success / ВСЕ документы (включая «в обработке»). Честная цифра доставки, в отличие от доли успеха только среди финализированных.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"First-pass acceptance, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Доля успеха с первой попытки, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -122,8 +126,14 @@
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
             "suffix": " %"
+          },
+          "[\"name\",\"Доля успеха с первой попытки, %\"]": {
+            "decimals": 1,
+            "suffix": " %",
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Доля успеха с первой попытки, %"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -145,7 +155,7 @@
       "col": 0
     },
     {
-      "name": "MRR (trailing-30d), ₽",
+      "name": "MRR (30 дн.), ₽",
       "description": "MRR = COUNT(DISTINCT JID, активного за последние 30 дней) × 10 000 ₽. Trailing-30d вместо календарного месяца — устраняет обнуление счётчика 1-го числа.",
       "dataset_query": {
         "type": "native",
@@ -160,9 +170,11 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "MRR, ₽"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -170,7 +182,7 @@
       "col": 0
     },
     {
-      "name": "ARR (MRR × 12), ₽",
+      "name": "ARR (год.), ₽",
       "description": "ARR = MRR (trailing-30d) × 12. Годовая выручка при сохранении текущей активной базы JID.",
       "dataset_query": {
         "type": "native",
@@ -185,9 +197,11 @@
         "column_settings": {
           "[\"name\",\"ARR, ₽\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "ARR, ₽"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -209,9 +223,11 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Активных JID\"]": {
-            "number_separators": " "
+            "number_separators": ".",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "Активных JID"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -234,9 +250,11 @@
         "column_settings": {
           "[\"name\",\"₽ за успешный СЭМД\"]": {
             "suffix": " ₽",
-            "decimals": 1
+            "decimals": 0,
+            "number_separators": " "
           }
-        }
+        },
+        "scalar.field": "₽ за успешный СЭМД"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -252,7 +270,7 @@
       "col": 0
     },
     {
-      "name": "Динамика MRR (trailing-30d), ₽",
+      "name": "Динамика MRR (30 дн.), ₽",
       "description": "MRR на конец каждого дня: COUNT(DISTINCT JID с активностью за предыдущие 30 дней) × 10 000 ₽. Trailing-30d, не календарный месяц.",
       "dataset_query": {
         "type": "native",
@@ -278,7 +296,8 @@
           },
           "[\"name\",\"MRR, ₽\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           }
         },
         "series_settings": {
@@ -288,7 +307,9 @@
             "line.size": "M",
             "line.style": "solid"
           }
-        }
+        },
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "MRR, ₽"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -296,7 +317,7 @@
       "col": 0
     },
     {
-      "name": "Динамика активных JID (trailing-30d)",
+      "name": "Динамика активных JID (30 дн.)",
       "description": "COUNT(DISTINCT JID) с хотя бы одним документом за предыдущие 30 дней на конец каждого дня. Драйвер MRR при плоском тарифе.",
       "dataset_query": {
         "type": "native",
@@ -321,7 +342,8 @@
             "column_title": "Дата"
           },
           "[\"name\",\"Активных JID\"]": {
-            "number_separators": " "
+            "number_separators": ".",
+            "decimals": 0
           }
         },
         "series_settings": {
@@ -331,7 +353,9 @@
             "line.size": "M",
             "line.style": "solid"
           }
-        }
+        },
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Активных JID"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -370,9 +394,11 @@
         "column_settings": {
           "[\"name\",\"Зависших >72 ч, %\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Зависших >72 ч, %"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -409,9 +435,11 @@
         "column_settings": {
           "[\"name\",\"Отказов РЭМД, %\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Отказов РЭМД, %"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -448,9 +476,11 @@
         "column_settings": {
           "[\"name\",\"Ошибок связи, %\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Ошибок связи, %"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -495,10 +525,21 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           },
           "[\"name\",\"₽ за успешный СЭМД\"]": {
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0,
+            "number_separators": " "
+          },
+          "[\"name\",\"Клиник\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Успешных СЭМД\"]": {
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -537,9 +578,11 @@
         "column_settings": {
           "[\"name\",\"₽ под риском\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "₽ под риском"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -576,9 +619,11 @@
         "column_settings": {
           "[\"name\",\"₽ под риском (затык)\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
           }
-        }
+        },
+        "scalar.field": "₽ под риском (затык)"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -614,9 +659,12 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"Клиник без успеха\"]": {
-            "number_separators": " "
+            "number_separators": ".",
+            "decimals": 1,
+            "suffix": " %"
           }
-        }
+        },
+        "scalar.field": "Клиник без успеха"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -653,7 +701,23 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "number_separators": " ",
-            "suffix": " ₽"
+            "suffix": " ₽",
+            "decimals": 0
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"JID\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Клиника\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Попыток\"]": {
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },
@@ -670,7 +734,7 @@
     },
     {
       "display": "text",
-      "text": "## Помесячная динамика (появится после накопления данных)\nMRR Waterfall (New + Reactivated − Churned), NRR и Logo retention требуют ≥2 закрытых календарных месяцев. Дневные графики MRR/ARR/активных JID выше уже доступны; помесячные когортные метрики включаются, когда накопится второй закрытый месяц.",
+      "text": "## Помесячная динамика (после накопления данных)\nMRR Waterfall, NRR и Logo retention — при ≥2 закрытых месяцах. Дневные графики MRR и активных JID выше уже доступны.",
       "sizeX": 24,
       "sizeY": 2,
       "row": 38,

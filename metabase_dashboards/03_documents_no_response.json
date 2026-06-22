@@ -106,7 +106,7 @@
             "column_title": "Наименование СЭМД"
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника"
           },
           "[\"name\",\"Отправлено\"]": {
             "column_title": "Отправлено",
@@ -206,7 +206,9 @@
         },
         "column_settings": {
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
@@ -214,7 +216,7 @@
             "number_separators": "."
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Наименование клиники"
+            "column_title": "Клиника"
           }
         },
         "graph.metrics": [
@@ -502,13 +504,26 @@
         },
         "column_settings": {
           "[\"name\",\"JID клиники\"]": {
-            "column_title": "JID клиники"
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": "."
           },
           "[\"name\",\"Отправлено\"]": {
             "column_title": "Отправлено",
             "date_abbreviate": true,
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"ИД документа\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Клиника\"]": {
+            "decimals": 0,
+            "number_separators": "."
           }
         }
       },

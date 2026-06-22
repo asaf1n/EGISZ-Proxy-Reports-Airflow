@@ -75,9 +75,10 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           }
-        }
+        },
+        "scalar.field": "Документов"
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -129,7 +130,15 @@
         "database": 1
       },
       "display": "scalar",
-      "visualization_settings": {},
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "scalar.field": "Успешно"
+      },
       "sizeX": 6,
       "sizeY": 3,
       "row": 1,
@@ -180,7 +189,15 @@
         "database": 1
       },
       "display": "scalar",
-      "visualization_settings": {},
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "scalar.field": "Ошибка асинхронного ответа РЭМД"
+      },
       "sizeX": 6,
       "sizeY": 3,
       "row": 1,
@@ -231,7 +248,15 @@
         "database": 1
       },
       "display": "scalar",
-      "visualization_settings": {},
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Ошибка связи\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "scalar.field": "Ошибка связи"
+      },
       "sizeX": 6,
       "sizeY": 3,
       "row": 1,
@@ -305,7 +330,15 @@
           "В обработке": {
             "color": "#509EE3"
           }
-        }
+        },
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Документов"
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -361,7 +394,18 @@
         "pie.percent_visibility": "inside",
         "pie.show_legend": true,
         "pie.show_total": true,
-        "pie.slice_threshold": 0
+        "pie.slice_threshold": 0,
+        "pie.decimal_places": 1,
+        "column_settings": {
+          "[\"name\",\"Тип документа\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -413,7 +457,15 @@
         "database": 1
       },
       "display": "scalar",
-      "visualization_settings": {},
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Среднее время доставки\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "scalar.field": "Среднее время доставки"
+      },
       "sizeX": 8,
       "sizeY": 4,
       "row": 11,
@@ -468,11 +520,12 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": ". "
+            "number_separators": "."
           },
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "suffix": "%"
+            "suffix": " %",
+            "number_separators": "."
           }
         }
       },
