@@ -256,7 +256,7 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
 def test_archive_top_semd_uses_same_document_universe_as_total() -> None:
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
     total = next(card for card in dashboard["cards"] if card["name"] == "Всего документов")
-    top = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
+    top = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД (архив)")
     clinic = next(card for card in dashboard["cards"] if card["name"] == "Топ по клинике")
     assert "NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL" not in top["dataset_query"]["native"]["query"]
     assert '"СЭМД (архив)"' in top["dataset_query"]["native"]["query"]
@@ -322,7 +322,7 @@ def test_error_interpretations_view_uses_canonical_labels() -> None:
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
-    card = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
+    card = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД (архив)")
     query = card["dataset_query"]["native"]["query"]
 
     assert '"СЭМД (архив)"' in sql
