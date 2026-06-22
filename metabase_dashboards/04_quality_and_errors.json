@@ -405,7 +405,7 @@
     },
     {
       "name": "Виды ошибок по категориям",
-      "description": "Атомарные **виды ошибки** (`error_type`), цвет сегмента — **категория** (`egisz_error_category`). Топ-15 видов по числу документов; метрика — COUNT(DISTINCT «Документ (ключ учёта)»). Объединяет прежние карточки «по категории» и «по виду»: и конкретный вид, и его класс читаются в одной полосе.",
+      "description": "Атомарные **виды ошибки** (`error_type`), цвет сегмента — **категория** (`egisz_error_category`). Топ-15 видов по числу документов; метрика — COUNT(DISTINCT «Документ (ключ учёта)»). Один документ с несколькими видами учитывается в каждом сегменте.",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -443,8 +443,8 @@
           "Категория ошибки"
         ],
         "graph.show_values": true,
-        "graph.x_axis.title_text": "Документов",
-        "graph.y_axis.title_text": "Вид ошибки",
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.title_text": "",
         "stackable.stack_type": "stacked",
         "graph.label_value_formatting": "compact",
         "column_settings": {
@@ -516,8 +516,8 @@
           "Вид ошибки"
         ],
         "graph.show_values": true,
-        "graph.x_axis.title_text": "Код СЭМД",
-        "graph.y_axis.title_text": "Доля, %",
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.title_text": "",
         "graph.x_axis.axis_enabled": "rotate-45",
         "stackable.stack_type": "normalized",
         "column_settings": {
@@ -1062,6 +1062,200 @@
         "semd_type": {
           "table_ref": "public.v_rpt_error_category_breakdown_ui",
           "field_name": "Код СЭМД"
+        }
+      }
+    },
+    {
+      "name": "% Ошибок за период",
+      "description": "Доля отказов РЭМД по срезам **клиника × тип СЭМД × атомарный вид ошибки** (из `v_rpt_error_category_breakdown_ui`, без составной «Сводки ошибки»). Учёт — COUNT(DISTINCT «Документ (ключ учёта)»).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), slices AS ( SELECT f.\"Тип СЭМД (код · НСИ)\", f.\"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(f.\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", f.\"Документ (ключ учёта)\", f.\"Статус (код)\", COALESCE(NULLIF(TRIM(b.\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_kind FROM filtered f INNER JOIN public.v_rpt_error_category_breakdown_ui b ON b.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\", \"Наименование клиники\", err_kind AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Доля ошибок\" FROM slices GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "f9000004-0004-4004-8004-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f9000004-0004-4004-8004-000000000001",
+              "name": "dwh_date",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. номер РЭМД (emdrid)",
+              "id": "f9000004-0004-4004-8004-000000000014",
+              "name": "emdr_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f9000004-0004-4004-8004-000000000012",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID журнала EXCHANGELOG",
+              "id": "f9000004-0004-4004-8004-000000000016",
+              "name": "log_id",
+              "required": false,
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение (relatesToMessage)",
+              "id": "f9000004-0004-4004-8004-000000000013",
+              "name": "relates_to",
+              "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f9000004-0004-4004-8004-000000000015",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f9000004-0004-4004-8004-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table": {
+          "columns": [
+            {
+              "enabled": false,
+              "name": "Связанное сообщение"
+            }
+          ]
+        },
+        "table.cell_column": "Документов",
+        "table.column_widths": [
+          null,
+          null,
+          288
+        ],
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Ошибок"
+          },
+          {
+            "enabled": true,
+            "name": "Доля ошибок"
+          },
+          {
+            "enabled": true,
+            "name": "Тип ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование клиники"
+          },
+          {
+            "enabled": true,
+            "name": "Тип СЭМД (код · НСИ)"
+          },
+          {
+            "enabled": true,
+            "name": "JID клиники"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
+          }
+        ],
+        "table.pivot_column": "Доля ошибок",
+        "column_settings": {
+          "[\"name\",\"Ошибок\"]": {
+            "column_title": "Ошибок",
+            "decimals": 0,
+            "number_separators": " "
+          },
+          "[\"name\",\"Доля ошибок\"]": {
+            "column_title": "% ошибок",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
+            "column_title": "Тип СЭМД"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "СЭМД в срезе (все статусы)",
+            "decimals": 0,
+            "number_separators": " "
+          },
+          "[\"name\",\"JID клиники\"]": {
+            "column_title": "JID клиники",
+            "decimals": 0,
+            "number_separators": " "
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 12,
+      "row": 33,
+      "col": 0,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
+        },
+        "semd_type": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Код СЭМД"
+        },
+        "jid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "JID клиники"
+        },
+        "local_uid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "localUid СЭМД"
+        },
+        "relates_to": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Связанное сообщение"
+        },
+        "emdr_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Рег. номер РЭМД"
+        },
+        "status": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Статус"
+        },
+        "log_id": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "LOGID журнала EXCHANGELOG"
         }
       }
     }

@@ -394,6 +394,10 @@
           "[\"name\",\"Тип документа\"]": {
             "decimals": 0,
             "number_separators": " "
+          },
+          "[\"name\",\"_percentage\"]": {
+            "number_separators": ", ",
+            "decimals": 1
           }
         },
         "graph.dimensions": [
@@ -507,7 +511,7 @@
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Документов\"]": {

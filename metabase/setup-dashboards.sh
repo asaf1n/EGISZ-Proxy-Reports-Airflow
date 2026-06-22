@@ -415,9 +415,18 @@ card_query_fingerprint() {
   }'
 }
 
+card_dimension_tags_ready() {
+  jq -e '
+    def tags:
+      (.dataset_query.native."template-tags" // .dataset_query.stages[0]."template-tags" // {});
+    ([tags | to_entries[]? | select(.value.type == "dimension")] | length == 0)
+    or ([tags | to_entries[]? | select(.value.type == "dimension" and .value.dimension == null)] | length == 0)
+  '
+}
+
 create_or_update_card() {
   local file="$1"
-  local payload card_id card_name existing_fp new_fp
+  local payload card_id card_name existing_fp new_fp existing_card
   payload="$(
     dashboard_payload "${file}" |
       jq '{
@@ -434,10 +443,27 @@ create_or_update_card() {
   new_fp="$(printf '%s' "${payload}" | card_query_fingerprint)"
   card_id="$(existing_card_id "${card_name}")"
   if [ -n "${card_id}" ]; then
-    existing_fp="$(api_request GET "/api/card/${card_id}" | card_query_fingerprint)"
+    existing_card="$(api_request GET "/api/card/${card_id}")"
+    existing_fp="$(printf '%s' "${existing_card}" | card_query_fingerprint)"
     if [ "${existing_fp}" = "${new_fp}" ]; then
-      # Карточка с тем же именем переиспользуется несколькими дашбордами — обновляем
-      # visualization_settings на месте (например форматирование чисел), не архивируя.
+      if [ "${METABASE_FORCE_PROVISION}" = "always" ] \
+        || [ "${METABASE_FORCE_PROVISION}" = "force" ] \
+        || [ "${METABASE_FORCE_PROVISION}" = "true" ]; then
+        log_info "Force refresh collection card: ${card_name}"
+        api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+        printf '%s\n' "${card_id}"
+        return 0
+      fi
+      if printf '%s' "${existing_card}" | card_dimension_tags_ready >/dev/null \
+        && printf '%s' "${payload}" | card_dimension_tags_ready >/dev/null; then
+        # Shared cards: refresh only visualization_settings. A later dashboard JSON may omit
+        # metabase-field-filters while reusing the same SQL; rewriting dataset_query would
+        # drop Metabase field-id bindings and break dashboard filters.
+        api_request PUT "/api/card/${card_id}" "$(printf '%s' "${payload}" | jq '{visualization_settings}')" >/dev/null
+        printf '%s\n' "${card_id}"
+        return 0
+      fi
+      log_info "Rebinding field filters for shared card: ${card_name}"
       api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
       printf '%s\n' "${card_id}"
       return 0
@@ -524,18 +550,28 @@ create_or_update_dashboard() {
         viz_settings="{}"
         mappings="$(
           jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" '
+            def param_base($slug):
+              if (($slug // "") | endswith("_filter")) then
+                ($slug | sub("_filter$"; ""))
+              else
+                ($slug // "")
+              end;
+
+            # Shared collection cards use semantic jid / semd_type template-tags.
+            def tag_candidates($base):
+              [$base];
+
+            def resolve_tag($slug; $tagKeys):
+              tag_candidates(param_base($slug))
+              | map(select(. as $t | ($tagKeys | index($t)) != null))
+              | .[0] // empty;
+
             (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
             | ($tags | keys) as $tagKeys
             | [
                 $dashParams[] as $param
-                | (
-                    if (($param.slug // "") | endswith("_filter")) then
-                      ($param.slug | sub("_filter$"; ""))
-                    else
-                      ($param.slug // "")
-                    end
-                  ) as $tagName
-                | select(($tagKeys | index($tagName)) != null)
+                | resolve_tag($param.slug; $tagKeys) as $tagName
+                | select($tagName != null and $tagName != "")
                 | ($tags[$tagName].type // "") as $tagType
                 | {
                     parameter_id: $param.id,

@@ -35,52 +35,75 @@ def fix_card(card: dict) -> list[str]:
     name = card.get("name", "(text)")
     viz = card.setdefault("visualization_settings", {})
     cs = viz.get("column_settings")
-    if not cs:
-        return changes
 
-    if name == "Среднее время доставки" and card.get("display") == "scalar":
+    if name == "Среднее время доставки" and card.get("display") == "scalar" and cs:
         key = '["name","Среднее время доставки"]'
         if key in cs:
             cs[key] = {}
             changes.append(f"{name}: removed numeric formatting from text scalar")
 
     if name == "Клиник без единого успеха":
+        cs = viz.setdefault("column_settings", {})
         key = '["name","Клиник без успеха"]'
         cs[key] = {"decimals": 0, "number_separators": " "}
         changes.append(f"{name}: fixed count formatting (was wrongly shown as percent)")
 
-    for key, settings in list(cs.items()):
-        if not isinstance(settings, dict):
-            continue
+    cs = viz.get("column_settings")
+    if cs:
+        for key, settings in list(cs.items()):
+            if not isinstance(settings, dict):
+                continue
 
-        if settings.get("number_separators") == ".":
-            settings["number_separators"] = " "
-            changes.append(f"{name}: space thousands separator")
+            if settings.get("suffix") == " %" and settings.get("decimals", 0) >= 1:
+                if settings.get("number_separators") != ", ":
+                    settings["number_separators"] = ", "
+                    changes.append(f"{name}: comma decimal separator for percent")
+            elif settings.get("number_separators") == ".":
+                settings["number_separators"] = " "
+                changes.append(f"{name}: space thousands separator")
+            elif "decimals" in settings and "number_separators" not in settings:
+                settings["number_separators"] = " "
+                changes.append(f"{name}: added space thousands separator")
 
-        if "decimals" in settings and "number_separators" not in settings:
-            settings["number_separators"] = " "
-            changes.append(f"{name}: added space thousands separator")
+            if name == "ЭМД/пациент" and key.endswith('ЭМД/пациент"]'):
+                if settings.get("decimals") == 0:
+                    settings["decimals"] = 1
+                    changes.append(f"{name}: decimals 0 -> 1")
 
-        if name == "ЭМД/пациент" and key.endswith('ЭМД/пациент"]'):
-            if settings.get("decimals") == 0:
-                settings["decimals"] = 1
-                changes.append(f"{name}: decimals 0 -> 1")
+            if name == "ЭМД в сутки (среднее по периоду)" and key.endswith('ЭМД/сутки"]'):
+                if settings.get("decimals") == 0:
+                    settings["decimals"] = 1
+                    changes.append(f"{name}: decimals 0 -> 1")
 
-        if name == "ЭМД в сутки (среднее по периоду)" and key.endswith('ЭМД/сутки"]'):
-            if settings.get("decimals") == 0:
-                settings["decimals"] = 1
-                changes.append(f"{name}: decimals 0 -> 1")
+            if is_text_column_key(key) and "suffix" not in settings and settings.get("decimals", 0) == 0:
+                if settings.pop("number_separators", None) is not None:
+                    changes.append(f"{name}: removed separator from text column")
+                if settings.pop("decimals", None) == 0:
+                    changes.append(f"{name}: removed decimals from text column")
+                if not settings:
+                    cs.pop(key)
 
-        if is_text_column_key(key) and "suffix" not in settings and settings.get("decimals", 0) == 0:
-            if settings.pop("number_separators", None) is not None:
-                changes.append(f"{name}: removed separator from text column")
-            if settings.pop("decimals", None) == 0:
-                changes.append(f"{name}: removed decimals from text column")
-            if not settings:
-                cs.pop(key)
+        if not cs:
+            viz.pop("column_settings", None)
 
-    if not cs:
-        viz.pop("column_settings", None)
+    if card.get("display") == "pie" and viz.get("pie.decimal_places", 0) >= 1:
+        metric = viz.get("pie.metric") or (viz.get("graph.metrics") or [None])[0]
+        pie_cs = viz.setdefault("column_settings", {})
+        if metric:
+            entry = pie_cs.setdefault(f'["name","{metric}"]', {})
+            if entry.get("decimals", 0) != 0:
+                entry["decimals"] = 0
+                changes.append(f"{name}: pie count metric decimals -> 0")
+            if entry.get("number_separators") != " ":
+                entry["number_separators"] = " "
+                changes.append(f"{name}: pie count metric space thousands separator")
+        percent_key = '["name","_percentage"]'
+        percent_entry = pie_cs.setdefault(percent_key, {})
+        if percent_entry.get("number_separators") != ", ":
+            percent_entry["number_separators"] = ", "
+            percent_entry["decimals"] = viz.get("pie.decimal_places", 1)
+            changes.append(f"{name}: pie slice percent comma decimal separator")
+
     return changes
 
 

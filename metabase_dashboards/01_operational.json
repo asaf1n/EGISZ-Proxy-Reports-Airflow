@@ -1,7 +1,7 @@
 {
   "name": "Оперативный мониторинг и динамика",
   "width": "full",
-  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры Код СЭМД / JID — `top_*_filter`. Детализация healthcheck, тренды и динамика сервиса (в т.ч. транзакции по дням) — дашборд **02**.",
+  "description": "Контроль текущего состояния. **Терминология:** в проекте **СЭМД** — структурированный меддокумент; его идентификаторы в обмене — **localUid** (МИС), **emdrId** (РЭМД). **relatesToMessage** в XML колбэка — коррелятор запрос–ответ, не идентификатор документа. Агрегаты «сколько СЭМД» считаются по колонке **«Документ (ключ учёта)»**: canonical `document_key` — всегда `lower(localUid)`; emdrId и OID — атрибуты, а не ключ; MSGID, LOGID и relatesToMessage не используются как ключ документа. Колонка **«Связанное сообщение»** в таблицах — значение relatesToMessage из колбэка. Период по колбэкам (ответы РЭМД в аналитике) — `dwh_date` по **«Обработано IPS»**. Фильтры JID / тип СЭМД — `jid_filter` / `semd_type_filter`. Детализация healthcheck, тренды и динамика сервиса (в т.ч. транзакции по дням) — дашборд **02**.",
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
@@ -14,14 +14,14 @@
     {
       "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
       "name": "Код СЭМД",
-      "slug": "top_semd_filter",
+      "slug": "semd_type_filter",
       "type": "string/=",
       "sectionId": "string"
     },
     {
       "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
       "name": "JID клиники",
-      "slug": "top_clinic_filter",
+      "slug": "jid_filter",
       "type": "string/=",
       "sectionId": "string"
     },
@@ -68,13 +68,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT public.v_rpt_documents_ui.* FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 50",
+          "query": "SELECT public.v_rpt_documents_ui.* FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ORDER BY \"Дата обработки\" DESC NULLS LAST LIMIT 50",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "f1000005-0005-4005-8005-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -125,11 +125,11 @@
               "required": false,
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "f1000005-0005-4005-8005-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -357,7 +357,7 @@
       "row": 0,
       "col": 0,
       "metabase-field-filters": {
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
@@ -365,7 +365,7 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "LOGID журнала EXCHANGELOG"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
@@ -397,13 +397,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE \"Статус (код)\" WHEN 'success' THEN 'Успешно зарегистрирован' WHEN 'network_error' THEN 'Ошибка связи' WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'waiting' THEN 'В обработке' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
+          "query": "SELECT CASE \"Статус (код)\" WHEN 'success' THEN 'Успешно зарегистрирован' WHEN 'network_error' THEN 'Ошибка связи' WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'waiting' THEN 'В обработке' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "f1000004-0004-4004-8004-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -454,11 +454,11 @@
               "required": false,
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "f1000004-0004-4004-8004-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -550,11 +550,11 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
@@ -586,13 +586,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)'), 22) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS total, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error','network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success','async_error','network_error') AND NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, errs, ROUND(100.0*errs/NULLIF(total,0),1) AS rate, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ) SELECT lbl AS \"Клиника\", errs AS \"Ошибок\", rate AS \"% ошибок\" FROM ranked WHERE rn <= 12 ORDER BY errs DESC",
+          "query": "WITH per_clinic AS ( SELECT (LEFT(COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)'), 22) || ' | ' || \"JID клиники\"::text) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS total, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error','network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success','async_error','network_error') AND NULLIF(TRIM(\"JID клиники\"::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, errs, ROUND(100.0*errs/NULLIF(total,0),1) AS rate, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ) SELECT lbl AS \"Клиника\", errs AS \"Ошибок\", rate AS \"% ошибок\" FROM ranked WHERE rn <= 12 ORDER BY errs DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "fc000004-0004-4004-8004-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -643,11 +643,11 @@
               "required": false,
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "fc000004-0004-4004-8004-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -678,7 +678,7 @@
         "column_settings": {
           "[\"name\",\"% ошибок\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Клиника\"]": {
@@ -706,11 +706,11 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
@@ -742,12 +742,12 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"JID клиники\", \"Наименование клиники\", \"Документ (ключ учёта)\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM filtered ), per_clinic AS ( SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM filtered GROUP BY 1, 2 ) SELECT \"JID клиники\", \"Наименование клиники\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT \"JID клиники\", \"Наименование клиники\", \"Документ (ключ учёта)\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM filtered ), per_clinic AS ( SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM filtered GROUP BY 1, 2 ) SELECT \"JID клиники\", \"Наименование клиники\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "display-name": "JID клиники",
               "id": "f2000002-0002-4002-8002-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "type": "dimension",
               "widget-type": "string/="
             },
@@ -786,10 +786,10 @@
               "type": "dimension",
               "widget-type": "string/="
             },
-            "top_semd": {
+            "semd_type": {
               "display-name": "Код СЭМД",
               "id": "f2000002-0002-4002-8002-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "type": "dimension",
               "widget-type": "string/="
             }
@@ -863,7 +863,7 @@
           "[\"name\",\"%\"]": {
             "column_title": "%",
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"JID клиники\"]": {
@@ -893,11 +893,11 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
@@ -921,17 +921,17 @@
     },
     {
       "name": "Ошибки по типу",
-      "description": "Структура ошибок РЭМД по категориям (внутреннее кольцо) и видам (внешнее). Метрика — число вхождений ошибок (один документ может содержать несколько типов), поэтому доли категорий/типов аддитивны и суммируются к 100%. Не путать с числом документов с ошибкой (оно меньше из-за множественных ошибок в документе). Период по «Обработано IPS».",
+      "description": "Атомарные **виды ошибки** (`error_type`) по числу документов: COUNT(DISTINCT «Документ (ключ учёта)»). Категория (`egisz_error_category`) — только на уровне отдельного документа, в агрегатах не суммируется. Сумма сегментов может превышать число документов (один документ — несколько видов). Период по «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Категория ошибки\", \"Тип ошибки\", COUNT(*)::bigint AS \"Количество\" /* error_occurrence_share: вхождения ошибок, не документы */ FROM public.v_rpt_error_category_breakdown_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "fa000004-0004-4004-8004-0011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -942,11 +942,11 @@
               "name": "dwh_date",
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "fa000004-0004-4004-8004-0010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -959,145 +959,32 @@
         "pie.slice_threshold": 1,
         "pie.percent_visibility": "both",
         "pie.dimension": [
-          "Категория ошибки",
           "Тип ошибки"
         ],
         "pie.sort_rows": false,
-        "pie.rows": [
-          {
-            "key": "Данные пациента",
-            "name": "Данные пациента",
-            "originalName": "Данные пациента",
-            "color": "#509EE3",
-            "defaultColor": true,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Данные медработника",
-            "name": "Данные медработника",
-            "originalName": "Данные медработника",
-            "color": "#227FD2",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки справочника НСИ",
-            "name": "Ошибки справочника НСИ",
-            "originalName": "Ошибки справочника НСИ",
-            "color": "#8A5EB0",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки организации / ИС",
-            "name": "Ошибки организации / ИС",
-            "originalName": "Ошибки организации / ИС",
-            "color": "#8A5EB0",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки связи",
-            "name": "Ошибки связи",
-            "originalName": "Ошибки связи",
-            "color": "#ED8535",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки ЭП и сертификатов",
-            "name": "Ошибки ЭП и сертификатов",
-            "originalName": "Ошибки ЭП и сертификатов",
-            "color": "#E75454",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Технические ошибки РЭМД",
-            "name": "Технические ошибки РЭМД",
-            "originalName": "Технические ошибки РЭМД",
-            "color": "#E75454",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки регистрации в РЭМД",
-            "name": "Ошибки регистрации в РЭМД",
-            "originalName": "Ошибки регистрации в РЭМД",
-            "color": "#E75454",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки структуры и валидации",
-            "name": "Ошибки структуры и валидации",
-            "originalName": "Ошибки структуры и валидации",
-            "color": "#F7C41F",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Ошибки получения файла ЭМД",
-            "name": "Ошибки получения файла ЭМД",
-            "originalName": "Ошибки получения файла ЭМД",
-            "color": "#69C8C8",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          },
-          {
-            "key": "Прочие",
-            "name": "Прочие",
-            "originalName": "Прочие",
-            "color": "#DCDFE0",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false
-          }
-        ],
         "graph.metrics": [
-          "Количество"
+          "Документов"
         ],
-        "pie.metric": "Количество",
+        "pie.metric": "Документов",
         "pie.show_legend": true,
         "pie.decimal_places": 1,
-        "pie.show_total": true,
+        "pie.show_total": false,
         "column_settings": {
-          "[\"name\",\"Категория ошибки\"]": {
-            "column_title": "Категория ошибки"
-          },
-          "[\"name\",\"Количество\"]": {
-            "column_title": "Вхождений ошибок",
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
             "decimals": 0,
             "number_separators": " "
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
+          },
+          "[\"name\",\"_percentage\"]": {
+            "number_separators": ", ",
+            "decimals": 1
           }
         },
         "version": 2,
         "graph.dimensions": [
-          "Категория ошибки",
           "Тип ошибки"
         ]
       },
@@ -1106,7 +993,7 @@
       "row": 15,
       "col": 0,
       "metabase-field-filters": {
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_error_category_breakdown_ui",
           "field_name": "JID клиники"
         },
@@ -1114,7 +1001,7 @@
           "table_ref": "public.v_rpt_error_category_breakdown_ui",
           "field_name": "Обработано IPS"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_error_category_breakdown_ui",
           "field_name": "Код СЭМД"
         }
@@ -1126,13 +1013,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT \"Код СЭМД\" AS code, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS total, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error','network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success','async_error','network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT code, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN code ELSE 'Прочие' END AS \"Код СЭМД\", SUM(errs)::bigint AS \"Ошибок\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT \"Код СЭМД\" AS code, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS total, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error','network_error'))::bigint AS errs FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success','async_error','network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT code, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN code ELSE 'Прочие' END AS \"Код СЭМД\", SUM(errs)::bigint AS \"Ошибок\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "fa000003-0003-4003-8003-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -1183,11 +1070,11 @@
               "required": false,
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "fa000003-0003-4003-8003-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -1234,7 +1121,7 @@
           "[\"name\",\"%\"]": {
             "column_title": "%",
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Код СЭМД\"]": {
@@ -1257,11 +1144,11 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },
@@ -1293,12 +1180,12 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT \"Код СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT \"Код СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "display-name": "JID клиники",
               "id": "f6a00003-0003-4003-8003-000000000002",
-              "name": "top_clinic",
+              "name": "jid",
               "type": "dimension",
               "widget-type": "string/="
             },
@@ -1344,10 +1231,10 @@
               "type": "dimension",
               "widget-type": "string/="
             },
-            "top_semd": {
+            "semd_type": {
               "display-name": "Код СЭМД",
               "id": "f6a00003-0003-4003-8003-000000000003",
-              "name": "top_semd",
+              "name": "semd_type",
               "type": "dimension",
               "widget-type": "string/="
             }
@@ -1393,7 +1280,7 @@
           "[\"name\",\"%\"]": {
             "column_title": "%",
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Документов\"]": {
@@ -1416,11 +1303,11 @@
           "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_semd_archive_ui",
           "field_name": "JID клиники"
         },
@@ -1448,17 +1335,17 @@
     },
     {
       "name": "% Ошибок за период",
-      "description": "Доля отказов РЭМД по срезам: только строки, где есть хотя бы один СЭМД со статусом error (строки только с успехом отфильтрованы как шум). Учёт СЭМД — «Документ (ключ учёта)». Фильтр по «Обработано».",
+      "description": "Доля отказов РЭМД по срезам **клиника × тип СЭМД × атомарный вид ошибки** (из `v_rpt_error_category_breakdown_ui`, без составной «Сводки ошибки»). Учёт — COUNT(DISTINCT «Документ (ключ учёта)»).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), first_err AS ( SELECT DISTINCT ON (r.\"Документ (ключ учёта)\") r.\"Документ (ключ учёта)\", r.\"Тип ошибки\" AS err_kind, r.\"Исходный текст ошибки\" AS json_error_text FROM public.v_rpt_error_interpretations_ui r JOIN filtered f ON f.\"Документ (ключ учёта)\" = r.\"Документ (ключ учёта)\" WHERE r.\"Порядок ошибки\" IS NOT NULL ORDER BY r.\"Документ (ключ учёта)\", r.\"Порядок ошибки\" ), with_err AS ( SELECT f.*, COALESCE(fe.err_kind, NULLIF(f.\"Тип ошибки\", ''), NULLIF(f.\"Сводка ошибки\", ''), CASE WHEN f.\"Статус (код)\" = 'success' THEN '(успешно)' ELSE NULL END) AS err_kind, fe.json_error_text FROM filtered f LEFT JOIN first_err fe ON fe.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", err_kind AS \"Тип ошибки\", err_kind AS \"Сводка ошибки\", MIN(LEFT(NULLIF(json_error_text, ''), 500)) AS \"Исходный текст ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Доля ошибок\" FROM with_err GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 AND NULLIF(TRIM(err_kind), '') IS NOT NULL ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
+          "query": "WITH filtered AS ( SELECT * FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL AND NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), slices AS ( SELECT f.\"Тип СЭМД (код · НСИ)\", f.\"JID клиники\"::text AS \"JID клиники\", COALESCE(NULLIF(TRIM(f.\"Наименование клиники\"), ''), '(нет)') AS \"Наименование клиники\", f.\"Документ (ключ учёта)\", f.\"Статус (код)\", COALESCE(NULLIF(TRIM(b.\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS err_kind FROM filtered f INNER JOIN public.v_rpt_error_category_breakdown_ui b ON b.\"Документ (ключ учёта)\" = f.\"Документ (ключ учёта)\" ) SELECT \"Тип СЭМД (код · НСИ)\" AS \"Тип СЭМД (код · НСИ)\", \"JID клиники\", \"Наименование клиники\", err_kind AS \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Доля ошибок\" FROM slices GROUP BY 1, 2, 3, 4 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0 ORDER BY \"Ошибок\" DESC, \"Документов\" DESC LIMIT 500",
           "template-tags": {
-            "top_clinic": {
+            "jid": {
               "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "f9000004-0004-4004-8004-000000000011",
-              "name": "top_clinic",
+              "name": "jid",
               "required": false,
               "type": "dimension"
             },
@@ -1509,11 +1396,11 @@
               "required": false,
               "type": "dimension"
             },
-            "top_semd": {
+            "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "f9000004-0004-4004-8004-000000000010",
-              "name": "top_semd",
+              "name": "semd_type",
               "required": false,
               "type": "dimension"
             }
@@ -1560,14 +1447,6 @@
           },
           {
             "enabled": true,
-            "name": "Исходный текст ошибки"
-          },
-          {
-            "enabled": true,
-            "name": "Сводка ошибки"
-          },
-          {
-            "enabled": true,
             "name": "JID клиники"
           },
           {
@@ -1585,13 +1464,8 @@
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок",
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
-          },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки",
-            "decimals": 0,
-            "number_separators": " "
           },
           "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
             "column_title": "Тип СЭМД"
@@ -1611,11 +1485,6 @@
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
-          },
-          "[\"name\",\"Исходный текст ошибки\"]": {
-            "column_title": "Исходный текст ошибки",
-            "decimals": 0,
-            "number_separators": " "
           }
         }
       },
@@ -1628,11 +1497,11 @@
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Дата обработки"
         },
-        "top_semd": {
+        "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
         },
-        "top_clinic": {
+        "jid": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "JID клиники"
         },

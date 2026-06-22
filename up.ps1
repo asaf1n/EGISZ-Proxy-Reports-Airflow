@@ -355,6 +355,30 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
     Write-Host "Airflow is ready. Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' to initialize the DWH, then unpause egisz_extract_dag, egisz_dimensions_dag and egisz_reconcile_dag."
 }
 
+function Wait-MetabaseProvisioning {
+    param(
+        [string]$Namespace
+    )
+
+    $marker = "Setup complete:"
+    $deadline = (Get-Date).AddMinutes(10)
+
+    while ((Get-Date) -lt $deadline) {
+        $logs = kubectl logs -n $Namespace deploy/metabase --tail=400 2>$null
+        if ($LASTEXITCODE -eq 0 -and $logs -and ($logs -match [regex]::Escape($marker))) {
+            Write-Host "Metabase provisioning finished (cards synced and dashboards linked)."
+            return
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    Write-Host "Provisioning marker not found in pod logs; running setup-dashboards.sh explicitly..."
+    kubectl exec -n $Namespace deploy/metabase -- env METABASE_FORCE_PROVISION=always /bin/bash /app/setup-dashboards.sh
+    if ($LASTEXITCODE -ne 0) {
+        throw "Explicit Metabase provisioning failed with exit code ${LASTEXITCODE}"
+    }
+}
+
 function Install-Metabase {
     Initialize-SecretFiles
     Test-KubernetesConnection
@@ -403,9 +427,9 @@ function Install-Metabase {
         kubectl rollout status -n $Namespace deployment/metabase --timeout=300s
     }
 
-    Write-Host "Provisioning Metabase dashboards..."
-    Invoke-Checked "Provision Metabase dashboards" {
-        kubectl exec -n $Namespace deploy/metabase -- /bin/bash /app/setup-dashboards.sh
+    Write-Host "Waiting for Metabase dashboard provisioning (sync cards, then link dashboards)..."
+    Invoke-Checked "Wait for Metabase provisioning" {
+        Wait-MetabaseProvisioning -Namespace $Namespace
     }
 }
 

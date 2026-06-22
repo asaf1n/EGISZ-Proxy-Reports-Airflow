@@ -338,11 +338,9 @@ def test_document_metric_cards_count_distinct_document_key() -> None:
         "v_rpt_client_documents_ui",
     )
     allowed_count_star = {
-        "01_operational.json": {"error_occurrence_share"},
         "02_service.json": {"v_health_signals_ui"},
         "05_executive.json": {"active_jid"},
         "08_client_bianalytic.json": {"per_patient"},
-        "09_general_statistics.json": {"error_occurrence_share"},
     }
     violations: list[str] = []
     for path in _dashboard_paths():
@@ -455,10 +453,9 @@ def test_quality_dashboard_has_no_slice_section_headers() -> None:
     assert not any(t.startswith("## Срезы ошибок по парам") for t in text_cards)
 
 
-def test_quality_error_structure_section_is_single_category_colored_card() -> None:
+def test_quality_error_structure_section_is_category_colored_row_card() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     names = {c.get("name") for c in dashboard["cards"]}
-    # Прежняя пара карточек свёрнута в одну: виды ошибок, цвет сегмента — категория.
     assert "Ошибки по категории" not in names
     assert "Топ видов ошибок" not in names
 
@@ -469,11 +466,13 @@ def test_quality_error_structure_section_is_single_category_colored_card() -> No
     assert card["display"] == "row"
     assert card["sizeX"] >= 11
     assert "v_rpt_error_category_breakdown_ui" in query
+    assert "Категория ошибки" in query
     assert "GROUP BY 1, 2" in query and "LIMIT 15" in query
     assert viz["graph.dimensions"] == ["Вид ошибки", "Категория ошибки"]
     assert viz["stackable.stack_type"] == "stacked"
     assert viz.get("graph.label_value_formatting") == "compact"
-    # Цвет должен наследоваться от категории — фиксированного series-цвета быть не должно.
+    assert viz.get("graph.x_axis.title_text", "unset") == ""
+    assert viz.get("graph.y_axis.title_text", "unset") == ""
     assert "series_settings" not in viz
 
 
@@ -489,6 +488,8 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     assert 'AS "Документов"' in query
     assert card["visualization_settings"]["graph.metrics"] == ["Документов"]
     assert card["visualization_settings"]["stackable.stack_type"] == "normalized"
+    assert card["visualization_settings"].get("graph.x_axis.title_text", "unset") == ""
+    assert card["visualization_settings"].get("graph.y_axis.title_text", "unset") == ""
     assert '"Код СЭМД"' in query
 
 
@@ -655,6 +656,120 @@ def test_shared_cards_use_identical_queries_across_dashboards() -> None:
     assert not mismatches, "Shared card names must reference the same SQL: " + ", ".join(mismatches)
 
 
+def test_shared_cards_use_identical_field_filters_across_dashboards() -> None:
+    """Переиспользуемые карточки должны иметь одинаковые metabase-field-filters."""
+    by_name: dict[str, list[tuple[str, dict]]] = {}
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            if card.get("display") == "text" or not card.get("name"):
+                continue
+            dq = card.get("dataset_query", {})
+            if dq.get("type") != "native":
+                continue
+            filters = card.get("metabase-field-filters") or {}
+            by_name.setdefault(card["name"], []).append((path.name, filters))
+
+    mismatches: list[str] = []
+    for name, instances in by_name.items():
+        if len(instances) < 2:
+            continue
+        reference = json.dumps(instances[0][1], sort_keys=True, ensure_ascii=False)
+        reference_file = instances[0][0]
+        for path_name, filters in instances[1:]:
+            if json.dumps(filters, sort_keys=True, ensure_ascii=False) != reference:
+                mismatches.append(f"{name!r}: {reference_file} vs {path_name}")
+    assert not mismatches, "Shared card names must use the same field filters: " + ", ".join(mismatches)
+
+
+def test_dashboards_use_canonical_filter_slugs() -> None:
+    """Общие фильтры JID/тип СЭМД — единые slug на всех дашбордах (кроме клиентских)."""
+    legacy = {"top_clinic_filter", "top_semd_filter"}
+    for path in _dashboard_paths():
+        if path.name in ("07_client_service.json", "08_client_bianalytic.json"):
+            continue
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        slugs = {p.get("slug") for p in dashboard.get("parameters", [])}
+        hit = slugs & legacy
+        assert not hit, f"{path.name} still uses legacy filter slug(s): {sorted(hit)}"
+
+
+def test_dashboard_cards_use_canonical_jid_semd_template_tags() -> None:
+    """SQL template-tags jid/semd_type — единые имена, без legacy top_clinic/top_semd."""
+    legacy = {"top_clinic", "top_semd"}
+    hits: list[str] = []
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            dq = card.get("dataset_query") or {}
+            native = dq.get("native") or {}
+            query = native.get("query") or ""
+            tags = set((native.get("template-tags") or {}).keys())
+            card_ref = f"{path.name} / {card.get('name', '?')}"
+            if tags & legacy:
+                hits.append(f"{card_ref}: template-tags {sorted(tags & legacy)}")
+            for old in legacy:
+                if f"{{{{{old}}}}}" in query:
+                    hits.append(f"{card_ref}: query still has {{{{{old}}}}}")
+    assert not hits, "Legacy jid/semd template tags: " + "; ".join(hits)
+
+
+def test_operational_error_period_card_uses_atomic_error_types() -> None:
+    """«% Ошибок за период» — только атомарные виды из breakdown, без «Сводки ошибки»."""
+    for fname in ("01_operational.json", "04_quality_and_errors.json"):
+        dashboard = json.loads(Path(f"metabase_dashboards/{fname}").read_text(encoding="utf-8"))
+        card = next(c for c in dashboard["cards"] if c.get("name") == "% Ошибок за период")
+        query = card["dataset_query"]["native"]["query"]
+        assert "v_rpt_error_category_breakdown_ui" in query
+        assert "Сводка ошибки" not in query
+        assert "error_interpretations" not in query
+        cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
+        assert "Сводка ошибки" not in cols
+        assert "Исходный текст ошибки" not in cols
+
+
+def test_operational_error_period_card_uses_canonical_filter_tags() -> None:
+    """Карточка «% Ошибок за период» переиспользуется — теги jid/semd_type."""
+    dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "% Ошибок за период")
+    tags = card["dataset_query"]["native"]["template-tags"]
+    assert "jid" in tags
+    assert "semd_type" in tags
+    param_slugs = {p["slug"] for p in dashboard["parameters"]}
+    assert "jid_filter" in param_slugs
+    assert "semd_type_filter" in param_slugs
+
+
+def test_pie_charts_with_decimals_use_comma_separator() -> None:
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            if card.get("display") != "pie":
+                continue
+            viz = card.get("visualization_settings") or {}
+            if viz.get("pie.decimal_places", 0) < 1:
+                continue
+            metric = viz.get("pie.metric") or (viz.get("graph.metrics") or [None])[0]
+            assert metric, f"{path.name} / {card.get('name')}: pie without metric"
+            key = f'["name","{metric}"]'
+            settings = (viz.get("column_settings") or {}).get(key) or {}
+            percent = (viz.get("column_settings") or {}).get('["name","_percentage"]') or {}
+            assert percent.get("number_separators") == ", ", (
+                f"{path.name} / {card.get('name')}: pie slice percent needs comma decimal separator"
+            )
+            if settings:
+                assert settings.get("number_separators") == " ", (
+                    f"{path.name} / {card.get('name')}: pie count metric must keep space thousands separator"
+                )
+
+
+def test_error_types_pie_hides_misleading_total() -> None:
+    for fname in ("01_operational.json", "09_general_statistics.json"):
+        dashboard = json.loads(Path(f"metabase_dashboards/{fname}").read_text(encoding="utf-8"))
+        card = next(c for c in dashboard["cards"] if c.get("name") == "Ошибки по типу")
+        assert card["visualization_settings"].get("pie.show_total") is False
+
+
 def test_dashboard_numeric_formatting_uses_space_thousands() -> None:
     """Все числовые column_settings должны использовать пробел как разделитель тысяч (RU)."""
     dot_separators: list[str] = []
@@ -673,6 +788,11 @@ def test_dashboard_numeric_formatting_uses_space_thousands() -> None:
                     continue
                 if settings["number_separators"] == ".":
                     dot_separators.append(f"{path.name} / {card_name} / {col_key}")
+                elif settings.get("suffix") == " %" and settings.get("decimals", 0) >= 1:
+                    if settings["number_separators"] != ", ":
+                        dot_separators.append(
+                            f"{path.name} / {card_name} / {col_key}: percent needs ', ' separator"
+                        )
                 elif settings["number_separators"] not in (" ", ", "):
                     dot_separators.append(
                         f"{path.name} / {card_name} / {col_key}: {settings['number_separators']!r}"

@@ -137,11 +137,11 @@
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
             "suffix": " %",
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Доля успеха с первой попытки (клиент), %\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           }
         }
@@ -397,7 +397,7 @@
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Документов\"]": {
@@ -853,7 +853,7 @@
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           },
           "[\"name\",\"Врач\"]": {

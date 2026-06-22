@@ -128,11 +128,11 @@
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
             "suffix": " %",
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Доля успеха с первой попытки, %\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           }
         }
@@ -400,7 +400,7 @@
         "column_settings": {
           "[\"name\",\"Зависших >72 ч, %\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           }
         }
@@ -441,7 +441,7 @@
         "column_settings": {
           "[\"name\",\"Отказов РЭМД, %\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           }
         }
@@ -482,7 +482,7 @@
         "column_settings": {
           "[\"name\",\"Ошибок связи, %\"]": {
             "decimals": 1,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " %"
           }
         }
