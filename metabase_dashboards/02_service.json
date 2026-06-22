@@ -93,12 +93,14 @@
       "display": "bar",
       "visualization_settings": {
         "graph.y_axis.title_text": "Документов",
-        "graph.show_values": false,
+        "graph.show_values": true,
         "graph.x_axis.axis_enabled": "rotate-45",
         "graph.x_axis.title_text": "Дата",
+        "graph.label_value_frequency": "fit",
         "graph.metrics": [
           "Документов"
         ],
+        "graph.label_value_formatting": "compact",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
@@ -125,7 +127,8 @@
           "Дата",
           "Статус"
         ],
-        "stackable.stack_type": "stacked"
+        "stackable.stack_type": "stacked",
+        "graph.split_panels": false
       },
       "sizeX": 24,
       "sizeY": 6,
@@ -367,7 +370,7 @@
           "Документов"
         ],
         "pie.metric": "Документов",
-        "pie.show_legend": true,
+        "pie.show_legend": false,
         "pie.decimal_places": 0,
         "pie.show_total": true,
         "column_settings": {

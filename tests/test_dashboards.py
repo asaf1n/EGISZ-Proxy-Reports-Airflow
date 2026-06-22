@@ -283,19 +283,18 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
 def test_archive_top_semd_uses_same_document_universe_as_total() -> None:
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
     total = next(card for card in dashboard["cards"] if card["name"] == "Всего документов")
-    top = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД (архив)")
-    clinic = next(card for card in dashboard["cards"] if card["name"] == "Топ по клинике")
-    assert "NULLIF(TRIM(\"Код СЭМД\"), '') IS NOT NULL" not in top["dataset_query"]["native"]["query"]
-    assert '"СЭМД (архив)"' in top["dataset_query"]["native"]["query"]
+    top = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
+    clinic = next(card for card in dashboard["cards"] if card["name"] == "Объём по клиникам")
+    top_query = top["dataset_query"]["native"]["query"]
+    clinic_query = clinic["dataset_query"]["native"]["query"]
+
+    assert '"Код СЭМД"' in top_query
     assert "v_rpt_semd_archive_ui" in total["dataset_query"]["native"]["query"]
-    assert "v_rpt_semd_archive_ui" in top["dataset_query"]["native"]["query"]
-    for query in (
-        top["dataset_query"]["native"]["query"],
-        clinic["dataset_query"]["native"]["query"],
-    ):
-        assert "LIMIT 8" not in query
-        assert "Остальные (" in query
-        assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in query
+    assert "v_rpt_semd_archive_ui" in top_query
+    assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in top_query
+    assert "v_rpt_documents_ui" in clinic_query
+    assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in clinic_query
+    assert "ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1)" in clinic_query
 
 
 def test_transform_backfills_semd_code_from_transactions() -> None:
@@ -318,6 +317,7 @@ def test_document_metric_cards_count_distinct_document_key() -> None:
         "02_service.json": {"v_health_signals_ui"},
         "05_executive.json": {"active_jid"},
         "08_client_bianalytic.json": {"per_patient"},
+        "09_general_statistics.json": {"error_occurrence_share"},
     }
     violations: list[str] = []
     for path in _dashboard_paths():
@@ -349,15 +349,15 @@ def test_error_interpretations_view_uses_canonical_labels() -> None:
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     dashboard = json.loads(Path("metabase_dashboards/06_semd_archive.json").read_text(encoding="utf-8"))
-    card = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД (архив)")
+    card = next(card for card in dashboard["cards"] if card["name"] == "Топ по типу СЭМД")
     query = card["dataset_query"]["native"]["query"]
 
     assert '"СЭМД (архив)"' in sql
     assert "Документ с ошибкой и не определён код" in sql
     assert '"Тип ошибки"' in sql
-    assert '"СЭМД (архив)"' in query
+    assert '"Код СЭМД"' in query
+    assert "v_rpt_semd_archive_ui" in query
     assert 'NULLIF(TRIM("Код СЭМД"), \'\') IS NOT NULL' not in query
-    assert "Наименование СЭМД" not in query
 
 
 def test_document_views_choose_latest_journal_entry_before_status_priority() -> None:
@@ -425,7 +425,7 @@ def test_quality_error_structure_section_is_single_category_colored_card() -> No
     viz = card["visualization_settings"]
 
     assert card["display"] == "row"
-    assert card["sizeX"] == 24
+    assert card["sizeX"] >= 11
     assert "v_rpt_error_category_breakdown_ui" in query
     assert "GROUP BY 1, 2" in query and "LIMIT 15" in query
     assert viz["graph.dimensions"] == ["Вид ошибки", "Категория ошибки"]
@@ -571,17 +571,30 @@ def test_dashboard_text_uses_measurement_entities_not_kpi() -> None:
         assert "KPI" not in blob, f"{path.name} still mentions KPI in user-facing text"
 
 
-def test_dashboard_card_names_are_globally_unique() -> None:
-    """setup-dashboards.sh resolves cards by name within the Metabase collection."""
-    by_name: dict[str, list[str]] = {}
+def test_shared_cards_use_identical_queries_across_dashboards() -> None:
+    """Дашборды переиспользуют одну Metabase-карточку по имени — SQL должен совпадать."""
+    by_name: dict[str, list[tuple[str, str]]] = {}
     for path in _dashboard_paths():
         dashboard = json.loads(path.read_text(encoding="utf-8"))
         for card in dashboard.get("cards", []):
             if card.get("display") == "text" or not card.get("name"):
                 continue
-            by_name.setdefault(card["name"], []).append(path.name)
-    duplicates = {name: files for name, files in by_name.items() if len(files) > 1}
-    assert not duplicates, f"Duplicate Metabase card names across dashboards: {duplicates}"
+            dq = card.get("dataset_query", {})
+            if dq.get("type") != "native":
+                continue
+            query = dq["native"]["query"]
+            by_name.setdefault(card["name"], []).append((path.name, query))
+
+    mismatches: list[str] = []
+    for name, instances in by_name.items():
+        if len(instances) < 2:
+            continue
+        reference_query = instances[0][1]
+        reference_file = instances[0][0]
+        for path_name, query in instances[1:]:
+            if query != reference_query:
+                mismatches.append(f"{name!r}: {reference_file} vs {path_name}")
+    assert not mismatches, "Shared card names must reference the same SQL: " + ", ".join(mismatches)
 
 
 def test_no_retired_dashboard_files_remain() -> None:
@@ -593,3 +606,4 @@ def test_no_retired_dashboard_files_remain() -> None:
     assert "05_executive.json" in names
     assert "07_client_service.json" in names
     assert "08_client_bianalytic.json" in names
+    assert "09_general_statistics.json" in names

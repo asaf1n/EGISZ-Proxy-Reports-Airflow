@@ -491,32 +491,32 @@
         "graph.x_axis.axis_enabled": "rotate-45",
         "pie.rows": [
           {
+            "color": "#88BF4D",
+            "enabled": true,
             "key": "Успешно зарегистрирован",
             "name": "Успешно зарегистрирован",
-            "originalName": "Успешно зарегистрирован",
-            "color": "#88BF4D",
-            "enabled": true
+            "originalName": "Успешно зарегистрирован"
           },
           {
+            "color": "#A989C5",
+            "enabled": true,
             "key": "Ошибка асинхронного ответа РЭМД",
             "name": "Ошибка асинхронного ответа РЭМД",
-            "originalName": "Ошибка асинхронного ответа РЭМД",
-            "color": "#A989C5",
-            "enabled": true
+            "originalName": "Ошибка асинхронного ответа РЭМД"
           },
           {
+            "color": "#F2994A",
+            "enabled": true,
             "key": "Ошибка связи",
             "name": "Ошибка связи",
-            "originalName": "Ошибка связи",
-            "color": "#F2994A",
-            "enabled": true
+            "originalName": "Ошибка связи"
           },
           {
+            "color": "#509EE3",
+            "enabled": true,
             "key": "В обработке",
             "name": "В обработке",
-            "originalName": "В обработке",
-            "color": "#509EE3",
-            "enabled": true
+            "originalName": "В обработке"
           }
         ],
         "graph.metrics": [
@@ -524,6 +524,7 @@
         ],
         "pie.metric": "Документов",
         "pie.show_legend": true,
+        "pie.decimal_places": 0,
         "pie.show_total": true,
         "column_settings": {
           "[\"name\",\"Документов\"]": {
@@ -535,10 +536,10 @@
             "column_title": "Статус"
           }
         },
+        "version": 2,
         "graph.dimensions": [
           "Статус"
-        ],
-        "pie.decimal_places": 1
+        ]
       },
       "sizeX": 6,
       "sizeY": 8,
@@ -677,20 +678,20 @@
         "column_settings": {
           "[\"name\",\"% ошибок\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           },
           "[\"name\",\"Клиника\"]": {
             "column_title": "Клиника",
             "decimals": 0,
             "number_separators": "."
           },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
           "[\"name\",\"Ошибок\"]": {
             "decimals": 0,
             "number_separators": "."
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
           }
         },
         "graph.metrics": [
@@ -743,56 +744,56 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT \"JID клиники\", \"Наименование клиники\", \"Документ (ключ учёта)\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM filtered ), per_clinic AS ( SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM filtered GROUP BY 1, 2 ) SELECT \"JID клиники\", \"Наименование клиники\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC LIMIT 20",
+          "query": "WITH filtered AS ( SELECT \"JID клиники\", \"Наименование клиники\", \"Документ (ключ учёта)\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::numeric AS total FROM filtered ), per_clinic AS ( SELECT \"JID клиники\"::text AS \"JID клиники\", \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM filtered GROUP BY 1, 2 ) SELECT \"JID клиники\", \"Наименование клиники\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "top_clinic": {
-              "widget-type": "string/=",
               "display-name": "JID клиники",
               "id": "f2000002-0002-4002-8002-000000000011",
               "name": "top_clinic",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             },
             "dwh_date": {
-              "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000002-0002-4002-8002-000000000001",
               "name": "dwh_date",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "date/all-options"
             },
             "emdr_id": {
-              "widget-type": "string/=",
               "display-name": "Рег. номер РЭМД (emdrid)",
               "id": "f2000002-0002-4002-8002-000000000014",
               "name": "emdr_id",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             },
             "local_uid": {
-              "widget-type": "string/=",
               "display-name": "localUid СЭМД",
               "id": "f2000002-0002-4002-8002-000000000012",
               "name": "local_uid",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             },
             "log_id": {
-              "widget-type": "string/=",
               "display-name": "LOGID журнала EXCHANGELOG",
               "id": "f2000002-0002-4002-8002-000000000015",
               "name": "log_id",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             },
             "relates_to": {
-              "widget-type": "string/=",
               "display-name": "Связанное сообщение (relatesToMessage)",
               "id": "f2000002-0002-4002-8002-000000000013",
               "name": "relates_to",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             },
             "top_semd": {
-              "widget-type": "string/=",
               "display-name": "Код СЭМД",
               "id": "f2000002-0002-4002-8002-000000000010",
               "name": "top_semd",
-              "type": "dimension"
+              "type": "dimension",
+              "widget-type": "string/="
             }
           }
         },
@@ -819,20 +820,20 @@
         },
         "table.columns": [
           {
-            "name": "JID клиники",
-            "enabled": false
+            "enabled": false,
+            "name": "JID клиники"
           },
           {
-            "name": "Наименование клиники",
-            "enabled": true
+            "enabled": true,
+            "name": "Наименование клиники"
           },
           {
-            "name": "Документов",
-            "enabled": true
+            "enabled": true,
+            "name": "Документов"
           },
           {
-            "name": "%",
-            "enabled": true
+            "enabled": true,
+            "name": "%"
           }
         ],
         "table.freeze_rows": false,
@@ -844,23 +845,29 @@
         ],
         "table.column_formatting": [
           {
-            "columns": [
-              "Документов"
-            ],
-            "type": "range",
             "colors": [
               "transparent",
               "#509EE3"
             ],
-            "min_type": null,
+            "columns": [
+              "Документов"
+            ],
             "max_type": null,
+            "max_value": 100,
+            "min_type": null,
             "min_value": 0,
-            "max_value": 100
+            "type": "range"
           }
         ],
         "table.row_index": true,
         "table.pivot_column": "Документов",
         "column_settings": {
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ".",
+            "suffix": " %"
+          },
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
@@ -873,12 +880,6 @@
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
-          },
-          "[\"name\",\"%\"]": {
-            "decimals": 1,
-            "suffix": " %",
-            "column_title": "%",
-            "number_separators": "."
           }
         },
         "graph.dimensions": [
@@ -963,6 +964,122 @@
           "Категория ошибки",
           "Тип ошибки"
         ],
+        "pie.sort_rows": false,
+        "pie.rows": [
+          {
+            "key": "Данные пациента",
+            "name": "Данные пациента",
+            "originalName": "Данные пациента",
+            "color": "#509EE3",
+            "defaultColor": true,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Данные медработника",
+            "name": "Данные медработника",
+            "originalName": "Данные медработника",
+            "color": "#227FD2",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки справочника НСИ",
+            "name": "Ошибки справочника НСИ",
+            "originalName": "Ошибки справочника НСИ",
+            "color": "#8A5EB0",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки организации / ИС",
+            "name": "Ошибки организации / ИС",
+            "originalName": "Ошибки организации / ИС",
+            "color": "#8A5EB0",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки связи",
+            "name": "Ошибки связи",
+            "originalName": "Ошибки связи",
+            "color": "#ED8535",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки ЭП и сертификатов",
+            "name": "Ошибки ЭП и сертификатов",
+            "originalName": "Ошибки ЭП и сертификатов",
+            "color": "#E75454",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Технические ошибки РЭМД",
+            "name": "Технические ошибки РЭМД",
+            "originalName": "Технические ошибки РЭМД",
+            "color": "#E75454",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки регистрации в РЭМД",
+            "name": "Ошибки регистрации в РЭМД",
+            "originalName": "Ошибки регистрации в РЭМД",
+            "color": "#E75454",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки структуры и валидации",
+            "name": "Ошибки структуры и валидации",
+            "originalName": "Ошибки структуры и валидации",
+            "color": "#F7C41F",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Ошибки получения файла ЭМД",
+            "name": "Ошибки получения файла ЭМД",
+            "originalName": "Ошибки получения файла ЭМД",
+            "color": "#69C8C8",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          },
+          {
+            "key": "Прочие",
+            "name": "Прочие",
+            "originalName": "Прочие",
+            "color": "#DCDFE0",
+            "defaultColor": false,
+            "enabled": true,
+            "hidden": false,
+            "isOther": false
+          }
+        ],
+        "graph.metrics": [
+          "Количество"
+        ],
         "pie.metric": "Количество",
         "pie.show_legend": true,
         "pie.decimal_places": 1,
@@ -981,9 +1098,6 @@
           }
         },
         "version": 2,
-        "graph.metrics": [
-          "Количество"
-        ],
         "graph.dimensions": [
           "Категория ошибки",
           "Тип ошибки"
@@ -1085,26 +1199,32 @@
       },
       "display": "table",
       "visualization_settings": {
+        "table.column_widths": [
+          105
+        ],
         "pie.slice_threshold": 1,
         "pie.percent_visibility": "inside",
         "pie.dimension": [
           "Код СЭМД"
         ],
+        "table.freeze_columns": true,
         "table.cell_column": "Ошибок",
+        "table.freeze_columns_count": 1,
         "table.column_formatting": [
           {
             "columns": [
-              "Ошибок"
+              "%"
             ],
             "type": "range",
             "colors": [
-              "transparent",
-              "#EF8C8C"
+              "hsla(89, 48%, 40%, 1)",
+              "hsla(46, 81%,  52%, 1)",
+              "hsla(358, 71%, 62%, 1)"
             ],
             "min_type": null,
-            "max_type": null,
+            "max_type": "custom",
             "min_value": 0,
-            "max_value": 100
+            "max_value": 50
           }
         ],
         "pie.metric": "Ошибок",
@@ -1113,18 +1233,18 @@
         "table.pivot_column": "Код СЭМД",
         "pie.show_total": true,
         "column_settings": {
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ".",
+            "suffix": " %"
+          },
           "[\"name\",\"Код СЭМД\"]": {
             "column_title": "Код СЭМД"
           },
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"%\"]": {
-            "decimals": 1,
-            "suffix": " %",
-            "column_title": "%",
             "number_separators": "."
           }
         },
@@ -1175,63 +1295,63 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT \"Код СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC LIMIT 10",
+          "query": "WITH base AS ( SELECT \"Код СЭМД\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_semd_archive_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
           "template-tags": {
             "top_clinic": {
+              "display-name": "JID клиники",
               "id": "f6a00003-0003-4003-8003-000000000002",
               "name": "top_clinic",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "JID клиники"
+              "widget-type": "string/="
             },
             "dwh_date": {
+              "display-name": "По дате обработки",
               "id": "f6a00003-0003-4003-8003-000000000001",
               "name": "dwh_date",
               "type": "dimension",
-              "widget-type": "date/all-options",
-              "display-name": "По дате обработки"
+              "widget-type": "date/all-options"
             },
             "emdr_id": {
+              "display-name": "Рег. номер РЭМД",
               "id": "f6a00003-0003-4003-8003-000000000006",
               "name": "emdr_id",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Рег. номер РЭМД"
+              "widget-type": "string/="
             },
             "local_uid": {
+              "display-name": "localUid СЭМД",
               "id": "f6a00003-0003-4003-8003-000000000004",
               "name": "local_uid",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД"
+              "widget-type": "string/="
             },
             "log_id": {
+              "display-name": "LOGID журнала EXCHANGELOG",
               "id": "f6a00003-0003-4003-8003-000000000008",
               "name": "log_id",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "LOGID журнала EXCHANGELOG"
+              "widget-type": "string/="
             },
             "relates_to": {
+              "display-name": "Связанное сообщение",
               "id": "f6a00003-0003-4003-8003-000000000005",
               "name": "relates_to",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение"
+              "widget-type": "string/="
             },
             "status": {
+              "display-name": "Статус",
               "id": "f6a00003-0003-4003-8003-000000000007",
               "name": "status",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Статус"
+              "widget-type": "string/="
             },
             "top_semd": {
+              "display-name": "Код СЭМД",
               "id": "f6a00003-0003-4003-8003-000000000003",
               "name": "top_semd",
               "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД"
+              "widget-type": "string/="
             }
           }
         },
@@ -1239,6 +1359,10 @@
       },
       "display": "table",
       "visualization_settings": {
+        "table.column_widths": [
+          77,
+          114
+        ],
         "pie.percent_visibility": "both",
         "table.cell_column": "СЭМД",
         "graph.series_order_dimension": null,
@@ -1249,33 +1373,34 @@
         "graph.y_axis.axis_enabled": true,
         "table.column_formatting": [
           {
-            "columns": [
-              "Документов"
-            ],
-            "type": "range",
             "colors": [
               "transparent",
               "#509EE3"
             ],
-            "min_type": null,
+            "columns": [
+              "Документов"
+            ],
             "max_type": null,
+            "max_value": 100,
+            "min_type": null,
             "min_value": 0,
-            "max_value": 100
+            "type": "range"
           }
         ],
+        "table.row_index": true,
         "graph.series_order": null,
         "table.pivot_column": "Документов",
         "pie.show_total": true,
         "column_settings": {
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ".",
+            "suffix": " %"
+          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"%\"]": {
-            "decimals": 1,
-            "suffix": " %",
-            "column_title": "%",
             "number_separators": "."
           }
         },
@@ -1462,8 +1587,8 @@
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок",
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           },
           "[\"name\",\"Сводка ошибки\"]": {
             "column_title": "Сводка ошибки",

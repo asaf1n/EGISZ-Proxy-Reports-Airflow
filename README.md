@@ -443,7 +443,7 @@ metabase_dashboards/*.json         — 8 дашбордов
 metabase_dashboards/field_filter_defaults.yaml — правила field-фильтров
 scripts/apply_metabase_field_filters.py — резолвер field-фильтров → JSON-карточек
 scripts/audit_metabase_dashboards.py    — аудит дашбордов
-scripts/export_dashboard.py             — выгрузка дашборда в JSON
+scripts/export_dashboard.py             — выгрузка дашбордов из Metabase в JSON (все файлы или один по id)
 k8s/airflow/                       — Helm values и секреты Airflow
 k8s/metabase/                      — манифест и секреты Metabase
 tests/                             — pytest-тесты Python-слоя и валидация дашбордов

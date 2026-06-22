@@ -42,13 +42,13 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Успешных СЭМД",
         "column_settings": {
           "[\"name\",\"Успешных СЭМД\"]": {
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           }
-        },
-        "scalar.field": "Успешных СЭМД"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -82,13 +82,13 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Документов",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           }
-        },
-        "scalar.field": "Документов"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -122,6 +122,7 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Доля успеха с первой попытки, %",
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
@@ -129,11 +130,10 @@
           },
           "[\"name\",\"Доля успеха с первой попытки, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           }
-        },
-        "scalar.field": "Доля успеха с первой попытки, %"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -167,14 +167,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "MRR, ₽",
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
+            "decimals": 0,
             "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
+            "suffix": " ₽"
           }
-        },
-        "scalar.field": "MRR, ₽"
+        }
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -194,14 +194,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "ARR, ₽",
         "column_settings": {
           "[\"name\",\"ARR, ₽\"]": {
+            "decimals": 0,
             "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
+            "suffix": " ₽"
           }
-        },
-        "scalar.field": "ARR, ₽"
+        }
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -221,13 +221,13 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Активных JID",
         "column_settings": {
           "[\"name\",\"Активных JID\"]": {
-            "number_separators": ".",
-            "decimals": 0
+            "decimals": 0,
+            "number_separators": "."
           }
-        },
-        "scalar.field": "Активных JID"
+        }
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -247,14 +247,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "₽ за успешный СЭМД",
         "column_settings": {
           "[\"name\",\"₽ за успешный СЭМД\"]": {
-            "suffix": " ₽",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": " ",
+            "suffix": " ₽"
           }
-        },
-        "scalar.field": "₽ за успешный СЭМД"
+        }
       },
       "sizeX": 6,
       "sizeY": 3,
@@ -285,21 +285,10 @@
         "graph.dimensions": [
           "Дата"
         ],
-        "graph.metrics": [
-          "MRR, ₽"
-        ],
-        "graph.x_axis.scale": "timeseries",
         "graph.show_values": false,
-        "column_settings": {
-          "[\"name\",\"Дата\"]": {
-            "column_title": "Дата"
-          },
-          "[\"name\",\"MRR, ₽\"]": {
-            "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
-          }
-        },
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "MRR, ₽",
         "series_settings": {
           "MRR, ₽": {
             "color": "#509EE3",
@@ -308,8 +297,19 @@
             "line.style": "solid"
           }
         },
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "MRR, ₽"
+        "column_settings": {
+          "[\"name\",\"MRR, ₽\"]": {
+            "decimals": 0,
+            "number_separators": " ",
+            "suffix": " ₽"
+          },
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          }
+        },
+        "graph.metrics": [
+          "MRR, ₽"
+        ]
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -332,20 +332,10 @@
         "graph.dimensions": [
           "Дата"
         ],
-        "graph.metrics": [
-          "Активных JID"
-        ],
-        "graph.x_axis.scale": "timeseries",
         "graph.show_values": false,
-        "column_settings": {
-          "[\"name\",\"Дата\"]": {
-            "column_title": "Дата"
-          },
-          "[\"name\",\"Активных JID\"]": {
-            "number_separators": ".",
-            "decimals": 0
-          }
-        },
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Активных JID",
         "series_settings": {
           "Активных JID": {
             "color": "#A989C5",
@@ -354,8 +344,18 @@
             "line.style": "solid"
           }
         },
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Активных JID"
+        "column_settings": {
+          "[\"name\",\"Активных JID\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          },
+          "[\"name\",\"Дата\"]": {
+            "column_title": "Дата"
+          }
+        },
+        "graph.metrics": [
+          "Активных JID"
+        ]
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -391,14 +391,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Зависших >72 ч, %",
         "column_settings": {
           "[\"name\",\"Зависших >72 ч, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           }
-        },
-        "scalar.field": "Зависших >72 ч, %"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -432,14 +432,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Отказов РЭМД, %",
         "column_settings": {
           "[\"name\",\"Отказов РЭМД, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           }
-        },
-        "scalar.field": "Отказов РЭМД, %"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -473,14 +473,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Ошибок связи, %",
         "column_settings": {
           "[\"name\",\"Ошибок связи, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
+            "number_separators": ".",
+            "suffix": " %"
           }
-        },
-        "scalar.field": "Ошибок связи, %"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -524,14 +524,9 @@
       "visualization_settings": {
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
-            "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
-          },
-          "[\"name\",\"₽ за успешный СЭМД\"]": {
-            "suffix": " ₽",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": " ",
+            "suffix": " ₽"
           },
           "[\"name\",\"Клиник\"]": {
             "decimals": 0,
@@ -540,6 +535,11 @@
           "[\"name\",\"Успешных СЭМД\"]": {
             "decimals": 0,
             "number_separators": "."
+          },
+          "[\"name\",\"₽ за успешный СЭМД\"]": {
+            "decimals": 0,
+            "number_separators": " ",
+            "suffix": " ₽"
           }
         }
       },
@@ -575,14 +575,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "₽ под риском",
         "column_settings": {
           "[\"name\",\"₽ под риском\"]": {
+            "decimals": 0,
             "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
+            "suffix": " ₽"
           }
-        },
-        "scalar.field": "₽ под риском"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -616,14 +616,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "₽ под риском (затык)",
         "column_settings": {
           "[\"name\",\"₽ под риском (затык)\"]": {
+            "decimals": 0,
             "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
+            "suffix": " ₽"
           }
-        },
-        "scalar.field": "₽ под риском (затык)"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -657,14 +657,14 @@
       },
       "display": "scalar",
       "visualization_settings": {
+        "scalar.field": "Клиник без успеха",
         "column_settings": {
           "[\"name\",\"Клиник без успеха\"]": {
-            "number_separators": ".",
             "decimals": 1,
+            "number_separators": ".",
             "suffix": " %"
           }
-        },
-        "scalar.field": "Клиник без успеха"
+        }
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -699,21 +699,21 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"MRR, ₽\"]": {
-            "number_separators": " ",
-            "suffix": " ₽",
-            "decimals": 0
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
-          },
           "[\"name\",\"JID\"]": {
             "decimals": 0,
             "number_separators": "."
           },
+          "[\"name\",\"MRR, ₽\"]": {
+            "decimals": 0,
+            "number_separators": " ",
+            "suffix": " ₽"
+          },
           "[\"name\",\"Клиника\"]": {
             "decimals": 0,
             "number_separators": "."
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
           },
           "[\"name\",\"Попыток\"]": {
             "decimals": 0,

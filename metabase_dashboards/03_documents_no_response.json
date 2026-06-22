@@ -508,15 +508,6 @@
             "decimals": 0,
             "number_separators": "."
           },
-          "[\"name\",\"Отправлено\"]": {
-            "column_title": "Отправлено",
-            "date_abbreviate": true,
-            "date_style": "D MMMM, YYYY",
-            "time_style": "HH:mm"
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
-          },
           "[\"name\",\"ИД документа\"]": {
             "decimals": 0,
             "number_separators": "."
@@ -524,6 +515,15 @@
           "[\"name\",\"Клиника\"]": {
             "decimals": 0,
             "number_separators": "."
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"Отправлено\"]": {
+            "column_title": "Отправлено",
+            "date_abbreviate": true,
+            "date_style": "D MMMM, YYYY",
+            "time_style": "HH:mm"
           }
         }
       },

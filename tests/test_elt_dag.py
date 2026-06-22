@@ -39,7 +39,9 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
 
     # Schedule and batch size come from Variables, not body literals.
     assert 'Variable.get("egisz_extract_schedule", default_var="*/5 * * * *")' in src
-    assert 'Variable.get("egisz_batch_size", default_var=5000)' in src
+    assert 'Variable.get("egisz_batch_size", default_var=50000)' in src
+    assert 'Variable.get("egisz_max_load_rounds", default_var=200)' in src
+    assert "while rounds < max_rounds" in src
     assert "BATCH_SIZE = 5000" not in src
 
 

@@ -45,34 +45,47 @@ def _proxy_connection():
 def egisz_extract_pipeline() -> None:
     @task
     def load_exchangelog_batch() -> BatchMetadata:
-        batch_size = int(Variable.get("egisz_batch_size", default_var=5000))
+        batch_size = int(Variable.get("egisz_batch_size", default_var=50000))
+        max_rounds = int(Variable.get("egisz_max_load_rounds", default_var=200))
 
         pg_conn = _dwh_connection()
         try:
             last_logid = int(get_cursors(pg_conn, PIPELINE).get("last_logid", 0))
+            cursor_logid = last_logid
+            total_loaded = 0
+            rounds = 0
 
-            fb_conn = _proxy_connection()
-            try:
-                started_at = time.monotonic()
-                log_rows = fetch_exchangelog_after_cursor(
-                    fb_conn,
-                    after_logid=last_logid,
-                    limit=batch_size,
-                )
-                log.info(
-                    "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs.",
-                    len(log_rows),
-                    last_logid,
-                    time.monotonic() - started_at,
-                )
-                cursor_logid = max((int(row["logid"]) for row in log_rows), default=last_logid)
-            finally:
-                fb_conn.close()
+            while rounds < max_rounds:
+                fb_conn = _proxy_connection()
+                try:
+                    started_at = time.monotonic()
+                    log_rows = fetch_exchangelog_after_cursor(
+                        fb_conn,
+                        after_logid=cursor_logid,
+                        limit=batch_size,
+                    )
+                    log.info(
+                        "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs (round %s).",
+                        len(log_rows),
+                        cursor_logid,
+                        time.monotonic() - started_at,
+                        rounds + 1,
+                    )
+                finally:
+                    fb_conn.close()
 
-            if log_rows:
+                if not log_rows:
+                    break
+
                 load_raw_logs(pg_conn, log_rows)
-                log.info("Loaded %s EXCHANGELOG row(s) into exchangelog_raw.", len(log_rows))
+                total_loaded += len(log_rows)
+                cursor_logid = max(int(row["logid"]) for row in log_rows)
+                rounds += 1
 
+                if len(log_rows) < batch_size:
+                    break
+
+            if total_loaded > 0:
                 # Refresh planner statistics in the same step that loaded the batch: after a bulk
                 # COPY pg_class.reltuples stays 0, the planner picks seq-scans over the functional
                 # indexes, and Metabase queries stall for minutes. Autovacuum won't ANALYZE a quiet
@@ -82,15 +95,19 @@ def egisz_extract_pipeline() -> None:
                 with pg_conn.cursor() as cur:
                     cur.execute("ANALYZE public.exchangelog_raw")
                 pg_conn.set_session(autocommit=False)
-                log.info("ANALYZE done for exchangelog_raw after this batch.")
+                log.info(
+                    "ANALYZE done for exchangelog_raw after %s row(s) in %s round(s).",
+                    total_loaded,
+                    rounds,
+                )
 
             log.info(
                 "Load complete: %s row(s), next LOGID cursor=%s.",
-                len(log_rows),
+                total_loaded,
                 cursor_logid,
             )
             return {
-                "count": len(log_rows),
+                "count": total_loaded,
                 "last_logid": last_logid,
                 "cursor_logid": cursor_logid,
             }
