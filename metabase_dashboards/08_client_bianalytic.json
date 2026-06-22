@@ -34,7 +34,8 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "СЭМД за период",
@@ -76,7 +77,7 @@
         "column_settings": {
           "[\"name\",\"СЭМД за период\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -135,11 +136,12 @@
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": " "
           },
           "[\"name\",\"Доля успеха с первой попытки (клиент), %\"]": {
             "decimals": 1,
-            "number_separators": ".",
+            "number_separators": " ",
             "suffix": " %"
           }
         }
@@ -199,7 +201,7 @@
         "column_settings": {
           "[\"name\",\"Медиана доставки, мин\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -257,8 +259,8 @@
         "scalar.field": "ЭМД/сутки",
         "column_settings": {
           "[\"name\",\"ЭМД/сутки\"]": {
-            "decimals": 0,
-            "number_separators": "."
+            "decimals": 1,
+            "number_separators": " "
           }
         }
       },
@@ -283,7 +285,8 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 4,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "Динамика по типам СЭМД (месяцы)",
@@ -329,7 +332,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -394,12 +397,12 @@
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "number_separators": ".",
+            "number_separators": " ",
             "suffix": " %"
           },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -464,11 +467,11 @@
         "column_settings": {
           "[\"name\",\"Документов с метрикой\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Доставка, мин\"]": {
             "decimals": 1,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -529,15 +532,15 @@
         "column_settings": {
           "[\"name\",\"Врач\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Пациент\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Текст ошибки\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -562,7 +565,8 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 25,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "Уникальных пациентов",
@@ -604,7 +608,7 @@
         "column_settings": {
           "[\"name\",\"Пациентов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -663,7 +667,7 @@
         "column_settings": {
           "[\"name\",\"Врачей\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -721,8 +725,8 @@
         "scalar.field": "ЭМД/пациент",
         "column_settings": {
           "[\"name\",\"ЭМД/пациент\"]": {
-            "decimals": 0,
-            "number_separators": "."
+            "decimals": 1,
+            "number_separators": " "
           }
         }
       },
@@ -784,11 +788,11 @@
         "column_settings": {
           "[\"name\",\"Документов на пациента\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Пациентов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -849,20 +853,20 @@
         "column_settings": {
           "[\"name\",\"% успеха\"]": {
             "decimals": 1,
-            "number_separators": ".",
+            "number_separators": " ",
             "suffix": " %"
           },
           "[\"name\",\"Врач\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Уникальных пациентов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },

@@ -208,12 +208,12 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
@@ -315,7 +315,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -411,7 +411,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Наименование СЭМД\"]": {
             "column_title": "Наименование СЭМД"
@@ -506,15 +506,11 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"ИД документа\"]": {
             "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Клиника\"]": {
-            "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"

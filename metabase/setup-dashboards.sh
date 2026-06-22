@@ -294,10 +294,17 @@ existing_dashboard_id() {
   fi
 }
 
+declare -gA CARD_REGISTRY=()
+
 existing_card_id() {
   local card_name="$1"
-  api_request GET "/api/collection/${COL_ID}/items?models=card&limit=1000" |
-    jq -r --arg name "${card_name}" '[.data[]? | select(.model == "card" and .name == $name) | .id][0] // empty'
+  api_request GET "/api/card" |
+    jq -r --arg name "${card_name}" --argjson col "${COL_ID}" '
+      [.[]?
+        | select(.collection_id == $col and .name == $name and (.archived | not))
+        | .id]
+      | if length > 0 then .[-1] else empty end
+    '
 }
 
 expected_card_names() {
@@ -401,9 +408,16 @@ dashboard_payload() {
   ' "${file}"
 }
 
+card_query_fingerprint() {
+  jq -c '{
+    display: (.display // ""),
+    query: (.dataset_query.native.query // "")
+  }'
+}
+
 create_or_update_card() {
   local file="$1"
-  local payload card_id card_name
+  local payload card_id card_name existing_fp new_fp
   payload="$(
     dashboard_payload "${file}" |
       jq '{
@@ -417,8 +431,17 @@ create_or_update_card() {
       }'
   )"
   card_name="$(jq -r '.name' "${file}")"
+  new_fp="$(printf '%s' "${payload}" | card_query_fingerprint)"
   card_id="$(existing_card_id "${card_name}")"
   if [ -n "${card_id}" ]; then
+    existing_fp="$(api_request GET "/api/card/${card_id}" | card_query_fingerprint)"
+    if [ "${existing_fp}" = "${new_fp}" ]; then
+      # Карточка с тем же именем переиспользуется несколькими дашбордами — обновляем
+      # visualization_settings на месте (например форматирование чисел), не архивируя.
+      api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+      printf '%s\n' "${card_id}"
+      return 0
+    fi
     # Metabase merges native-query metadata on card updates and can keep stale
     # template tags that are no longer present in dashboard JSON. Recreate the
     # card object while preserving the dashboard object itself.
@@ -427,6 +450,26 @@ create_or_update_card() {
   card_id="$(api_request POST "/api/card" "${payload}" | jq -r '.id')"
   [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot create or update card from ${file}"
   printf '%s\n' "${card_id}"
+}
+
+sync_all_cards() {
+  local file i card_file card_name
+  for file in "${DASHBOARDS_DIR}"/*.json; do
+    [ -f "${file}" ] || continue
+    local num_cards
+    num_cards="$(jq '.cards | length' "${file}")"
+    for i in $(seq 0 $((num_cards - 1))); do
+      card_file="$(mktemp)"
+      jq -c ".cards[${i}]" "${file}" > "${card_file}"
+      if [ "$(jq -r '.display // empty' "${card_file}")" = "text" ]; then
+        rm -f "${card_file}" >/dev/null 2>&1 || true
+        continue
+      fi
+      card_name="$(jq -r '.name' "${card_file}")"
+      CARD_REGISTRY["${card_name}"]="$(create_or_update_card "${card_file}")"
+      rm -f "${card_file}" >/dev/null 2>&1 || true
+    done
+  done
 }
 
 create_or_update_dashboard() {
@@ -474,7 +517,9 @@ create_or_update_dashboard() {
         }' "${card_file}")"
         mappings="[]"
       else
-        card_id="$(create_or_update_card "${card_file}")"
+        card_name="$(jq -r '.name' "${card_file}")"
+        card_id="${CARD_REGISTRY[${card_name}]:-}"
+        [ -n "${card_id}" ] || fail "card is missing from registry after sync: ${card_name}"
         card_id_json="${card_id}"
         viz_settings="{}"
         mappings="$(
@@ -629,6 +674,7 @@ maybe_skip_dashboard_import
 
 log_info "Importing dashboards to collection '${COLLECTION_NAME}' from ${DASHBOARDS_DIR}"
 archive_stale_collection_cards
+sync_all_cards
 for file in "${DASHBOARDS_DIR}"/*.json; do
   [ -f "${file}" ] || continue
   dashboard_name=$(jq -r '.name' "${file}")

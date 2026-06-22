@@ -105,7 +105,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "series_settings": {
@@ -230,11 +230,11 @@
         "column_settings": {
           "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Ошибка связи\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Час\"]": {
             "date_style": "D MMMM, YYYY",
@@ -376,7 +376,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.dimensions": [
@@ -546,7 +546,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           },
           "[\"name\",\"Проверка\"]": {
             "column_title": "Проверка"
@@ -596,7 +596,8 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 21,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "Документов за период",
@@ -665,7 +666,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -771,12 +772,13 @@
         "column_settings": {
           "[\"name\",\"Доля ошибок за период, %\"]": {
             "decimals": 1,
-            "number_separators": ".",
+            "number_separators": " ",
             "suffix": " %"
           },
           "[\"name\",\"Доля ошибок, %\"]": {
             "decimals": 1,
-            "suffix": " %"
+            "suffix": " %",
+            "number_separators": " "
           }
         }
       },
@@ -882,7 +884,7 @@
         "column_settings": {
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -938,7 +940,7 @@
         "column_settings": {
           "[\"name\",\"В обработке\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -953,7 +955,8 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 25,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "Доля ошибок по дням",
@@ -1028,7 +1031,7 @@
         "column_settings": {
           "[\"name\",\"Доля ошибок, %\"]": {
             "decimals": 1,
-            "number_separators": ".",
+            "number_separators": " ",
             "suffix": " %"
           }
         },
@@ -1077,7 +1080,8 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 32,
-      "col": 0
+      "col": 0,
+      "visualization_settings": {}
     },
     {
       "name": "Сбоев связи за период",
@@ -1118,7 +1122,7 @@
         "column_settings": {
           "[\"name\",\"Сбоев связи\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -1180,7 +1184,7 @@
         "column_settings": {
           "[\"name\",\"Пик сбоев за день\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         }
       },
@@ -1248,7 +1252,7 @@
         "column_settings": {
           "[\"name\",\"Документов с ошибкой связи\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -1321,7 +1325,7 @@
         "column_settings": {
           "[\"name\",\"Количество\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [
@@ -1394,7 +1398,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": "."
+            "number_separators": " "
           }
         },
         "graph.metrics": [

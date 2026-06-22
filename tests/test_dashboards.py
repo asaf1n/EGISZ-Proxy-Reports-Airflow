@@ -265,6 +265,8 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     query = card["dataset_query"]["native"]["query"]
 
     assert card["display"] == "table"
+    assert card["sizeX"] == 12
+    assert card["col"] == 0
     assert "v_rpt_documents_ui" in query
     # Срез по парам клиника × тип СЭМД с долей ошибок по документному универсуму.
     assert "GROUP BY 1, 3" in query
@@ -273,10 +275,33 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in query
     # Показываем только пары с хотя бы одной ошибкой и без ограничения числа строк.
     assert "HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('async_error', 'network_error')) > 0" in query
-    assert "LIMIT" not in query
+    assert "ORDER BY 4 DESC" in query
+    assert '"Код СЭМД"' in query
     assert card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_documents_ui",
         "field_name": "Дата обработки",
+    }
+
+
+def test_quality_error_rate_error_kind_by_semd_card() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: тип ошибки × тип СЭМД")
+    query = card["dataset_query"]["native"]["query"]
+
+    assert card["display"] == "table"
+    assert card["sizeX"] == 12
+    assert card["col"] == 12
+    assert card["row"] == 25
+    assert "v_rpt_error_category_breakdown_ui" in query
+    assert "WITH pairs AS" in query
+    assert "SUM(docs) OVER (PARTITION BY semd)" in query
+    assert '"Код СЭМД"' in query
+    assert "COUNT(DISTINCT \"Документ (ключ учёта)\")" in query
+    assert "ORDER BY 3 DESC" in query
+    assert "LIMIT" not in query
+    assert card["metabase-field-filters"]["dwh_date"] == {
+        "table_ref": "public.v_rpt_error_category_breakdown_ui",
+        "field_name": "Обработано IPS",
     }
 
 
@@ -390,7 +415,7 @@ def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
     quality_queries = _native_queries(quality)
     assert any(
         '"Статус (код)" IN (\'success\', \'async_error\', \'network_error\')' in q
-        and "Тип СЭМД (код · НСИ)" in q
+        and '"Код СЭМД"' in q
         for q in quality_queries
     )
 
@@ -413,6 +438,23 @@ def test_error_analytics_use_raw_json_column_for_grouping() -> None:
     assert all("\"Ошибки JSON raw\"" not in query for query in queries)
 
 
+def test_quality_success_slices_sort_by_total_desc() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    clinic = next(c for c in dashboard["cards"] if c.get("name") == "Успешность по клиникам")
+    semd = next(c for c in dashboard["cards"] if c.get("name") == "Успешность по типам СЭМД")
+    assert "ORDER BY 3 DESC" in clinic["dataset_query"]["native"]["query"]
+    assert "ORDER BY 2 DESC" in semd["dataset_query"]["native"]["query"]
+    assert '"Код СЭМД"' in semd["dataset_query"]["native"]["query"]
+    assert clinic["row"] == 18
+
+
+def test_quality_dashboard_has_no_slice_section_headers() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    text_cards = [c.get("text", "") for c in dashboard["cards"] if c.get("display") == "text"]
+    assert not any(t.startswith("## Успешность по срезам") for t in text_cards)
+    assert not any(t.startswith("## Срезы ошибок по парам") for t in text_cards)
+
+
 def test_quality_error_structure_section_is_single_category_colored_card() -> None:
     dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
     names = {c.get("name") for c in dashboard["cards"]}
@@ -430,6 +472,7 @@ def test_quality_error_structure_section_is_single_category_colored_card() -> No
     assert "GROUP BY 1, 2" in query and "LIMIT 15" in query
     assert viz["graph.dimensions"] == ["Вид ошибки", "Категория ошибки"]
     assert viz["stackable.stack_type"] == "stacked"
+    assert viz.get("graph.label_value_formatting") == "compact"
     # Цвет должен наследоваться от категории — фиксированного series-цвета быть не должно.
     assert "series_settings" not in viz
 
@@ -439,12 +482,27 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     card = next(c for c in dashboard["cards"] if c.get("name") == "Виды ошибок по типам СЭМД")
     query = card["dataset_query"]["native"]["query"]
 
-    assert card["display"] == "row"
+    assert card["display"] == "bar"
     # Хвост типов СЭМД с пренебрежимо малой долей ошибок отсекается top-15 по объёму.
     assert "ROW_NUMBER() OVER (ORDER BY total DESC" in query
     assert "WHERE r.rn <= 15" in query
-    # Знаменатель остаётся общим числом ошибок (доля честно «от всех»).
-    assert "(SELECT total FROM grand)" in query
+    assert 'AS "Документов"' in query
+    assert card["visualization_settings"]["graph.metrics"] == ["Документов"]
+    assert card["visualization_settings"]["stackable.stack_type"] == "normalized"
+    assert '"Код СЭМД"' in query
+
+
+def test_quality_percent_columns_use_comma_decimal_separator() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    percent_cols: list[str] = []
+    for card in dashboard["cards"]:
+        cs = (card.get("visualization_settings") or {}).get("column_settings") or {}
+        for col_key, settings in cs.items():
+            if isinstance(settings, dict) and settings.get("suffix") == " %":
+                percent_cols.append(f"{card.get('name')} / {col_key}")
+                assert settings.get("decimals") == 1
+                assert settings.get("number_separators") == ", "
+    assert percent_cols, "expected percent column_settings in quality dashboard"
 
 
 def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
@@ -597,7 +655,56 @@ def test_shared_cards_use_identical_queries_across_dashboards() -> None:
     assert not mismatches, "Shared card names must reference the same SQL: " + ", ".join(mismatches)
 
 
-def test_no_retired_dashboard_files_remain() -> None:
+def test_dashboard_numeric_formatting_uses_space_thousands() -> None:
+    """Все числовые column_settings должны использовать пробел как разделитель тысяч (RU)."""
+    dot_separators: list[str] = []
+    missing_separators: list[str] = []
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            card_name = card.get("name", "(text)")
+            cs = (card.get("visualization_settings") or {}).get("column_settings") or {}
+            for col_key, settings in cs.items():
+                if not isinstance(settings, dict):
+                    continue
+                if "number_separators" not in settings:
+                    if "decimals" in settings or "suffix" in settings:
+                        missing_separators.append(f"{path.name} / {card_name} / {col_key}")
+                    continue
+                if settings["number_separators"] == ".":
+                    dot_separators.append(f"{path.name} / {card_name} / {col_key}")
+                elif settings["number_separators"] not in (" ", ", "):
+                    dot_separators.append(
+                        f"{path.name} / {card_name} / {col_key}: {settings['number_separators']!r}"
+                    )
+    assert not dot_separators, "US-style separators still present: " + ", ".join(dot_separators)
+    assert not missing_separators, "Numeric columns missing separator: " + ", ".join(missing_separators)
+
+
+def test_scalar_cards_use_appropriate_display_format() -> None:
+    executive = json.loads(Path("metabase_dashboards/05_executive.json").read_text(encoding="utf-8"))
+    clinic_card = next(c for c in executive["cards"] if c.get("name") == "Клиник без единого успеха")
+    clinic_fmt = clinic_card["visualization_settings"]["column_settings"]['["name","Клиник без успеха"]']
+    assert clinic_fmt["decimals"] == 0
+    assert "suffix" not in clinic_fmt
+    assert clinic_fmt["number_separators"] == " "
+
+    client = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    by_name = {c.get("name"): c for c in client["cards"]}
+    for text_scalar in (
+        "Успешно зарегистрирован",
+        "Ошибка асинхронного ответа РЭМД",
+        "Ошибка связи",
+        "Среднее время регистрации СЭМД",
+    ):
+        viz = by_name[text_scalar]["visualization_settings"]
+        assert "column_settings" not in viz, f"{text_scalar} returns pre-formatted text"
+
+    bi = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
+    ratio = next(c for c in bi["cards"] if c.get("name") == "ЭМД на пациента (среднее)")
+    ratio_fmt = ratio["visualization_settings"]["column_settings"]['["name","ЭМД/пациент"]']
+    assert ratio_fmt["decimals"] == 1
+
     names = {p.name for p in _dashboard_paths()}
     # старые версии переименованных дашбордов должны быть удалены, иначе setup-dashboards.sh
     # импортирует дубликаты в коллекцию.
