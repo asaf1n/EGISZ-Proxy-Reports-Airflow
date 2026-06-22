@@ -1,7 +1,7 @@
 {
   "name": "Ошибки и качество данных",
   "width": "full",
-  "description": "**Качество интеграции и передачи СЭМД.** **СЭМД** — структурированный меддокумент; учёт экземпляра — **COUNT(DISTINCT «Документ (ключ учёта)»)**; «Тип СЭМД (код · НСИ)» — паспорт НСИ 1520. **Единые фильтры дашборда:** период (**«Обработано IPS»** `dwh_date_filter` для колбэков / календарный день `connectivity_day_filter` для доступности; карточки транспорта/ошибок связи без фильтра по дате — весь доступный период), **JID клиники** (`jid_filter`), **Тип СЭМД** по коду НСИ (`semd_type_filter`) и **статус документа** (`status_filter` → 4 значения «Статуса», в т.ч. «Ошибка асинхронного ответа РЭМД» и «Ошибка связи»). Статус — это жизненный цикл документа, не путать с **категорией ошибки** (`egisz_error_category`, ~10 групп внутри статусов-ошибок) и **видом/типом ошибки** (`error_type`, атомарные виды). **Две метрики ошибок (не путать):** **(а)** *документов с ошибкой* — COUNT DISTINCT «Документ (ключ учёта)» в `v_rpt_documents_ui` со «Статус (код)» IN ('async_error','network_error'); эталон — «Итоги по ошибкам», к нему сходятся рейтинги. **(б)** *по виду ошибки* — атомарная разбивка через `v_rpt_error_category_breakdown_ui` (RUNTIME `error_type` атомизирован по «·» и «-» на конкретные виды и сведён в категории через `egisz_error_category`); один документ с N видами учитывается N раз. Сунбёрст «Ошибки по виду» и stacked-bar «Виды ошибок по типам СЭМД» используют (б). **Ошибки связи (транспорт):** сбой канала (журнал LOGSTATE=3) из `v_rpt_network_errors_detail_ui`, не текст отказа регистрации в XML ответа РЭМД. **Доступность транспорта:** `v_rpt_connectivity_global_daily_ui` / `v_rpt_clinic_connectivity_daily_ui` — прокси успехи/(успехи+ошибки связи).",
+  "description": "**Качество интеграции и передачи СЭМД.** **СЭМД** — структурированный меддокумент; учёт — **COUNT(DISTINCT «Документ (ключ учёта)»)**. **Фильтры:** период **«Обработано IPS»** (`dwh_date_filter`), **JID клиники**, **Тип СЭМД**, **статус**. **Метрики:** *(а)* документов с ошибкой — `async_error` + `network_error` в `v_rpt_documents_ui`; *(б)* разбивка по виду — `v_rpt_error_category_breakdown_ui` (один документ с N видами = N строк). **Ошибки связи (транспорт) и доступность канала** — дашборд «Сервис интеграции» (02).",
   "parameters": [
     {
       "id": "e5f6a7b8-c9d0-4123-ef45-6789abcdef01",
@@ -10,13 +10,6 @@
       "type": "date/all-options",
       "sectionId": "date",
       "default": "past30days~"
-    },
-    {
-      "id": "f5e6d7c8-b9a0-4123-cdef-012345678902",
-      "name": "Период (доступность: календарный день)",
-      "slug": "connectivity_day_filter",
-      "type": "date/all-options",
-      "sectionId": "date"
     },
     {
       "id": "a1b2c3d4-0001-4001-8001-0000000004a1",
@@ -43,7 +36,7 @@
   "cards": [
     {
       "display": "text",
-      "text": "## Сводка ошибок за период\nЭталонные KPI по документам со статусом «Ошибка асинхронного ответа РЭМД» или «Ошибка связи». Доля ошибок — среди финализированных документов (без «В обработке»).",
+      "text": "## Сводка за период\nСчётчики документов с ошибкой (отказ РЭМД или связь). Доля — среди финализированных. Транспорт и доступность канала — дашборд **02**.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
@@ -217,10 +210,72 @@
         },
         "scalar.field": "Клиник с ошибками"
       },
-      "sizeX": 12,
+      "sizeX": 6,
       "sizeY": 3,
       "row": 1,
       "col": 12,
+      "metabase-field-filters": {
+        "dwh_date": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Дата обработки"
+        },
+        "jid": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "JID клиники"
+        },
+        "semd_type": {
+          "table_ref": "public.v_rpt_documents_ui",
+          "field_name": "Код СЭМД"
+        }
+      }
+    },
+    {
+      "name": "Ошибок регистрации в РЭМД",
+      "description": "Документы с отказом в асинхронном ответе РЭМД (async_error), без транспортных сбоев.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'async_error')::bigint AS \"Ошибок регистрации в РЭМД\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]",
+          "template-tags": {
+            "dwh_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fb040105-0105-4105-8105-000000000001",
+              "name": "dwh_date",
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID клиники",
+              "id": "fb040105-0105-4105-8105-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип СЭМД (код НСИ)",
+              "id": "fb040105-0105-4105-8105-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Ошибок регистрации в РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": "."
+          }
+        },
+        "scalar.field": "Ошибок регистрации в РЭМД"
+      },
+      "sizeX": 6,
+      "sizeY": 3,
+      "row": 1,
+      "col": 18,
       "metabase-field-filters": {
         "dwh_date": {
           "table_ref": "public.v_rpt_documents_ui",
@@ -392,7 +447,7 @@
           "Документов"
         ],
         "stackable.stack_type": "stacked",
-        "graph.show_values": true,
+        "graph.show_values": false,
         "graph.x_axis.title_text": "Документов",
         "graph.y_axis.title_text": "Вид ошибки",
         "column_settings": {
@@ -411,7 +466,7 @@
         }
       },
       "sizeX": 24,
-      "sizeY": 9,
+      "sizeY": 7,
       "row": 11,
       "col": 0,
       "metabase-field-filters": {
@@ -431,10 +486,10 @@
     },
     {
       "display": "text",
-      "text": "## Успешность по срезам\nСортировка по возрастанию % успеха — проблемные клиники и типы СЭМД наверху. «Всего» включает все 4 статуса; % успеха — только среди финализированных.",
+      "text": "## Успешность по срезам\nПроблемные клиники и типы СЭМД — вверху (% успеха по возрастанию). Отказы РЭМД в колонке «Отказ РЭМД»; транспорт — дашборд **02**.",
       "sizeX": 24,
       "sizeY": 1,
-      "row": 20,
+      "row": 18,
       "col": 0
     },
     {
@@ -443,7 +498,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), 'Неизвестно') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), 'Неизвестно') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='async_error')::bigint AS \"Ошибок асинхронного ответа\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='network_error')::bigint AS \"Ошибок связи (транспорт)\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='waiting')::bigint AS \"В обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 8 ASC NULLS LAST, 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), 'Неизвестно') AS \"JID клиники\", COALESCE(MAX(NULLIF(TRIM(\"Наименование клиники\"::text), '')), 'Неизвестно') AS \"Наименование клиники\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Всего документов\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success')::bigint AS \"Успешно\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='async_error')::bigint AS \"Ошибок асинхронного ответа\", COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='waiting')::bigint AS \"В обработке\", ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\"='success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Процент успешных (по документам)\" FROM public.v_rpt_documents_ui WHERE COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 7 ASC NULLS LAST, 3 DESC",
           "template-tags": {
             "dwh_date": {
               "widget-type": "date/all-options",
@@ -501,10 +556,6 @@
             "enabled": true
           },
           {
-            "name": "Ошибок связи (транспорт)",
-            "enabled": true
-          },
-          {
             "name": "В обработке",
             "enabled": true
           },
@@ -536,12 +587,7 @@
             "number_separators": "."
           },
           "[\"name\",\"Ошибок асинхронного ответа\"]": {
-            "column_title": "Ошибка асинхронного ответа РЭМД",
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Ошибок связи (транспорт)\"]": {
-            "column_title": "Ошибка связи",
+            "column_title": "Отказ РЭМД",
             "decimals": 0,
             "number_separators": "."
           },
@@ -552,7 +598,8 @@
           },
           "[\"name\",\"Процент успешных (по документам)\"]": {
             "column_title": "% успеха",
-            "decimals": 0,
+            "decimals": 1,
+            "suffix": " %",
             "number_separators": "."
           },
           "[\"name\",\"Процент успешных\"]": {
@@ -578,8 +625,8 @@
         ]
       },
       "sizeX": 12,
-      "sizeY": 8,
-      "row": 21,
+      "sizeY": 7,
+      "row": 19,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -690,7 +737,8 @@
           },
           "[\"name\",\"Процент успешных\"]": {
             "column_title": "% успеха",
-            "decimals": 0,
+            "decimals": 1,
+            "suffix": " %",
             "number_separators": "."
           }
         },
@@ -713,8 +761,8 @@
         ]
       },
       "sizeX": 12,
-      "sizeY": 8,
-      "row": 21,
+      "sizeY": 7,
+      "row": 19,
       "col": 12,
       "metabase-field-filters": {
         "dwh_date": {
@@ -802,8 +850,8 @@
         }
       },
       "sizeX": 24,
-      "sizeY": 13,
-      "row": 29,
+      "sizeY": 10,
+      "row": 26,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -819,6 +867,14 @@
           "field_name": "Код СЭМД"
         }
       }
+    },
+    {
+      "display": "text",
+      "text": "## Пары клиника × тип СЭМД\nТолько срезы с ≥1 ошибкой; сортировка по % ошибок.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 36,
+      "col": 0
     },
     {
       "name": "% ошибок: клиника × тип СЭМД",
@@ -935,8 +991,8 @@
         ]
       },
       "sizeX": 24,
-      "sizeY": 9,
-      "row": 42,
+      "sizeY": 8,
+      "row": 37,
       "col": 0,
       "metabase-field-filters": {
         "dwh_date": {
@@ -950,433 +1006,6 @@
         "semd_type": {
           "table_ref": "public.v_rpt_documents_ui",
           "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "display": "text",
-      "text": "## Ошибки связи (транспорт)\nСбой канала LOGSTATE=3, не текст отказа регистрации в XML. Без фильтра по дате — весь доступный период; срез только по **JID клиники** и **Типу СЭМД**.",
-      "sizeX": 24,
-      "sizeY": 1,
-      "row": 51,
-      "col": 0
-    },
-    {
-      "name": "Топ клиник по сбоям транспорта",
-      "description": "Сбой доставки/транспорта (LOGSTATE=3), не содержимое ответа РЭМД. **Клиника (транспорт)** — связанный колбэк в аналитике либо МО по числовому JID из `gost-…` в журнале. Без фильтра по дате — весь доступный период.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(\"Клиника (транспорт)\"), ''), 'Неизвестно') AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 10 ) SELECT CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 10 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb040901-0901-4901-8901-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb040901-0901-4901-8901-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Клиника"
-        ],
-        "graph.metrics": [
-          "Количество"
-        ],
-        "graph.show_values": true,
-        "series_settings": {
-          "Количество": {
-            "color": "#F2994A"
-          }
-        },
-        "column_settings": {
-          "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника",
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Количество\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 52,
-      "col": 0,
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "name": "Типы сетевых ошибок (все дни)",
-      "description": "Транспорт: группировка по **нормализованному** тексту сетевой ошибки (URL/host заменены на плейсхолдеры при загрузке в аналитику). Это не формулировки отказа регистрации из XML ответа РЭМД. Уникальные сущности — **COUNT(DISTINCT «Документ (ключ учёта)»)**. Без фильтра по дате — весь доступный период.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(\"Тип сетевой ошибки\"), ''), 'Неизвестно'), 120) AS lbl, COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS cnt FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Количество\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb041001-1001-4001-8a01-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb041001-1001-4001-8a01-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Тип сетевой ошибки"
-        ],
-        "graph.metrics": [
-          "Количество"
-        ],
-        "graph.show_values": true,
-        "series_settings": {
-          "Количество": {
-            "color": "#F9D45C"
-          }
-        },
-        "column_settings": {
-          "[\"name\",\"Количество\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Тип сетевой ошибки\"]": {
-            "column_title": "Тип сетевой ошибки",
-            "decimals": 0,
-            "number_separators": "."
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 52,
-      "col": 12,
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "name": "Тренд ошибок связи по дням",
-      "description": "Транспорт по календарным дням: **COUNT(DISTINCT «Документ (ключ учёта)»)**; ось — **«Дата создания документа»**. Без фильтра по дате — весь доступный период.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT date_trunc('day', \"Дата создания документа\")::date AS \"День\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов с ошибкой связи\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb041101-1101-4101-8b01-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb041101-1101-4101-8b01-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "День"
-        ],
-        "graph.show_values": true,
-        "graph.x_axis.scale": "timeseries",
-        "column_settings": {
-          "[\"name\",\"Документов с ошибкой связи\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          }
-        },
-        "graph.metrics": [
-          "Документов с ошибкой связи"
-        ],
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Ошибок"
-      },
-      "sizeX": 24,
-      "sizeY": 5,
-      "row": 58,
-      "col": 0,
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "name": "Детализация ошибок связи",
-      "description": "Транспорт: фрагмент текста канала и нормализованный тип сетевой ошибки для разбора инцидента. Колонка «Сводка ошибки регистрации» относится к **уже доставленному** ответу (если удалось сопоставить) и не объясняет сбой доставки. Без фильтра по дате — весь доступный период. Технические трассировочные идентификаторы (relatesToMessage / localUid / emdrId / MSGID / LOGID) убраны — поиск по ним на дашборде «Архив СЭМД».",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"Дата создания документа\", \"Клиника (транспорт)\", \"JID клиники\", \"Тип СЭМД (код · НСИ)\", \"Тип сетевой ошибки\", LEFT(\"Текст сетевой ошибки\", 160) AS \"Сеть (фрагмент)\", \"Сводка ошибки регистрации\" FROM public.v_rpt_network_errors_detail_ui WHERE 1=1 [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY \"Дата создания документа\" DESC NULLS LAST LIMIT 150",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb041201-1201-4201-8c01-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb041201-1201-4201-8c01-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Сеть (фрагмент)\"]": {
-            "column_title": "Сеть (фрагмент)"
-          },
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД"
-          }
-        }
-      },
-      "sizeX": 24,
-      "sizeY": 8,
-      "row": 63,
-      "col": 0,
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "JID клиники"
-        },
-        "semd_type": {
-          "table_ref": "public.v_rpt_network_errors_detail_ui",
-          "field_name": "Код СЭМД"
-        }
-      }
-    },
-    {
-      "display": "text",
-      "text": "## Доступность транспорта\nПрокси: успехи / (успехи + ошибки связи). Ось — календарный день (`connectivity_day_filter`).",
-      "sizeX": 24,
-      "sizeY": 1,
-      "row": 71,
-      "col": 0
-    },
-    {
-      "name": "Объёмы доступности по дням",
-      "description": "Успешные колбэки РЭМД (документы) и ошибки связи по дням (UTC). Источник: `v_rpt_connectivity_global_daily_ui`. Ось — `connectivity_day_filter`.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"День\", \"Успешные ответы РЭМД (документов)\", \"Ошибки связи (документов)\" FROM public.v_rpt_connectivity_global_daily_ui WHERE 1=1 [[AND {{connectivity_day}}]] ORDER BY 1",
-          "template-tags": {
-            "connectivity_day": {
-              "widget-type": "date/all-options",
-              "display-name": "По календарному дню (доступность)",
-              "id": "fb041401-1401-4401-8e01-000000000001",
-              "name": "connectivity_day",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "День"
-        ],
-        "graph.show_values": true,
-        "graph.x_axis.scale": "timeseries",
-        "column_settings": {
-          "[\"name\",\"Ошибки связи (документов)\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Успешные ответы РЭМД (документов)\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          }
-        },
-        "graph.metrics": [
-          "Успешные ответы РЭМД (документов)",
-          "Ошибки связи (документов)"
-        ],
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Попыток"
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 72,
-      "col": 0,
-      "metabase-field-filters": {
-        "connectivity_day": {
-          "table_ref": "public.v_rpt_connectivity_global_daily_ui",
-          "field_name": "День"
-        }
-      }
-    },
-    {
-      "name": "Доля доступности по дням",
-      "description": "Прокси: успехи / (успехи + ошибки связи) × 100 %. Не SLA; разные временные оси колбэка и журнала сети.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"День\", \"Доступность транспорта (прибл.), %\" FROM public.v_rpt_connectivity_global_daily_ui WHERE 1=1 [[AND {{connectivity_day}}]] ORDER BY 1",
-          "template-tags": {
-            "connectivity_day": {
-              "widget-type": "date/all-options",
-              "display-name": "По календарному дню (доступность)",
-              "id": "fb041501-1501-4501-8f01-000000000001",
-              "name": "connectivity_day",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "line",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "День"
-        ],
-        "graph.show_values": true,
-        "graph.x_axis.scale": "timeseries",
-        "graph.metrics": [
-          "Доступность транспорта (прибл.), %"
-        ],
-        "column_settings": {
-          "[\"name\",\"Доступность транспорта (прибл.), %\"]": {
-            "decimals": 1,
-            "suffix": " %",
-            "number_separators": "."
-          }
-        },
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Доля доступности, %"
-      },
-      "sizeX": 12,
-      "sizeY": 6,
-      "row": 72,
-      "col": 12,
-      "metabase-field-filters": {
-        "connectivity_day": {
-          "table_ref": "public.v_rpt_connectivity_global_daily_ui",
-          "field_name": "День"
-        }
-      }
-    },
-    {
-      "name": "Доступность транспорта: день × JID",
-      "description": "Сводка ответов РЭМД и ошибок связи по JID и дню. Ключ JID для сети: колбэк или gost из журнала. Фильтр — `connectivity_day_filter` и **JID клиники**.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT \"День\", \"JID клиники (ключ)\", \"Наименование клиники\", \"Ответы РЭМД: успех (документов)\", \"Ответы РЭМД: отказ (документов)\", \"Ошибки связи (документов)\", \"Доступность транспорта (прибл.), %\" FROM public.v_rpt_clinic_connectivity_daily_ui WHERE 1=1 [[AND {{connectivity_day}}]] [[AND {{jid}}]] ORDER BY \"День\" DESC NULLS LAST, \"Ошибки связи (документов)\" DESC NULLS LAST LIMIT 600",
-          "template-tags": {
-            "connectivity_day": {
-              "widget-type": "date/all-options",
-              "display-name": "По календарному дню (доступность)",
-              "id": "fb041601-1601-4601-8001-000000000001",
-              "name": "connectivity_day",
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "fb041601-1601-4601-8001-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Ответы РЭМД: отказ (документов)\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Ответы РЭМД: успех (документов)\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Ошибки связи (документов)\"]": {
-            "decimals": 0,
-            "number_separators": "."
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
-          }
-        }
-      },
-      "sizeX": 24,
-      "sizeY": 8,
-      "row": 78,
-      "col": 0,
-      "metabase-field-filters": {
-        "connectivity_day": {
-          "table_ref": "public.v_rpt_clinic_connectivity_daily_ui",
-          "field_name": "День"
-        },
-        "jid": {
-          "table_ref": "public.v_rpt_clinic_connectivity_daily_ui",
-          "field_name": "JID клиники"
         }
       }
     }

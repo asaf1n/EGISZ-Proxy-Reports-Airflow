@@ -27,26 +27,35 @@ def test_all_dashboards_default_to_full_width() -> None:
 
 def test_service_network_top_groups_by_typed_label() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c["name"] == "Типы сетевых ошибок (за период)")
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Типы сетевых ошибок (за период)")
     query = card["dataset_query"]["native"]["query"]
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
 
     assert '"Тип сетевой ошибки"' in query
     assert 'public.egisz_network_error_type(d.error_text) AS "Тип сетевой ошибки"' in sql
-    assert "GROUP BY 1" in query
-
-
-def test_quality_network_top_groups_by_typed_label() -> None:
-    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
-    card = next(
-        c for c in dashboard["cards"]
-        if c.get("name") == "Типы сетевых ошибок (все дни)"
-    )
-    query = card["dataset_query"]["native"]["query"]
-
-    assert card["display"] == "row"
-    assert '"Тип сетевой ошибки"' in query
     assert "per_kind AS" in query
+    assert "[[AND {{dwh_date}}]]" in query
+    assert "Остальные (" in query
+
+
+def test_quality_dashboard_has_no_transport_detail_block() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/04_quality_and_errors.json").read_text(encoding="utf-8"))
+    names = {c.get("name") for c in dashboard["cards"]}
+    param_slugs = {p["slug"] for p in dashboard["parameters"]}
+    queries = _native_queries(dashboard)
+    for retired in (
+        "Топ клиник по сбоям транспорта",
+        "Типы сетевых ошибок (все дни)",
+        "Тренд ошибок связи по дням",
+        "Детализация ошибок связи",
+        "Объёмы доступности по дням",
+        "Доля доступности по дням",
+        "Доступность транспорта: день × JID",
+    ):
+        assert retired not in names
+    assert "connectivity_day_filter" not in param_slugs
+    assert all("v_rpt_connectivity_" not in q for q in queries)
+    assert all("Ошибок связи (транспорт)" not in q for q in queries)
 
 
 def test_operational_error_types_include_network_slice() -> None:
@@ -112,35 +121,51 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    for name in ("Сетевые ошибки (тренд)", "Ошибки регистрации в РЭМД ЕГИСЗ (тренд)"):
-        card = next(c for c in dashboard["cards"] if c["name"] == name)
-        query = card["dataset_query"]["native"]["query"]
-        assert "date_trunc('hour', \"Дата обработки\")" in query
-        assert "[[AND {{dwh_date}}]]" in query
-        assert card["visualization_settings"]["graph.dimensions"] == ["Час"]
-
-
-def test_service_async_vs_network_pie_uses_canonical_status_colors() -> None:
-    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c["name"] == "Отказы: асинхронный ответ vs связь")
+    card = next(
+        c for c in dashboard["cards"]
+        if c.get("name") == "Отказы по часам: связь и асинхронный ответ"
+    )
     query = card["dataset_query"]["native"]["query"]
-    assert 'SELECT "Статус"' in query
-    assert '"Статус" AS "Тип"' not in query
-    rows = card["visualization_settings"]["pie.rows"]
-    colors = {row["key"]: row["color"] for row in rows}
-    assert colors["Ошибка асинхронного ответа РЭМД"] == "#A989C5"
-    assert colors["Ошибка связи"] == "#F2994A"
-    assert card["visualization_settings"]["pie.dimension"] == ["Статус"]
-    assert card["visualization_settings"]["pie.metric"] == "Документов"
+    assert "date_trunc('hour', \"Дата обработки\")" in query
+    assert "[[AND {{dwh_date}}]]" in query
+    assert card["visualization_settings"]["graph.dimensions"] == ["Час"]
+    metrics = card["visualization_settings"]["graph.metrics"]
+    assert "Ошибка связи" in metrics
+    assert "Ошибка асинхронного ответа РЭМД" in metrics
 
 
-def test_service_healthcheck_pie_matches_signals_table_scope() -> None:
+def test_service_healthcheck_table_scope() -> None:
     dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    pie = next(c for c in dashboard["cards"] if c["name"] == "Статус healthcheck")
-    table = next(c for c in dashboard["cards"] if c["name"] == "Детализация healthcheck")
+    by_name = {c.get("name"): c for c in dashboard["cards"]}
+    table = by_name["Детализация healthcheck"]
     scope = "\"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h')"
-    assert scope in pie["dataset_query"]["native"]["query"]
     assert scope in table["dataset_query"]["native"]["query"]
+    names = set(by_name)
+    assert "Топ клиник по доле отказов" not in names
+    assert "Статус healthcheck" not in names
+    assert "Отказы: асинхронный ответ vs связь" not in names
+    assert "Сигналы ELT" not in names
+
+    refusal_pie = by_name["РЭМД vs связь"]
+    assert refusal_pie["display"] == "pie"
+    assert refusal_pie["row"] == by_name["Отказы по часам: связь и асинхронный ответ"]["row"]
+    assert refusal_pie["col"] > by_name["Отказы по часам: связь и асинхронный ответ"]["col"]
+    assert 'CASE "Статус (код)"' in refusal_pie["dataset_query"]["native"]["query"]
+    assert refusal_pie["visualization_settings"]["pie.metric"] == "Документов"
+    assert by_name["Контроль качества данных"]["row"] == table["row"]
+
+
+def test_service_transport_block_layout() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
+    by_name = {c.get("name"): c for c in dashboard["cards"]}
+    assert by_name["Транзакции по дням и статусам"]["row"] == 0
+    assert by_name["Транзакции по дням и статусам"]["row"] < by_name["Тренд ошибок связи по дням"]["row"]
+    hourly = by_name["Отказы по часам: связь и асинхронный ответ"]
+    pie = by_name["РЭМД vs связь"]
+    assert hourly["sizeX"] + pie["sizeX"] == 24
+    assert hourly["row"] == pie["row"]
+    assert by_name["Сбоев связи за период"]["display"] == "scalar"
+    assert "v_rpt_network_errors_detail_ui" in by_name["Тренд ошибок связи по дням"]["dataset_query"]["native"]["query"]
 
 
 def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
@@ -149,7 +174,7 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
     # Тренд «Транзакции по дням и статусам» относится к динамике сервиса — живёт в дашборде 02.
     service = json.loads(Path("metabase_dashboards/02_service.json").read_text(encoding="utf-8"))
-    trend_card = next(card for card in service["cards"] if card["name"] == "Транзакции по дням и статусам")
+    trend_card = next(card for card in service["cards"] if card.get("name") == "Транзакции по дням и статусам")
     latest_query = latest_card["dataset_query"]["native"]["query"]
     query = card["dataset_query"]["native"]["query"]
     trend_query = trend_card["dataset_query"]["native"]["query"]
@@ -167,8 +192,9 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     # к общему числу документов; нотификация берётся из канонической колонки «Статус».
     assert "WHERE \"Статус\" IN ('success', 'error')" not in query
     assert "WHERE 1=1" in query
-    assert "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
+    assert 'CASE "Статус (код)"' in query
     assert "COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint" in query
+    assert card["visualization_settings"]["pie.metric"] == "Документов"
     assert card["metabase-field-filters"]["dwh_date"] == {
         "table_ref": "public.v_rpt_documents_ui",
         "field_name": "Дата обработки",
@@ -515,6 +541,34 @@ def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> 
     # surrogate-ID для BI-дашборда: считать уникальных пациентов/врачей по hash без раскрытия ФИО/СНИЛС
     assert "patient_hash" in sql
     assert "doctor_hash" in sql
+
+
+def test_all_pie_charts_have_v2_binding() -> None:
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard.get("cards", []):
+            if card.get("display") != "pie":
+                continue
+            name = card.get("name", path.name)
+            viz = card.get("visualization_settings", {})
+            assert viz.get("pie.metric"), f"{path.name} / {name}: missing pie.metric"
+            dims = viz.get("pie.dimension") or viz.get("graph.dimensions")
+            assert dims, f"{path.name} / {name}: missing pie.dimension"
+            assert viz.get("graph.metrics"), f"{path.name} / {name}: missing graph.metrics"
+            assert viz.get("graph.dimensions"), f"{path.name} / {name}: missing graph.dimensions"
+            for row in viz.get("pie.rows", []):
+                assert row.get("enabled") is True, f"{path.name} / {name}: pie.rows without enabled"
+                assert row.get("originalName"), f"{path.name} / {name}: pie.rows without originalName"
+
+
+def test_dashboard_text_uses_measurement_entities_not_kpi() -> None:
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        blob = dashboard.get("description", "")
+        for card in dashboard.get("cards", []):
+            if card.get("display") == "text":
+                blob += "\n" + card.get("text", "")
+        assert "KPI" not in blob, f"{path.name} still mentions KPI in user-facing text"
 
 
 def test_dashboard_card_names_are_globally_unique() -> None:

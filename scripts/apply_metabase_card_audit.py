@@ -12,8 +12,10 @@ DASHBOARDS_DIR = ROOT / "metabase_dashboards"
 
 # Global card renames (old -> new)
 RENAMES: dict[str, str] = {
-    "async vs network": "Отказы: асинхронный ответ vs связь",
-    "Healthcheck": "Статус healthcheck",
+    "async vs network": "РЭМД vs связь",
+    "Отказы: асинхронный ответ vs связь": "РЭМД vs связь",
+    "Healthcheck": "Сигналы ELT",
+    "Статус healthcheck": "Сигналы ELT",
     "Сигналы healthcheck": "Детализация healthcheck",
     "Топ сетевых формулировок": "Типы сетевых ошибок (за период)",
     "Топ формулировок сетевых ошибок": "Типы сетевых ошибок (все дни)",
@@ -53,7 +55,7 @@ SQL_ALIAS_FIXES: dict[str, tuple[str, str]] = {
         'AS "First-pass acceptance, %"',
         'AS "Доля успеха с первой попытки (клиент), %"',
     ),
-    "Отказы: асинхронный ответ vs связь": (
+    "РЭМД vs связь": (
         'AS "Уникальных документов"',
         'AS "Документов"',
     ),
@@ -92,6 +94,91 @@ def rename_in_obj(obj: object, old: str, new: str) -> None:
                 rename_in_obj(item, old, new)
 
 
+DIM_HINTS = (
+    "Статус",
+    "Уровень",
+    "Категория ошибки",
+    "Тип ошибки",
+    "СЭМД",
+    "Клиника",
+    "Тип документа",
+    "Час",
+    "День",
+)
+
+REFUSAL_PIE_ROWS = [
+    {
+        "key": "Ошибка асинхронного ответа РЭМД",
+        "name": "Ошибка асинхронного ответа РЭМД",
+        "originalName": "Ошибка асинхронного ответа РЭМД",
+        "color": "#A989C5",
+        "enabled": True,
+    },
+    {
+        "key": "Ошибка связи",
+        "name": "Ошибка связи",
+        "originalName": "Ошибка связи",
+        "color": "#F2994A",
+        "enabled": True,
+    },
+]
+
+HEALTH_PIE_ROWS = [
+    {"key": "red", "name": "red", "originalName": "red", "color": "#E75454", "enabled": True},
+    {"key": "yellow", "name": "yellow", "originalName": "yellow", "color": "#F7C41F", "enabled": True},
+    {"key": "green", "name": "green", "originalName": "green", "color": "#88BF4D", "enabled": True},
+]
+
+
+def infer_pie_metric(query: str) -> str | None:
+    aliases = re.findall(r'AS "([^"]+)"', query)
+    for col in reversed(aliases):
+        if col not in DIM_HINTS:
+            return col
+    return aliases[-1] if aliases else None
+
+
+def infer_pie_dimensions(query: str) -> list[str] | None:
+    if 'AS "Статус"' in query or ('CASE' in query and '"Статус"' in query):
+        return ["Статус"]
+    if '"Уровень"' in query:
+        return ["Уровень"]
+    if '"Категория ошибки"' in query and '"Тип ошибки"' in query:
+        return ["Категория ошибки", "Тип ошибки"]
+    if '"СЭМД"' in query:
+        return ["СЭМД"]
+    if '"Клиника"' in query:
+        return ["Клиника"]
+    if '"Тип документа"' in query:
+        return ["Тип документа"]
+    return None
+
+
+def ensure_pie_v2_contract(card: dict) -> None:
+    if card.get("display") != "pie":
+        return
+    viz = card.setdefault("visualization_settings", {})
+    query = card.get("dataset_query", {}).get("native", {}).get("query", "")
+    metric = viz.get("pie.metric") or (viz.get("graph.metrics") or [None])[0] or infer_pie_metric(query)
+    dims = viz.get("pie.dimension")
+    if not dims:
+        gd = viz.get("graph.dimensions") or []
+        dims = [d for d in gd if d != metric]
+    if not dims:
+        dims = infer_pie_dimensions(query)
+    if metric:
+        viz["pie.metric"] = metric
+        viz["graph.metrics"] = [metric]
+    if dims:
+        viz["pie.dimension"] = dims
+        viz["graph.dimensions"] = list(dims)
+    for row in viz.get("pie.rows", []):
+        row["enabled"] = True
+        row.setdefault("originalName", row.get("key", row.get("name")))
+    viz.setdefault("pie.slice_threshold", 0)
+    viz.setdefault("pie.decimal_places", 1)
+
+
 def ensure_column_setting(viz: dict, col_name: str, settings: dict) -> None:
     viz.setdefault("column_settings", {})
     key = f'["name","{col_name}"]'
@@ -115,16 +202,19 @@ def apply_viz_defaults(card: dict) -> None:
     if display == "pie" and "Статус" in query and "async_error', 'network_error')" not in query:
         rows = []
         for status, color in STATUS_COLORS.items():
-            rows.append({"key": status, "name": status, "color": color})
+            rows.append(
+                {"key": status, "name": status, "originalName": status, "color": color, "enabled": True}
+            )
         viz["pie.dimension"] = ["Статус"]
         viz["pie.rows"] = rows
-    if display == "pie" and name == "Отказы: асинхронный ответ vs связь":
+    if display == "pie" and name == "РЭМД vs связь":
         viz["pie.dimension"] = ["Статус"]
         viz["pie.metric"] = "Документов"
-        viz["pie.rows"] = [
-            {"key": "Ошибка асинхронного ответа РЭМД", "name": "Ошибка асинхронного ответа РЭМД", "color": "#A989C5"},
-            {"key": "Ошибка связи", "name": "Ошибка связи", "color": "#F2994A"},
-        ]
+        viz["pie.rows"] = REFUSAL_PIE_ROWS
+    if display == "pie" and name == "Сигналы ELT":
+        viz["pie.dimension"] = ["Уровень"]
+        viz["pie.metric"] = "Сигналов"
+        viz["pie.rows"] = HEALTH_PIE_ROWS
 
     # Scalar decimals
     if display == "scalar":
@@ -225,19 +315,12 @@ def apply_viz_defaults(card: dict) -> None:
             "graph.x_axis.title_text": "День",
             "graph.y_axis.title_text": "Ошибок",
         },
-        "Объёмы доступности по дням": {
-            "graph.x_axis.title_text": "День",
-            "graph.y_axis.title_text": "Попыток",
-        },
-        "Доля доступности по дням": {
-            "graph.x_axis.title_text": "День",
-            "graph.y_axis.title_text": "Доля доступности, %",
-        },
         "Типы сетевых ошибок (за период)": {
             "graph.show_values": True,
         },
-        "Типы сетевых ошибок (все дни)": {
-            "graph.show_values": True,
+        "Отказы по часам: связь и асинхронный ответ": {
+            "graph.x_axis.title_text": "Час",
+            "graph.y_axis.title_text": "Документов",
         },
         "Топ клиник по доле отказов": {
             "graph.x_axis.title_text": "Доля ошибок, %",
@@ -266,6 +349,8 @@ def apply_viz_defaults(card: dict) -> None:
     if name == "Тепловая карта: клиника × день":
         ensure_column_setting(viz, "Доля ошибок, %", {"decimals": 1, "suffix": " %"})
         viz["table.cell_column"] = "Доля ошибок, %"
+
+    ensure_pie_v2_contract(card)
 
 
 def process_dashboard(path: Path) -> dict:
@@ -344,9 +429,6 @@ def process_dashboard(path: Path) -> dict:
             if "Последние ошибки связи" in desc:
                 card["description"] = desc.replace(
                     "Последние ошибки связи", "Последние сбои транспорта"
-                ).replace(
-                    "дашборд «Ошибки и качество данных»",
-                    "раздел «Ошибки связи» на дашборде качества",
                 )
 
     return data

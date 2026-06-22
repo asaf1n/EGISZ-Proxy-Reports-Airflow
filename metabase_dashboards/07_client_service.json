@@ -405,7 +405,17 @@
             "decimals": 0,
             "number_separators": "."
           }
-        }
+        },
+        "pie.metric": "Документов",
+        "graph.metrics": [
+          "Документов"
+        ],
+        "pie.dimension": [
+          "Тип документа"
+        ],
+        "graph.dimensions": [
+          "Тип документа"
+        ]
       },
       "sizeX": 12,
       "sizeY": 7,

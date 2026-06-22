@@ -272,10 +272,14 @@
           }
         },
         "graph.dimensions": [
-          "СЭМД",
-          "Документов"
+          "СЭМД"
         ],
-        "pie.decimal_places": 1
+        "pie.decimal_places": 1,
+        "pie.metric": "Документов",
+        "pie.dimension": [
+          "СЭМД"
+        ],
+        "pie.slice_threshold": 0
       },
       "sizeX": 9,
       "sizeY": 6,
@@ -412,10 +416,14 @@
           }
         },
         "graph.dimensions": [
-          "Клиника",
-          "Документов"
+          "Клиника"
         ],
-        "pie.decimal_places": 1
+        "pie.decimal_places": 1,
+        "pie.metric": "Документов",
+        "pie.dimension": [
+          "Клиника"
+        ],
+        "pie.slice_threshold": 0
       },
       "sizeX": 9,
       "sizeY": 6,

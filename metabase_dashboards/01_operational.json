@@ -397,7 +397,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
+          "query": "SELECT CASE \"Статус (код)\" WHEN 'success' THEN 'Успешно зарегистрирован' WHEN 'network_error' THEN 'Ошибка связи' WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'waiting' THEN 'В обработке' END AS \"Статус\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{top_semd}}]] [[AND {{top_clinic}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT \"Документ (ключ учёта)\") > 0 ORDER BY 2 DESC",
           "template-tags": {
             "top_clinic": {
               "widget-type": "string/=",
@@ -493,27 +493,36 @@
           {
             "key": "Успешно зарегистрирован",
             "name": "Успешно зарегистрирован",
-            "color": "#88BF4D"
+            "originalName": "Успешно зарегистрирован",
+            "color": "#88BF4D",
+            "enabled": true
           },
           {
             "key": "Ошибка асинхронного ответа РЭМД",
             "name": "Ошибка асинхронного ответа РЭМД",
-            "color": "#A989C5"
+            "originalName": "Ошибка асинхронного ответа РЭМД",
+            "color": "#A989C5",
+            "enabled": true
           },
           {
             "key": "Ошибка связи",
             "name": "Ошибка связи",
-            "color": "#F2994A"
+            "originalName": "Ошибка связи",
+            "color": "#F2994A",
+            "enabled": true
           },
           {
             "key": "В обработке",
             "name": "В обработке",
-            "color": "#509EE3"
+            "originalName": "В обработке",
+            "color": "#509EE3",
+            "enabled": true
           }
         ],
         "graph.metrics": [
           "Документов"
         ],
+        "pie.metric": "Документов",
         "pie.show_legend": true,
         "pie.show_total": true,
         "column_settings": {
@@ -971,7 +980,14 @@
             "column_title": "Тип ошибки"
           }
         },
-        "version": 2
+        "version": 2,
+        "graph.metrics": [
+          "Количество"
+        ],
+        "graph.dimensions": [
+          "Категория ошибки",
+          "Тип ошибки"
+        ]
       },
       "sizeX": 12,
       "sizeY": 9,
