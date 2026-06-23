@@ -8,6 +8,8 @@
 DROP VIEW IF EXISTS public.v_health_by_clinic_ui;
 DROP VIEW IF EXISTS public.v_health_signals_ui;
 DROP VIEW IF EXISTS public.v_health_proxy_db_ui;
+DROP VIEW IF EXISTS public.v_rpt_client_kpi_daily_ui;
+DROP VIEW IF EXISTS public.v_rpt_clinic_semd_slice_ui;
 DROP VIEW IF EXISTS public.v_rpt_connectivity_global_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_clinic_connectivity_daily_ui;
 DROP VIEW IF EXISTS public.v_rpt_client_documents_ui;

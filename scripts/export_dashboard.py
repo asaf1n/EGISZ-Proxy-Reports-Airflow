@@ -76,18 +76,49 @@ def clean_template_tags(tags: dict) -> dict:
     return result
 
 
-def extract_query_and_tags(card: dict) -> tuple[str, dict]:
-    """Handle both Metabase v0.50 (native.query) and v0.60 (stages[0]) formats."""
+def load_existing_qb_metadata(path: Path | None) -> dict[str, dict]:
+    """Map card name -> QB metadata blocks from a previously-saved JSON."""
+    if not path or not path.exists():
+        return {}
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[str, dict] = {}
+    for card in existing.get("cards") or []:
+        name = card.get("name")
+        if not name:
+            continue
+        meta: dict = {}
+        for key in (
+            "query_tier",
+            "source_model",
+            "metabase-parameter-targets",
+            "click_behavior",
+        ):
+            if key in card:
+                meta[key] = card[key]
+        if meta:
+            result[name] = meta
+    return result
+
+
+def extract_query_and_tags(card: dict) -> tuple[str | dict, dict, str]:
+    """Handle native SQL, Query Builder, and Metabase v0.62 stages formats."""
     dq = card.get("dataset_query") or {}
+    if dq.get("type") == "query":
+        return dq.get("query") or {}, {}, "query"
     if "stages" in dq:
         stage = dq["stages"][0]
+        if stage.get("lib/type") == "mbql/query" or dq.get("type") == "query":
+            return stage.get("query") or {}, {}, "query"
         query = stage.get("native") or ""
         tags = stage.get("template-tags") or {}
-    else:
-        native = dq.get("native") or {}
-        query = native.get("query") or ""
-        tags = native.get("template-tags") or {}
-    return query, clean_template_tags(tags)
+        return query, clean_template_tags(tags), "native"
+    native = dq.get("native") or {}
+    query = native.get("query") or ""
+    tags = native.get("template-tags") or {}
+    return query, clean_template_tags(tags), "native"
 
 
 def load_existing_field_filters(path: Path | None) -> dict[str, dict]:
@@ -111,6 +142,7 @@ def export_dashboard(token: str, dash_id: int, keep_params_from: Path | None) ->
     dashboard = api("GET", f"/api/dashboard/{dash_id}", token)
     dashcards = dashboard.get("dashcards") or dashboard.get("ordered_cards") or []
     existing_field_filters = load_existing_field_filters(keep_params_from)
+    existing_qb_metadata = load_existing_qb_metadata(keep_params_from)
 
     def is_text_dc(dc: dict) -> bool:
         viz = dc.get("visualization_settings") or {}
@@ -147,31 +179,59 @@ def export_dashboard(token: str, dash_id: int, keep_params_from: Path | None) ->
 
         card_id = dc["card"]["id"]
         card = card_cache[card_id]
-        query, tags = extract_query_and_tags(card)
+        query, tags, query_type = extract_query_and_tags(card)
 
-        card_obj = {
-            "name": card["name"],
-            "description": card.get("description"),
-            "dataset_query": {
-                "type": "native",
-                "native": {
+        if query_type == "query":
+            card_obj = {
+                "name": card["name"],
+                "description": card.get("description"),
+                "query_tier": "query_builder",
+                "dataset_query": {
+                    "type": "query",
                     "query": query,
-                    "template-tags": tags,
+                    "database": 1,
                 },
-                "database": 1,
-            },
-            "display": card.get("display", "table"),
-            "visualization_settings": card.get("visualization_settings") or {},
-            "sizeX": dc.get("size_x", 12),
-            "sizeY": dc.get("size_y", 6),
-            "row": dc.get("row", 0),
-            "col": dc.get("col", 0),
-        }
-        prior_ff = existing_field_filters.get(card["name"])
-        if prior_ff:
-            field_filters = {k: v for k, v in prior_ff.items() if k in tags}
-            if field_filters:
-                card_obj["metabase-field-filters"] = field_filters
+                "display": card.get("display", "table"),
+                "visualization_settings": card.get("visualization_settings") or {},
+                "sizeX": dc.get("size_x", 12),
+                "sizeY": dc.get("size_y", 6),
+                "row": dc.get("row", 0),
+                "col": dc.get("col", 0),
+            }
+            prior_qb = existing_qb_metadata.get(card["name"])
+            if prior_qb:
+                for key in (
+                    "query_tier",
+                    "source_model",
+                    "metabase-parameter-targets",
+                    "click_behavior",
+                ):
+                    if key in prior_qb:
+                        card_obj[key] = prior_qb[key]
+        else:
+            card_obj = {
+                "name": card["name"],
+                "description": card.get("description"),
+                "dataset_query": {
+                    "type": "native",
+                    "native": {
+                        "query": query,
+                        "template-tags": tags,
+                    },
+                    "database": 1,
+                },
+                "display": card.get("display", "table"),
+                "visualization_settings": card.get("visualization_settings") or {},
+                "sizeX": dc.get("size_x", 12),
+                "sizeY": dc.get("size_y", 6),
+                "row": dc.get("row", 0),
+                "col": dc.get("col", 0),
+            }
+            prior_ff = existing_field_filters.get(card["name"])
+            if prior_ff:
+                field_filters = {k: v for k, v in prior_ff.items() if k in tags}
+                if field_filters:
+                    card_obj["metabase-field-filters"] = field_filters
         cards.append(card_obj)
 
     if keep_params_from and keep_params_from.exists():

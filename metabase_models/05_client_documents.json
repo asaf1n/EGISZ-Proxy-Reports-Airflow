@@ -1,0 +1,20 @@
+{
+  "name": "Клиентские документы",
+  "table_ref": "public.v_rpt_client_documents_ui",
+  "description": "Клиентский срез документов (включая waiting) для дашбордов 07 и 08.",
+  "fields": {
+    "document_key": { "semantic_type": "type/PK" },
+    "document_ts": { "semantic_type": "type/CreationTimestamp" },
+    "document_day": { "semantic_type": "type/CreationDate" },
+    "client_jid": { "semantic_type": "type/Category" },
+    "semd_code": { "semantic_type": "type/Category" },
+    "document_type": { "semantic_type": "type/Title" },
+    "status_label": { "semantic_type": "type/Category" }
+  },
+  "hidden_fields": ["status_code"],
+  "metrics": {
+    "Документов": {
+      "aggregation": ["distinct", ["field", "document_key", null]]
+    }
+  }
+}

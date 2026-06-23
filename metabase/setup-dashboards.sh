@@ -5,6 +5,8 @@ METABASE_URL="${METABASE_URL:-${MB_URL:-http://localhost:3000}}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}"
 DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
+MODELS_DIR="${METABASE_MODELS_DIR:-/app/metabase_models}"
+MODEL_REGISTRY_FILE="${METABASE_MODEL_REGISTRY_FILE:-/tmp/metabase-model-registry.json}"
 METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
 METABASE_AUTO_APPLY_FILTERS="${METABASE_AUTO_APPLY_FILTERS:-true}"
 DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
@@ -22,6 +24,11 @@ DB_METADATA_FILE=""
 if [ -f "/app/include/mb_list.sh" ]; then
   # shellcheck source=/app/include/mb_list.sh
   source "/app/include/mb_list.sh"
+fi
+
+if [ -f "/app/sync-models.sh" ]; then
+  # shellcheck source=/app/sync-models.sh
+  source "/app/sync-models.sh"
 fi
 
 log_info() {
@@ -186,9 +193,12 @@ ensure_collection() {
 }
 
 required_public_objects() {
-  jq -r '.. | strings | scan("public\\.[A-Za-z_][A-Za-z0-9_]*")' "${DASHBOARDS_DIR}"/*.json |
-    sort -u |
-    sed 's/^public\.//'
+  {
+    jq -r '.. | strings | scan("public\\.[A-Za-z_][A-Za-z0-9_]*")' "${DASHBOARDS_DIR}"/*.json 2>/dev/null || true
+    if [ -d "${MODELS_DIR}" ]; then
+      jq -r '.table_ref // empty' "${MODELS_DIR}"/*.json 2>/dev/null || true
+    fi
+  } | sort -u | sed 's/^public\.//'
 }
 
 dwh_object_exists() {
@@ -228,22 +238,34 @@ validate_dwh_contract() {
     printf '%s\n' "${missing[@]}" >&2
     fail "DWH is missing ${#missing[@]} object(s) required by dashboard SQL"
   fi
+  if declare -F validate_model_fields_in_dwh >/dev/null; then
+    validate_model_fields_in_dwh
+  fi
 }
 
 sync_metabase_schema() {
   log_info "Requesting Metabase schema sync for ${APP_DB_NAME} (database id ${APP_DB_ID})"
   api_request POST "/api/database/${APP_DB_ID}/sync_schema" "{}" >/dev/null
-  DB_METADATA_FILE="$(mktemp)"
-  wait_for_metabase_metadata
+  DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
+  api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
 }
 
 required_field_filters() {
-  jq -r '
-    .. | objects | select(has("metabase-field-filters"))
-    | ."metabase-field-filters"[]?
-    | [.table_ref, .field_name]
-    | @tsv
-  ' "${DASHBOARDS_DIR}"/*.json | sort -u
+  {
+    jq -r '
+      .. | objects | select(has("metabase-field-filters"))
+      | ."metabase-field-filters"[]?
+      | select(.table_ref != null)
+      | [.table_ref, .field_name]
+      | @tsv
+    ' "${DASHBOARDS_DIR}"/*.json
+    jq -r '
+      .. | objects | select(has("metabase-parameter-targets"))
+      | ."metabase-parameter-targets"[]?
+      | [.model_ref, .field_name]
+      | @tsv
+    ' "${DASHBOARDS_DIR}"/*.json 2>/dev/null || true
+  } | sort -u
 }
 
 metadata_has_field() {
@@ -260,6 +282,23 @@ metadata_has_field() {
   ' "${DB_METADATA_FILE}" >/dev/null
 }
 
+resolve_filter_table_ref() {
+  local ref="$1"
+  if [[ "${ref}" == public.* ]]; then
+    printf '%s\n' "${ref}"
+    return
+  fi
+  local model_file
+  for model_file in "${MODELS_DIR}"/*.json; do
+    [ -f "${model_file}" ] || continue
+    if [ "$(jq -r '.name' "${model_file}")" = "${ref}" ]; then
+      jq -r '.table_ref' "${model_file}"
+      return
+    fi
+  done
+  printf '\n'
+}
+
 wait_for_metabase_metadata() {
   local attempt table_ref field_name missing sample
   for attempt in $(seq 1 30); do
@@ -267,6 +306,10 @@ wait_for_metabase_metadata() {
     missing=0
     sample=""
     while IFS=$'\t' read -r table_ref field_name; do
+      [ -n "${table_ref}" ] || continue
+      if [[ "${table_ref}" != public.* ]]; then
+        table_ref="$(resolve_filter_table_ref "${table_ref}")"
+      fi
       [ -n "${table_ref}" ] || continue
       if ! metadata_has_field "${table_ref}" "${field_name}"; then
         missing=$((missing + 1))
@@ -313,7 +356,7 @@ expected_card_names() {
 
 archive_stale_collection_cards() {
   local expected_file card_id card_name
-  expected_file="$(mktemp)"
+  expected_file="/tmp/metabase-expected-card-names.txt"
   expected_card_names > "${expected_file}"
   while IFS=$'\t' read -r card_id card_name; do
     [ -n "${card_id}" ] || continue
@@ -337,7 +380,7 @@ expected_dashboard_names() {
 # имён больше нет в JSON — зеркало archive_stale_collection_cards для дашбордов.
 archive_stale_collection_dashboards() {
   local expected_file dashboard_id dashboard_name
-  expected_file="$(mktemp)"
+  expected_file="/tmp/metabase-expected-dashboard-names.txt"
   expected_dashboard_names > "${expected_file}"
   while IFS=$'\t' read -r dashboard_id dashboard_name; do
     [ -n "${dashboard_id}" ] || continue
@@ -354,7 +397,13 @@ archive_stale_collection_dashboards() {
 
 dashboard_payload() {
   local file="$1"
-  jq --argjson db "${APP_DB_ID}" --argjson col "${COL_ID}" --slurpfile meta_file "${DB_METADATA_FILE}" '
+  local models_file="${MODEL_REGISTRY_FILE}"
+  [ -f "${file}" ] || fail "card definition file missing: ${file}"
+  [ -s "${DB_METADATA_FILE}" ] || fail "Metabase DB metadata cache missing: ${DB_METADATA_FILE}"
+  [ -f "${models_file}" ] || printf '{}' > "${models_file}"
+  jq --argjson db "${APP_DB_ID}" --argjson col "${COL_ID}" \
+    --slurpfile meta_file "${DB_METADATA_FILE}" \
+    --slurpfile models_file "${models_file}" '
     def walk(f):
       . as $in
       | if type == "object" then
@@ -375,17 +424,37 @@ dashboard_payload() {
           | .id
         ][0];
 
+    def model_entry($name):
+      $models_file[0][$name] // error("Unknown Metabase model: " + $name);
+
+    def resolve_mbql:
+      walk(
+        if type == "string" and startswith("model:") then
+          "card__" + (model_entry(.[6:]).model_id | tostring)
+        elif type == "array" and length >= 2 and .[0] == "field" and (.[1] | type) == "string" and (.[1] | test(":")) then
+          (.[1] | split(":")) as $parts
+          | if ($parts | length) == 2 then
+              ["field", model_entry($parts[0]).fields[$parts[1]], .[2]]
+            else . end
+        else .
+        end
+      );
+
     def bind_field_filters:
       if type == "object" and has("dataset_query") and has("metabase-field-filters") then
         reduce (."metabase-field-filters" | to_entries[]) as $filter (.;
-          ($filter.value.table_ref // "") as $table_ref
-          | ($filter.value.field_name // "") as $field_name
-          | (field_id($table_ref; $field_name)) as $field_id
-          | if $field_id == null then
-              error("Cannot resolve Metabase field id for " + $table_ref + "." + $field_name)
-            else
-              .dataset_query.native."template-tags"[$filter.key].dimension = ["field", $field_id, null]
-            end
+          if ($filter.value.model_ref // "") != "" then
+            .
+          else
+            ($filter.value.table_ref // "") as $table_ref
+            | ($filter.value.field_name // "") as $field_name
+            | (field_id($table_ref; $field_name)) as $field_id
+            | if $field_id == null then
+                error("Cannot resolve Metabase field id for " + $table_ref + "." + $field_name)
+              else
+                .dataset_query.native."template-tags"[$filter.key].dimension = ["field", $field_id, null]
+              end
+          end
         )
         | del(."metabase-field-filters")
       else
@@ -402,17 +471,29 @@ dashboard_payload() {
         .
       end;
 
+    def normalize_query_card:
+      if type == "object"
+        and (.dataset_query.type // "") == "query"
+        and (.dataset_query.query | type) == "object" then
+        .dataset_query.query = (.dataset_query.query | resolve_mbql)
+      else .
+      end;
+
     del(.id)
     | .collection_id = $col
     | walk(set_database | bind_field_filters)
+    | normalize_query_card
+    | del(."query_tier")
+    | del(."source_model")
   ' "${file}"
 }
 
 card_query_fingerprint() {
-  jq -c '{
-    display: (.display // ""),
-    query: (.dataset_query.native.query // "")
-  }'
+  jq -c 'if (.dataset_query.type // "") == "query" then
+    {display: (.display // ""), query: (.dataset_query.query // {})}
+  else
+    {display: (.display // ""), query: (.dataset_query.native.query // "")}
+  end'
 }
 
 card_dimension_tags_ready() {
@@ -426,10 +507,9 @@ card_dimension_tags_ready() {
 
 create_or_update_card() {
   local file="$1"
-  local payload card_id card_name existing_fp new_fp existing_card
-  payload="$(
-    dashboard_payload "${file}" |
-      jq '{
+  local payload card_id card_name existing_fp new_fp existing_card raw_payload
+  raw_payload="$(dashboard_payload "${file}")" || fail "dashboard_payload failed for ${file}"
+  payload="$(printf '%s' "${raw_payload}" | jq '{
         name,
         description,
         collection_id,
@@ -437,8 +517,7 @@ create_or_update_card() {
         display,
         visualization_settings,
         table_id: (.table_id // null)
-      }'
-  )"
+      }')"
   card_name="$(jq -r '.name' "${file}")"
   new_fp="$(printf '%s' "${payload}" | card_query_fingerprint)"
   card_id="$(existing_card_id "${card_name}")"
@@ -485,24 +564,116 @@ sync_all_cards() {
     local num_cards
     num_cards="$(jq '.cards | length' "${file}")"
     for i in $(seq 0 $((num_cards - 1))); do
-      card_file="$(mktemp)"
-      jq -c ".cards[${i}]" "${file}" > "${card_file}"
+      card_file="/tmp/metabase-import-card-$(basename "${file}" .json)-${i}.json"
+      jq -e -c ".cards[${i}]" "${file}" > "${card_file}" || fail "invalid card ${i} in ${file}"
       if [ "$(jq -r '.display // empty' "${card_file}")" = "text" ]; then
-        rm -f "${card_file}" >/dev/null 2>&1 || true
         continue
       fi
       card_name="$(jq -r '.name' "${card_file}")"
       CARD_REGISTRY["${card_name}"]="$(create_or_update_card "${card_file}")"
-      rm -f "${card_file}" >/dev/null 2>&1 || true
     done
   done
+}
+
+prepare_dashboard_tabs() {
+  local file="$1" dashboard_id="$2" tab_map_file="$3"
+  local existing_tabs ordered_tabs tab_count existing_count tab_sync_response
+
+  existing_tabs="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.tabs // []')"
+  ordered_tabs="$(
+    jq -c --argjson existing "${existing_tabs}" '
+      [.tabs[]? as $t
+        | ($existing | map(select(.name == $t.name)) | .[0].id // null) as $existing_id
+        | {
+            slug: $t.id,
+            position: ($t.position // 0),
+            id: (if $existing_id != null then $existing_id else -(($t.position // 0) + 1) end),
+            name: $t.name
+          }
+      ]
+      | sort_by(.position)
+      | map({id, name})
+    ' "${file}"
+  )"
+
+  tab_count="$(jq '.tabs | length // 0' "${file}")"
+  existing_count="$(jq 'length' <<< "${existing_tabs}")"
+  if [ "${tab_count}" -gt 0 ] && {
+    jq -e '[.[] | select(.id < 0)] | length > 0' <<< "${ordered_tabs}" >/dev/null 2>&1 ||
+    [ "${tab_count}" -ne "${existing_count}" ]
+  }; then
+    api_request PUT "/api/dashboard/${dashboard_id}/cards" '{"cards":[]}' >/dev/null
+    existing_tabs="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.tabs // []')"
+    ordered_tabs="$(
+      jq -c --argjson existing "${existing_tabs}" '
+        [.tabs[]? as $t
+          | ($existing | map(select(.name == $t.name)) | .[0].id // null) as $existing_id
+          | {
+              position: ($t.position // 0),
+              id: (if $existing_id != null then $existing_id else -(($t.position // 0) + 1) end),
+              name: $t.name
+            }
+        ]
+        | sort_by(.position)
+        | map({id, name})
+      ' "${file}"
+    )"
+    tab_sync_response="$(
+      api_request PUT "/api/dashboard/${dashboard_id}/cards" \
+        "$(jq -n --argjson tabs "${ordered_tabs}" '{tabs: $tabs, cards: []}')"
+    )"
+    existing_tabs="$(
+      jq -c '
+        if (.tabs // []) | length > 0 then .tabs
+        elif (.ordered_tabs // []) | length > 0 then .ordered_tabs
+        else [] end
+      ' <<< "${tab_sync_response}"
+    )"
+    if [ "$(jq 'length' <<< "${existing_tabs}")" -eq 0 ]; then
+      existing_tabs="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.tabs // []')"
+    fi
+  fi
+
+  jq -c --argjson existing "${existing_tabs}" '
+    reduce (.tabs[]?) as $t ({};
+      . + {($t.id): (
+        ($existing | map(select(.name == $t.name)) | .[0].id)
+      )}
+    )
+  ' "${file}" > "${tab_map_file}"
+
+  if [ "${tab_count}" -gt 0 ]; then
+    local missing_slug
+    missing_slug="$(
+      jq -r --argjson map "$(cat "${tab_map_file}")" '
+        [.tabs[]?.id | select($map[.] == null)]
+        | if length > 0 then .[0] else empty end
+      ' "${file}"
+    )"
+    [ -z "${missing_slug}" ] || fail "cannot resolve Metabase tab id for slug '${missing_slug}' in ${file}"
+  fi
+
+  jq -c --argjson existing "${existing_tabs}" '
+    [.tabs[]? as $t
+      | ($existing | map(select(.name == $t.name)) | .[0].id) as $id
+      | if $id == null then empty else {id: $id, name: $t.name} end
+    ]
+  ' "${file}"
 }
 
 create_or_update_dashboard() {
   local file="$1"
   local payload dashboard_id saved_parameters cards num_cards i
-  local dashboard_name
+  local dashboard_name tab_map_file ordered_tabs_json dashboard_slug
   dashboard_name="$(jq -r '.name' "${file}")"
+  dashboard_slug="$(basename "${file}" .json)"
+  tab_map_file="/tmp/metabase-tab-map-${dashboard_slug}.json"
+  ordered_tabs_json="[]"
+  if [ "$(jq '.tabs | length // 0' "${file}")" -gt 0 ]; then
+    echo '{}' > "${tab_map_file}"
+  else
+    echo '{}' > "${tab_map_file}"
+  fi
 
   payload="$(
     dashboard_payload "${file}" |
@@ -526,14 +697,18 @@ create_or_update_dashboard() {
   fi
   [ -n "${dashboard_id}" ] && [ "${dashboard_id}" != "null" ] || fail "cannot create or update dashboard from ${file}"
 
+  if [ "$(jq '.tabs | length // 0' "${file}")" -gt 0 ]; then
+    ordered_tabs_json="$(prepare_dashboard_tabs "${file}" "${dashboard_id}" "${tab_map_file}")"
+  fi
+
   saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
   cards="[]"
   num_cards="$(jq '.cards | length' "${file}")"
   if [ "${num_cards}" -gt 0 ]; then
     for i in $(seq 0 $((num_cards - 1))); do
-      local card_file card_id card_id_json viz_settings size_x size_y row col mappings dashcard_id dashcard
-      card_file="$(mktemp)"
-      jq -c ".cards[${i}]" "${file}" > "${card_file}"
+      local card_file card_id card_id_json viz_settings size_x size_y row col mappings dashcard_id dashcard tab_slug dashboard_tab_id_json
+      card_file="/tmp/metabase-dashcard-${dashboard_slug}-${i}.json"
+      jq -e -c ".cards[${i}]" "${file}" > "${card_file}" || fail "invalid dashcard ${i} in ${file}"
 
       if [ "$(jq -r '.display // empty' "${card_file}")" = "text" ]; then
         card_id_json="null"
@@ -549,7 +724,8 @@ create_or_update_dashboard() {
         card_id_json="${card_id}"
         viz_settings="{}"
         mappings="$(
-          jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" '
+          jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" \
+            --slurpfile models_file "${MODEL_REGISTRY_FILE}" '
             def param_base($slug):
               if (($slug // "") | endswith("_filter")) then
                 ($slug | sub("_filter$"; ""))
@@ -557,7 +733,6 @@ create_or_update_dashboard() {
                 ($slug // "")
               end;
 
-            # Shared collection cards use semantic jid / semd_type template-tags.
             def tag_candidates($base):
               [$base];
 
@@ -566,34 +741,59 @@ create_or_update_dashboard() {
               | map(select(. as $t | ($tagKeys | index($t)) != null))
               | .[0] // empty;
 
+            def model_field_id($model_ref; $field_name):
+              ($models_file[0][$model_ref].fields[$field_name]) // empty;
+
             (.cards[$cardIndex].dataset_query.native["template-tags"] // {}) as $tags
             | ($tags | keys) as $tagKeys
-            | [
-                $dashParams[] as $param
-                | resolve_tag($param.slug; $tagKeys) as $tagName
-                | select($tagName != null and $tagName != "")
-                | ($tags[$tagName].type // "") as $tagType
-                | {
-                    parameter_id: $param.id,
-                    card_id: $cardDbId,
-                    target: (
-                      if $tagType == "dimension" then
-                        ["dimension", ["template-tag", $tagName]]
-                      else
-                        ["variable", ["template-tag", $tagName]]
-                      end
-                    )
-                  }
-              ]
+            | (.cards[$cardIndex]."metabase-parameter-targets" // {}) as $qbTargets
+            | (
+                [
+                  $dashParams[] as $param
+                  | resolve_tag($param.slug; $tagKeys) as $tagName
+                  | select($tagName != null and $tagName != "")
+                  | ($tags[$tagName].type // "") as $tagType
+                  | {
+                      parameter_id: $param.id,
+                      card_id: $cardDbId,
+                      target: (
+                        if $tagType == "dimension" then
+                          ["dimension", ["template-tag", $tagName]]
+                        else
+                          ["variable", ["template-tag", $tagName]]
+                        end
+                      )
+                    }
+                ]
+                + [
+                  $dashParams[] as $param
+                  | param_base($param.slug) as $base
+                  | ($qbTargets[$base] // $qbTargets[param_base($param.slug)] // empty) as $target
+                  | select($target != null and ($target.model_ref // "") != "")
+                  | (model_field_id($target.model_ref; $target.field_name)) as $fieldId
+                  | select($fieldId != null and $fieldId != "")
+                  | {
+                      parameter_id: $param.id,
+                      card_id: $cardDbId,
+                      target: ["dimension", ["field", $fieldId, {"stage-number": 0}]]
+                    }
+                ]
+              )
           ' "${file}"
         )"
       fi
-      rm -f "${card_file}" >/dev/null 2>&1 || true
 
       size_x="$(jq -r ".cards[${i}].sizeX // .cards[${i}].size_x // 4" "${file}")"
       size_y="$(jq -r ".cards[${i}].sizeY // .cards[${i}].size_y // 4" "${file}")"
       row="$(jq -r ".cards[${i}].row // 0" "${file}")"
       col="$(jq -r ".cards[${i}].col // 0" "${file}")"
+
+      tab_slug="$(jq -r '.tab // empty' "${card_file}")"
+      dashboard_tab_id_json="null"
+      if [ -n "${tab_slug}" ]; then
+        dashboard_tab_id_json="$(jq -r --arg tab "${tab_slug}" '.[$tab] // null' "${tab_map_file}")"
+        [ "${dashboard_tab_id_json}" != "null" ] || fail "unknown dashboard tab '${tab_slug}' in ${file}"
+      fi
 
       dashcard_id=$((-(i + 1)))
       dashcard="$(
@@ -606,10 +806,11 @@ create_or_update_dashboard() {
           --argjson col "${col}" \
           --argjson mappings "${mappings}" \
           --argjson vizSettings "${viz_settings}" \
+          --argjson dashboardTabId "${dashboard_tab_id_json}" \
           '{
             id: $dashcardId,
             card_id: $cardId,
-            dashboard_tab_id: null,
+            dashboard_tab_id: $dashboardTabId,
             action_id: null,
             size_x: $sizeX,
             size_y: $sizeY,
@@ -623,7 +824,13 @@ create_or_update_dashboard() {
       cards="$(jq -n --argjson existing "${cards}" --argjson card "${dashcard}" '$existing + [$card]')"
     done
 
-    api_request PUT "/api/dashboard/${dashboard_id}/cards" "$(jq -n --argjson cards "${cards}" '{ordered_tabs: [], cards: $cards}')" >/dev/null
+    if [ "$(jq 'length' <<< "${ordered_tabs_json}")" -gt 0 ]; then
+      ordered_tabs_json="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '[.tabs[]? | {id, name}]')"
+      [ "$(jq 'length' <<< "${ordered_tabs_json}")" -gt 0 ] || fail "dashboard ${dashboard_id} has no Metabase tabs after tab sync"
+    fi
+
+    api_request PUT "/api/dashboard/${dashboard_id}/cards" "$(jq -n --argjson cards "${cards}" --argjson tabs "${ordered_tabs_json}" '{tabs: $tabs, cards: $cards}')" >/dev/null
+    rm -f "${tab_map_file}" >/dev/null 2>&1 || true
   fi
 
   printf '%s\n' "${dashboard_id}"
@@ -703,12 +910,20 @@ done
 
 login
 resolve_or_create_app_database_id
+DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
 validate_dwh_contract
 sync_metabase_schema
 ensure_collection
+if declare -F sync_all_models >/dev/null; then
+  sync_all_models
+else
+  printf '{}' > "${MODEL_REGISTRY_FILE}"
+fi
+wait_for_metabase_metadata
 maybe_skip_dashboard_import
 
 log_info "Importing dashboards to collection '${COLLECTION_NAME}' from ${DASHBOARDS_DIR}"
+api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
 archive_stale_collection_cards
 sync_all_cards
 for file in "${DASHBOARDS_DIR}"/*.json; do

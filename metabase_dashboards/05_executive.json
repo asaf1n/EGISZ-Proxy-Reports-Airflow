@@ -368,7 +368,7 @@
     },
     {
       "display": "text",
-      "text": "## Здоровье сервиса\nСервисные guardrail-метрики (без тела документа). Реагируют на фильтр «Период». Цель: «зависших >72 ч» → вниз, «отказов РЭМД» и «ошибок связи» → вниз.",
+      "text": "## Здоровье сервиса\nСервисные guardrail-метрики (без тела документа). Реагируют на фильтр «Период». Цель: «зависших >7 дн.» → вниз, «отказов РЭМД» и «ошибок связи» → вниз.",
       "sizeX": 24,
       "sizeY": 2,
       "row": 16,
@@ -376,12 +376,12 @@
       "visualization_settings": {}
     },
     {
-      "name": "Зависших >72 ч, %",
-      "description": "Доля документов в статусе «в обработке» дольше 72 часов (нет колбэка от РЭМД) от всех документов. Главный операционный риск — скрытый при расчёте «% успеха только по финализированным».",
+      "name": "Зависших >7 дн., %",
+      "description": "Доля документов в статусе «в обработке» дольше 7 суток (нет колбэка от РЭМД) от всех документов.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting' AND now() - \"Дата обработки\" > INTERVAL '72 hours') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Зависших >72 ч, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting' AND now() - \"Дата обработки\" > INTERVAL '7 days') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Зависших >7 дн., %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -396,9 +396,9 @@
       },
       "display": "scalar",
       "visualization_settings": {
-        "scalar.field": "Зависших >72 ч, %",
+        "scalar.field": "Зависших >7 дн., %",
         "column_settings": {
-          "[\"name\",\"Зависших >72 ч, %\"]": {
+          "[\"name\",\"Зависших >7 дн., %\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"

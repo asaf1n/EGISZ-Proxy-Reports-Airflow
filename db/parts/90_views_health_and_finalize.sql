@@ -67,16 +67,16 @@ SELECT * FROM (
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.fact_egisz_documents WHERE status = 'network_error'), 'документов', 'fact_egisz_documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'async_error'), 'документов', 'fact_egisz_documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('pending_backlog_24h',
-         'Документы в обработке > 24ч (backlog)',
+         'Документы без ответа > 7 дней',
          CASE
-             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '72 hours') >= 100 THEN 'red'
-             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '72 hours') >= 20  THEN 'yellow'
+             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '30 days') >= 50 THEN 'red'
+             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days') >= 20  THEN 'yellow'
              ELSE 'green'
          END,
-         (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '72 hours'),
-         'документов > 72ч',
-         'v_rpt_documents_no_response_ui (просрочено)',
-         'Проверить транспорт клиник в дашборде 03; pending — норма, просрочено — эскалация'),
+         (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days'),
+         'документов > 7 дн.',
+         'v_rpt_documents_no_response_ui (Сегмент ожидания)',
+         'Проверить транспорт клиник в дашборде 03; до 3 дн. — норма, >7 дн. — эскалация'),
         ('unknown_high',
          'Доля «Нераспознан» (status=unknown)',
          'green',

@@ -1,0 +1,37 @@
+{
+  "name": "Документы",
+  "table_ref": "public.v_rpt_documents_ui",
+  "description": "Grain: 1 строка = 1 документ (ключ учёта). Фильтры и группировки — по полю «Статус», не по «Статус (код)».",
+  "fields": {
+    "Документ (ключ учёта)": { "semantic_type": "type/PK" },
+    "Дата обработки": { "semantic_type": "type/CreationTimestamp" },
+    "День (тренд)": { "semantic_type": "type/CreationDate" },
+    "JID клиники": { "semantic_type": "type/Category" },
+    "Наименование клиники": { "semantic_type": "type/Name" },
+    "Код СЭМД": { "semantic_type": "type/Category" },
+    "Тип СЭМД (код · НСИ)": { "semantic_type": "type/Title" },
+    "Статус": { "semantic_type": "type/Category" },
+    "Тип ошибки": { "semantic_type": "type/Category" },
+    "localUid СЭМД": { "semantic_type": "type/Category" },
+    "Связанное сообщение": { "semantic_type": "type/Category" },
+    "Рег. номер РЭМД": { "semantic_type": "type/Category" }
+  },
+  "hidden_fields": [
+    "Статус (код)",
+    "LOGID журнала EXCHANGELOG",
+    "MSGID обмена"
+  ],
+  "metrics": {
+    "Документов": {
+      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]]
+    },
+    "Документов с ошибкой": {
+      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]],
+      "filter": [
+        "or",
+        ["=", ["field", "Статус", null], "Ошибка связи"],
+        ["=", ["field", "Статус", null], "Ошибка асинхронного ответа РЭМД"]
+      ]
+    }
+  }
+}

@@ -12,6 +12,7 @@ SELECT
     COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID журнала (сетевая ошибка)",
     d.message_id AS "MSGID обмена",
     d.document_key AS "Документ (ключ учёта)",
+    public.egisz_clean_text_value(d.local_uid) AS "localUid СЭМД",
     d.relates_to_id AS "relatesToMessage (из текста журнала)",
     d.local_uid AS "localUid (из текста)",
     d.emdr_id AS "emdrId (из текста)",
@@ -43,10 +44,14 @@ CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
 SELECT
     d.sent_at AS "Отправлено",
     EXTRACT(EPOCH FROM (now() - d.sent_at))/3600.0 AS "Часов в ожидании",
+    ROUND(EXTRACT(EPOCH FROM (now() - d.sent_at))/86400.0, 1) AS "Дней в ожидании",
     CASE
-        WHEN now() - d.sent_at > INTERVAL '72 hours' THEN 'просрочено'
-        ELSE 'в обработке'
-    END AS "Категория ожидания",
+        WHEN d.sent_at IS NULL THEN 'дата неизвестна'
+        WHEN now() - d.sent_at > INTERVAL '30 days' THEN '>30 дней'
+        WHEN now() - d.sent_at > INTERVAL '7 days' THEN '>7 дней'
+        WHEN now() - d.sent_at > INTERVAL '3 days' THEN '>3 дней'
+        ELSE 'до 3 дней'
+    END AS "Сегмент ожидания",
     d."localUid СЭМД",
     d."Идентификатор документа (localUid)",
     d."Код СЭМД",
@@ -375,3 +380,53 @@ SELECT
     doctor_hash
 FROM ranked
 WHERE rn = 1;
+
+-- Срез клиника × тип СЭМД для QB tier-1 (дашборд 04, 01).
+CREATE OR REPLACE VIEW public.v_rpt_clinic_semd_slice_ui AS
+SELECT
+    "JID клиники",
+    "Наименование клиники",
+    "Код СЭМД",
+    "Тип СЭМД (код · НСИ)",
+    "Статус",
+    COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS "Документов"
+FROM public.v_rpt_documents_ui
+WHERE NULLIF(TRIM("JID клиники"::text), '') IS NOT NULL
+  AND NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
+GROUP BY 1, 2, 3, 4, 5;
+
+COMMENT ON VIEW public.v_rpt_clinic_semd_slice_ui IS
+'Предрасчёт: клиника × код СЭМД × статус → число документов. Для Query Builder tier-1.';
+
+-- Дневные KPI клиентских дашбордов 07/08.
+CREATE OR REPLACE VIEW public.v_rpt_client_kpi_daily_ui AS
+SELECT
+    document_day AS "День",
+    client_jid AS "JID клиники",
+    COUNT(DISTINCT document_key)::bigint AS "Документов",
+    COUNT(DISTINCT document_key) FILTER (WHERE status_label = 'Успешно зарегистрирован')::bigint AS "Успешно",
+    COUNT(DISTINCT document_key) FILTER (
+        WHERE status_label IN ('Ошибка асинхронного ответа РЭМД', 'Ошибка связи')
+    )::bigint AS "С ошибкой",
+    ROUND(
+        100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_label = 'Успешно зарегистрирован')
+        / NULLIF(
+            COUNT(DISTINCT document_key) FILTER (
+                WHERE status_label IN (
+                    'Успешно зарегистрирован',
+                    'Ошибка асинхронного ответа РЭМД',
+                    'Ошибка связи'
+                )
+            ),
+            0
+        ),
+        1
+    ) AS "% успеха",
+    ROUND(AVG(delivery_seconds) FILTER (WHERE delivery_seconds IS NOT NULL), 0) AS "Среднее время доставки, сек"
+FROM public.v_rpt_client_documents_ui
+WHERE document_day IS NOT NULL
+GROUP BY 1, 2;
+
+COMMENT ON VIEW public.v_rpt_client_kpi_daily_ui IS
+'Дневные KPI по клиентским документам для QB-дашбордов 07/08.';
+

@@ -1,0 +1,19 @@
+{
+  "name": "Сбои транспорта",
+  "table_ref": "public.v_rpt_network_errors_detail_ui",
+  "description": "Сетевые сбои (LOGSTATE=3), grain: документ.",
+  "fields": {
+    "Документ (ключ учёта)": { "semantic_type": "type/PK" },
+    "Дата создания документа": { "semantic_type": "type/CreationTimestamp" },
+    "JID клиники": { "semantic_type": "type/Category" },
+    "Клиника (транспорт)": { "semantic_type": "type/Name" },
+    "Тип сетевой ошибки": { "semantic_type": "type/Category" },
+    "localUid СЭМД": { "semantic_type": "type/Category" }
+  },
+  "hidden_fields": [],
+  "metrics": {
+    "Сбоев связи": {
+      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]]
+    }
+  }
+}

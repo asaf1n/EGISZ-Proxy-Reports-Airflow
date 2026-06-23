@@ -1,0 +1,21 @@
+{
+  "name": "Очередь без ответа",
+  "table_ref": "public.v_rpt_documents_no_response_ui",
+  "description": "Документы в ожидании колбэка (grain: localUid СЭМД).",
+  "fields": {
+    "localUid СЭМД": { "semantic_type": "type/PK" },
+    "Отправлено": { "semantic_type": "type/CreationTimestamp" },
+    "JID клиники": { "semantic_type": "type/Category" },
+    "Наименование клиники": { "semantic_type": "type/Name" },
+    "Код СЭМД": { "semantic_type": "type/Category" },
+    "Тип СЭМД (код · НСИ)": { "semantic_type": "type/Title" },
+    "Сегмент ожидания": { "semantic_type": "type/Category" },
+    "Дней в ожидании": { "semantic_type": "type/Quantity" }
+  },
+  "hidden_fields": [],
+  "metrics": {
+    "Зависших документов": {
+      "aggregation": ["distinct", ["field", "localUid СЭМД", null]]
+    }
+  }
+}
