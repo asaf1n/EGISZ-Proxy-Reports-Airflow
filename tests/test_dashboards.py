@@ -747,50 +747,58 @@ def test_dashboard_cards_use_canonical_jid_semd_template_tags() -> None:
     assert not hits, "Legacy jid/semd template tags: " + "; ".join(hits)
 
 
-ERROR_PERIOD_CARD = "% ошибок. Тип ошибки × Клиника × Тип СЭМД"
+ERROR_PERIOD_CARD = "Ошибки: тип × клиника"
 
 
 def test_operational_error_period_card_uses_atomic_error_types() -> None:
-    """Карточка error period — только атомарные виды из breakdown, без «Сводки ошибки»."""
+    """Карточка error period — Query Builder на модели «Разбивка ошибок», без «Сводки ошибки»."""
     dashboard = _legacy_dashboard("04_quality_and_errors.json")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
-    query = card["dataset_query"]["native"]["query"]
-    assert "v_rpt_error_category_breakdown_ui" in query
-    assert "Сводка ошибки" not in query
-    assert "error_interpretations" not in query
+    assert card.get("query_tier") == "query_builder"
+    assert card.get("source_model") == "Разбивка ошибок"
+    query = card["dataset_query"]["query"]
+    assert query["source-table"] == "model:Разбивка ошибок"
+    breakout = {field[1].split(":")[-1] for field in query["breakout"]}
+    assert "Тип ошибки" in breakout
+    assert "Наименование клиники" in breakout
     cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
     assert "Сводка ошибки" not in cols
     assert "Исходный текст ошибки" not in cols
 
 
-def test_error_period_card_percent_is_share_within_clinic_semd() -> None:
-    """«% ошибок» — доля вида среди всех ошибок в паре клиника × тип СЭМД."""
+def test_error_period_card_groups_by_error_type_and_clinic() -> None:
+    """По умолчанию — группировка тип ошибки × клиника, метрика distinct по документу."""
     dashboard = _legacy_dashboard("04_quality_and_errors.json")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
-    query = card["dataset_query"]["native"]["query"]
-    assert 'SUM(g."Ошибок") OVER (PARTITION BY g."JID клиники", g."Тип СЭМД (код · НСИ)")' in query
+    query = card["dataset_query"]["query"]
+    assert query["aggregation"] == [
+        ["distinct", ["field", "Разбивка ошибок:Документ (ключ учёта)", None]]
+    ]
+    assert query["breakout"] == [
+        ["field", "Разбивка ошибок:Тип ошибки", None],
+        ["field", "Разбивка ошибок:Наименование клиники", None],
+        ["field", "Разбивка ошибок:JID клиники", None],
+    ]
 
 
-def test_error_period_card_avoids_documents_ui_rescan() -> None:
-    """Карточка читает breakdown напрямую — без повторного скана v_rpt_documents_ui."""
+def test_error_period_card_uses_breakdown_model() -> None:
+    """Карточка читает модель «Разбивка ошибок» (v_rpt_error_category_breakdown_ui)."""
     dashboard = _legacy_dashboard("04_quality_and_errors.json")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
-    query = card["dataset_query"]["native"]["query"]
-    assert "v_rpt_documents_ui" not in query
-    assert "v_rpt_error_category_breakdown_ui b" not in query
-    assert "[[AND {{jid}}]]" in query
-    assert "dim_organizations" in query
-    filters = card.get("metabase-field-filters") or {}
-    assert filters["dwh_date"]["table_ref"] == "public.v_rpt_error_category_breakdown_ui"
+    assert card["dataset_query"]["type"] == "query"
+    assert card.get("metabase-parameter-targets")["dwh_date"] == {
+        "model_ref": "Разбивка ошибок",
+        "field_name": "Обработано IPS",
+    }
 
 
 def test_error_period_card_uses_canonical_filter_tags() -> None:
-    """Карточка error period на дашборде 04 — теги jid/semd_type."""
+    """Карточка error period на дашборде 04 — parameter targets jid/semd_type."""
     dashboard = _legacy_dashboard("04_quality_and_errors.json")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
-    tags = card["dataset_query"]["native"]["template-tags"]
-    assert "jid" in tags
-    assert "semd_type" in tags
+    targets = card.get("metabase-parameter-targets") or {}
+    assert targets["jid"]["field_name"] == "JID клиники"
+    assert targets["semd_type"]["field_name"] == "Код СЭМД"
     param_slugs = {p["slug"] for p in dashboard["parameters"]}
     assert "jid_filter" in param_slugs
     assert "semd_type_filter" in param_slugs

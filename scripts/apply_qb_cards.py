@@ -196,6 +196,22 @@ QB_CARDS: dict[str, dict[str, Any]] = {
         param_targets=BRK_PARAMS,
         click=ARCHIVE_CLICK,
     ),
+    "Ошибки: тип × клиника": qb_card(
+        model=BRK,
+        display="table",
+        query=qb_query(
+            BRK,
+            aggregation=[["distinct", field(BRK, "Документ (ключ учёта)")]],
+            breakout=[
+                field(BRK, "Тип ошибки"),
+                field(BRK, "Наименование клиники"),
+                field(BRK, "JID клиники"),
+            ],
+            order_by=[["desc", ["aggregation", 0, None]]],
+        ),
+        param_targets=BRK_PARAMS,
+        click=ARCHIVE_CLICK,
+    ),
     "Успешность по клиникам": qb_card(
         model=DOC,
         display="table",

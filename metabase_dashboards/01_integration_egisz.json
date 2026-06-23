@@ -3188,64 +3188,59 @@
       "tab": "errors"
     },
     {
-      "name": "% ошибок. Тип ошибки × Клиника × Тип СЭМД",
-      "description": "Доля каждого атомарного вида ошибки среди всех отказов РЭМД в паре **клиника × тип СЭМД** (из `v_rpt_error_category_breakdown_ui`, без «Сводки ошибки»). «% ошибок» = документы с этим видом / все ошибки в паре. Учёт — COUNT(DISTINCT «Документ (ключ учёта)»). Источник — только breakdown + `dim_organizations` (без повторного скана `v_rpt_documents_ui`).",
+      "name": "Ошибки: тип × клиника",
+      "description": "Интерактивная таблица на модели «Разбивка ошибок»: COUNT(DISTINCT «Документ (ключ учёта)») по умолчанию сгруппирован по **типу ошибки** и **клинике**. Через «Открыть вопрос» в Metabase можно добавить измерения (код СЭМД, категория ошибки и т.д.), изменить группировку, сортировку и фильтры.",
       "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH pairs AS ( SELECT COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), 'Неизвестно') AS \"Тип СЭМД (код · НСИ)\", COALESCE(NULLIF(TRIM(\"JID клиники\"::text), ''), 'Неизвестно') AS \"JID клиники\", COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", \"Документ (ключ учёта)\" FROM public.v_rpt_error_category_breakdown_ui WHERE COALESCE(NULLIF(TRIM(\"Код СЭМД\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип СЭМД (код · НСИ)\"), ''), '') <> '' AND COALESCE(NULLIF(TRIM(\"Тип ошибки\"), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), grouped AS ( SELECT \"Тип СЭМД (код · НСИ)\", \"JID клиники\", \"Тип ошибки\", COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Ошибок\" FROM pairs GROUP BY 1, 2, 3 ) SELECT g.\"Тип СЭМД (код · НСИ)\", g.\"JID клиники\", COALESCE(NULLIF(TRIM(o.name), ''), '(нет)') AS \"Наименование клиники\", g.\"Тип ошибки\", g.\"Ошибок\", ROUND(100.0 * g.\"Ошибок\" / NULLIF(SUM(g.\"Ошибок\") OVER (PARTITION BY g.\"JID клиники\", g.\"Тип СЭМД (код · НСИ)\"), 0), 1) AS \"Доля ошибок\" FROM grouped g LEFT JOIN public.dim_organizations o ON o.jid::text = g.\"JID клиники\" WHERE g.\"Ошибок\" > 0 ORDER BY g.\"Ошибок\" DESC LIMIT 500",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID клиники",
-              "id": "f9000004-0004-4004-8004-000000000011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "dwh_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "f9000004-0004-4004-8004-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f9000004-0004-4004-8004-000000000010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            }
-          }
+        "type": "query",
+        "query": {
+          "source-table": "model:Разбивка ошибок",
+          "aggregation": [
+            [
+              "distinct",
+              [
+                "field",
+                "Разбивка ошибок:Документ (ключ учёта)",
+                null
+              ]
+            ]
+          ],
+          "breakout": [
+            [
+              "field",
+              "Разбивка ошибок:Тип ошибки",
+              null
+            ],
+            [
+              "field",
+              "Разбивка ошибок:Наименование клиники",
+              null
+            ],
+            [
+              "field",
+              "Разбивка ошибок:JID клиники",
+              null
+            ]
+          ],
+          "order-by": [
+            [
+              "desc",
+              [
+                "aggregation",
+                0,
+                null
+              ]
+            ]
+          ]
         },
         "database": 1
       },
       "display": "table",
       "visualization_settings": {
-        "table": {
-          "columns": [
-            {
-              "enabled": false,
-              "name": "Связанное сообщение"
-            }
-          ]
-        },
-        "table.cell_column": "Ошибок",
-        "table.column_widths": [
-          null,
-          null,
-          288
-        ],
+        "table.cell_column": "count",
         "table.columns": [
           {
             "enabled": true,
-            "name": "Ошибок"
-          },
-          {
-            "enabled": true,
-            "name": "Доля ошибок"
+            "name": "count"
           },
           {
             "enabled": true,
@@ -3256,29 +3251,18 @@
             "name": "Наименование клиники"
           },
           {
-            "enabled": true,
-            "name": "Тип СЭМД (код · НСИ)"
-          },
-          {
-            "enabled": true,
+            "enabled": false,
             "name": "JID клиники"
           }
         ],
-        "table.pivot_column": "Доля ошибок",
         "column_settings": {
-          "[\"name\",\"Ошибок\"]": {
-            "column_title": "Ошибок",
+          "[\"name\",\"count\"]": {
+            "column_title": "Документов",
             "decimals": 0,
             "number_separators": ", "
           },
-          "[\"name\",\"Доля ошибок\"]": {
-            "column_title": "% ошибок",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Тип СЭМД (код · НСИ)\"]": {
-            "column_title": "Тип СЭМД"
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
           },
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
@@ -3287,9 +3271,6 @@
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
           }
         }
       },
@@ -3297,19 +3278,28 @@
       "sizeY": 12,
       "row": 27,
       "col": 0,
-      "metabase-field-filters": {
+      "query_tier": "query_builder",
+      "source_model": "Разбивка ошибок",
+      "metabase-parameter-targets": {
         "dwh_date": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
+          "model_ref": "Разбивка ошибок",
           "field_name": "Обработано IPS"
         },
-        "semd_type": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
-          "field_name": "Код СЭМД"
-        },
         "jid": {
-          "table_ref": "public.v_rpt_error_category_breakdown_ui",
+          "model_ref": "Разбивка ошибок",
           "field_name": "JID клиники"
+        },
+        "semd_type": {
+          "model_ref": "Разбивка ошибок",
+          "field_name": "Код СЭМД"
         }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "dashboard",
+        "targetDashboard": "Интеграция с ЕГИСЗ",
+        "parameterMapping": {},
+        "tab": "archive"
       },
       "tab": "errors"
     },
