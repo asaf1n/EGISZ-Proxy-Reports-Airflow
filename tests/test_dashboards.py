@@ -468,9 +468,10 @@ def test_quality_error_structure_section_is_category_colored_row_card() -> None:
     assert "v_rpt_error_category_breakdown_ui" in query
     assert "Категория ошибки" in query
     assert "GROUP BY 1, 2" in query and "LIMIT 15" in query
-    assert viz["graph.dimensions"] == ["Вид ошибки", "Категория ошибки"]
+    assert viz["graph.dimensions"] == ["Категория ошибки", "Вид ошибки"]
     assert viz["stackable.stack_type"] == "stacked"
     assert viz.get("graph.label_value_formatting") == "compact"
+    assert viz.get("graph.y_axis.scale") == "linear"
     assert viz.get("graph.x_axis.title_text", "unset") == ""
     assert viz.get("graph.y_axis.title_text", "unset") == ""
     assert "series_settings" not in viz
@@ -487,7 +488,10 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     assert "WHERE r.rn <= 15" in query
     assert 'AS "Документов"' in query
     assert card["visualization_settings"]["graph.metrics"] == ["Документов"]
-    assert card["visualization_settings"]["stackable.stack_type"] == "normalized"
+    assert card["visualization_settings"]["stackable.stack_type"] == "stacked"
+    assert card["visualization_settings"].get("graph.show_stack_values") == "total"
+    assert card["visualization_settings"].get("graph.label_value_frequency") == "all"
+    assert card["visualization_settings"].get("graph.x_axis.scale") == "ordinal"
     assert card["visualization_settings"].get("graph.x_axis.title_text", "unset") == ""
     assert card["visualization_settings"].get("graph.y_axis.title_text", "unset") == ""
     assert '"Код СЭМД"' in query
@@ -714,11 +718,14 @@ def test_dashboard_cards_use_canonical_jid_semd_template_tags() -> None:
     assert not hits, "Legacy jid/semd template tags: " + "; ".join(hits)
 
 
+ERROR_PERIOD_CARD = "% ошибок. Тип ошибки × Клиника × Тип СЭМД"
+
+
 def test_operational_error_period_card_uses_atomic_error_types() -> None:
-    """«% Ошибок за период» — только атомарные виды из breakdown, без «Сводки ошибки»."""
+    """Карточка error period — только атомарные виды из breakdown, без «Сводки ошибки»."""
     for fname in ("01_operational.json", "04_quality_and_errors.json"):
         dashboard = json.loads(Path(f"metabase_dashboards/{fname}").read_text(encoding="utf-8"))
-        card = next(c for c in dashboard["cards"] if c.get("name") == "% Ошибок за период")
+        card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
         query = card["dataset_query"]["native"]["query"]
         assert "v_rpt_error_category_breakdown_ui" in query
         assert "Сводка ошибки" not in query
@@ -728,10 +735,33 @@ def test_operational_error_period_card_uses_atomic_error_types() -> None:
         assert "Исходный текст ошибки" not in cols
 
 
+def test_error_period_card_percent_is_share_within_clinic_semd() -> None:
+    """«% ошибок» — доля вида среди всех ошибок в паре клиника × тип СЭМД."""
+    for fname in ("01_operational.json", "04_quality_and_errors.json"):
+        dashboard = json.loads(Path(f"metabase_dashboards/{fname}").read_text(encoding="utf-8"))
+        card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
+        query = card["dataset_query"]["native"]["query"]
+        assert 'SUM(g."Ошибок") OVER (PARTITION BY g."JID клиники", g."Тип СЭМД (код · НСИ)")' in query
+
+
+def test_error_period_card_avoids_documents_ui_rescan() -> None:
+    """Карточка читает breakdown напрямую — без повторного скана v_rpt_documents_ui."""
+    for fname in ("01_operational.json", "04_quality_and_errors.json"):
+        dashboard = json.loads(Path(f"metabase_dashboards/{fname}").read_text(encoding="utf-8"))
+        card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
+        query = card["dataset_query"]["native"]["query"]
+        assert "v_rpt_documents_ui" not in query
+        assert "v_rpt_error_category_breakdown_ui b" not in query
+        assert "[[AND {{jid}}]]" in query
+        assert "dim_organizations" in query
+        filters = card.get("metabase-field-filters") or {}
+        assert filters["dwh_date"]["table_ref"] == "public.v_rpt_error_category_breakdown_ui"
+
+
 def test_operational_error_period_card_uses_canonical_filter_tags() -> None:
-    """Карточка «% Ошибок за период» переиспользуется — теги jid/semd_type."""
+    """Карточка error period переиспользуется — теги jid/semd_type."""
     dashboard = json.loads(Path("metabase_dashboards/01_operational.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c.get("name") == "% Ошибок за период")
+    card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     tags = card["dataset_query"]["native"]["template-tags"]
     assert "jid" in tags
     assert "semd_type" in tags

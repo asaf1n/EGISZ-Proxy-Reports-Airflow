@@ -456,10 +456,10 @@ create_or_update_card() {
       fi
       if printf '%s' "${existing_card}" | card_dimension_tags_ready >/dev/null \
         && printf '%s' "${payload}" | card_dimension_tags_ready >/dev/null; then
-        # Shared cards: refresh only visualization_settings. A later dashboard JSON may omit
+        # Shared cards: refresh display + visualization_settings. A later dashboard JSON may omit
         # metabase-field-filters while reusing the same SQL; rewriting dataset_query would
         # drop Metabase field-id bindings and break dashboard filters.
-        api_request PUT "/api/card/${card_id}" "$(printf '%s' "${payload}" | jq '{visualization_settings}')" >/dev/null
+        api_request PUT "/api/card/${card_id}" "$(printf '%s' "${payload}" | jq '{display, visualization_settings, description}')" >/dev/null
         printf '%s\n' "${card_id}"
         return 0
       fi
