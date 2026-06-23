@@ -77,7 +77,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -316,7 +316,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -389,11 +389,11 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Тип документа\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"_percentage\"]": {
             "number_separators": ", ",
@@ -516,7 +516,7 @@
           },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },

@@ -137,7 +137,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -263,7 +263,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "series_settings": {
@@ -391,7 +391,7 @@
           "[\"name\",\"Клиник\"]": {
             "column_title": "Клиник",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -546,7 +546,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.dimensions": [
@@ -726,12 +726,12 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"

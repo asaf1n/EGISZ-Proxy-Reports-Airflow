@@ -105,7 +105,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "series_settings": {
@@ -230,11 +230,11 @@
         "column_settings": {
           "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Ошибка связи\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Час\"]": {
             "date_style": "D MMMM, YYYY",
@@ -376,7 +376,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.dimensions": [
@@ -546,7 +546,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Проверка\"]": {
             "column_title": "Проверка"
@@ -666,7 +666,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -884,7 +884,7 @@
         "column_settings": {
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -940,7 +940,7 @@
         "column_settings": {
           "[\"name\",\"В обработке\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -1122,7 +1122,7 @@
         "column_settings": {
           "[\"name\",\"Сбоев связи\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -1184,7 +1184,7 @@
         "column_settings": {
           "[\"name\",\"Пик сбоев за день\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -1252,7 +1252,7 @@
         "column_settings": {
           "[\"name\",\"Документов с ошибкой связи\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -1325,7 +1325,7 @@
         "column_settings": {
           "[\"name\",\"Количество\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -1398,7 +1398,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [

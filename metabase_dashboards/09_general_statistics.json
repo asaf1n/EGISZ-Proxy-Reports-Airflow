@@ -143,7 +143,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
@@ -243,7 +243,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "series_settings": {
@@ -368,11 +368,11 @@
         "column_settings": {
           "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Ошибка связи\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Час\"]": {
             "date_style": "D MMMM, YYYY",
@@ -514,7 +514,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.dimensions": [
@@ -689,12 +689,12 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
@@ -851,7 +851,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.dimensions": [
@@ -952,7 +952,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"_percentage\"]": {
             "decimals": 1,
@@ -1109,7 +1109,7 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "version": 2
@@ -1262,7 +1262,7 @@
           },
           "[\"name\",\"Ошибок\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [

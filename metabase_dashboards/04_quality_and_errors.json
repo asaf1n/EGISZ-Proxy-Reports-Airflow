@@ -82,7 +82,7 @@
         "column_settings": {
           "[\"name\",\"Документов с ошибкой\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -207,7 +207,7 @@
         "column_settings": {
           "[\"name\",\"Клиник с ошибками\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -269,7 +269,7 @@
         "column_settings": {
           "[\"name\",\"Ошибок регистрации в РЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -451,7 +451,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -524,7 +524,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Вид ошибки\"]": {
             "column_title": "Вид ошибки"
@@ -658,16 +658,15 @@
           },
           "[\"name\",\"Всего\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
-          "[\"name\",\"Клиника\"]": {},
           "[\"name\",\"Отказ РЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники"
@@ -791,18 +790,18 @@
           },
           "[\"name\",\"Всего\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Код СЭМД\"]": {
             "column_title": "Код"
           },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Ошибок\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -918,12 +917,12 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Всего\"]": {
             "column_title": "Всего",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Клиника\"]": {
             "column_title": "Клиника"
@@ -934,7 +933,7 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Код СЭМД\"]": {
             "column_title": "Код"
@@ -1041,7 +1040,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
@@ -1152,7 +1151,7 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок",
@@ -1166,7 +1165,7 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"

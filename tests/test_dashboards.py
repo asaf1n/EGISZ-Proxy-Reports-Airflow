@@ -787,9 +787,18 @@ def test_pie_charts_with_decimals_use_comma_separator() -> None:
             assert percent.get("number_separators") == ", ", (
                 f"{path.name} / {card.get('name')}: pie slice percent needs comma decimal separator"
             )
+            assert percent.get("decimals") == 1, (
+                f"{path.name} / {card.get('name')}: pie slice percent needs 1 decimal place"
+            )
+            assert viz.get("pie.decimal_places") == 1, (
+                f"{path.name} / {card.get('name')}: pie.decimal_places must be 1"
+            )
             if settings:
-                assert settings.get("number_separators") == " ", (
-                    f"{path.name} / {card.get('name')}: pie count metric must keep space thousands separator"
+                assert settings.get("number_separators") == ", ", (
+                    f"{path.name} / {card.get('name')}: pie count metric needs RU separator"
+                )
+                assert settings.get("decimals") == 0, (
+                    f"{path.name} / {card.get('name')}: pie count metric must be integer"
                 )
 
 
@@ -800,10 +809,17 @@ def test_error_types_pie_hides_misleading_total() -> None:
         assert card["visualization_settings"].get("pie.show_total") is False
 
 
-def test_dashboard_numeric_formatting_uses_space_thousands() -> None:
-    """Все числовые column_settings должны использовать пробел как разделитель тысяч (RU)."""
-    dot_separators: list[str] = []
-    missing_separators: list[str] = []
+def test_dashboard_numeric_formatting_uses_ru_default() -> None:
+    """Целые — без дробной части; проценты — до десятых; разделитель 000 000 / запятая."""
+    text_markers = (
+        "Клиника", "клиника", "Вид ошибки", "Категория ошибки", "Тип ошибки", "Тип СЭМД",
+        "Наименование", "Код СЭМД", "Статус", "День", "Дата", "Час", "lbl", "code",
+        "Сегмент", "Тип сетевой", "Категория", "Сигнал", "localUid", "OID", "ИНН",
+        "СНИЛС", "ФИО", "текст", "Сводка", "Исходный", "Хост", "Сообщение", "emdrid",
+        "Рег. номер", "relatesTo", "Врач", "Пациент", "document_type",
+    )
+    bad: list[str] = []
+    missing: list[str] = []
     for path in _dashboard_paths():
         dashboard = json.loads(path.read_text(encoding="utf-8"))
         for card in dashboard.get("cards", []):
@@ -812,23 +828,36 @@ def test_dashboard_numeric_formatting_uses_space_thousands() -> None:
             for col_key, settings in cs.items():
                 if not isinstance(settings, dict):
                     continue
-                if "number_separators" not in settings:
-                    if "decimals" in settings or "suffix" in settings:
-                        missing_separators.append(f"{path.name} / {card_name} / {col_key}")
+                if not any(k in settings for k in ("decimals", "number_separators", "suffix")):
                     continue
-                if settings["number_separators"] == ".":
-                    dot_separators.append(f"{path.name} / {card_name} / {col_key}")
-                elif settings.get("suffix") == " %" and settings.get("decimals", 0) >= 1:
-                    if settings["number_separators"] != ", ":
-                        dot_separators.append(
-                            f"{path.name} / {card_name} / {col_key}: percent needs ', ' separator"
-                        )
-                elif settings["number_separators"] not in (" ", ", "):
-                    dot_separators.append(
+                if any(marker in col_key for marker in text_markers) and not col_key.endswith('"_percentage"]'):
+                    if settings.get("suffix") != " %":
+                        continue
+                if "number_separators" not in settings:
+                    missing.append(f"{path.name} / {card_name} / {col_key}")
+                    continue
+                if settings["number_separators"] != ", ":
+                    bad.append(
                         f"{path.name} / {card_name} / {col_key}: {settings['number_separators']!r}"
                     )
-    assert not dot_separators, "US-style separators still present: " + ", ".join(dot_separators)
-    assert not missing_separators, "Numeric columns missing separator: " + ", ".join(missing_separators)
+                    continue
+                if settings.get("suffix") == " %" or col_key.endswith('"_percentage"]'):
+                    expected_decimals = 1
+                elif "/" in col_key or ", мин" in col_key:
+                    expected_decimals = 1
+                elif (
+                    "₽ за успешный СЭМД" in col_key
+                    and card_name == "Эфф. цена успешного СЭМД, ₽"
+                ):
+                    expected_decimals = 1
+                else:
+                    expected_decimals = 0
+                if settings.get("decimals") != expected_decimals:
+                    bad.append(
+                        f"{path.name} / {card_name} / {col_key}: decimals={settings.get('decimals')}"
+                    )
+    assert not bad, "Non-standard numeric formatting: " + ", ".join(bad)
+    assert not missing, "Numeric columns missing separator: " + ", ".join(missing)
 
 
 def test_scalar_cards_use_appropriate_display_format() -> None:
@@ -837,7 +866,7 @@ def test_scalar_cards_use_appropriate_display_format() -> None:
     clinic_fmt = clinic_card["visualization_settings"]["column_settings"]['["name","Клиник без успеха"]']
     assert clinic_fmt["decimals"] == 0
     assert "suffix" not in clinic_fmt
-    assert clinic_fmt["number_separators"] == " "
+    assert clinic_fmt["number_separators"] == ", "
 
     client = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     by_name = {c.get("name"): c for c in client["cards"]}

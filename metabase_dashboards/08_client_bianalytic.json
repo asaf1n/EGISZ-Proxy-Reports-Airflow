@@ -77,7 +77,7 @@
         "column_settings": {
           "[\"name\",\"СЭМД за период\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -200,8 +200,8 @@
         "scalar.field": "Медиана доставки, мин",
         "column_settings": {
           "[\"name\",\"Медиана доставки, мин\"]": {
-            "decimals": 0,
-            "number_separators": " "
+            "decimals": 1,
+            "number_separators": ", "
           }
         }
       },
@@ -260,7 +260,7 @@
         "column_settings": {
           "[\"name\",\"ЭМД/сутки\"]": {
             "decimals": 1,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -332,7 +332,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -402,7 +402,7 @@
           },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -467,11 +467,11 @@
         "column_settings": {
           "[\"name\",\"Документов с метрикой\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Доставка, мин\"]": {
             "decimals": 1,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -530,17 +530,9 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Врач\"]": {
-            "decimals": 0,
-            "number_separators": " "
-          },
-          "[\"name\",\"Пациент\"]": {
-            "decimals": 0,
-            "number_separators": " "
-          },
           "[\"name\",\"Текст ошибки\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -604,13 +596,7 @@
       },
       "display": "scalar",
       "visualization_settings": {
-        "scalar.field": "Пациентов",
-        "column_settings": {
-          "[\"name\",\"Пациентов\"]": {
-            "decimals": 0,
-            "number_separators": " "
-          }
-        }
+        "scalar.field": "Пациентов"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -663,13 +649,7 @@
       },
       "display": "scalar",
       "visualization_settings": {
-        "scalar.field": "Врачей",
-        "column_settings": {
-          "[\"name\",\"Врачей\"]": {
-            "decimals": 0,
-            "number_separators": " "
-          }
-        }
+        "scalar.field": "Врачей"
       },
       "sizeX": 8,
       "sizeY": 3,
@@ -726,7 +706,7 @@
         "column_settings": {
           "[\"name\",\"ЭМД/пациент\"]": {
             "decimals": 1,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -788,11 +768,7 @@
         "column_settings": {
           "[\"name\",\"Документов на пациента\"]": {
             "decimals": 0,
-            "number_separators": " "
-          },
-          "[\"name\",\"Пациентов\"]": {
-            "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -856,17 +832,13 @@
             "number_separators": ", ",
             "suffix": " %"
           },
-          "[\"name\",\"Врач\"]": {
-            "decimals": 0,
-            "number_separators": " "
-          },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Уникальных пациентов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },

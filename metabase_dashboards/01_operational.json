@@ -530,7 +530,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
@@ -689,7 +689,7 @@
           },
           "[\"name\",\"Ошибок\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.metrics": [
@@ -869,12 +869,12 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Документов\"]": {
             "column_title": "Количество",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
@@ -973,7 +973,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"
@@ -1130,7 +1130,7 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "version": 2
@@ -1286,7 +1286,7 @@
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         },
         "graph.dimensions": [
@@ -1415,7 +1415,7 @@
           "[\"name\",\"Ошибок\"]": {
             "column_title": "Ошибок",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Доля ошибок\"]": {
             "column_title": "% ошибок",
@@ -1429,7 +1429,7 @@
           "[\"name\",\"JID клиники\"]": {
             "column_title": "JID клиники",
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки"

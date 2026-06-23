@@ -47,7 +47,7 @@
         "column_settings": {
           "[\"name\",\"Успешных СЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -87,7 +87,7 @@
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -174,7 +174,7 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -201,7 +201,7 @@
         "column_settings": {
           "[\"name\",\"ARR, ₽\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -228,7 +228,7 @@
         "column_settings": {
           "[\"name\",\"Активных JID\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -253,8 +253,8 @@
         "scalar.field": "₽ за успешный СЭМД",
         "column_settings": {
           "[\"name\",\"₽ за успешный СЭМД\"]": {
-            "decimals": 0,
-            "number_separators": " ",
+            "decimals": 1,
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -304,7 +304,7 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           },
           "[\"name\",\"Дата\"]": {
@@ -351,7 +351,7 @@
         "column_settings": {
           "[\"name\",\"Активных JID\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Дата\"]": {
             "column_title": "Дата"
@@ -531,20 +531,20 @@
         "column_settings": {
           "[\"name\",\"MRR, ₽\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           },
           "[\"name\",\"Клиник\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"Успешных СЭМД\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"₽ за успешный СЭМД\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -585,7 +585,7 @@
         "column_settings": {
           "[\"name\",\"₽ под риском\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -626,7 +626,7 @@
         "column_settings": {
           "[\"name\",\"₽ под риском (затык)\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           }
         }
@@ -667,7 +667,7 @@
         "column_settings": {
           "[\"name\",\"Клиник без успеха\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },
@@ -706,11 +706,11 @@
         "column_settings": {
           "[\"name\",\"JID\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           },
           "[\"name\",\"MRR, ₽\"]": {
             "decimals": 0,
-            "number_separators": " ",
+            "number_separators": ", ",
             "suffix": " ₽"
           },
           "[\"name\",\"Наименование клиники\"]": {
@@ -718,7 +718,7 @@
           },
           "[\"name\",\"Попыток\"]": {
             "decimals": 0,
-            "number_separators": " "
+            "number_separators": ", "
           }
         }
       },

@@ -1,8 +1,13 @@
-"""Normalize Metabase dashboard number formatting to Russian-style space thousands."""
+"""Normalize Metabase dashboard number formatting to Russian locale."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+DEFAULT_NUMBER_SEPARATORS = ", "
+INTEGER_DECIMALS = 0
+PERCENT_DECIMALS = 1
+FRACTIONAL_DECIMALS = 1
 
 TEXT_COLUMN_MARKERS = (
     "Клиника",
@@ -23,11 +28,75 @@ TEXT_COLUMN_MARKERS = (
     "Тип сетевой",
     "Категория",
     "Сигнал",
+    "localUid",
+    "OID",
+    "ИНН",
+    "СНИЛС",
+    "ФИО",
+    "текст",
+    "Сводка",
+    "Исходный",
+    "Хост",
+    "Сообщение",
+    "emdrid",
+    "Рег. номер",
+    "relatesTo",
+    "Врач",
+    "Пациент",
+    "document_type",
 )
 
 
+def column_name_from_key(key: str) -> str:
+    if '["name","' in key:
+        return key.split('["name","', 1)[1].rsplit('"]', 1)[0]
+    return key
+
+
 def is_text_column_key(key: str) -> bool:
+    if key.endswith('"_percentage"]'):
+        return False
     return any(marker in key for marker in TEXT_COLUMN_MARKERS)
+
+
+def is_percent_column(key: str, settings: dict) -> bool:
+    if key.endswith('"_percentage"]'):
+        return True
+    if settings.get("suffix") == " %":
+        return True
+    col = column_name_from_key(key)
+    return col == "%" or col.endswith(", %") or col.endswith(" %")
+
+
+def is_fractional_column(key: str, settings: dict, card: dict) -> bool:
+    col = column_name_from_key(key)
+    if "/" in col:
+        return True
+    if ", мин" in col or col == "Доставка, мин":
+        return True
+    if col == "₽ за успешный СЭМД" and card.get("name") == "Эфф. цена успешного СЭМД, ₽":
+        return True
+    return False
+
+
+def target_decimals(key: str, settings: dict, card: dict) -> int:
+    if is_percent_column(key, settings):
+        return PERCENT_DECIMALS
+    if is_fractional_column(key, settings, card):
+        return FRACTIONAL_DECIMALS
+    return INTEGER_DECIMALS
+
+
+def apply_ru_number_format(key: str, settings: dict, card: dict) -> bool:
+    changed = False
+    decimals = target_decimals(key, settings, card)
+    if settings.get("number_separators") != DEFAULT_NUMBER_SEPARATORS:
+        settings["number_separators"] = DEFAULT_NUMBER_SEPARATORS
+        changed = True
+    if settings.get("decimals") != decimals:
+        settings["decimals"] = decimals
+        changed = True
+    return changed
 
 
 def fix_card(card: dict) -> list[str]:
@@ -42,67 +111,47 @@ def fix_card(card: dict) -> list[str]:
             cs[key] = {}
             changes.append(f"{name}: removed numeric formatting from text scalar")
 
-    if name == "Клиник без единого успеха":
-        cs = viz.setdefault("column_settings", {})
-        key = '["name","Клиник без успеха"]'
-        cs[key] = {"decimals": 0, "number_separators": " "}
-        changes.append(f"{name}: fixed count formatting (was wrongly shown as percent)")
-
     cs = viz.get("column_settings")
     if cs:
         for key, settings in list(cs.items()):
             if not isinstance(settings, dict):
                 continue
 
-            if settings.get("suffix") == " %" and settings.get("decimals", 0) >= 1:
-                if settings.get("number_separators") != ", ":
-                    settings["number_separators"] = ", "
-                    changes.append(f"{name}: comma decimal separator for percent")
-            elif settings.get("number_separators") == ".":
-                settings["number_separators"] = " "
-                changes.append(f"{name}: space thousands separator")
-            elif "decimals" in settings and "number_separators" not in settings:
-                settings["number_separators"] = " "
-                changes.append(f"{name}: added space thousands separator")
+            if is_text_column_key(key):
+                if "suffix" not in settings and settings.get("decimals", 0) == 0:
+                    if settings.pop("number_separators", None) is not None:
+                        changes.append(f"{name}: removed separator from text column")
+                    if settings.pop("decimals", None) == 0:
+                        changes.append(f"{name}: removed decimals from text column")
+                    if not settings:
+                        cs.pop(key)
+                continue
 
-            if name == "ЭМД/пациент" and key.endswith('ЭМД/пациент"]'):
-                if settings.get("decimals") == 0:
-                    settings["decimals"] = 1
-                    changes.append(f"{name}: decimals 0 -> 1")
+            if not any(k in settings for k in ("decimals", "number_separators", "suffix")):
+                continue
 
-            if name == "ЭМД в сутки (среднее по периоду)" and key.endswith('ЭМД/сутки"]'):
-                if settings.get("decimals") == 0:
-                    settings["decimals"] = 1
-                    changes.append(f"{name}: decimals 0 -> 1")
-
-            if is_text_column_key(key) and "suffix" not in settings and settings.get("decimals", 0) == 0:
-                if settings.pop("number_separators", None) is not None:
-                    changes.append(f"{name}: removed separator from text column")
-                if settings.pop("decimals", None) == 0:
-                    changes.append(f"{name}: removed decimals from text column")
-                if not settings:
-                    cs.pop(key)
+            if apply_ru_number_format(key, settings, card):
+                changes.append(f"{name}: RU number formatting for {key}")
 
         if not cs:
             viz.pop("column_settings", None)
 
     if card.get("display") == "pie" and viz.get("pie.decimal_places", 0) >= 1:
+        if viz.get("pie.decimal_places") != PERCENT_DECIMALS:
+            viz["pie.decimal_places"] = PERCENT_DECIMALS
+            changes.append(f"{name}: pie.decimal_places -> {PERCENT_DECIMALS}")
+
         metric = viz.get("pie.metric") or (viz.get("graph.metrics") or [None])[0]
         pie_cs = viz.setdefault("column_settings", {})
         if metric:
-            entry = pie_cs.setdefault(f'["name","{metric}"]', {})
-            if entry.get("decimals", 0) != 0:
-                entry["decimals"] = 0
-                changes.append(f"{name}: pie count metric decimals -> 0")
-            if entry.get("number_separators") != " ":
-                entry["number_separators"] = " "
-                changes.append(f"{name}: pie count metric space thousands separator")
+            metric_key = f'["name","{metric}"]'
+            entry = pie_cs.setdefault(metric_key, {})
+            if apply_ru_number_format(metric_key, entry, card):
+                changes.append(f"{name}: pie count metric integer formatting")
         percent_key = '["name","_percentage"]'
         percent_entry = pie_cs.setdefault(percent_key, {})
-        if percent_entry.get("number_separators") != ", ":
-            percent_entry["number_separators"] = ", "
-            percent_entry["decimals"] = viz.get("pie.decimal_places", 1)
-            changes.append(f"{name}: pie slice percent comma decimal separator")
+        if apply_ru_number_format(percent_key, percent_entry, card):
+            changes.append(f"{name}: pie slice percent formatting")
 
     return changes
 
@@ -139,8 +188,10 @@ def check_scalar_cards() -> list[str]:
                 issues.append(f"{path.name}/{name}: text scalar still has column_settings")
             elif not is_text_scalar and field and not settings:
                 issues.append(f"{path.name}/{name}: numeric scalar missing column_settings")
-            elif settings and settings.get("number_separators") not in (None, " "):
+            elif settings and settings.get("number_separators") != DEFAULT_NUMBER_SEPARATORS:
                 issues.append(f"{path.name}/{name}: bad separator")
+            elif settings and key and settings.get("decimals") != target_decimals(key, settings, card):
+                issues.append(f"{path.name}/{name}: bad decimals")
     return issues
 
 
