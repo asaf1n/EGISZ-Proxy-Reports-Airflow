@@ -235,7 +235,7 @@ Lookback при transform: extract использует окно по ширин
 | `clinic_*` | `clinic_jid`, `clinic_name`, `clinic_jid_mismatch` |
 | без префикса | `status`, `status_label`, `error_type`, `error_summary`, `error_text`, `processed_at`, `processed_day`, `arrival_day` |
 
-`processed_at` / `processed_day` — по последней активности (`last_callback_at` → `sent_at` → `document_created_at`). `arrival_day` — день поступления на прокси (`first_sent_at` → `document_created_at`). Карточка «Динамика по дням» строится и фильтруется по `arrival_day` (не по `processed_day`).
+`processed_at` / `processed_day` — по последней активности (`last_callback_at` → `sent_at` → `document_created_at`). `arrival_day` — день поступления на прокси (`first_sent_at` → `document_created_at`). Карточка «Динамика по дням» строится и фильтруется по `arrival_day`.
 
 ---
 
