@@ -9,10 +9,6 @@ from egisz_elt.common import serialize_exchangelog_row, transform_raw_to_facts
 
 log = logging.getLogger(__name__)
 
-# Reconcile recovers scattered chain messages. Mirrors the transform's own -500
-# getDocumentFile lookback so coalesced windows scan no more raw than a single window.
-RECONCILE_WINDOW_MAX_GAP = 500
-
 
 def count_exchangelog_rows(con: Any) -> int:
     """Count all EXCHANGELOG rows in the proxy journal.
@@ -91,18 +87,19 @@ def get_all_raw_logids(con: psycopg2.extensions.connection) -> set[int]:
 def coalesce_logid_windows(
     logids: list[int] | set[int],
     *,
-    max_gap: int = RECONCILE_WINDOW_MAX_GAP,
+    max_gap: int = 0,
 ) -> list[tuple[int, int]]:
     """Group LOGIDs into ``(lo, hi)`` windows, merging runs separated by ``<= max_gap``.
 
-    Transforming the single ``min..max`` span would re-parse everything between two distant
-    LOGIDs; per-id windows would issue one transform call per row. Coalescing into dense
-    windows bounds the re-transform to the actual gaps.
+    Default ``max_gap=0`` merges only consecutive LOGIDs so distant missing rows do not
+    re-transform the whole span between them.
     """
     ordered = sorted({int(value) for value in logids})
     windows: list[tuple[int, int]] = []
     for logid in ordered:
-        if windows and logid - windows[-1][1] <= max_gap:
+        # max_gap counts missing LOGIDs between window end and the next id;
+        # +1 keeps consecutive runs merged when max_gap=0.
+        if windows and logid - windows[-1][1] <= max_gap + 1:
             windows[-1] = (windows[-1][0], logid)
         else:
             windows.append((logid, logid))
@@ -113,10 +110,19 @@ def transform_missing_windows(
     con: psycopg2.extensions.connection,
     missing: list[int] | set[int],
     *,
-    max_gap: int = RECONCILE_WINDOW_MAX_GAP,
+    max_gap: int = 0,
 ) -> int:
-    """Run ``egisz_transform_raw_to_facts`` over each dense LOGID window of ``missing``."""
+    """Run transform over each dense LOGID window of ``missing``.
+
+    Each window uses prefix lookback ``lo`` so a late callback deep in the journal can still
+    resolve its getDocumentFile chain from earlier LOGIDs.
+    """
     total = 0
     for lo, hi in coalesce_logid_windows(missing, max_gap=max_gap):
-        total += transform_raw_to_facts(con, from_logid=lo - 1, to_logid=hi)
+        total += transform_raw_to_facts(
+            con,
+            from_logid=lo - 1,
+            to_logid=hi,
+            lookback_logids=lo,
+        )
     return total

@@ -1,0 +1,23 @@
+{
+  "name": "Очередь без ответа",
+  "table_ref": "public.rpt_documents_waiting",
+  "description": "Документы в ожидании колбэка (grain: semd_local_uid).",
+  "fields": {
+    "semd_local_uid": { "semantic_type": "type/PK", "display_name": "localUid СЭМД" },
+    "sent_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Отправлено" },
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
+    "semd_code_name": { "semantic_type": "type/Title", "display_name": "СЭМД Код Наименование" },
+    "wait_segment": { "semantic_type": "type/Category", "display_name": "Сегмент ожидания" },
+    "waiting_days": { "semantic_type": "type/Quantity", "display_name": "Дней в ожидании" }
+  },
+  "hidden_fields": ["clinic_name"],
+  "metrics": {
+    "Зависших документов": {
+      "aggregation": ["distinct", ["field", "semd_local_uid", null]]
+    }
+  }
+}

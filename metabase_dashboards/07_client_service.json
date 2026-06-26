@@ -1,7 +1,7 @@
 {
   "name": "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ",
   "width": "full",
-  "description": "Дашборд для клиники по умолчанию: общие объёмы, типы документооборота, статусы регистрации в РЭМД. Фильтр **JID клиники** обязателен — в будущем JID будет приходить из auth-токена и фильтр станет невидимым. Источник — `v_rpt_client_documents_ui` (PII маскируется на уровне DWH).",
+  "description": "Дашборд для клиники по умолчанию: общие объёмы, типы документооборота, статусы регистрации в РЭМД. JID резолвится через справочник лицензий (mo_uid / gost-endpoint). Фильтр **JID Клиники** обязателен — в будущем JID будет приходить из auth-токена и фильтр станет невидимым. Источник — `rpt_documents` (PII маскируется на уровне DWH).",
   "parameters": [
     {
       "id": "07c00000-0000-4000-8000-000000000001",
@@ -20,7 +20,7 @@
     },
     {
       "id": "07c00000-0000-4000-8000-000000000003",
-      "name": "JID клиники",
+      "name": "JID Клиники",
       "slug": "client_jid_filter",
       "type": "string/=",
       "sectionId": "string",
@@ -38,16 +38,16 @@
       "visualization_settings": {}
     },
     {
-      "name": "Всего распознанных документов",
+      "name": "Документов за период — клиент",
       "description": "Распознанные документы клиента с callback-статусом.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c10000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -87,12 +87,12 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -102,11 +102,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c20000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -140,12 +140,12 @@
       "col": 6,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -155,11 +155,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'async_error') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c30000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -193,12 +193,12 @@
       "col": 12,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -208,11 +208,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'network_error') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c40000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -246,26 +246,26 @@
       "col": 18,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
     {
       "name": "Динамика статусов по дням",
-      "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке по дням.",
+      "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке по дням (текущий статус документа).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT document_day AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY document_day, status_label, status_sort ORDER BY document_day, status_sort",
+          "query": "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c50000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -329,26 +329,26 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
     {
-      "name": "Структура документооборота по типам СЭМД",
+      "name": "Топ типов СЭМД — клиент",
       "description": "Pie по типам документов: на что приходится основная доля отправок.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c60000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -379,9 +379,6 @@
         "pie.dimension": [
           "Тип документа"
         ],
-        "graph.metrics": [
-          "Документов"
-        ],
         "pie.metric": "Документов",
         "pie.show_legend": true,
         "pie.decimal_places": 1,
@@ -399,10 +396,7 @@
             "number_separators": ", ",
             "decimals": 1
           }
-        },
-        "graph.dimensions": [
-          "Тип документа"
-        ]
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -410,12 +404,12 @@
       "col": 12,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -425,11 +419,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (SELECT AVG(delivery_seconds)::numeric AS avg_sec FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]) SELECT CASE WHEN avg_sec IS NULL THEN 'нет данных' WHEN avg_sec < 60 THEN ROUND(avg_sec, 0)::text || ' сек' WHEN avg_sec < 3600 THEN ROUND(avg_sec / 60.0, 1)::text || ' мин' WHEN avg_sec < 86400 THEN ROUND(avg_sec / 3600.0, 1)::text || ' ч' ELSE ROUND(avg_sec / 86400.0, 1)::text || ' сут' END AS \"Среднее время доставки\" FROM base",
+          "query": "WITH base AS (SELECT AVG(delivery_seconds)::numeric AS avg_sec FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]) SELECT CASE WHEN avg_sec IS NULL THEN 'нет данных' WHEN avg_sec < 60 THEN ROUND(avg_sec, 0)::text || ' сек' WHEN avg_sec < 3600 THEN ROUND(avg_sec / 60.0, 1)::text || ' мин' WHEN avg_sec < 86400 THEN ROUND(avg_sec / 3600.0, 1)::text || ' ч' ELSE ROUND(avg_sec / 86400.0, 1)::text || ' сут' END AS \"Среднее время доставки\" FROM base",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c70000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -463,26 +457,26 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
     {
-      "name": "Топ-10 типов СЭМД",
+      "name": "Топ-10 типов СЭМД по документам",
       "description": "По объёму отправок: количество и доля успешных регистраций на каждый тип.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "07c80000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -526,12 +520,12 @@
       "col": 8,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     }

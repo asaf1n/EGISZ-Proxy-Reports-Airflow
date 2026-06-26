@@ -31,7 +31,6 @@ $$;
 \i db/parts/50_transform.sql
 \i db/parts/60_drop_dependents.sql
 \i db/parts/70_views_core.sql
-\i db/parts/75_views_stg.sql
 \i db/parts/80_views_rpt.sql
 \i db/parts/90_views_health_and_finalize.sql
 

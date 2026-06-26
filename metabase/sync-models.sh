@@ -86,15 +86,23 @@ existing_model_id() {
 }
 
 apply_field_metadata() {
-  local table_ref="$1" field_name="$2" semantic_type="$3" visibility="${4:-normal}"
+  local table_ref="$1" field_name="$2" semantic_type="$3" visibility="${4:-normal}" display_name="${5:-}"
   local field_id attempt
   for attempt in 1 2 3 4 5; do
     field_id="$(field_id_for_ref "${table_ref}" "${field_name}")"
     if [ -n "${field_id}" ]; then
-      api_request PUT "/api/field/${field_id}" "$(jq -nc \
-        --arg sem "${semantic_type}" \
-        --arg vis "${visibility}" \
-        '{semantic_type: $sem, visibility_type: $vis}')" >/dev/null
+      if [ -n "${display_name}" ]; then
+        api_request PUT "/api/field/${field_id}" "$(jq -nc \
+          --arg sem "${semantic_type}" \
+          --arg vis "${visibility}" \
+          --arg dn "${display_name}" \
+          '{semantic_type: $sem, visibility_type: $vis, display_name: $dn}')" >/dev/null
+      else
+        api_request PUT "/api/field/${field_id}" "$(jq -nc \
+          --arg sem "${semantic_type}" \
+          --arg vis "${visibility}" \
+          '{semantic_type: $sem, visibility_type: $vis}')" >/dev/null
+      fi
       return 0
     fi
     if [ "${attempt}" -lt 5 ]; then
@@ -145,10 +153,10 @@ create_or_update_model() {
   fi
   [ -n "${model_id}" ] && [ "${model_id}" != "null" ] || fail "cannot create model ${model_name}"
 
-  while IFS=$'\t' read -r field_name semantic_type; do
+  while IFS=$'\t' read -r field_name semantic_type display_name; do
     [ -n "${field_name}" ] || continue
-    apply_field_metadata "${table_ref}" "${field_name}" "${semantic_type}" "normal"
-  done < <(jq -r '.fields | to_entries[] | [.key, .value.semantic_type] | @tsv' "${model_file}")
+    apply_field_metadata "${table_ref}" "${field_name}" "${semantic_type}" "normal" "${display_name}"
+  done < <(jq -r '.fields | to_entries[] | [.key, .value.semantic_type, (.value.display_name // "")] | @tsv' "${model_file}")
 
   while IFS= read -r field_name; do
     [ -n "${field_name}" ] || continue

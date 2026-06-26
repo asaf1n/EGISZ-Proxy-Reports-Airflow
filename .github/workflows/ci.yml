@@ -71,15 +71,18 @@ jobs:
       - name: Smoke-check key DWH objects exist
         run: |
           psql -d dwh_egisz -v ON_ERROR_STOP=1 -c "
-            SELECT 'fact_egisz_transactions'::regclass,
+            SELECT 'transactions'::regclass,
+                   'documents'::regclass,
+                   'document_attributes'::regclass,
+                   'dim_document_status'::regclass,
                    'exchangelog_raw'::regclass,
                    'elt_state'::regclass,
                    'dim_organizations'::regclass,
                    'dim_licenses'::regclass,
                    'dim_semd_types'::regclass,
-                   'public.egisz_transform_raw_to_facts(bigint,bigint)'::regprocedure,
-                   'public.v_egisz_documents_enriched_ui'::regclass,
-                   'public.v_stg_channel_errors_by_document'::regclass;
+                   'public.transform_raw_to_facts(bigint,bigint,bigint)'::regprocedure,
+                   'public.backfill_semd_codes()'::regprocedure,
+                   'public.rpt_documents'::regclass;
           "
 
   metabase_field_filters:

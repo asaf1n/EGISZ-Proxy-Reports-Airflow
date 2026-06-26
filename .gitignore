@@ -9,20 +9,22 @@ dist/
 *.egg-info/
 
 # Local secrets
+.env
 k8s/**/**secret*.yaml
 !k8s/**/**.example.yaml
 
 # Local Claude/Cursor permissions — per-machine, must never be committed
 .claude/settings.local.json
 .claude/worktrees/
+.cursor/
 
-# Ad-hoc verification files (psql -o output, temp SQL)
+# Ad-hoc verification files (psql -o output, temp SQL, profiling)
 tmp_*.txt
 tmp_*.sql
+scripts/_*
+profile_cold*.log
+tests/.pytest_airflow.db
 
 # Local runtime/build artifacts
 *.log
-.airflow-image-tag
-.metabase-image-tag
 .dwh-init.last.log
-audit_metabase_report.json

@@ -1,25 +1,26 @@
 {
   "name": "Разбивка ошибок",
-  "table_ref": "public.v_rpt_error_category_breakdown_ui",
-  "description": "Grain: 1 строка = 1 атомарный вид ошибки на документ (occurrence). Для документов — Count distinct «Документ (ключ учёта)».",
+  "table_ref": "public.rpt_error_breakdown",
+  "description": "Grain: 1 строка = 1 атомарный вид ошибки на документ.",
   "fields": {
-    "Обработано IPS": { "semantic_type": "type/CreationTimestamp" },
-    "День (тренд)": { "semantic_type": "type/CreationDate" },
-    "Документ (ключ учёта)": { "semantic_type": "type/FK" },
-    "JID клиники": { "semantic_type": "type/Category" },
-    "Наименование клиники": { "semantic_type": "type/Title" },
-    "Код СЭМД": { "semantic_type": "type/Category" },
-    "Тип СЭМД (код · НСИ)": { "semantic_type": "type/Title" },
-    "Тип ошибки": { "semantic_type": "type/Category" },
-    "Категория ошибки": { "semantic_type": "type/Category" }
+    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Обработано IPS" },
+    "processed_day": { "semantic_type": "type/CreationDate", "display_name": "День" },
+    "dwh_id": { "semantic_type": "type/FK" },
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+    "clinic_name": { "semantic_type": "type/Title", "display_name": "Наименование клиники" },
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_code_name": { "semantic_type": "type/Title", "display_name": "СЭМД Код Наименование" },
+    "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
+    "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" }
   },
-  "hidden_fields": [],
+  "hidden_fields": ["dwh_id", "clinic_name"],
   "metrics": {
     "Вхождений ошибки": {
       "aggregation": ["count"]
     },
     "Документов с видом": {
-      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]]
+      "aggregation": ["distinct", ["field", "dwh_id", null]]
     }
   }
 }

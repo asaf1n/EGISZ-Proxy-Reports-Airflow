@@ -15,11 +15,6 @@ PROXY_CONN_ID = "proxy_egisz_fb"
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
 
-# Serialized EXCHANGELOG row shape shared by forward fetch and reconcile fetch — keeps both
-# paths feeding load_raw_logs through one column contract. See README.md §«Источник».
-EXCHANGELOG_SELECT_COLUMNS = ("LOGID", "LOGDATE", "CREATEDATE", "MSGID", "LOGSTATE", "LOGTEXT", "MSGTEXT")
-
-
 class BatchMetadata(TypedDict):
     count: int
     last_logid: int
@@ -102,6 +97,52 @@ def normalize_message_id(value: Any) -> Any:
     return text or None
 
 
+def pending_transform_tail(
+    con: psycopg2.extensions.connection,
+    last_logid: int,
+) -> tuple[int, int]:
+    """Return (row_count, max_logid) of raw rows above the extract watermark."""
+    with con.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint, COALESCE(MAX(logid), %s)::bigint
+            FROM public.exchangelog_raw
+            WHERE logid > %s
+            """,
+            (last_logid, last_logid),
+        )
+        pending_rows, pending_max = cur.fetchone()
+    return int(pending_rows or 0), int(pending_max or last_logid)
+
+
+def bounded_transform_to_logid(
+    con: psycopg2.extensions.connection,
+    *,
+    last_logid: int,
+    cursor_logid: int,
+    raw_rows: int,
+) -> int:
+    """Upper LOGID bound for the next transform chunk (at most ``raw_rows`` raw rows)."""
+    if cursor_logid <= last_logid or raw_rows <= 0:
+        return last_logid
+    with con.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(MAX(logid), %s)::bigint
+            FROM (
+                SELECT logid
+                FROM public.exchangelog_raw
+                WHERE logid > %s AND logid <= %s
+                ORDER BY logid
+                LIMIT %s
+            ) bounded
+            """,
+            (last_logid, last_logid, cursor_logid, raw_rows),
+        )
+        row = cur.fetchone()
+    return int(row[0] if row else last_logid)
+
+
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
     """Read pipeline watermark state (``last_logid``)."""
     with con.cursor() as cur:
@@ -178,26 +219,46 @@ def transform_raw_to_facts(
     *,
     from_logid: int,
     to_logid: int,
+    lookback_logids: int = 0,
 ) -> int:
-    """Run the database-side ELT transform for the requested LOGID window."""
+    """Run the database-side ELT transform for the requested LOGID window.
+
+    ``lookback_logids=0`` lets SQL derive lookback from ``to_logid - from_logid``.
+    Reconcile passes the window low LOGID explicitly for prefix chain resolution.
+    """
     with con.cursor() as cur:
         cur.execute(
-            "SELECT public.egisz_transform_raw_to_facts(%s, %s)",
-            (from_logid, to_logid),
+            "SELECT public.transform_raw_to_facts(%s, %s, %s)",
+            (from_logid, to_logid, lookback_logids),
         )
         transformed = int(cur.fetchone()[0] or 0)
     con.commit()
     return transformed
 
 
-def reconcile_enriched_ui(con: psycopg2.extensions.connection) -> int:
-    """Refresh enriched mart rows that drifted from ``v_egisz_documents_enriched_src``.
-
-    Covers dimension sync (clinic names), status changes on late callbacks already in facts,
-    and any other display fields derived from facts + reference tables.
-    """
+def reconcile_document_attributes_ui(con: psycopg2.extensions.connection) -> int:
+    """Refresh document_attributes rows that drifted from documents + dimensions."""
     with con.cursor() as cur:
-        cur.execute("SELECT public.egisz_reconcile_enriched_ui()")
+        cur.execute("SELECT public.reconcile_document_attributes_ui()")
         refreshed = int(cur.fetchone()[0] or 0)
     con.commit()
     return refreshed
+
+
+def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
+    """Run ANALYZE outside a transaction (PostgreSQL forbids ANALYZE inside one).
+
+    Read-only SELECTs leave psycopg2 in an open transaction; commit first so
+    set_session(autocommit=True) is legal.
+    """
+    if not statements:
+        return
+    con.commit()
+    previous_autocommit = con.autocommit
+    con.set_session(autocommit=True)
+    try:
+        with con.cursor() as cur:
+            for statement in statements:
+                cur.execute(statement)
+    finally:
+        con.set_session(autocommit=previous_autocommit)

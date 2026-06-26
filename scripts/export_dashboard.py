@@ -82,8 +82,8 @@ def load_existing_qb_metadata(path: Path | None) -> dict[str, dict]:
         return {}
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read existing dashboard JSON: {path}") from exc
     result: dict[str, dict] = {}
     for card in existing.get("cards") or []:
         name = card.get("name")
@@ -127,8 +127,8 @@ def load_existing_field_filters(path: Path | None) -> dict[str, dict]:
         return {}
     try:
         existing = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read existing dashboard JSON: {path}") from exc
     result: dict[str, dict] = {}
     for card in existing.get("cards") or []:
         name = card.get("name")

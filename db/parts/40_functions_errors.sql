@@ -6,7 +6,7 @@
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_schematron_chunk(p_chunk text)
+CREATE OR REPLACE FUNCTION public.error_interpretation_schematron_chunk(p_chunk text)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -102,7 +102,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_join_deduped(parts text[], sep text DEFAULT ' - ')
+CREATE OR REPLACE FUNCTION public.error_join_deduped(parts text[], sep text DEFAULT ' - ')
 RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
@@ -131,7 +131,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_matching_rule_labels(p_code text, p_message text)
+CREATE OR REPLACE FUNCTION public.error_matching_rule_labels(p_code text, p_message text)
 RETURNS text[]
 LANGUAGE sql
 STABLE
@@ -143,13 +143,13 @@ AS $$
     )
     SELECT COALESCE(array_agg(r.interpretation ORDER BY r.rule_code), ARRAY[]::text[])
     FROM normalized n
-    JOIN public.egisz_error_interpretation_rules r ON r.is_active
+    JOIN public.dim_error_rules r ON r.is_active
     WHERE n.m <> ''
       AND (r.match_code IS NULL OR r.match_code = n.c)
       AND n.m ~* r.match_pattern;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_item(p_code text, p_message text)
+CREATE OR REPLACE FUNCTION public.error_interpretation_item(p_code text, p_message text)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -175,9 +175,9 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    rule_labels := public.egisz_error_matching_rule_labels(c, m);
+    rule_labels := public.error_matching_rule_labels(c, m);
     IF COALESCE(array_length(rule_labels, 1), 0) > 0 THEN
-        RETURN public.egisz_error_join_deduped(rule_labels, ' - ');
+        RETURN public.error_join_deduped(rule_labels, ' - ');
     END IF;
 
     IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR') THEN
@@ -210,7 +210,7 @@ BEGIN
         IF chunk IS NULL THEN
             CONTINUE;
         END IF;
-        interpreted := public.egisz_error_interpretation_schematron_chunk(chunk);
+        interpreted := public.error_interpretation_schematron_chunk(chunk);
         IF interpreted IS NOT NULL THEN
             out_parts := array_append(out_parts, interpreted);
         END IF;
@@ -232,7 +232,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_type(error_code text, error_message text)
+CREATE OR REPLACE FUNCTION public.error_interpretation_type(error_code text, error_message text)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -241,12 +241,12 @@ DECLARE
     label text;
 BEGIN
     -- egisz_error_interpretation_item возвращает уже канонические лейблы
-    -- (правило из egisz_error_interpretation_rules ИЛИ название из
+    -- (правило из dim_error_rules ИЛИ название из
     -- schematron-chunk). Нормализация ФИО/UUID/<...> здесь не нужна и
     -- даже вредна: «case-insensitive» регэксп 3-слов случайно матчит
     -- «Не указан адрес» и калечит лейбл в «<ФИО> пациента». Поэтому
     -- просто обрезаем длину и возвращаем как есть.
-    label := btrim(COALESCE(public.egisz_error_interpretation_item(error_code, error_message), ''));
+    label := btrim(COALESCE(public.error_interpretation_item(error_code, error_message), ''));
     IF label = '' THEN
         RETURN 'Неизвестная ошибка';
     END IF;
@@ -254,10 +254,95 @@ BEGIN
 END;
 $$;
 
+-- Атомарные канонические типы для одного <item> (без склейки в псевдо-тип).
+CREATE OR REPLACE FUNCTION public.error_item_atoms(p_code text, p_message text)
+RETURNS text[]
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    c text;
+    m text;
+    rule_labels text[];
+    parts text[];
+    chunk text;
+    interpreted text;
+    out_parts text[] := ARRAY[]::text[];
+    deduped text[] := ARRAY[]::text[];
+    p text;
+BEGIN
+    c := upper(btrim(COALESCE(p_code, '')));
+    m := btrim(COALESCE(p_message, ''));
+
+    IF m = '' AND c = '' THEN
+        RETURN ARRAY[]::text[];
+    END IF;
+
+    IF m = '' THEN
+        RETURN ARRAY['Код: ' || c];
+    END IF;
+
+    rule_labels := public.error_matching_rule_labels(c, m);
+    IF COALESCE(array_length(rule_labels, 1), 0) > 0 THEN
+        RETURN rule_labels;
+    END IF;
+
+    IF c IN ('RUNTIME_ERROR', 'INTERNAL_ERROR') THEN
+        RETURN ARRAY['Техническая ошибка на стороне РЭМД: повторите отправку позже'];
+    END IF;
+    IF c IN ('CA_INACCESSIBILITY', 'CA_UNAVAILABLE') THEN
+        RETURN ARRAY['Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже'];
+    END IF;
+    IF c IN ('ASYNC_RESPONSE_TIMEOUT', 'TIMEOUT') THEN
+        RETURN ARRAY['Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже'];
+    END IF;
+
+    IF m !~* 'schematron' AND m !~* 'схематрон' THEN
+        RETURN ARRAY['Неизвестная ошибка'];
+    END IF;
+
+    parts := string_to_array(
+        regexp_replace(
+            m,
+            'Ошибка валидации (Schematron|схематрона)\s*:\s*',
+            E'\x1E',
+            'gi'
+        ),
+        E'\x1E'
+    );
+
+    FOREACH chunk IN ARRAY parts
+    LOOP
+        chunk := NULLIF(btrim(chunk), '');
+        IF chunk IS NULL THEN
+            CONTINUE;
+        END IF;
+        interpreted := public.error_interpretation_schematron_chunk(chunk);
+        IF interpreted IS NOT NULL THEN
+            out_parts := array_append(out_parts, interpreted);
+        END IF;
+    END LOOP;
+
+    IF COALESCE(array_length(out_parts, 1), 0) = 0 THEN
+        RETURN ARRAY['Неизвестная ошибка'];
+    END IF;
+
+    FOREACH p IN ARRAY out_parts
+    LOOP
+        IF p IS NULL OR p = '' OR p = ANY (deduped) THEN
+            CONTINUE;
+        END IF;
+        deduped := array_append(deduped, p);
+    END LOOP;
+
+    RETURN deduped;
+END;
+$$;
+
 -- Возвращает категорию (~10 групп) для одиночной интерпретации ошибки.
 -- Сначала ищет точное совпадение interpretation в таблице правил (с error_category),
 -- затем падает на паттерн-матчинг для schematron-chunk текстов и прочих краевых случаев.
-CREATE OR REPLACE FUNCTION public.egisz_error_category(p_interpretation text)
+CREATE OR REPLACE FUNCTION public.error_category(p_interpretation text)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
@@ -272,7 +357,7 @@ BEGIN
     END IF;
 
     SELECT r.error_category INTO cat
-    FROM egisz_error_interpretation_rules r
+    FROM dim_error_rules r
     WHERE r.is_active AND r.interpretation = t
     LIMIT 1;
 
@@ -297,12 +382,11 @@ BEGIN
 END;
 $$;
 
--- Плоская таксономия error_type. Каждый <ns2:item> в асинхронном ответе РЭМД
--- классифицируется через egisz_error_interpretation_type (правила из
--- egisz_error_interpretation_rules); уникальные типы дедуплицируются и
+-- Плоская таксономия error_type. Каждый <ns2:item> даёт один или несколько
+-- атомарных типов (error_item_atoms); уникальные типы дедуплицируются и
 -- объединяются через ' · '. Если ни один item не дал интерпретации —
 -- возвращается 'Неизвестная ошибка'.
-CREATE OR REPLACE FUNCTION public.egisz_error_classify(p_errors jsonb)
+CREATE OR REPLACE FUNCTION public.error_classify(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -317,9 +401,12 @@ AS $$
     items AS (
         SELECT
             o,
-            NULLIF(btrim(public.egisz_error_interpretation_type(e->>'code', e->>'message')), '') AS t
+            NULLIF(btrim(atom), '') AS t
         FROM normalized n
         CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
+        CROSS JOIN LATERAL unnest(
+            public.error_item_atoms(e->>'code', e->>'message')
+        ) AS atom
     ),
     first_pos AS (
         SELECT t, MIN(o) AS first_o
@@ -334,7 +421,7 @@ AS $$
     SELECT COALESCE(NULLIF(types, ''), 'Неизвестная ошибка') FROM aggregated;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_interpretation_row(p_errors jsonb)
+CREATE OR REPLACE FUNCTION public.error_interpretation_row(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -349,7 +436,7 @@ AS $$
     items AS (
         SELECT
             o,
-            NULLIF(btrim(public.egisz_error_interpretation_item(e->>'code', e->>'message')), '') AS t
+            NULLIF(btrim(public.error_interpretation_item(e->>'code', e->>'message')), '') AS t
         FROM normalized n
         CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
     ),
@@ -363,7 +450,7 @@ AS $$
     FROM first_pos;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_error_messages_row(p_errors jsonb)
+CREATE OR REPLACE FUNCTION public.error_messages_row(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -392,7 +479,7 @@ AS $$
     FROM first_pos;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_xml_error_items(payload text)
+CREATE OR REPLACE FUNCTION public.xml_error_items(payload text)
 RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
@@ -411,8 +498,8 @@ BEGIN
         SELECT part
         FROM regexp_split_to_table(payload, '<(?:[A-Za-z0-9_]+:)?item(?:\s[^>]*)?>', 'i') AS part
     LOOP
-        item_code := public.egisz_xml_text(item_xml, 'code');
-        item_message := public.egisz_xml_text(item_xml, 'message');
+        item_code := public.xml_text(item_xml, 'code');
+        item_message := public.xml_text(item_xml, 'message');
         IF NULLIF(btrim(COALESCE(item_code, '')), '') IS NOT NULL
            OR NULLIF(btrim(COALESCE(item_message, '')), '') IS NOT NULL THEN
             result := result || jsonb_build_array(jsonb_build_object('code', item_code, 'message', item_message));
@@ -423,7 +510,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.egisz_build_errors_json(
+CREATE OR REPLACE FUNCTION public.build_errors_json(
     p_status text,
     p_error_code text,
     p_error_message text,
@@ -434,7 +521,7 @@ LANGUAGE sql
 STABLE
 AS $$
     WITH xml_items AS (
-        SELECT public.egisz_xml_error_items(p_msgtext) AS items
+        SELECT public.xml_error_items(p_msgtext) AS items
     )
     SELECT CASE
         WHEN p_status <> 'error' THEN '[]'::jsonb
@@ -449,7 +536,7 @@ $$;
 
 -- Сворачивает формулировки LOGSTATE=3 в канонический тип: URL, gost-endpoint,
 -- UUID и IP не должны раздувать кардинальность топов на дашбордах 02/04.
-CREATE OR REPLACE FUNCTION public.egisz_network_error_type(p_text text)
+CREATE OR REPLACE FUNCTION public.network_error_type(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -492,33 +579,4 @@ AS $$
         ),
         '(без текста)'
     );
-$$;
-
-CREATE OR REPLACE FUNCTION public.egisz_semd_type_report_label(semd_code text, semd_name text)
-RETURNS text
-LANGUAGE sql
-STABLE
-AS $$
-    WITH normalized AS (
-        SELECT public.egisz_normalize_semd_code(semd_code) AS code
-    ),
-    resolved AS (
-        SELECT
-            n.code,
-            (
-                SELECT d.name
-                FROM public.dim_semd_types d
-                WHERE d.oid = n.code
-                ORDER BY d.start_date DESC NULLS LAST, d.code DESC
-                LIMIT 1
-            ) AS display_name
-        FROM normalized n
-    )
-    SELECT CASE
-        WHEN code IS NULL AND display_name IS NULL THEN '(неизвестно)'
-        WHEN code IS NULL THEN display_name
-        WHEN display_name IS NULL THEN code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
-        ELSE code || ' · ' || display_name
-    END
-    FROM resolved;
 $$;

@@ -133,7 +133,8 @@ login() {
             dbname: $dbname,
             user: $user,
             password: $pass,
-            ssl: false
+            ssl: false,
+            "report-timezone": "Europe/Moscow"
           }
         }
       }'
@@ -171,12 +172,31 @@ resolve_or_create_app_database_id() {
           dbname: $dbname,
           user: $user,
           password: $pass,
-          ssl: false
+          ssl: false,
+          "report-timezone": "Europe/Moscow"
         }
       }'
   )
   APP_DB_ID=$(api_request POST "/api/database" "${payload}" | jq -r '.id')
   [ -n "${APP_DB_ID}" ] && [ "${APP_DB_ID}" != "null" ] || fail "cannot register DWH database '${APP_DB_NAME}'"
+}
+
+ensure_app_database_report_timezone() {
+  local current_tz payload
+  current_tz=$(
+    api_request GET "/api/database/${APP_DB_ID}" |
+      jq -r '.details["report-timezone"] // empty'
+  )
+  if [ "${current_tz}" = "Europe/Moscow" ]; then
+    return
+  fi
+
+  log_info "Setting Metabase report-timezone=Europe/Moscow for database id ${APP_DB_ID}"
+  payload=$(
+    api_request GET "/api/database/${APP_DB_ID}" |
+      jq '.details["report-timezone"] = "Europe/Moscow" | {details: .details, engine: .engine, name: .name}'
+  )
+  api_request PUT "/api/database/${APP_DB_ID}" "${payload}" >/dev/null
 }
 
 ensure_collection() {
@@ -344,10 +364,37 @@ existing_card_id() {
   api_request GET "/api/card" |
     jq -r --arg name "${card_name}" --argjson col "${COL_ID}" '
       [.[]?
-        | select(.collection_id == $col and .name == $name and (.archived | not))
+        | select(
+            .collection_id == $col
+            and .name == $name
+            and (.archived | not)
+            and ((.type // "question") != "model")
+          )
         | .id]
       | if length > 0 then .[-1] else empty end
     '
+}
+
+archive_cards_by_name() {
+  local card_name="$1"
+  while IFS= read -r card_id; do
+    [ -n "${card_id}" ] || continue
+    log_info "Archiving card ${card_id}: ${card_name}"
+    api_request PUT "/api/card/${card_id}" '{"archived":true}' >/dev/null
+  done < <(
+    api_request GET "/api/card" |
+      jq -r --arg name "${card_name}" --argjson col "${COL_ID}" '
+        [.[]?
+          | select(
+              .collection_id == $col
+              and .name == $name
+              and (.archived | not)
+              and ((.type // "question") != "model")
+            )
+          | .id]
+        | .[]
+      '
+  )
 }
 
 expected_card_names() {
@@ -485,23 +532,53 @@ dashboard_payload() {
     | normalize_query_card
     | del(."query_tier")
     | del(."source_model")
+    | del(."metabase-model-drill-params")
   ' "${file}"
 }
 
 card_query_fingerprint() {
-  jq -c 'if (.dataset_query.type // "") == "query" then
-    {display: (.display // ""), query: (.dataset_query.query // {})}
-  else
-    {display: (.display // ""), query: (.dataset_query.native.query // "")}
-  end'
+  jq -c '
+    def native_sql:
+      if (.dataset_query.type // "") == "query" then
+        .dataset_query.query
+      else
+        (.dataset_query.native.query // .dataset_query.stages[0].native // "")
+      end;
+    {display: (.display // ""), query: native_sql}
+  '
 }
 
 card_dimension_tags_ready() {
   jq -e '
+    def native_sql:
+      if (.dataset_query.type // "") == "query" then
+        .dataset_query.query // ""
+      else
+        (.dataset_query.native.query // .dataset_query.stages[0].native // "")
+      end;
     def tags:
       (.dataset_query.native."template-tags" // .dataset_query.stages[0]."template-tags" // {});
-    ([tags | to_entries[]? | select(.value.type == "dimension")] | length == 0)
-    or ([tags | to_entries[]? | select(.value.type == "dimension" and .value.dimension == null)] | length == 0)
+    def has_vars:
+      (native_sql | test("\\{\\{"));
+    def dims:
+      [tags | to_entries[]? | select(.value.type == "dimension")];
+    (has_vars | not)
+    or (
+      (dims | length) > 0
+      and ([dims[] | select(.value.dimension == null)] | length) == 0
+    )
+  '
+}
+
+card_native_query_missing() {
+  jq -e '
+    def native_sql:
+      if (.dataset_query.type // "") == "query" then
+        .dataset_query.query // ""
+      else
+        (.dataset_query.native.query // .dataset_query.stages[0].native // "")
+      end;
+    (native_sql | length) == 0
   '
 }
 
@@ -523,13 +600,28 @@ create_or_update_card() {
   card_id="$(existing_card_id "${card_name}")"
   if [ -n "${card_id}" ]; then
     existing_card="$(api_request GET "/api/card/${card_id}")"
+    if printf '%s' "${existing_card}" | card_native_query_missing >/dev/null; then
+      log_info "Repairing card with missing native query: ${card_name}"
+      api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+      printf '%s\n' "${card_id}"
+      return 0
+    fi
+    if ! printf '%s' "${existing_card}" | card_dimension_tags_ready >/dev/null \
+      && printf '%s' "${payload}" | jq -e 'def native_sql: if (.dataset_query.type // "") == "query" then .dataset_query.query // "" else (.dataset_query.native.query // "") end; native_sql | test("\\{\\{")' >/dev/null; then
+      log_info "Rebinding broken field filters for card: ${card_name}"
+      api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+      printf '%s\n' "${card_id}"
+      return 0
+    fi
     existing_fp="$(printf '%s' "${existing_card}" | card_query_fingerprint)"
     if [ "${existing_fp}" = "${new_fp}" ]; then
       if [ "${METABASE_FORCE_PROVISION}" = "always" ] \
         || [ "${METABASE_FORCE_PROVISION}" = "force" ] \
         || [ "${METABASE_FORCE_PROVISION}" = "true" ]; then
         log_info "Force refresh collection card: ${card_name}"
-        api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+        archive_cards_by_name "${card_name}"
+        card_id="$(api_request POST "/api/card" "${payload}" | jq -r '.id')"
+        [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot force-recreate card from ${file}"
         printf '%s\n' "${card_id}"
         return 0
       fi
@@ -550,7 +642,7 @@ create_or_update_card() {
     # Metabase merges native-query metadata on card updates and can keep stale
     # template tags that are no longer present in dashboard JSON. Recreate the
     # card object while preserving the dashboard object itself.
-    api_request PUT "/api/card/${card_id}" '{"archived":true}' >/dev/null
+    archive_cards_by_name "${card_name}"
   fi
   card_id="$(api_request POST "/api/card" "${payload}" | jq -r '.id')"
   [ -n "${card_id}" ] && [ "${card_id}" != "null" ] || fail "cannot create or update card from ${file}"
@@ -722,7 +814,102 @@ create_or_update_dashboard() {
         card_id="${CARD_REGISTRY[${card_name}]:-}"
         [ -n "${card_id}" ] || fail "card is missing from registry after sync: ${card_name}"
         card_id_json="${card_id}"
-        viz_settings="{}"
+        viz_settings="$(
+          jq -c \
+            --arg dashId "${dashboard_id}" \
+            --argjson dashParams "${saved_parameters}" \
+            --slurpfile tabMap "${tab_map_file}" \
+            --slurpfile models_file "${MODEL_REGISTRY_FILE}" '
+            def resolve_param_id($slug):
+              ($dashParams[] | select(.slug == $slug) | .id) // empty;
+
+            def model_field_id($model_ref; $field_name):
+              ($models_file[0][$model_ref].fields[$field_name]) // empty;
+
+            def model_dimension($model_ref; $field_name):
+              (model_field_id($model_ref; $field_name)) as $fid
+              | ["dimension", ["field", $fid, {"stage-number": 0}]];
+
+            def model_dimension_key($model_ref; $field_name):
+              model_dimension($model_ref; $field_name) | tojson;
+
+            def dashboard_param_slug($base):
+              if $base == "dwh_date" then "dwh_date_filter" else $base + "_filter" end;
+
+            (."metabase-model-drill-params" // {}) as $drillParams
+            | (.click_behavior // null) as $raw
+            | if $raw == null or ($raw | type) != "object" or ($raw.type // "") != "link" then
+                {}
+              elif ($raw.linkType // "") == "question" and ($raw.targetModel // "") != "" then
+                {
+                  click_behavior: (
+                    $raw
+                    | del(.targetModel, .targetQuestion, .targetDashboard, .tab)
+                    | .targetId = ($models_file[0][$raw.targetModel].model_id | tonumber)
+                    | ($raw.targetModel) as $mref
+                    | .parameterMapping = (
+                        reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
+                          ($entry.value.target.model_ref // $mref) as $mref
+                          | ($entry.value.target.field_name // $entry.key) as $fname
+                          | (model_field_id($mref; $fname)) as $fid
+                          | select($fid != null and $fid != "")
+                          | (model_dimension_key($mref; $fname)) as $dimKey
+                          | (model_dimension($mref; $fname)) as $dim
+                          | .[$dimKey] = (
+                              $entry.value
+                              | .target = {
+                                  "type": "dimension",
+                                  "id": $dimKey,
+                                  "dimension": $dim
+                                }
+                              | .source = (.source + {id: (.source.name // "")})
+                            )
+                        )
+                        | reduce ($drillParams | to_entries[]) as $entry (.;
+                          (resolve_param_id(dashboard_param_slug($entry.key))) as $pid
+                          | select($pid != null and $pid != "")
+                          | (model_dimension_key($mref; $entry.value)) as $dimKey
+                          | select(.[$dimKey] == null)
+                          | (model_dimension($mref; $entry.value)) as $dim
+                          | .[$dimKey] = {
+                              "source": {
+                                "type": "parameter",
+                                "id": $pid,
+                                "name": (($dashParams[] | select(.id == $pid) | .name) // $entry.key)
+                              },
+                              "target": {
+                                "type": "dimension",
+                                "id": $dimKey,
+                                "dimension": $dim
+                              }
+                            }
+                        )
+                      )
+                  )
+                }
+              else
+                {
+                  click_behavior: (
+                    $raw
+                    | del(.targetDashboard, .tab)
+                    | .targetId = ($dashId | tonumber)
+                    | (if ($raw.tab // "") != "" then .tabId = ($tabMap[0][$raw.tab] // null) else . end)
+                    | .parameterMapping = (
+                        reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
+                          (resolve_param_id($entry.key) // $entry.value.target.id // empty) as $pid
+                          | select($pid != "")
+                          | .[$pid] = (
+                              $entry.value
+                              | .target = {"type": "parameter", "id": $pid}
+                              | .source = (.source + {id: (.source.name // "")})
+                            )
+                        )
+                      )
+                  )
+                }
+              end
+            ' "${card_file}"
+        )"
         mappings="$(
           jq -c --argjson cardIndex "${i}" --argjson dashParams "${saved_parameters}" --argjson cardDbId "${card_id}" \
             --slurpfile models_file "${MODEL_REGISTRY_FILE}" '
@@ -860,7 +1047,7 @@ verify_dashboard_cards() {
     dashboard_id="$(existing_dashboard_id "$(jq -r '.name' "${file}")")"
     [ -n "${dashboard_id}" ] || fail "dashboard is missing after import: ${file}"
     actual="$(api_request GET "/api/dashboard/${dashboard_id}" | jq '(.dashcards // .ordered_cards // []) | length')"
-    [ "${actual}" -ge "${expected}" ] || fail "dashboard ${dashboard_id} has ${actual}/${expected} card(s)"
+    [ "${actual}" -eq "${expected}" ] || fail "dashboard ${dashboard_id} has ${actual}/${expected} card(s)"
   done
 }
 
@@ -872,7 +1059,7 @@ dashboards_present_with_cards() {
     dashboard_id="$(existing_dashboard_id "$(jq -r '.name' "${file}")")"
     [ -n "${dashboard_id}" ] || return 1
     actual="$(api_request GET "/api/dashboard/${dashboard_id}" | jq '(.dashcards // .ordered_cards // []) | length')"
-    [ "${actual}" -ge "${expected}" ] || return 1
+    [ "${actual}" -eq "${expected}" ] || return 1
   done
 }
 
@@ -884,12 +1071,14 @@ maybe_skip_dashboard_import() {
       ;;
     false|never|skip)
       log_info "Dashboard provisioning disabled by METABASE_FORCE_PROVISION=${METABASE_FORCE_PROVISION}."
+      log_info "Setup complete: dashboard provisioning skipped."
       exit 0
       ;;
     auto)
       if dashboards_present_with_cards; then
         if dashboard_manifest_unchanged; then
           log_info "Dashboard manifest is unchanged and existing dashboards are complete; skipping import."
+          log_info "Setup complete: collection '${COLLECTION_NAME}' is up to date."
           exit 0
         else
           log_info "Dashboard manifest changed; refreshing existing dashboards and cards."
@@ -910,6 +1099,7 @@ done
 
 login
 resolve_or_create_app_database_id
+ensure_app_database_report_timezone
 DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
 validate_dwh_contract
 sync_metabase_schema

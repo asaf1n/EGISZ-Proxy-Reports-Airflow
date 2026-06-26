@@ -1,37 +1,122 @@
 {
+
   "name": "Документы",
-  "table_ref": "public.v_rpt_documents_ui",
-  "description": "Grain: 1 строка = 1 документ (ключ учёта). Фильтры и группировки — по полю «Статус», не по «Статус (код)».",
+
+  "table_ref": "public.rpt_documents",
+
+  "description": "Единая модель документов (grain: 1 строка = 1 document). Фильтры по status_label или status.",
+
   "fields": {
-    "Документ (ключ учёта)": { "semantic_type": "type/PK" },
-    "Дата обработки": { "semantic_type": "type/CreationTimestamp" },
-    "День (тренд)": { "semantic_type": "type/CreationDate" },
-    "JID клиники": { "semantic_type": "type/Category" },
-    "Наименование клиники": { "semantic_type": "type/Name" },
-    "Код СЭМД": { "semantic_type": "type/Category" },
-    "Тип СЭМД (код · НСИ)": { "semantic_type": "type/Title" },
-    "Статус": { "semantic_type": "type/Category" },
-    "Тип ошибки": { "semantic_type": "type/Category" },
-    "localUid СЭМД": { "semantic_type": "type/Category" },
-    "Связанное сообщение": { "semantic_type": "type/Category" },
-    "Рег. номер РЭМД": { "semantic_type": "type/Category" }
+
+    "dwh_id": { "semantic_type": "type/PK" },
+
+    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
+
+    "processed_day": { "semantic_type": "type/CreationDate", "display_name": "День" },
+
+    "arrival_day": { "semantic_type": "type/CreationDate", "display_name": "День поступления" },
+
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
+
+    "clinic_host": { "semantic_type": "type/URL", "display_name": "Host Клиники (ГОСТ VPN)" },
+
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+
+    "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
+
+    "semd_code_name": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+
+    "status_label": { "semantic_type": "type/Category", "display_name": "Статус" },
+
+    "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
+
+    "error_summary": { "semantic_type": "type/Description", "display_name": "Сводка ошибки" },
+
+    "error_text": { "semantic_type": "type/Description", "display_name": "Исходный текст ошибки" },
+
+    "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
+
+    "relates_to_id": { "semantic_type": "type/Category", "display_name": "Связанное сообщение" },
+
+    "semd_emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" },
+
+    "semd_created_at": { "semantic_type": "type/CreationTimestamp", "display_name": "СЭМД CreateDate" },
+
+    "delivery_seconds": { "semantic_type": "type/Quantity", "display_name": "Время доставки, сек" },
+
+    "logid": { "semantic_type": "type/Category", "display_name": "LOGID" }
+
   },
+
   "hidden_fields": [
-    "Статус (код)",
-    "LOGID журнала EXCHANGELOG",
-    "MSGID обмена"
+
+    "dwh_id",
+
+    "status",
+
+    "status_sort",
+
+    "message_id",
+
+    "processed_day",
+
+    "arrival_day",
+
+    "semd_code",
+
+    "semd_name",
+
+    "clinic_jid",
+
+    "clinic_name",
+
+    "clinic_inn",
+
+    "clinic_oid",
+
+    "error_text",
+
+    "patient_name_masked",
+
+    "snils_masked",
+
+    "doctor_name",
+
+    "patient_hash",
+
+    "doctor_hash"
+
   ],
+
   "metrics": {
+
     "Документов": {
-      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]]
+
+      "aggregation": ["distinct", ["field", "dwh_id", null]]
+
     },
+
     "Документов с ошибкой": {
-      "aggregation": ["distinct", ["field", "Документ (ключ учёта)", null]],
+
+      "aggregation": ["distinct", ["field", "dwh_id", null]],
+
       "filter": [
+
         "or",
-        ["=", ["field", "Статус", null], "Ошибка связи"],
-        ["=", ["field", "Статус", null], "Ошибка асинхронного ответа РЭМД"]
+
+        ["=", ["field", "status_label", null], "Ошибка связи"],
+
+        ["=", ["field", "status_label", null], "Ошибка асинхронного ответа РЭМД"]
+
       ]
+
     }
+
   }
+
 }
+

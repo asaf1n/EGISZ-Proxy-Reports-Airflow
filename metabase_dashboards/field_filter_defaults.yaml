@@ -1,269 +1,129 @@
 # Декларативные правила для scripts/apply_metabase_field_filters.py.
-#
-# Скрипт идёт по каждому native-карточному template-tag в metabase_dashboards/*.json,
-# и если тег упомянут в разделе `tags:` ниже, превращает его в dimension field filter
-# с указанным `table_ref` / `field_name`.
-#
-# Структура: `tags.<имя>.rules` — упорядоченный список правил. Срабатывает ПЕРВОЕ
-# подходящее правило. Все условия внутри одного правила должны выполниться (AND):
-#   query_contains:            все подстроки должны быть в native query
-#   query_not_contains:        ни одна подстрока не должна быть в query
-#   display_name_contains:     все подстроки должны быть в display-name template-tag
-#   display_name_not_contains: ни одной из подстрок в display-name быть не должно
-#   display_name_contains_lower: то же, но в нижнем регистре (для русских вхождений типа «очередь»)
-# Если правило без условий — это default. Правило без условий допускается только
-# последним; всё, что после него, никогда не сработает.
-#
-# Импорт: metabase/setup-dashboards.sh подставляет dimension ["field", id, null] только
-# если у карточки в JSON есть блок metabase-field-filters с точным table_ref и
-# field_name, совпадающим с именем или display_name поля в метаданных Metabase после
-# sync_schema. Эвристики и автоподбор столбца убраны; при несовпадении provisioning
-# не прерывается, тип виджета остаётся из template-tags.
-#
-# Параметры дашборда: основной период (dwh_date_filter / mgmt_period_filter) по умолчанию
-# past30days~ (суффикс ~ = включая текущий день), чтобы пустые query-параметры
-# в URL (?dwh_date_filter=) не ломали карточки и документы за сегодня попадали в окно.
-# Клиентские дашборды 07/08: default JID для локальной среды (см. JSON).
-# Автоприменение при открытии: METABASE_AUTO_APPLY_FILTERS по умолчанию true
-# в setup-dashboards.sh; отключить — false.
-#
-# Параметры дашборда jid_filter / semd_type_filter мапятся на template-tags jid / semd_type.
+# field_name — физическое имя колонки в DWH (snake_case).
 
 version: 2
 
 tags:
   parse_date:
     rules:
-      - query_contains: [v_rpt_network_errors_detail_ui]
-        table_ref: public.v_rpt_network_errors_detail_ui
-        field_name: Дата создания документа
-      - query_contains: [v_stg_channel_network_errors_by_document]
-        table_ref: public.v_stg_channel_network_errors_by_document
-        field_name: created_at
-      - table_ref: public.v_stg_channel_errors_by_document
-        field_name: created_at
+      - query_contains: [rpt_network_errors]
+        table_ref: public.rpt_network_errors
+        field_name: processed_at
 
   parse_created:
     rules:
-      - query_contains: [v_rpt_network_errors_detail_ui]
-        table_ref: public.v_rpt_network_errors_detail_ui
-        field_name: Дата создания документа
-      - query_contains: [v_stg_channel_network_errors_by_document]
-        table_ref: public.v_stg_channel_network_errors_by_document
-        field_name: created_at
-      - table_ref: public.v_stg_channel_errors_by_document
-        field_name: created_at
-
-  connectivity_day:
-    rules:
-      - query_contains: [v_rpt_clinic_connectivity_daily_ui]
-        table_ref: public.v_rpt_clinic_connectivity_daily_ui
-        field_name: День
-      - table_ref: public.v_rpt_connectivity_global_daily_ui
-        field_name: День
+      - query_contains: [rpt_network_errors]
+        table_ref: public.rpt_network_errors
+        field_name: processed_at
 
   local_uid:
     rules:
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
-        field_name: local_uid_hint
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: localUid СЭМД
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: localUid СЭМД
-      - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_documents_enriched_ui]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: localUid СЭМД
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: localUid СЭМД
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: semd_local_uid
+      - query_contains: [rpt_documents_waiting]
+        table_ref: public.rpt_documents_waiting
+        field_name: semd_local_uid
 
   relates_to:
     rules:
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
         field_name: relates_to_id
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Связанное сообщение
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Связанное сообщение
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Связанное сообщение
 
   emdr_id:
     rules:
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
-        field_name: emdr_id_hint
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Рег. номер РЭМД
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Рег. номер РЭМД
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Рег. номер РЭМД (emdrid)
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: semd_emdr_id
 
   status:
     rules:
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Статус
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Статус
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Статус
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: status_label
 
   log_id:
     rules:
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
-        field_name: exchangelog_log_id
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: LOGID журнала EXCHANGELOG
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: LOGID журнала EXCHANGELOG
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: LOGID журнала EXCHANGELOG
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: logid
 
-  err_parse_code:
+  error_type:
     rules:
-      - table_ref: public.v_stg_channel_errors_by_document
-        field_name: error_code
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: error_type
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: error_type
 
-  # jid — JID клиники, semd_type — тип СЭМД по коду НСИ.
-  # Статус документа фильтруется существующим тегом `status` (поле «Статус»):
-  # статус ≠ категория ошибки (`egisz_error_category`) ≠ тип ошибки (`error_type`).
   jid:
     rules:
-      - query_contains: [v_rpt_error_category_breakdown_ui]
-        table_ref: public.v_rpt_error_category_breakdown_ui
-        field_name: JID клиники
-      - query_contains: [v_health_by_clinic_ui]
-        table_ref: public.v_health_by_clinic_ui
-        field_name: JID клиники
-      - query_contains: [v_rpt_clinic_connectivity_daily_ui]
-        table_ref: public.v_rpt_clinic_connectivity_daily_ui
-        field_name: JID клиники
-      - query_contains: [v_rpt_network_errors_detail_ui]
-        table_ref: public.v_rpt_network_errors_detail_ui
-        field_name: JID клиники
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: JID клиники
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: JID клиники
-      - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_documents_enriched_ui]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: JID клиники
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: JID клиники
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: clinic_jid
+      - query_contains: [rpt_health_by_clinic]
+        table_ref: public.rpt_health_by_clinic
+        field_name: clinic_jid
+      - query_contains: [rpt_network_errors]
+        table_ref: public.rpt_network_errors
+        field_name: clinic_jid
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: clinic_jid
+      - query_contains: [rpt_documents_waiting]
+        table_ref: public.rpt_documents_waiting
+        field_name: clinic_jid
 
   semd_type:
     rules:
-      - query_contains: [v_rpt_error_category_breakdown_ui]
-        table_ref: public.v_rpt_error_category_breakdown_ui
-        field_name: Код СЭМД
-      - query_contains: [v_rpt_network_errors_detail_ui]
-        table_ref: public.v_rpt_network_errors_detail_ui
-        field_name: Код СЭМД
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Код СЭМД
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Код СЭМД
-      - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_documents_enriched_ui]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: Код СЭМД
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Код СЭМД
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: semd_code
+      - query_contains: [rpt_network_errors]
+        table_ref: public.rpt_network_errors
+        field_name: semd_code
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: semd_code
+      - query_contains: [rpt_documents_waiting]
+        table_ref: public.rpt_documents_waiting
+        field_name: semd_code
 
-  # dwh_date — особый случай: выбор поля зависит от display-name template-tag,
-  # а не только от подстрок в query.
   dwh_date:
     rules:
-      - query_contains: [v_rpt_network_errors_detail_ui]
-        table_ref: public.v_rpt_network_errors_detail_ui
-        field_name: Дата создания документа
-      - query_contains: [v_stg_channel_errors_by_document]
-        table_ref: public.v_stg_channel_errors_by_document
-        field_name: created_at
-      - query_contains: [v_rpt_error_category_breakdown_ui]
-        table_ref: public.v_rpt_error_category_breakdown_ui
-        field_name: Обработано IPS
+      - query_contains: [rpt_network_errors]
+        table_ref: public.rpt_network_errors
+        field_name: processed_at
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: processed_at
       - display_name_contains: [Отправлено]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: Отправлено
+        table_ref: public.rpt_documents_waiting
+        field_name: sent_at
       - display_name_contains_lower: [очередь]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: Отправлено
-      - display_name_contains: ["День (тренд)"]
-        query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: День (тренд)
-      - display_name_contains: ["День (тренд)"]
-        query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: День (тренд)
-      - display_name_contains: ["День (тренд)"]
-        table_ref: public.v_egisz_documents_enriched_ui
-        field_name: День (тренд)
+        table_ref: public.rpt_documents_waiting
+        field_name: sent_at
+      - display_name_contains: ["День"]
+        query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: processed_day
       - display_name_contains: [Дата обработки]
-        query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Дата обработки
-      - display_name_contains: [Дата обработки]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Дата обработки
-      - display_name_contains: [Обработано IPS]
-        table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Обработано IPS
-      - display_name_contains: [Обработано]
-        display_name_not_contains: [Отправлено]
-        table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Обработано IPS
-      - query_contains: [v_rpt_documents_no_response_ui]
-        query_not_contains: [v_egisz_documents_enriched_ui]
-        table_ref: public.v_rpt_documents_no_response_ui
-        field_name: Отправлено
-      - query_contains: [v_rpt_semd_archive_ui]
-        table_ref: public.v_rpt_semd_archive_ui
-        field_name: Дата обработки
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Дата обработки
-      - query_contains: [v_egisz_documents_enriched_ui]
-        table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Обработано IPS
+        query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: processed_at
+      - table_ref: public.rpt_documents
+        field_name: processed_at
 
-  client_period:
-    rules:
-      - table_ref: public.v_rpt_client_documents_ui
-        field_name: document_ts
-
-  client_document_type:
-    rules:
-      - table_ref: public.v_rpt_client_documents_ui
-        field_name: document_type
-
-  # mgmt_period — единый dimension-фильтр периода для 05_executive.json.
-  # Документные карточки привязаны к "Дата обработки" в v_rpt_documents_ui;
-  # транзакционные карточки остаются на "Обработано IPS" в v_egisz_documents_enriched_ui.
   mgmt_period:
     rules:
-      - query_contains: [v_rpt_documents_ui]
-        table_ref: public.v_rpt_documents_ui
-        field_name: Дата обработки
-      - table_ref: public.v_egisz_documents_enriched_ui
-        field_name: Обработано IPS
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: processed_at
+
+  clinic_jid:
+    rules:
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: clinic_jid

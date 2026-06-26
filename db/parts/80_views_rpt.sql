@@ -1,434 +1,208 @@
 ﻿-- ============================================================================
--- 80_views_rpt.sql — v_rpt_network_errors_detail_ui + v_rpt_documents_no_response_ui + v_rpt_semd_archive_ui + connectivity views
--- Source: db/dwh_init.sql, lines [1506..1744).
+-- 80_views_rpt.sql — reporting views for Metabase (rpt_*)
 -- Loaded by db/dwh_init.sql via \i db/parts/80_views_rpt.sql.
--- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
-CREATE OR REPLACE VIEW public.v_rpt_network_errors_detail_ui AS
+CREATE OR REPLACE VIEW public.rpt_documents AS
 SELECT
-    COALESCE(d.last_callback_at, d.sent_at, d.updated_at) AS "Дата создания документа",
-    COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID журнала (сетевая ошибка)",
-    d.message_id AS "MSGID обмена",
-    d.document_key AS "Документ (ключ учёта)",
-    public.egisz_clean_text_value(d.local_uid) AS "localUid СЭМД",
-    d.relates_to_id AS "relatesToMessage (из текста журнала)",
-    d.local_uid AS "localUid (из текста)",
-    d.emdr_id AS "emdrId (из текста)",
-    public.egisz_clean_host(d.error_text) AS "Хост клиники (VPN ГОСТ)",
-    d.jid::text AS "JID клиники",
-    d.jid::text AS "JID из журнала (gost, число)",
-    COALESCE(o.name, 'Клиника JID: ' || COALESCE(d.jid::text, '(нет JID)')) AS "Клиника (транспорт)",
-    o.name AS "Медицинская организация",
-    public.egisz_semd_type_report_label(d.semd_code, NULL) AS "Тип СЭМД (код · НСИ)",
-    public.egisz_normalize_semd_code(d.semd_code) AS "Код СЭМД",
-    d.error_summary AS "Сводка ошибки регистрации",
-    public.egisz_network_error_type(d.error_text) AS "Тип сетевой ошибки",
-    d.error_text AS "Текст сетевой ошибки",
-    d.error_text AS "Сообщение",
-    d.error_type AS "Подтип ошибки канала",
-    'да'::text AS "Связанный колбэк в аналитике",
-    COALESCE(d.callback_log_id, d.source_logid)::text AS "LOGID записи ответа",
-    d.relates_to_id AS "Связанное сообщение (ответ РЭМД)",
-    d.local_uid AS "Идентификатор документа (localUid)",
-    d.emdr_id AS "Регистрационный номер РЭМД"
-FROM public.fact_egisz_documents d
-LEFT JOIN public.dim_organizations o ON d.jid = o.jid
-WHERE d.status = 'network_error';
+    d.dwh_id,
+    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) AS processed_at,
+    (
+        COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)
+        AT TIME ZONE 'Europe/Moscow'
+    )::date AS processed_day,
+    d.status,
+    ds.label AS status_label,
+    ds.sort_order AS status_sort,
+    NULLIF(
+        btrim(
+            split_part(
+                COALESCE(NULLIF(btrim(d.error_type), ''), 'Неизвестная ошибка'),
+                ' · ',
+                1
+            )
+        ),
+        ''
+    ) AS error_type,
+    d.error_summary,
+    d.error_text,
+    public.normalize_semd_code(d.semd_code) AS semd_code,
+    st.name AS semd_name,
+    CASE
+        WHEN st.code IS NOT NULL AND st.name IS NOT NULL
+            THEN st.code || ' · ' || st.name
+        WHEN st.code IS NOT NULL
+            THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+        ELSE NULL
+    END AS semd_code_name,
+    public.clean_text_value(d.local_uid) AS semd_local_uid,
+    d.document_created_at AS semd_created_at,
+    d.emdr_id AS semd_emdr_id,
+    d.jid AS clinic_jid,
+    o.name AS clinic_name,
+    COALESCE(NULLIF(BTRIM(d.jid::text), ''), '—')
+        || ' · ' ||
+    COALESCE(NULLIF(BTRIM(o.name), ''), '—') AS clinic_label,
+    o.inn AS clinic_inn,
+    COALESCE(
+        NULLIF(btrim(a.clinic_oid_license), ''),
+        NULLIF(btrim(d.org_oid), '')
+    ) AS clinic_oid,
+    a.clinic_host,
+    a.clinic_jid_mismatch,
+    public.clean_text_value(d.relates_to_id) AS relates_to_id,
+    d.callback_log_id::text AS logid,
+    d.message_id,
+    CASE
+        WHEN d.status = 'success'
+         AND d.document_created_at IS NOT NULL
+         AND COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) >= d.document_created_at
+        THEN ROUND(
+            EXTRACT(
+                EPOCH FROM (
+                    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)
+                    - d.document_created_at
+                )
+            )::numeric,
+            0
+        )
+        ELSE NULL::numeric
+    END AS delivery_seconds,
+    a.patient_name_masked,
+    a.snils_masked,
+    a.doctor_name,
+    a.patient_hash,
+    a.doctor_hash,
+    d.registered_at,
+    (
+        COALESCE(d.first_sent_at, d.document_created_at)
+        AT TIME ZONE 'Europe/Moscow'
+    )::date AS arrival_day
+FROM public.documents d
+LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
+LEFT JOIN public.dim_document_status ds ON ds.code = d.status
+LEFT JOIN public.dim_organizations o ON o.jid = d.jid
+LEFT JOIN LATERAL (
+    SELECT dst.*
+    FROM public.dim_semd_types dst
+    WHERE dst.oid = public.normalize_semd_code(d.semd_code)
+    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
+    LIMIT 1
+) st ON TRUE
+WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
 
-COMMENT ON VIEW public.v_rpt_network_errors_detail_ui IS
-'Техническая витрина ошибок связи proxy_egisz: document-grain fact (status=network_error), без отдельной stg-таблицы канала.';
+COMMENT ON VIEW public.rpt_documents IS
+'Единая документная витрина: одна строка на dwh_id.';
 
-CREATE OR REPLACE VIEW public.v_rpt_documents_no_response_ui AS
+CREATE OR REPLACE VIEW public.rpt_documents_waiting AS
 SELECT
-    d.sent_at AS "Отправлено",
-    EXTRACT(EPOCH FROM (now() - d.sent_at))/3600.0 AS "Часов в ожидании",
-    ROUND(EXTRACT(EPOCH FROM (now() - d.sent_at))/86400.0, 1) AS "Дней в ожидании",
+    d.sent_at,
+    EXTRACT(EPOCH FROM (now() - d.sent_at)) / 3600.0 AS waiting_hours,
+    ROUND(EXTRACT(EPOCH FROM (now() - d.sent_at)) / 86400.0, 1) AS waiting_days,
     CASE
         WHEN d.sent_at IS NULL THEN 'дата неизвестна'
         WHEN now() - d.sent_at > INTERVAL '30 days' THEN '>30 дней'
         WHEN now() - d.sent_at > INTERVAL '7 days' THEN '>7 дней'
         WHEN now() - d.sent_at > INTERVAL '3 days' THEN '>3 дней'
         ELSE 'до 3 дней'
-    END AS "Сегмент ожидания",
-    d."localUid СЭМД",
-    d."Идентификатор документа (localUid)",
-    d."Код СЭМД",
-    d."Наименование СЭМД",
-    d."Тип СЭМД (код · НСИ)",
-    d."JID клиники",
-    d."Наименование клиники",
-    d."Связанное сообщение",
-    d."MSGID обмена",
-    d."Хост клиники (VPN ГОСТ)"
-FROM public.v_egisz_documents_enriched_ui d
-WHERE d.document_status = 'waiting';
+    END AS wait_segment,
+    r.semd_local_uid,
+    r.semd_code,
+    r.semd_name,
+    r.semd_code_name,
+    r.clinic_jid,
+    r.clinic_name,
+    r.clinic_label,
+    r.relates_to_id,
+    r.message_id,
+    r.clinic_host
+FROM public.documents d
+INNER JOIN public.rpt_documents r ON r.dwh_id = d.dwh_id
+WHERE d.status = 'waiting';
 
-CREATE OR REPLACE VIEW public.v_rpt_documents_ui AS
-WITH source_rows AS (
+CREATE OR REPLACE VIEW public.rpt_network_errors AS
 SELECT
-    "Обработано IPS" AS "Дата обработки",
-    "День (тренд)",
-    CASE
-        WHEN NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
-        THEN COALESCE(
-            NULLIF(TRIM("Наименование СЭМД"), ''),
-            NULLIF(TRIM("Тип СЭМД (код · НСИ)"), ''),
-            NULLIF(TRIM("Код СЭМД"), '')
-        )
-        WHEN "Статус (код)" IN ('async_error', 'network_error')
-        THEN 'Документ с ошибкой и не определён код'
-        ELSE 'Документ без кода СЭМД'
-    END AS "СЭМД (архив)",
-    "Код СЭМД",
-    "Наименование СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "JID клиники",
-    "Наименование клиники",
-    TRIM(COALESCE("JID клиники"::text, '') || ' ' || COALESCE(NULLIF(TRIM("Наименование клиники"), ''), '')) AS "JID+Наименование",
-    "ИНН клиники",
-    "OID организации",
-    "OID клиники",
-    "Документ (ключ учёта)",
-    "localUid СЭМД",
-    "Связанное сообщение",
-    "Рег. номер РЭМД (emdrid)" AS "Рег. номер РЭМД",
-    -- Единая нотификация: в колонке «Статус» во всех таблицах/графиках — адаптированный
-    -- русский текст (4 значения). «Статус (код)» — машинный код для WHERE/FILTER карточек.
-    "Статус (отчёт)" AS "Статус",
-    "Статус (код)",
-    "Тип ошибки",
-    "LOGID журнала EXCHANGELOG",
-    "MSGID обмена",
-    "Создание СЭМД",
-    "Сводка ошибки",
-    "Исходный текст ошибки",
-    "Хост клиники (VPN ГОСТ)"
-FROM public.v_egisz_documents_enriched_ui
-WHERE NULLIF(TRIM("Документ (ключ учёта)"), '') IS NOT NULL
-),
-ranked AS (
-    SELECT
-        source_rows.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY NULLIF("Документ (ключ учёта)", '')
-            ORDER BY
-                NULLIF("LOGID журнала EXCHANGELOG", '')::bigint DESC NULLS LAST,
-                "Дата обработки" DESC NULLS LAST,
-                CASE
-                    WHEN "Статус (код)" = 'success' THEN 0
-                    WHEN "Статус (код)" IN ('async_error', 'network_error') THEN 1
-                    ELSE 2
-                END,
-                "MSGID обмена" DESC NULLS LAST
-        ) AS rn
-    FROM source_rows
-)
-SELECT
-    "Дата обработки",
-    "День (тренд)",
-    "СЭМД (архив)",
-    "Код СЭМД",
-    "Наименование СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "JID клиники",
-    "JID+Наименование",
-    "Наименование клиники",
-    "ИНН клиники",
-    "OID организации",
-    "OID клиники",
-    "Документ (ключ учёта)",
-    "localUid СЭМД",
-    "Связанное сообщение",
-    "Рег. номер РЭМД",
-    "Статус",
-    "Статус (код)",
-    "Тип ошибки",
-    "LOGID журнала EXCHANGELOG",
-    "MSGID обмена",
-    "Создание СЭМД",
-    "Сводка ошибки",
-    "Исходный текст ошибки",
-    "Хост клиники (VPN ГОСТ)"
-FROM ranked
-WHERE rn = 1;
+    r.processed_at,
+    r.logid,
+    r.message_id,
+    r.dwh_id,
+    r.semd_local_uid,
+    r.relates_to_id,
+    r.clinic_host,
+    r.clinic_jid,
+    r.clinic_name,
+    r.clinic_label,
+    r.semd_code,
+    r.semd_name,
+    r.semd_code_name,
+    public.network_error_type(r.error_text) AS network_error_type,
+    r.error_text,
+    r.error_type,
+    r.semd_emdr_id
+FROM public.rpt_documents r
+WHERE r.status = 'network_error';
 
-COMMENT ON VIEW public.v_rpt_documents_ui IS
-'Единая документная витрина: одна актуальная строка на "Документ (ключ учёта)". Документы без localUid не попадают в fact_egisz_documents на этапе transform (getDocumentFile). Очередь без ответа — v_rpt_documents_no_response_ui (дашборд 03).';
+COMMENT ON VIEW public.rpt_network_errors IS
+'Ошибки связи proxy_egisz: document-grain (status=network_error).';
 
--- Разбивка ошибок по категории (~10) и конкретному виду (~70) для двойного пирога.
--- Атомизирует составной error_type до одного вида на строку. Разделители два:
--- ' · ' между разными <item> ответа (egisz_error_classify) и ' - ' между правилами,
--- сработавшими на одном <item> (egisz_error_interpretation_item). Канонические
--- интерпретации правил пробела-дефиса-пробела внутри себя не содержат, поэтому
--- split по ' [·-] ' лосслесс. Итог: одна строка = один атомарный вид ошибки.
-CREATE OR REPLACE VIEW public.v_rpt_error_category_breakdown_ui AS
+CREATE OR REPLACE VIEW public.rpt_error_breakdown AS
 WITH remd_errors AS (
     SELECT
-        d."Дата обработки" AS "Обработано IPS",
-        d."День (тренд)",
-        d."Документ (ключ учёта)",
-        d."JID клиники",
-        d."Наименование клиники",
-        d."Код СЭМД",
-        d."Тип СЭМД (код · НСИ)",
-        trim(err_item)                                                                AS "Тип ошибки"
-    FROM public.v_rpt_documents_ui d
+        r.processed_at,
+        r.processed_day,
+        r.dwh_id,
+        r.clinic_jid,
+        r.clinic_name,
+        r.clinic_label,
+        r.semd_code,
+        r.semd_code_name,
+        trim(err_item) AS error_type
+    FROM public.documents doc
+    INNER JOIN public.rpt_documents r ON r.dwh_id = doc.dwh_id
     CROSS JOIN LATERAL regexp_split_to_table(
-        COALESCE(NULLIF(trim(d."Тип ошибки"), ''), 'Неизвестная ошибка'),
+        COALESCE(NULLIF(btrim(doc.error_type), ''), 'Неизвестная ошибка'),
         ' [·-] '
     ) AS err_item
-    WHERE d."Статус (код)" IN ('async_error', 'network_error')
-      AND d."Тип ошибки" IS NOT NULL
-      AND d."Документ (ключ учёта)" IS NOT NULL
-      AND trim(d."Тип ошибки") <> ''
+    WHERE r.status IN ('async_error', 'network_error')
+      AND doc.error_type IS NOT NULL
+      AND doc.dwh_id IS NOT NULL
+      AND btrim(doc.error_type) <> ''
       AND trim(err_item) <> ''
 )
 SELECT
-    "Обработано IPS",
-    "День (тренд)",
-    "Документ (ключ учёта)",
-    "JID клиники",
-    "Наименование клиники",
-    "Код СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "Тип ошибки",
-    public.egisz_error_category("Тип ошибки") AS "Категория ошибки"
+    processed_at,
+    processed_day,
+    dwh_id,
+    clinic_jid,
+    clinic_name,
+    clinic_label,
+    semd_code,
+    semd_code_name,
+    error_type,
+    public.error_category(error_type) AS error_category
 FROM remd_errors;
 
-COMMENT ON VIEW public.v_rpt_error_category_breakdown_ui IS
-'Разбивка ошибок EGISZ-прокси: один ряд = один вид ошибки на документ.
-Источник — v_rpt_documents_ui («Статус (код)» async_error / network_error).
-Используется картой «Категории ошибок» и «Ошибки по типу».';
+COMMENT ON VIEW public.rpt_error_breakdown IS
+'Разбивка ошибок: один ряд = один атомарный вид ошибки на документ (split documents.error_type по '' · '' и '' - '').';
 
-CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui AS
+CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT
-    "Дата обработки" AS "Обработано IPS",
-    "День (тренд)",
-    "LOGID журнала EXCHANGELOG",
-    "Документ (ключ учёта)",
-    "localUid СЭМД",
-    "Рег. номер РЭМД" AS "Рег. номер РЭМД (emdrid)",
-    "Связанное сообщение",
-    "JID клиники",
-    "Тип СЭМД (код · НСИ)",
-    "Статус",
-    CASE
-        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
-        WHEN "Статус (код)" IN ('async_error', 'network_error')
-        THEN COALESCE(NULLIF("Исходный текст ошибки", ''), '(нет текста)')
-        ELSE ''
-    END AS "Исходный текст ошибки",
-    CASE
-        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
-        WHEN "Статус (код)" IN ('async_error', 'network_error')
-        THEN COALESCE(NULLIF("Сводка ошибки", ''), 'Неизвестная ошибка')
-        ELSE ''
-    END AS "Интерпретация ошибки",
-    CASE
-        WHEN "Статус (код)" = 'success' THEN 'Успешно зарегистрирован'
-        WHEN "Статус (код)" IN ('async_error', 'network_error') THEN "Тип ошибки"
-        ELSE ''
-    END AS "Тип ошибки",
-    CASE
-        WHEN "Статус (код)" IN ('async_error', 'network_error') THEN 1::bigint
-        ELSE NULL::bigint
-    END AS "Порядок ошибки"
-FROM public.v_rpt_documents_ui
-WHERE "Статус (код)" IN ('success', 'async_error', 'network_error');
+    d.dwh_id,
+    d.jid AS clinic_jid,
+    o.name AS clinic_name,
+    a.clinic_oid_xml,
+    a.clinic_oid_jpersons,
+    a.clinic_oid_license,
+    a.clinic_host,
+    a.clinic_jid_resolve_method,
+    a.message_endpoint,
+    a.clinic_jid_mismatch,
+    d.org_oid AS document_org_oid,
+    d.jid_resolve_method AS document_jid_resolve_method
+FROM public.documents d
+LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
+LEFT JOIN public.dim_organizations o ON o.jid = d.jid
+WHERE d.dwh_id IS NOT NULL;
 
-CREATE OR REPLACE VIEW public.v_rpt_semd_archive_ui AS
-SELECT
-    "Дата обработки",
-    "День (тренд)",
-    "СЭМД (архив)",
-    "Код СЭМД",
-    "Наименование СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "JID клиники",
-    "JID+Наименование",
-    "Наименование клиники",
-    "ИНН клиники",
-    "OID организации",
-    "OID клиники",
-    "Документ (ключ учёта)",
-    "localUid СЭМД",
-    "Связанное сообщение",
-    "Рег. номер РЭМД",
-    "Статус",
-    "Статус (код)",
-    "Тип ошибки",
-    "LOGID журнала EXCHANGELOG",
-    "MSGID обмена",
-    "Создание СЭМД",
-    "Сводка ошибки",
-    "Исходный текст ошибки",
-    "Хост клиники (VPN ГОСТ)"
-FROM public.v_rpt_documents_ui;
-
-CREATE OR REPLACE VIEW public.v_rpt_clinic_connectivity_daily_ui AS
-WITH success_by_day AS (
-    SELECT
-        "Обработано IPS"::date AS day,
-        NULLIF("JID клиники", '') AS jid,
-        MAX("Наименование клиники") AS clinic_name,
-        COUNT(DISTINCT "Документ (ключ учёта)") FILTER (WHERE "Статус" = 'success')::bigint AS ok_cnt,
-        COUNT(DISTINCT "Документ (ключ учёта)") FILTER (WHERE "Статус" = 'error')::bigint AS err_remd_cnt
-    FROM public.v_egisz_documents_enriched_ui
-    GROUP BY 1, 2
-),
-network_by_day AS (
-    SELECT
-        "Дата создания документа"::date AS day,
-        NULLIF(COALESCE("JID клиники", "JID из журнала (gost, число)"), '') AS jid,
-        MAX("Клиника (транспорт)") AS clinic_name,
-        COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS err_cnt
-    FROM public.v_rpt_network_errors_detail_ui
-    GROUP BY 1, 2
-)
-SELECT
-    COALESCE(s.day, n.day) AS "День",
-    COALESCE(s.jid, n.jid) AS "JID клиники (ключ)",
-    COALESCE(s.jid, n.jid) AS "JID клиники",
-    COALESCE(NULLIF(s.clinic_name, ''), NULLIF(n.clinic_name, ''), 'Клиника JID: ' || COALESCE(s.jid, n.jid)) AS "Наименование клиники",
-    COALESCE(s.ok_cnt, 0)::bigint AS "Успешные ответы РЭМД (документов)",
-    COALESCE(s.ok_cnt, 0)::bigint AS "Ответы РЭМД: успех (документов)",
-    COALESCE(s.err_remd_cnt, 0)::bigint AS "Ответы РЭМД: отказ (документов)",
-    COALESCE(n.err_cnt, 0)::bigint AS "Ошибки связи (документов)",
-    ROUND(100.0 * COALESCE(s.ok_cnt, 0) / NULLIF(COALESCE(s.ok_cnt, 0) + COALESCE(n.err_cnt, 0), 0), 2) AS "Доступность транспорта (прибл.), %"
-FROM success_by_day s
-FULL OUTER JOIN network_by_day n ON s.day = n.day AND s.jid = n.jid;
-
-CREATE OR REPLACE VIEW public.v_rpt_connectivity_global_daily_ui AS
-SELECT
-    "День",
-    SUM("Успешные ответы РЭМД (документов)")::bigint AS "Успешные ответы РЭМД (документов)",
-    SUM("Ошибки связи (документов)")::bigint AS "Ошибки связи (документов)",
-    ROUND(100.0 * SUM("Успешные ответы РЭМД (документов)") / NULLIF(SUM("Успешные ответы РЭМД (документов)") + SUM("Ошибки связи (документов)"), 0), 2) AS "Доступность транспорта (прибл.), %"
-FROM public.v_rpt_clinic_connectivity_daily_ui
-GROUP BY 1;
-
-CREATE OR REPLACE VIEW public.v_rpt_client_documents_ui AS
-WITH fact_source AS (
-    SELECT
-        f.transaction_id::text AS document_row_id,
-        f."Обработано IPS" AS document_ts,
-        f."День (тренд)" AS document_day,
-        NULLIF(f."JID клиники", '') AS client_jid,
-        NULLIF(f."Документ (ключ учёта)", '') AS document_key,
-        NULLIF(f."Код СЭМД", '') AS semd_code,
-        COALESCE(NULLIF(f."Тип СЭМД (код · НСИ)", ''), NULLIF(f."Наименование СЭМД", ''), '(тип СЭМД не определен)') AS document_type,
-        f."Статус (код)" AS status_code,
-        f."Статус (отчёт)" AS status_label,
-        CASE
-            WHEN f."Статус (код)" = 'success' THEN 1
-            WHEN f."Статус (код)" = 'async_error' THEN 2
-            WHEN f."Статус (код)" = 'network_error' THEN 3
-            ELSE 4
-        END AS status_sort,
-        COALESCE(NULLIF(f."Сводка ошибки", ''), NULLIF(f."Исходный текст ошибки", ''), '(ошибка без текста)') AS error_text,
-        CASE
-            WHEN f."Статус (код)" = 'success'
-             AND f."Создание СЭМД" IS NOT NULL
-             AND f."Обработано IPS" >= f."Создание СЭМД"
-            THEN ROUND(EXTRACT(EPOCH FROM (f."Обработано IPS" - f."Создание СЭМД"))::numeric, 0)
-            ELSE NULL::numeric
-        END AS delivery_seconds,
-        f.patient_name_masked,
-        f.snils_masked,
-        f.doctor_name,
-        f.patient_hash,
-        f.doctor_hash
-    FROM public.v_egisz_documents_enriched_ui f
-    -- Единый документный универсум: включаем «В обработке» (waiting), чтобы итог
-    -- «всего документов» в клиентских дашбордах совпадал с операционным. Доли успеха/
-    -- ошибок в карточках считаются по финализированным (success/async_error/network_error).
-    WHERE NULLIF(f."Документ (ключ учёта)", '') IS NOT NULL
-),
-source_rows AS (
-    SELECT * FROM fact_source
-),
-ranked AS (
-    SELECT
-        source_rows.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY NULLIF(document_key, '')
-            ORDER BY
-                CASE WHEN document_row_id ~ '^[0-9]+$' THEN document_row_id::bigint END DESC NULLS LAST,
-                document_ts DESC NULLS LAST,
-                status_sort,
-                document_row_id DESC
-        ) AS rn
-    FROM source_rows
-)
-SELECT
-    document_row_id,
-    document_ts,
-    document_day,
-    client_jid,
-    document_key,
-    semd_code,
-    document_type,
-    status_code,
-    status_label,
-    status_sort,
-    error_text,
-    delivery_seconds,
-    patient_name_masked,
-    snils_masked,
-    doctor_name,
-    patient_hash,
-    doctor_hash
-FROM ranked
-WHERE rn = 1;
-
--- Срез клиника × тип СЭМД для QB tier-1 (дашборд 04, 01).
-CREATE OR REPLACE VIEW public.v_rpt_clinic_semd_slice_ui AS
-SELECT
-    "JID клиники",
-    "Наименование клиники",
-    "Код СЭМД",
-    "Тип СЭМД (код · НСИ)",
-    "Статус",
-    COUNT(DISTINCT "Документ (ключ учёта)")::bigint AS "Документов"
-FROM public.v_rpt_documents_ui
-WHERE NULLIF(TRIM("JID клиники"::text), '') IS NOT NULL
-  AND NULLIF(TRIM("Код СЭМД"), '') IS NOT NULL
-GROUP BY 1, 2, 3, 4, 5;
-
-COMMENT ON VIEW public.v_rpt_clinic_semd_slice_ui IS
-'Предрасчёт: клиника × код СЭМД × статус → число документов. Для Query Builder tier-1.';
-
--- Дневные KPI клиентских дашбордов 07/08.
-CREATE OR REPLACE VIEW public.v_rpt_client_kpi_daily_ui AS
-SELECT
-    document_day AS "День",
-    client_jid AS "JID клиники",
-    COUNT(DISTINCT document_key)::bigint AS "Документов",
-    COUNT(DISTINCT document_key) FILTER (WHERE status_label = 'Успешно зарегистрирован')::bigint AS "Успешно",
-    COUNT(DISTINCT document_key) FILTER (
-        WHERE status_label IN ('Ошибка асинхронного ответа РЭМД', 'Ошибка связи')
-    )::bigint AS "С ошибкой",
-    ROUND(
-        100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_label = 'Успешно зарегистрирован')
-        / NULLIF(
-            COUNT(DISTINCT document_key) FILTER (
-                WHERE status_label IN (
-                    'Успешно зарегистрирован',
-                    'Ошибка асинхронного ответа РЭМД',
-                    'Ошибка связи'
-                )
-            ),
-            0
-        ),
-        1
-    ) AS "% успеха",
-    ROUND(AVG(delivery_seconds) FILTER (WHERE delivery_seconds IS NOT NULL), 0) AS "Среднее время доставки, сек"
-FROM public.v_rpt_client_documents_ui
-WHERE document_day IS NOT NULL
-GROUP BY 1, 2;
-
-COMMENT ON VIEW public.v_rpt_client_kpi_daily_ui IS
-'Дневные KPI по клиентским документам для QB-дашбордов 07/08.';
-
+COMMENT ON VIEW public.rpt_document_lineage IS
+'Lineage документа: атомы идентификаторов клиники из XML, лицензий и журнала.';

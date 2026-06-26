@@ -1,12 +1,12 @@
 -- ============================================================================
--- 30_error_rules.sql — egisz_error_interpretation_rules table + seed
+-- 30_error_rules.sql — dim_error_rules table + seed
 -- Source: db/dwh_init.sql, lines [536..650).
 -- Loaded by db/dwh_init.sql via \i db/parts/30_error_rules.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (
+CREATE TABLE IF NOT EXISTS dim_error_rules (
     rule_code text PRIMARY KEY,
     priority integer NOT NULL,
     match_code text,
@@ -16,13 +16,13 @@ CREATE TABLE IF NOT EXISTS egisz_error_interpretation_rules (
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE egisz_error_interpretation_rules
+ALTER TABLE dim_error_rules
     ADD COLUMN IF NOT EXISTS error_category text NOT NULL DEFAULT 'Прочие';
 
-COMMENT ON COLUMN egisz_error_interpretation_rules.priority IS
+COMMENT ON COLUMN dim_error_rules.priority IS
 'Устаревший порядок загрузки seed-данных; на выбор правил в egisz_error_matching_rule_labels не влияет.';
 
-INSERT INTO egisz_error_interpretation_rules (rule_code, priority, match_code, match_pattern, interpretation, error_category)
+INSERT INTO dim_error_rules (rule_code, priority, match_code, match_pattern, interpretation, error_category)
 VALUES
     ('schematron_patient_address_type', 10, 'VALIDATION_ERROR', '(?is)(Schematron|схематрон).*patientRole.*addr.*address:Type', 'Не указан адрес пациента', 'Данные пациента'),
     ('schematron_org_not_linked_rmis', 11, 'VALIDATION_ERROR', '(?is)не привязана к РМИС', 'Организация не привязана к РМИС', 'Ошибки структуры и валидации'),
@@ -137,7 +137,7 @@ ON CONFLICT (rule_code) DO UPDATE SET
 -- Деактивируем generic-фолбэк, который раньше отдавал «Ошибка регистрации в РЭМД».
 -- При отсутствии конкретного типа теперь подставляется «Неизвестная ошибка»
 -- в egisz_error_classify (см. ниже).
-UPDATE egisz_error_interpretation_rules
+UPDATE dim_error_rules
 SET is_active = false, updated_at = now()
 WHERE rule_code = 'remd_async_response';
 

@@ -1,7 +1,7 @@
 {
   "name": "Управленческий дашборд",
   "width": "full",
-  "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `v_rpt_documents_ui`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Дневная динамика MRR/ARR/активных JID — trailing-30d на каждую дату (последние 90 дней, без фильтра «Период»). Помесячные MRR Waterfall / NRR / Logo retention — после ≥2 закрытых месяцев.",
+  "description": "Сервисный управленческий дашборд интеграции с ЕГИСЗ (grain: JID / документ / статус / канал; без тела СЭМД). Иерархия метрик NSM → Деньги → Здоровье сервиса → Выручка под риском. Источник — `rpt_documents`. Финансовая модель: фикс-тариф **10 000 ₽/JID/мес**, MRR = активных JID за 30 дней × 10 000 ₽ (trailing-30d, НЕ календарный месяц — иначе счётчик обнуляется 1-го числа). Дневная динамика MRR/ARR/активных JID — trailing-30d на каждую дату (последние 90 дней, без фильтра «Период»). Помесячные MRR Waterfall / NRR / Logo retention — после ≥2 закрытых месяцев.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -28,7 +28,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Успешных СЭМД\" FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" = 'success' [[AND {{mgmt_period}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Успешных СЭМД\" FROM public.rpt_documents WHERE status = 'success' [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -57,18 +57,18 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
     {
-      "name": "Всего документов за период",
+      "name": "Документов за период",
       "description": "COUNT(DISTINCT документ) по всем статусам, включая «в обработке». Знаменатель для честного first-pass acceptance.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT \"Документ (ключ учёта)\")::bigint AS \"Документов\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -97,8 +97,8 @@
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -108,7 +108,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Доля успеха с первой попытки, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Доля успеха с первой попытки, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -143,8 +143,8 @@
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -163,7 +163,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL AND processed_at >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -190,7 +190,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL AND processed_at >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -217,7 +217,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT COUNT(*)::bigint AS \"Активных JID\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL AND processed_at >= CURRENT_DATE - INTERVAL '30 days') SELECT COUNT(*)::bigint AS \"Активных JID\" FROM active_jid",
           "template-tags": {}
         },
         "database": 1
@@ -243,7 +243,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT \"JID клиники\" AS jid FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days'), success AS (SELECT COUNT(DISTINCT \"Документ (ключ учёта)\") AS ok FROM public.v_rpt_documents_ui WHERE \"Статус (код)\" = 'success' AND \"Дата обработки\" >= CURRENT_DATE - INTERVAL '30 days') SELECT ROUND((SELECT COUNT(*) FROM active_jid) * 10000.0 / NULLIF(success.ok, 0), 1) AS \"₽ за успешный СЭМД\" FROM success",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL AND processed_at >= CURRENT_DATE - INTERVAL '30 days'), success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM public.rpt_documents WHERE status = 'success' AND processed_at >= CURRENT_DATE - INTERVAL '30 days') SELECT ROUND((SELECT COUNT(*) FROM active_jid) * 10000.0 / NULLIF(success.ok, 0), 1) AS \"₽ за успешный СЭМД\" FROM success",
           "template-tags": {}
         },
         "database": 1
@@ -279,7 +279,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, processed_at::date AS activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
           "template-tags": {}
         },
         "database": 1
@@ -326,7 +326,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH jid_activity AS (SELECT DISTINCT \"JID клиники\" AS jid, \"Дата обработки\"::date AS activity_day FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", COUNT(DISTINCT ja.jid)::bigint AS \"Активных JID\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, processed_at::date AS activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", COUNT(DISTINCT ja.jid)::bigint AS \"Активных JID\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
           "template-tags": {}
         },
         "database": 1
@@ -381,7 +381,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting' AND now() - \"Дата обработки\" > INTERVAL '7 days') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\"), 0), 1) AS \"Зависших >7 дн., %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting' AND now() - processed_at > INTERVAL '7 days') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Зависших >7 дн., %\" FROM public.rpt_documents WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -411,8 +411,8 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -422,7 +422,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'async_error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Отказов РЭМД, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Отказов РЭМД, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -452,8 +452,8 @@
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -463,7 +463,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'network_error') / NULLIF(COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Ошибок связи, %\" FROM public.v_rpt_documents_ui WHERE 1=1 [[AND {{mgmt_period}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Ошибок связи, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{mgmt_period}}]]",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -493,8 +493,8 @@
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -513,7 +513,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT CASE WHEN docs >= 1000 THEN 'Тяжёлые (>=1000 док)' WHEN docs >= 50 THEN 'Средние (50-999)' ELSE 'Спящие (<50)' END AS \"Сегмент\", COUNT(DISTINCT jid)::bigint AS \"Клиник\", (COUNT(DISTINCT jid) * 10000)::bigint AS \"MRR, ₽\", SUM(ok)::bigint AS \"Успешных СЭМД\", ROUND(COUNT(DISTINCT jid) * 10000.0 / NULLIF(SUM(ok), 0), 0) AS \"₽ за успешный СЭМД\" FROM per_jid GROUP BY 1 ORDER BY MIN(docs) DESC",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT CASE WHEN docs >= 1000 THEN 'Тяжёлые (>=1000 док)' WHEN docs >= 50 THEN 'Средние (50-999)' ELSE 'Спящие (<50)' END AS \"Сегмент\", COUNT(DISTINCT jid)::bigint AS \"Клиник\", (COUNT(DISTINCT jid) * 10000)::bigint AS \"MRR, ₽\", SUM(ok)::bigint AS \"Успешных СЭМД\", ROUND(COUNT(DISTINCT jid) * 10000.0 / NULLIF(SUM(ok), 0), 0) AS \"₽ за успешный СЭМД\" FROM per_jid GROUP BY 1 ORDER BY MIN(docs) DESC",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -555,8 +555,8 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -566,7 +566,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -596,8 +596,8 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -607,7 +607,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting') AS waiting FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN waiting::numeric / NULLIF(docs, 0) > 0.8 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском (затык)\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting') AS waiting FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT (SUM(CASE WHEN waiting::numeric / NULLIF(docs, 0) > 0.8 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском (затык)\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -637,8 +637,8 @@
       "col": 8,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -648,7 +648,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)::bigint AS \"Клиник без успеха\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END)::bigint AS \"Клиник без успеха\" FROM per_jid",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -677,8 +677,8 @@
       "col": 16,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },
@@ -688,7 +688,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT \"JID клиники\" AS jid, MAX(\"Наименование клиники\") AS clinic, COUNT(DISTINCT \"Документ (ключ учёта)\") AS docs, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'success') AS ok, COUNT(DISTINCT \"Документ (ключ учёта)\") FILTER (WHERE \"Статус (код)\" = 'waiting') AS waiting FROM public.v_rpt_documents_ui WHERE NULLIF(\"JID клиники\", '') IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Попыток\", waiting AS \"В обработке\", 10000 AS \"MRR, ₽\" FROM per_jid WHERE ok = 0 AND docs > 0 ORDER BY docs DESC LIMIT 15",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, MAX(clinic_name) AS clinic, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting') AS waiting FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{mgmt_period}}]] GROUP BY 1) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Попыток\", waiting AS \"В обработке\", 10000 AS \"MRR, ₽\" FROM per_jid WHERE ok = 0 AND docs > 0 ORDER BY docs DESC LIMIT 15",
           "template-tags": {
             "mgmt_period": {
               "widget-type": "date/all-options",
@@ -719,6 +719,9 @@
           "[\"name\",\"Попыток\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника"
           }
         }
       },
@@ -728,8 +731,8 @@
       "col": 0,
       "metabase-field-filters": {
         "mgmt_period": {
-          "table_ref": "public.v_rpt_documents_ui",
-          "field_name": "Дата обработки"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         }
       }
     },

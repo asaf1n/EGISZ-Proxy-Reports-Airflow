@@ -1,7 +1,7 @@
 {
   "name": "Клиентский дашборд. BI-аналитика ЭМД",
   "width": "full",
-  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. Верхний блок — операционные показатели на реальных данных DWH (объём, first-pass acceptance, доставка, структура типов СЭМД). Медицинские показатели (уникальные пациенты/врачи) считаются по `patient_hash` / `doctor_hash`, но **тело СЭМД сейчас не захватывается в журнал ЕГИСЗ**, поэтому эти карты пусты до доработки upstream-захвата. Источник — `v_rpt_client_documents_ui` (PII маскируется).",
+  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. JID резолвится через справочник лицензий (mo_uid / gost-endpoint). Верхний блок — операционные показатели на реальных данных DWH (объём, first-pass acceptance, доставка, структура типов СЭМД). Медицинские показатели (уникальные пациенты/врачи) считаются по `patient_hash` / `doctor_hash`, но **тело СЭМД сейчас не захватывается в журнал ЕГИСЗ**, поэтому эти карты пусты до доработки upstream-захвата. Источник — `rpt_documents` (PII маскируется).",
   "parameters": [
     {
       "id": "08b00000-0000-4000-8000-000000000001",
@@ -20,7 +20,7 @@
     },
     {
       "id": "08b00000-0000-4000-8000-000000000003",
-      "name": "JID клиники",
+      "name": "JID Клиники",
       "slug": "client_jid_filter",
       "type": "string/=",
       "sectionId": "string",
@@ -38,16 +38,16 @@
       "visualization_settings": {}
     },
     {
-      "name": "СЭМД за период",
+      "name": "Документов за период — BI",
       "description": "COUNT(DISTINCT документ) клиники за период. Базовый объём документооборота.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT document_key)::bigint AS \"СЭМД за период\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"СЭМД за период\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c10000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -87,12 +87,12 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -102,11 +102,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c20000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -152,12 +152,12 @@
       "col": 6,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -167,11 +167,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds::double precision))::numeric / 60.0, 1) AS \"Медиана доставки, мин\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds::double precision))::numeric / 60.0, 1) AS \"Медиана доставки, мин\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c30000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -211,12 +211,12 @@
       "col": 12,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -226,11 +226,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT document_day), 0), 1) AS \"ЭМД/сутки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT processed_day), 0), 1) AS \"ЭМД/сутки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c40000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -270,12 +270,12 @@
       "col": 18,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -289,16 +289,16 @@
       "visualization_settings": {}
     },
     {
-      "name": "Динамика по типам СЭМД (месяцы)",
+      "name": "Динамика документов по типам СЭМД",
       "description": "Stacked bar: объём по типам СЭМД помесячно. Показывает сезонность и сдвиги в номенклатуре документов.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (SELECT date_trunc('month', document_ts)::date AS month_, COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS document_type_, COUNT(DISTINCT document_key)::bigint AS cnt FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND document_ts IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT document_type_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.document_type_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (document_type_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+          "query": "WITH base AS (SELECT date_trunc('month', processed_at)::date AS month_, COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS semd_code_name_, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND processed_at IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT semd_code_name_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.semd_code_name_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (semd_code_name_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c50000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -341,16 +341,16 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 5,
+      "row": 4,
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -360,11 +360,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT document_key)::bigint AS \"Документов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT document_key) > 0 ORDER BY 3 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c60000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -411,16 +411,16 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 5,
+      "row": 4,
       "col": 12,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -430,11 +430,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(document_type, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT document_key) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT document_key) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c70000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -480,16 +480,16 @@
       },
       "sizeX": 24,
       "sizeY": 6,
-      "row": 12,
+      "row": 11,
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -499,11 +499,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT document_ts AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", document_type AS \"Тип СЭМД\", error_text AS \"Текст ошибки\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND status_code IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY document_ts DESC NULLS LAST LIMIT 50",
+          "query": "SELECT processed_at AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_code_name AS \"Тип СЭМД\", error_summary AS \"Сводка ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY processed_at DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c80000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -530,24 +530,36 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Текст ошибки\"]": {
+          "[\"name\",\"Исходный текст ошибки\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"error_text\"]": {
+            "column_title": "Текст ошибки",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Сводка ошибки\"]": {
+            "column_title": "Сводка ошибки",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
           }
         }
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 18,
+      "row": 17,
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -566,11 +578,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08c90000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -604,12 +616,12 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -619,11 +631,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08ca0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -657,12 +669,12 @@
       "col": 8,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -672,11 +684,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT document_key)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 1) AS \"ЭМД/пациент\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 1) AS \"ЭМД/пациент\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08cb0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -716,12 +728,12 @@
       "col": 16,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
@@ -731,11 +743,11 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT document_key)::int AS doc_cnt FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
+          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT dwh_id)::int AS doc_cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08cc0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -781,26 +793,26 @@
       "col": 0,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     },
     {
-      "name": "Топ-10 врачей по объёму СЭМД",
+      "name": "Топ врачей по документам",
       "description": "⏳ Ожидает захвата тела СЭМД (upstream). Лидерборд по отправленным документам и % успешных регистраций — пока пусто (doctor_hash NULL).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT document_key)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_key) FILTER (WHERE status_code = 'success') / NULLIF(COUNT(DISTINCT document_key) FILTER (WHERE status_code IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM public.v_rpt_client_documents_ui WHERE client_jid = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "type": "text",
-              "display-name": "JID клиники",
+              "display-name": "JID Клиники",
               "id": "08cd0000-0000-4000-8000-000000000003",
               "name": "client_jid",
               "required": true,
@@ -848,12 +860,12 @@
       "col": 12,
       "metabase-field-filters": {
         "client_period": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_ts"
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
         },
         "client_document_type": {
-          "table_ref": "public.v_rpt_client_documents_ui",
-          "field_name": "document_type"
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_code_name"
         }
       }
     }

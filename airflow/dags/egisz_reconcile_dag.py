@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 
 from airflow.decorators import dag, task
+from airflow.exceptions import AirflowSkipException
 from airflow.hooks.base import BaseHook
 from airflow.models import Variable
 
@@ -15,7 +16,9 @@ from egisz_elt.common import (
     connect_pg,
     get_cursors,
     load_raw_logs,
-    reconcile_enriched_ui,
+    pending_transform_tail,
+    reconcile_document_attributes_ui,
+    run_analyze,
 )
 from egisz_elt.reconcile import (
     count_exchangelog_rows,
@@ -26,6 +29,8 @@ from egisz_elt.reconcile import (
 )
 
 log = logging.getLogger(__name__)
+
+DWH_POOL = "dwh_postgres"
 
 
 def _dwh_connection():
@@ -38,26 +43,17 @@ def _proxy_connection():
 
 @dag(
     dag_id="egisz_reconcile_dag",
-    schedule=Variable.get("egisz_reconcile_schedule", default_var="@daily"),
+    schedule=Variable.get("reconcile_schedule", default_var="@daily"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
     tags=["egisz", "elt", "dwh", "reconcile"],
 )
 def egisz_reconcile_pipeline() -> None:
-    @task
+    @task(pool=DWH_POOL)
     def reconcile_proxy_raw() -> int:
-        """Full source↔raw constancy check: every EXCHANGELOG LOGID against exchangelog_raw.
-
-        The proxy journal materializes rows out of LOGID order — async СЭМД callbacks and
-        gateway backfills appear *below* an already-advanced watermark, where the forward cursor
-        (`LOGID > last_logid`) never re-reads them. Reconcile set-diffs the **whole** proxy LOGID
-        set against the **whole** raw set, loads+transforms whatever is missing, and **never moves
-        the watermark** (GREATEST stays the only writer, in the extract DAG). Steady state finds
-        nothing and is a no-op. See README.md §«Полная сверка константности источник↔raw».
-        """
-        max_logids = int(Variable.get("egisz_reconcile_max_logids", default_var=20000000))
-        window_max_gap = int(Variable.get("egisz_reconcile_window_max_gap", default_var=500))
+        """Full source↔raw constancy check: every EXCHANGELOG LOGID against exchangelog_raw."""
+        max_logids = int(Variable.get("reconcile_max_logids", default_var=20000000))
 
         pg_conn = _dwh_connection()
         try:
@@ -66,20 +62,22 @@ def egisz_reconcile_pipeline() -> None:
                 log.info("Reconcile: watermark not advanced yet; nothing to reconcile.")
                 return 0
 
+            pending_rows, pending_max = pending_transform_tail(pg_conn, last_logid)
+            if pending_rows > 0:
+                raise AirflowSkipException(
+                    f"Reconcile deferred: extract backlog has {pending_rows} raw row(s) "
+                    f"above watermark LOGID={last_logid} (tail={pending_max}). "
+                    "Run extract transform first."
+                )
+
             fb_conn = _proxy_connection()
             try:
-                # Memory guard: the whole-journal set-diff materializes every LOGID in the worker.
-                # Above the expected volume we hard-skip rather than risk OOM-killing the worker.
-                # Extension point: range-batched diff would lift this cap (not introduced here).
                 source_count = count_exchangelog_rows(fb_conn)
                 if source_count > max_logids:
-                    log.warning(
-                        "Reconcile: source has %s LOGID(s) > guard %s; skipping full set-diff "
-                        "to avoid worker OOM. Raise egisz_reconcile_max_logids or batch by range.",
-                        source_count,
-                        max_logids,
+                    raise RuntimeError(
+                        f"Reconcile aborted: source has {source_count} LOGID(s) > guard "
+                        f"{max_logids}. Raise reconcile_max_logids or implement batched diff."
                     )
-                    return 0
 
                 source_logids = fetch_exchangelog_logids(fb_conn)
                 raw_logids = get_all_raw_logids(pg_conn)
@@ -99,20 +97,18 @@ def egisz_reconcile_pipeline() -> None:
 
             load_raw_logs(pg_conn, late_rows)
 
-            pg_conn.set_session(autocommit=True)
-            with pg_conn.cursor() as cur:
-                cur.execute("ANALYZE public.exchangelog_raw")
-            pg_conn.set_session(autocommit=False)
+            run_analyze(pg_conn, "ANALYZE public.exchangelog_raw")
 
-            reconciled = transform_missing_windows(pg_conn, missing, max_gap=window_max_gap)
+            reconciled = transform_missing_windows(pg_conn, missing)
 
-            pg_conn.set_session(autocommit=True)
-            with pg_conn.cursor() as cur:
-                cur.execute("ANALYZE public.fact_egisz_documents")
-            reconcile_enriched_ui(pg_conn)
-            with pg_conn.cursor() as cur:
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.v_egisz_documents_daily_ui")
-            log.info("Reconcile: recovered %s late chain message(s) into document facts.", reconciled)
+            run_analyze(pg_conn, "ANALYZE public.documents")
+            refreshed = reconcile_document_attributes_ui(pg_conn)
+            log.info(
+                "Reconcile: recovered %s late chain message(s); "
+                "refreshed %s enriched row(s).",
+                reconciled,
+                refreshed,
+            )
             return reconciled
         finally:
             pg_conn.close()

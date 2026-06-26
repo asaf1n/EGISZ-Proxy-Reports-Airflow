@@ -3,33 +3,33 @@
 -- refresh, and ANALYZE.
 -- ============================================================================
 
--- Business backfill lives only in public.egisz_transform_raw_to_facts().
+-- Business backfill lives only in public.transform_raw_to_facts().
 
-CREATE OR REPLACE VIEW public.v_health_by_clinic_ui AS
+CREATE OR REPLACE VIEW public.rpt_health_by_clinic AS
 WITH anchor AS (
     SELECT COALESCE(MAX(COALESCE(last_callback_at, sent_at, document_created_at)), now()) AS ref_ts
-    FROM public.fact_egisz_documents
+    FROM public.documents
 ),
 fact_24h AS (
     SELECT
         d.jid::text AS clinic_jid,
         MAX(COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || d.jid::text)) AS clinic_name,
-        COUNT(DISTINCT d.document_key)::bigint AS docs_cnt,
-        COUNT(DISTINCT d.document_key) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS err_cnt
-    FROM public.fact_egisz_documents d
+        COUNT(DISTINCT d.dwh_id)::bigint AS docs_cnt,
+        COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS err_cnt
+    FROM public.documents d
     CROSS JOIN anchor
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
     WHERE COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) >= anchor.ref_ts - INTERVAL '24 hours'
     GROUP BY d.jid
 ),
 queue AS (
-    SELECT jid::text AS clinic_jid, COUNT(DISTINCT document_key)::bigint AS queue_cnt
-    FROM public.fact_egisz_documents
+    SELECT jid::text AS clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS queue_cnt
+    FROM public.documents
     WHERE status = 'waiting'
     GROUP BY jid
 )
 SELECT
-    f.clinic_jid AS "JID клиники",
+    f.clinic_jid AS "JID Клиники",
     COALESCE(NULLIF(f.clinic_name, ''), 'Клиника JID: ' || f.clinic_jid) AS "Наименование клиники",
     ROUND(100.0 * f.err_cnt / NULLIF(f.docs_cnt, 0), 2) AS "Доля ошибок, %",
     f.docs_cnt AS "Документов за 24ч",
@@ -42,48 +42,48 @@ SELECT
 FROM fact_24h f
 LEFT JOIN queue q ON q.clinic_jid = f.clinic_jid;
 
-CREATE OR REPLACE VIEW public.v_health_proxy_db_ui AS
+CREATE OR REPLACE VIEW public.rpt_health_proxy_db AS
 SELECT
-    (SELECT COUNT(*) FROM public.fact_egisz_documents)::bigint AS "DWH сообщений всего",
-    (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting')::bigint AS "Очередь всего",
-    (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours')::bigint AS "Очередь > 24ч",
-    (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '24 hours' AND sent_at < now() - INTERVAL '1 hour')::bigint AS "Очередь 1-24ч",
-    (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '1 hour')::bigint AS "Очередь < 1ч",
-    (SELECT MAX(sent_at) FROM public.fact_egisz_documents) AS "DWH max Sent",
+    (SELECT COUNT(*) FROM public.documents)::bigint AS "DWH сообщений всего",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'waiting')::bigint AS "Очередь всего",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours')::bigint AS "Очередь > 24ч",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '24 hours' AND sent_at < now() - INTERVAL '1 hour')::bigint AS "Очередь 1-24ч",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'waiting' AND sent_at >= now() - INTERVAL '1 hour')::bigint AS "Очередь < 1ч",
+    (SELECT MAX(sent_at) FROM public.documents) AS "DWH max Sent",
     (SELECT updated_at FROM elt_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
     (SELECT last_logid FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_logid",
-    (SELECT MAX(callback_log_id) FROM public.fact_egisz_documents) AS "DWH max LOGID fact",
-    (SELECT COUNT(DISTINCT document_key) FROM public.fact_egisz_documents)::bigint AS "Всего документов";
+    (SELECT MAX(callback_log_id) FROM public.documents) AS "DWH max LOGID fact",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents)::bigint AS "Всего документов";
 
-CREATE OR REPLACE VIEW public.v_health_signals_ui AS
+CREATE OR REPLACE VIEW public.rpt_health_signals AS
 WITH anchor AS (
     SELECT MAX(COALESCE(last_callback_at, sent_at, document_created_at)) AS last_fact_ts
-    FROM public.fact_egisz_documents
+    FROM public.documents
 )
 SELECT * FROM (
     VALUES
-        ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents), 'документов', 'fact_egisz_documents', 'Контроль поступления СЭМД в DWH'),
-        ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours'), 'документов', 'fact_egisz_documents.status=waiting', 'Проверить клиники с зависшими документами и транспортный канал'),
-        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT document_key)::numeric FROM public.fact_egisz_documents WHERE status = 'network_error'), 'документов', 'fact_egisz_documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
-        ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'async_error'), 'документов', 'fact_egisz_documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
+        ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.documents), 'документов', 'documents', 'Контроль поступления СЭМД в DWH'),
+        ('queue_24h', 'Очередь без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '24 hours'), 'документов', 'documents.status=waiting', 'Проверить клиники с зависшими документами и транспортный канал'),
+        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'network_error'), 'документов', 'documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
+        ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.documents WHERE status = 'async_error'), 'документов', 'documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('pending_backlog_24h',
          'Документы без ответа > 7 дней',
          CASE
-             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '30 days') >= 50 THEN 'red'
-             WHEN (SELECT COUNT(*) FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days') >= 20  THEN 'yellow'
+             WHEN (SELECT COUNT(*) FROM public.documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '30 days') >= 50 THEN 'red'
+             WHEN (SELECT COUNT(*) FROM public.documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days') >= 20  THEN 'yellow'
              ELSE 'green'
          END,
-         (SELECT COUNT(*)::numeric FROM public.fact_egisz_documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days'),
+         (SELECT COUNT(*)::numeric FROM public.documents WHERE status = 'waiting' AND sent_at < now() - INTERVAL '7 days'),
          'документов > 7 дн.',
-         'v_rpt_documents_no_response_ui (Сегмент ожидания)',
+         'rpt_documents_waiting (Сегмент ожидания)',
          'Проверить транспорт клиник в дашборде 03; до 3 дн. — норма, >7 дн. — эскалация'),
         ('unknown_high',
          'Доля «Нераспознан» (status=unknown)',
          'green',
          0::numeric,
          '% (за 24ч)',
-         'fact_egisz_documents: no unknown document status',
-         'Проверить regex egisz_classify_async_status, если появится новый шаблон ответа РЭМД'),
+         'documents: no unknown document status',
+         'Проверить regex classify_async_status, если появится новый шаблон ответа РЭМД'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
          CASE
@@ -94,7 +94,7 @@ SELECT * FROM (
          END,
          ROUND(EXTRACT(EPOCH FROM (now() - COALESCE((SELECT last_fact_ts FROM anchor), now()))) / 60.0, 1)::numeric,
          'минут с последнего факта',
-         'fact_egisz_documents.last_callback_at/sent_at',
+         'documents.last_callback_at/sent_at',
          'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
 
@@ -147,30 +147,30 @@ BEGIN
 END;
 $$;
 
-UPDATE public.fact_egisz_documents d
+UPDATE public.documents d
 SET error_text = src.error_text,
+    error_summary = src.error_summary,
     updated_at = now()
 FROM (
-    SELECT DISTINCT ON (f.document_key)
-        f.document_key,
-        COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message) AS error_text
-    FROM public.fact_egisz_transactions f
-    WHERE COALESCE(NULLIF(btrim(f.error_json_text), ''), NULLIF(btrim(f.message), '')) IS NOT NULL
-    ORDER BY f.document_key, f.log_date DESC NULLS LAST, f.exchangelog_log_id DESC
+    SELECT DISTINCT ON (f.dwh_id)
+        f.dwh_id,
+        NULLIF(btrim(f.error_json_text), '') AS error_text,
+        NULLIF(btrim(f.error_summary), '') AS error_summary
+    FROM public.transactions f
+    WHERE COALESCE(NULLIF(btrim(f.error_json_text), ''), NULLIF(btrim(f.error_summary), '')) IS NOT NULL
+    ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
 ) src
-WHERE d.document_key = src.document_key
-  AND d.error_text IS DISTINCT FROM src.error_text;
+WHERE d.dwh_id = src.dwh_id
+  AND (
+      d.error_text IS DISTINCT FROM src.error_text
+      OR d.error_summary IS DISTINCT FROM src.error_summary
+  );
 
--- Полная сборка витрины при init. Дальше её сопровождает egisz_transform_raw_to_facts
--- инкрементально (по затронутым document_key), без полного пересчёта каждые 5 минут.
-TRUNCATE public.v_egisz_documents_enriched_ui;
-INSERT INTO public.v_egisz_documents_enriched_ui
-SELECT * FROM public.v_egisz_documents_enriched_src;
-REFRESH MATERIALIZED VIEW public.v_egisz_documents_daily_ui;
+-- Полная сборка атрибутов документов при init.
+SELECT public.reconcile_document_attributes(NULL::text[]);
 ANALYZE public.exchangelog_raw;
-ANALYZE public.fact_egisz_documents;
-ANALYZE public.fact_egisz_transactions;
-ANALYZE public.v_egisz_documents_enriched_ui;
-ANALYZE public.v_egisz_documents_daily_ui;
+ANALYZE public.documents;
+ANALYZE public.transactions;
+ANALYZE public.document_attributes;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

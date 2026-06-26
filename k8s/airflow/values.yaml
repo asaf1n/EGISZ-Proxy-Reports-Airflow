@@ -8,8 +8,18 @@ airflowVersion: "2.11.2"
 config:
   core:
     dags_are_paused_at_creation: "True"
+    parallelism: "8"
+    max_active_tasks_per_dag: "2"
   celery:
     operation_timeout: "30.0"
+    worker_concurrency: "2"
+  scheduler:
+    min_file_process_interval: "30"
+
+workers:
+  replicas: 1
+  celery:
+    replicas: 1
 
 images:
   airflow:
@@ -41,6 +51,22 @@ extraEnvFrom: |
   - secretRef:
       name: airflow-connections
 
+# Pool dwh_postgres is NOT provisioned by the official apache-airflow Helm chart.
+# up.ps1 calls `airflow pools set` after scheduler startup (see Initialize-AirflowDwhPool).
+
 webserver:
+  startupProbe:
+    failureThreshold: 30
+    periodSeconds: 10
+    timeoutSeconds: 10
+  readinessProbe:
+    timeoutSeconds: 10
+  resources:
+    requests:
+      memory: 1536Mi
+      cpu: 500m
+    limits:
+      memory: 3Gi
+      cpu: "1"
   service:
     type: LoadBalancer

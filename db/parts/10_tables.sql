@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS exchangelog_raw (
 
 ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
 
-CREATE TABLE IF NOT EXISTS fact_egisz_documents (
-    document_key text PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS documents (
+    dwh_id text PRIMARY KEY,
     local_uid text,
     emdr_id text,
     semd_code text,
@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS fact_egisz_documents (
     document_created_at timestamptz,
     registered_at timestamptz,
     error_type text,
-    error_summary text,
     error_text text,
     patient_hash text,
     doctor_hash text,
@@ -61,29 +60,92 @@ CREATE TABLE IF NOT EXISTS fact_egisz_documents (
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS local_uid text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS emdr_id text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS semd_code text;
-ALTER TABLE fact_egisz_documents ALTER COLUMN semd_code DROP NOT NULL;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS status text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS status_category text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS message_id text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS relates_to_id text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS callback_log_id bigint;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS sent_at timestamptz;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS error_type text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS error_summary text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS error_text text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS patient_hash text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS doctor_hash text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS source_logid bigint;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS last_status text;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS jid integer;
-ALTER TABLE fact_egisz_documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'document_key'
+    ) THEN
+        ALTER TABLE public.documents RENAME COLUMN document_key TO dwh_id;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'document_key'
+    ) THEN
+        ALTER TABLE public.transactions RENAME COLUMN document_key TO dwh_id;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF to_regclass('public.fact_documents') IS NOT NULL
+       AND to_regclass('public.documents') IS NULL THEN
+        ALTER TABLE public.fact_documents RENAME TO documents;
+    END IF;
+    IF to_regclass('public.fact_transactions') IS NOT NULL
+       AND to_regclass('public.transactions') IS NULL THEN
+        ALTER TABLE public.fact_transactions RENAME TO transactions;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'transactions'
+          AND column_name = 'exchangelog_log_id'
+    ) THEN
+        ALTER TABLE public.transactions RENAME COLUMN exchangelog_log_id TO logid;
+    END IF;
+END $$;
+
+DO $$
+DECLARE
+    part record;
+BEGIN
+    FOR part IN
+        SELECT c.relname AS old_name,
+               replace(c.relname, 'fact_transactions_', 'transactions_') AS new_name
+        FROM pg_class c
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class p ON p.oid = i.inhparent
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND p.relname = 'transactions'
+          AND c.relname LIKE 'fact_transactions\_%' ESCAPE '\'
+          AND to_regclass(
+              'public.' || replace(c.relname, 'fact_transactions_', 'transactions_')
+          ) IS NULL
+    LOOP
+        EXECUTE format('ALTER TABLE public.%I RENAME TO %I', part.old_name, part.new_name);
+    END LOOP;
+END $$;
+
+DROP INDEX IF EXISTS idx_fact_document_key;
+DROP INDEX IF EXISTS idx_dim_exchangelog_refs_document_key;
+
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS local_uid text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
+ALTER TABLE documents ALTER COLUMN semd_code DROP NOT NULL;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS status text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS status_category text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS message_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS relates_to_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS callback_log_id bigint;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_type text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_text text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_summary text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS doctor_hash text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_logid bigint;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid integer;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_oid text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid_resolve_method text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,
@@ -92,6 +154,26 @@ CREATE TABLE IF NOT EXISTS dim_organizations (
     address text,
     updated_at timestamptz DEFAULT now()
 );
+
+ALTER TABLE dim_organizations ADD COLUMN IF NOT EXISTS fir_oid text;
+
+CREATE TABLE IF NOT EXISTS dim_document_status (
+    code text PRIMARY KEY,
+    label text NOT NULL,
+    sort_order smallint NOT NULL,
+    is_final boolean NOT NULL
+);
+
+INSERT INTO dim_document_status (code, label, sort_order, is_final)
+VALUES
+    ('success', 'Успешно зарегистрирован', 1, true),
+    ('async_error', 'Ошибка асинхронного ответа РЭМД', 2, true),
+    ('network_error', 'Ошибка связи', 3, true),
+    ('waiting', 'В обработке', 4, false)
+ON CONFLICT (code) DO UPDATE SET
+    label = EXCLUDED.label,
+    sort_order = EXCLUDED.sort_order,
+    is_final = EXCLUDED.is_final;
 
 CREATE TABLE IF NOT EXISTS dim_licenses (
     id bigint PRIMARY KEY,
@@ -106,46 +188,8 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
     updated_at timestamptz DEFAULT now()
 );
 
--- Индекс EXCHANGELOG: одна строка = одно сообщение журнала (logid).
--- exchange_msgid_norm — ключ связи цепочки (relatesToMessage), не реквизит документа.
--- local_uid / emdr_id / document_key — реквизиты СЭМД, извлечённые из payload.
--- document_key канонический = lower(localUid); emdr_id — атрибут регистрации, не ключ.
-CREATE TABLE IF NOT EXISTS dim_egisz_exchangelog_refs (
-    logid bigint PRIMARY KEY,
-    created_at timestamptz,
-    exchange_msgid text,
-    exchange_msgid_norm text,
-    local_uid text,
-    emdr_id text,
-    document_key text,
-    updated_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS exchange_msgid text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS exchange_msgid_norm text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS local_uid text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS emdr_id text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_key text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS action text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS relates_to_id text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS kind_xml text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS doc_number text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS org_oid text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS error_code text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS xml_message text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_status text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS document_status text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS jid_from_payload integer;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS creation_date timestamptz;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_patient_name text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_snils text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS raw_doctor_name text;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_fault_marker boolean;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_register_response boolean;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_register_result boolean;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_processing_marker boolean;
-ALTER TABLE dim_egisz_exchangelog_refs ADD COLUMN IF NOT EXISTS has_error_ilike boolean;
+-- Parsed MSGTEXT и метаданные строки журнала хранятся в transactions (xml_* / source_*).
+-- grain transaction: PK (logid, log_date).
 
 CREATE TABLE IF NOT EXISTS dim_semd_types (
     code text PRIMARY KEY,
@@ -414,9 +458,9 @@ WHERE oid IS DISTINCT FROM code;
 
 CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid ON dim_semd_types (oid) WHERE oid IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
-    exchangelog_log_id bigint PRIMARY KEY,
-    document_key text,
+CREATE TABLE IF NOT EXISTS transactions (
+    logid bigint PRIMARY KEY,
+    dwh_id text,
     log_date timestamptz,
     message_id text,
     relates_to_id text,
@@ -435,22 +479,50 @@ CREATE TABLE IF NOT EXISTS fact_egisz_transactions (
     processed_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS document_key text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_type text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_summary text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS error_json_text text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS patient_name_masked text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS snils_masked text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS doctor_name text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS patient_hash text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS doctor_hash text;
-ALTER TABLE fact_egisz_transactions ADD COLUMN IF NOT EXISTS message text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS dwh_id text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_type text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_json_text text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_summary text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_name_masked text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS snils_masked text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_name text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_hash text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_hash text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS message text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS jid_resolve_method text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_msgid text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_message_id_norm text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_action text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_dwh_id text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_local_uid text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_emdr_id text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_relates_to_id text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_semd_code text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_doc_number text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_org_oid text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_error_code text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_message text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_raw_status text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_document_status text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_jid integer;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_creation_date timestamptz;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_patient_name text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_snils text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_doctor_name text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_fault_marker boolean;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_register_response boolean;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_register_result boolean;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_processing_marker boolean;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_error_ilike boolean;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_parsed_at timestamptz;
+
+DROP TABLE IF EXISTS public.dim_exchangelog_refs CASCADE;
 
 -- ============================================================================
 -- Range partitioning (monthly) for monotonic time-series tables.
 -- PK must include the partition key: PostgreSQL enforces UNIQUE/PK only when
--- the partition column is part of the constraint. logid / exchangelog_log_id
+-- the partition column is part of the constraint. logid / logid
 -- remain globally unique in practice; composite keys preserve ON CONFLICT upserts.
 -- ============================================================================
 
@@ -511,30 +583,30 @@ BEGIN
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
-      AND c.relname = 'fact_egisz_transactions';
+      AND c.relname = 'transactions';
 
     IF relkind IS NOT NULL AND relkind <> 'p' THEN
-        UPDATE public.fact_egisz_transactions
+        UPDATE public.transactions
         SET log_date = COALESCE(log_date, processed_at, creation_date, now())
         WHERE log_date IS NULL;
 
-        CREATE TABLE public.fact_egisz_transactions_partitioned (
-            LIKE public.fact_egisz_transactions INCLUDING DEFAULTS
+        CREATE TABLE public.transactions_partitioned (
+            LIKE public.transactions INCLUDING DEFAULTS
         ) PARTITION BY RANGE (log_date);
 
-        ALTER TABLE public.fact_egisz_transactions_partitioned
-            DROP CONSTRAINT IF EXISTS fact_egisz_transactions_pkey;
-        ALTER TABLE public.fact_egisz_transactions_partitioned
-            ADD PRIMARY KEY (exchangelog_log_id, log_date);
-        ALTER TABLE public.fact_egisz_transactions_partitioned
+        ALTER TABLE public.transactions_partitioned
+            DROP CONSTRAINT IF EXISTS transactions_pkey;
+        ALTER TABLE public.transactions_partitioned
+            ADD PRIMARY KEY (logid, log_date);
+        ALTER TABLE public.transactions_partitioned
             ALTER COLUMN log_date SET NOT NULL;
 
-        INSERT INTO public.fact_egisz_transactions_partitioned
+        INSERT INTO public.transactions_partitioned
         SELECT *
-        FROM public.fact_egisz_transactions;
+        FROM public.transactions;
 
-        DROP TABLE public.fact_egisz_transactions;
-        ALTER TABLE public.fact_egisz_transactions_partitioned RENAME TO fact_egisz_transactions;
+        DROP TABLE public.transactions;
+        ALTER TABLE public.transactions_partitioned RENAME TO transactions;
     END IF;
 END
 $$;
@@ -575,17 +647,17 @@ BEGIN
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public'
-      AND c.relname = 'fact_egisz_transactions';
+      AND c.relname = 'transactions';
 
     IF relkind = 'p' THEN
-        EXECUTE 'CREATE TABLE IF NOT EXISTS public.fact_egisz_transactions_default PARTITION OF public.fact_egisz_transactions DEFAULT';
+        EXECUTE 'CREATE TABLE IF NOT EXISTS public.transactions_default PARTITION OF public.transactions DEFAULT';
 
         FOR month_offset IN -12..24 LOOP
             part_start := date_trunc('month', timezone('UTC', now())) + (month_offset || ' months')::interval;
             part_end := part_start + INTERVAL '1 month';
-            part_name := format('fact_egisz_transactions_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
+            part_name := format('transactions_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
             EXECUTE format(
-                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.fact_egisz_transactions FOR VALUES FROM (%L) TO (%L)',
+                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.transactions FOR VALUES FROM (%L) TO (%L)',
                 part_name,
                 part_start,
                 part_end
@@ -595,52 +667,62 @@ BEGIN
 END
 $$;
 
--- msgid/logstate на raw не использовались ни одним запросом (transform идёт по PK-полосе
--- logid; нормализованный msgid берётся из dim). createdate оставлен как ключ партиционирования
--- и единственный полезный для ad-hoc/ретеншн-операций индекс над staging.
+-- msgid/logstate на raw не использовались ни одним запросом. createdate — ключ
+-- партиционирования; logid — ключ watermark/transform (батч и lookback идут по LOGID,
+-- без индекса на logid Postgres обходит все партиции на каждом JOIN).
 DROP INDEX IF EXISTS idx_exchangelog_raw_msgid;
 DROP INDEX IF EXISTS idx_exchangelog_raw_logstate;
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_semd_code ON fact_egisz_documents (semd_code);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_local_uid ON fact_egisz_documents (local_uid);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id ON fact_egisz_documents (emdr_id);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logid ON exchangelog_raw (logid);
+CREATE INDEX IF NOT EXISTS idx_documents_semd_code ON documents (semd_code);
+CREATE INDEX IF NOT EXISTS idx_documents_local_uid ON documents (local_uid);
+CREATE INDEX IF NOT EXISTS idx_documents_emdr_id ON documents (emdr_id);
 -- Резолвинг callback→документ (egisz_transform_raw_to_facts, emdr_ref) ищет по
 -- lower(btrim(emdr_id)); без функционального индекса это seq scan на каждую строку
 -- батча и линейная деградация transform с ростом архива.
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_emdr_id_norm
-    ON fact_egisz_documents (lower(NULLIF(btrim(emdr_id), '')))
+CREATE INDEX IF NOT EXISTS idx_documents_emdr_id_norm
+    ON documents (lower(NULLIF(btrim(emdr_id), '')))
     WHERE NULLIF(btrim(emdr_id), '') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_last_callback_at ON fact_egisz_documents (last_callback_at);
--- Инкрементальное сопровождение витрины v_egisz_documents_enriched_ui резолвит
--- затронутые в транзакции document_key через updated_at = now(); без индекса это
+CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON documents (last_callback_at);
+-- Инкрементальное сопровождение document_attributes резолвит
+-- затронутые в транзакции dwh_id через updated_at = now(); без индекса это
 -- seq scan по всему архиву на каждый батч (та же O(archive)-деградация, что и emdr).
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_updated_at ON fact_egisz_documents (updated_at);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_status ON fact_egisz_documents (status);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_jid ON fact_egisz_documents (jid);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_sent_at ON fact_egisz_documents (sent_at);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_document_created_at ON fact_egisz_documents (document_created_at);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_registered_at ON fact_egisz_documents (registered_at);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_documents_callback_log_id ON fact_egisz_documents (callback_log_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_log_date ON fact_egisz_transactions (log_date);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_document_key ON fact_egisz_transactions (document_key);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_status ON fact_egisz_transactions (status);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_jid ON fact_egisz_transactions (jid);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_message_id ON fact_egisz_transactions (message_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid ON fact_egisz_transactions (local_uid_semd);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_local_uid_norm ON fact_egisz_transactions (lower(NULLIF(btrim(local_uid_semd), '')));
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_emdr_id ON fact_egisz_transactions (emdr_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_relates_to ON fact_egisz_transactions (relates_to_id);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_error_type ON fact_egisz_transactions (error_type);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_patient_hash ON fact_egisz_transactions (patient_hash);
-CREATE INDEX IF NOT EXISTS idx_fact_egisz_doctor_hash ON fact_egisz_transactions (doctor_hash);
+CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status);
+CREATE INDEX IF NOT EXISTS idx_documents_jid ON documents (jid);
+CREATE INDEX IF NOT EXISTS idx_documents_sent_at ON documents (sent_at);
+CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON documents (document_created_at);
+CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON documents (registered_at);
+CREATE INDEX IF NOT EXISTS idx_documents_callback_log_id ON documents (callback_log_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id ON transactions (dwh_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
+CREATE INDEX IF NOT EXISTS idx_transactions_jid ON transactions (jid);
+CREATE INDEX IF NOT EXISTS idx_transactions_message_id ON transactions (message_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_local_uid ON transactions (local_uid_semd);
+CREATE INDEX IF NOT EXISTS idx_transactions_local_uid_norm ON transactions (lower(NULLIF(btrim(local_uid_semd), '')));
+CREATE INDEX IF NOT EXISTS idx_transactions_emdr_id ON transactions (emdr_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_relates_to ON transactions (relates_to_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_error_type ON transactions (error_type);
+CREATE INDEX IF NOT EXISTS idx_transactions_patient_hash ON transactions (patient_hash);
+CREATE INDEX IF NOT EXISTS idx_transactions_doctor_hash ON transactions (doctor_hash);
+-- Scoped semd backfill: DISTINCT ON (dwh_id) по последней транзакции с semd_code.
+CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_semd
+    ON transactions (dwh_id, log_date DESC, logid DESC)
+    WHERE NULLIF(btrim(semd_code), '') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_exchange_msgid_norm ON dim_egisz_exchangelog_refs (exchange_msgid_norm);
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_document_key ON dim_egisz_exchangelog_refs (document_key);
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_local_uid_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(local_uid), '')));
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_emdr_id_norm ON dim_egisz_exchangelog_refs (lower(NULLIF(btrim(emdr_id), '')));
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_created_at ON dim_egisz_exchangelog_refs (created_at);
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_relates_to_id ON dim_egisz_exchangelog_refs (relates_to_id)
-    WHERE relates_to_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_egisz_exchangelog_refs_action_gdf ON dim_egisz_exchangelog_refs (action, logid DESC)
-    WHERE action = 'getDocumentFile';
+CREATE INDEX IF NOT EXISTS idx_transactions_source_message_id_norm
+    ON transactions (source_message_id_norm)
+    WHERE source_message_id_norm IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_xml_local_uid_norm
+    ON transactions (lower(NULLIF(btrim(xml_local_uid), '')));
+CREATE INDEX IF NOT EXISTS idx_transactions_xml_emdr_id_norm
+    ON transactions (lower(NULLIF(btrim(xml_emdr_id), '')));
+CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
+CREATE INDEX IF NOT EXISTS idx_transactions_xml_relates_to_id ON transactions (xml_relates_to_id)
+    WHERE xml_relates_to_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_source_action_gdf
+    ON transactions (source_action, logid DESC)
+    WHERE source_action = 'getDocumentFile';

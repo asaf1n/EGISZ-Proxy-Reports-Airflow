@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.description="Metabase OSS for EGISZ integration s
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 USER root
-RUN apk add --no-cache jq curl postgresql-client bash shadow \
+RUN apk add --no-cache jq curl postgresql-client bash shadow util-linux \
     && groupadd -g 1500 metabase-local \
     && useradd -u 1500 -g 1500 -m -d /home/metabase-local -s /sbin/nologin metabase-local \
     && chown -R 1500:1500 /app /tmp
@@ -16,12 +16,13 @@ COPY --chown=1500:1500 metabase/entrypoint.sh /app/entrypoint.sh
 COPY --chown=1500:1500 metabase/provision.sh /app/provision.sh
 # bust COPY cache when provisioning scripts change
 COPY --chown=1500:1500 metabase/setup-dashboards.sh /app/setup-dashboards.sh
-COPY --chown=1500:1500 metabase/smoke-metabase-ui.sh /app/smoke-metabase-ui.sh
 COPY --chown=1500:1500 metabase/sync-models.sh /app/sync-models.sh
 COPY --chown=1500:1500 metabase_models/ /app/metabase_models/
+# bust COPY cache when dashboard JSON changes (see up.ps1 Get-DashboardsManifestHash)
+ARG DASHBOARDS_CACHE_BUST=dev
 COPY --chown=1500:1500 metabase_dashboards/ /app/metabase_dashboards/
 
-RUN chmod +x /app/entrypoint.sh /app/provision.sh /app/setup-dashboards.sh /app/sync-models.sh /app/smoke-metabase-ui.sh /app/include/mb_list.sh \
+RUN chmod +x /app/entrypoint.sh /app/provision.sh /app/setup-dashboards.sh /app/sync-models.sh /app/include/mb_list.sh \
     && find /app/metabase_dashboards -maxdepth 1 -name '*.json' -type f | LC_ALL=C sort | xargs sha256sum | sha256sum > /app/metabase_dashboards/.manifest.sha256 || true
 
 USER 1500:1500
