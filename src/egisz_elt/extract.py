@@ -14,6 +14,7 @@ from egisz_elt.common import (
     get_cursors,
     load_raw_logs,
     pending_transform_tail,
+    refresh_error_breakdown,
     run_analyze,
     serialize_exchangelog_row,
     transform_raw_to_facts,
@@ -216,5 +217,8 @@ def transform_exchangelog(
 
     if total_transformed > 0:
         _analyze_exchangelog_documents(pg_conn)
+        # Витрина разбивки ошибок — matview; обновляем после смены фактов, чтобы
+        # карточки «Анализ ошибок» отражали свежие документы (свежесть = у фактов).
+        refresh_error_breakdown(pg_conn)
 
     return {**load_info, "last_logid": watermark, "transformed": total_transformed}

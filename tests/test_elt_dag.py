@@ -86,7 +86,8 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "@task.short_circuit" not in src
 
     assert "transform_exchangelog(extracted)" in src
-    assert "extracted >> transformed" in src
+    # TaskFlow выстраивает зависимость через передачу XCom; явный ">>" избыточен.
+    assert "extracted >> transformed" not in src
     assert "get_current_context" not in src
 
 
@@ -161,7 +162,8 @@ def test_up_ps1_provisions_dwh_postgres_pool() -> None:
     assert "Sync-MetabaseDashboardArtifacts" in src
     assert "Test-MetabaseIntegrationDashboard" in src
     assert "verify_metabase_integration.py" in src
-    assert "Dashboard manifest is unchanged" not in src
+    assert "Test-MetabaseManifestUnchanged" in src
+    assert "metabase-deployed-manifest" in src
 
 
 def test_dag_bag_loads_egisz_dags() -> None:

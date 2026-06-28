@@ -174,7 +174,7 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 1. **Сообщение** — `transform_raw_to_facts` парсит новые строки `exchangelog_raw` в `transactions` (поля `xml_*`, классификация callback на уровне строки). Повторный парсинг той же строки пропускается (`xml_parsed_at`).
 
-2. **Документ** — UPSERT в `documents` (PK `dwh_id`). Несколько строк журнала одной отправки сходятся в одну запись: ключ `lower(localUid)`; callback привязывается по `relatesTo` / `emdrId` (`normalize_message_id`). Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, итоговый `status`, `error_type`, `jid`.
+2. **Документ** — UPSERT в `documents` (PK `dwh_id`). Несколько строк журнала одной отправки сходятся в одну запись: ключ `lower(localUid)`; callback привязывается по `relatesTo` / `emdrId` (`normalize_message_id`). Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, итоговый `status`, `error_types`, `jid`.
 
 Lookback при transform: extract использует окно по ширине батча; reconcile передаёт prefix журнала, чтобы поздний callback связался с ранним `getDocumentFile`.
 
@@ -186,17 +186,19 @@ Lookback при transform: extract использует окно по ширин
 
 РЭМД отдаёт ошибки как SOAP-faultcode, массив `<item>` (`code` + `message`), фрагменты Schematron. Правила — `dim_error_rules` (`db/parts/30_error_rules.sql`); логика — `db/parts/40_functions_errors.sql`.
 
-На каждый `<item>`: все активные правила проверяются независимо (`match_code` + regex `match_pattern`); сработавшие `interpretation` дедуплицируются и склеиваются. Иначе — code-fallback, эвристики Schematron, «Неизвестная ошибка».
+На каждый `<item>`: все активные правила проверяются независимо (`match_code` + regex `match_pattern`); сработавшие `interpretation` дедуплицируются. Иначе — code-fallback, единый тип «Ошибка Schematron-валидации», «Неизвестная ошибка». Канонический тип всегда из словаря — детальная расшифровка Schematron уходит в `error_summary`, а не в тип.
+
+Связь **тип → группа** — единый справочник `dim_error_type_group` (тип PK → категория), единственный источник истины (`error_category()` читает его). Это исключает «один тип → две группы».
 
 В `documents`:
 
 | Поле | Содержание |
 | ---- | ---------- |
-| `error_type` | Канонические **типы** для группировки и фильтра; несколько атомов через `·` |
+| `error_types` | Канонические **типы** документа (один или несколько) через `·`; в БД хранится полным списком |
 | `error_summary` | **Сводка ошибки** — интерпретируемый текст (одна или несколько ошибок через `·`) |
 | `error_text` | Исходный текст из `<message>` **без редактирования** |
 
-`rpt_error_breakdown` раскладывает `error_type` на атомарные строки (split по `·` и legacy ` - `).
+`rpt_error_breakdown` раскладывает `error_types` на атомарные строки (split по `·` и legacy ` - `) и канонизирует каждую через `canonical_error_atom`: 1 ряд = 1 канонический тип на документ (поле `error_type`). `rpt_documents.error_types` канонизируется на чтении через `canonical_error_list` — обе витрины показывают согласованную таксономию без переобработки архива.
 
 Перечень типов — [приложение](#приложение-типы-ошибок). Условия правил — [справочник](#справочник-активных-правил-классификации).
 
@@ -215,6 +217,7 @@ Lookback при transform: extract использует окно по ширин
 | Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID |
 | Справочники | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_document_status` | Клиники, лицензии, типы СЭМД, подписи статусов |
 | Правила | `dim_error_rules` | `match_code` + `match_pattern` → `interpretation` |
+| Тип→группа | `dim_error_type_group` | Канонический тип (PK) → категория — единый источник истины |
 
 Представления `rpt_*`:
 
@@ -223,7 +226,7 @@ Lookback при transform: extract использует окно по ширин
 | `rpt_documents` | `documents` + `document_attributes` + справочники |
 | `rpt_documents_waiting` | `status = waiting` |
 | `rpt_network_errors` | `status = network_error` |
-| `rpt_error_breakdown` | Split `error_type` по `·` / ` - ` → атомарный вид |
+| `rpt_error_breakdown` | Split `error_types` по `·` / ` - ` → атомарный канонический вид (`error_type` + `error_category`) |
 | `rpt_document_lineage` | OID / host / endpoint по документу |
 | `rpt_health_*` | Свежесть и состояние контура |
 
@@ -233,9 +236,9 @@ Lookback при transform: extract использует окно по ширин
 | ------- | ------- |
 | `semd_*` | `semd_code`, `semd_name`, `semd_local_uid`, `semd_emdr_id` |
 | `clinic_*` | `clinic_jid`, `clinic_name`, `clinic_jid_mismatch` |
-| без префикса | `status`, `status_label`, `error_type`, `error_summary`, `error_text`, `processed_at`, `processed_day`, `arrival_day` |
+| без префикса | `status`, `status_label`, `error_types` (модель «Документы», полный список), `error_type` (модель «Разбивка ошибок», атомарный), `error_category`, `error_summary`, `error_text`, `processed_at`, `processed_day`, `arrival_day` |
 
-`processed_at` / `processed_day` — по последней активности (`last_callback_at` → `sent_at` → `document_created_at`). `arrival_day` — день поступления на прокси (`first_sent_at` → `document_created_at`). Карточка «Динамика по дням» строится и фильтруется по `arrival_day`.
+`processed_at` / `processed_day` — по последней активности (`last_callback_at` → `sent_at` → `document_created_at`). `arrival_day` — день поступления на прокси (`first_sent_at` → `document_created_at`). Карточка «Динамика документов по дням» на дашборде «Интеграция с ЕГИСЗ» строится и фильтруется по `arrival_day` (не по `processed_day`).
 
 ---
 
@@ -243,14 +246,18 @@ Lookback при transform: extract использует окно по ширин
 
 Четыре JSON-дашборда (`metabase_dashboards/`). Импорт — `metabase/setup-dashboards.sh`, модели — `metabase/sync-models.sh`.
 
-**«Интеграция с ЕГИСЗ»** — пять вкладок: оперативный мониторинг, сервис интеграции, документы без ответа, анализ ошибок, архив СЭМД. Drill-through из KPI и ошибок — в архив (модель «Документы»).
+**«Интеграция с ЕГИСЗ»** — пять вкладок: оперативный мониторинг, сервис интеграции, документы без ответа, анализ ошибок, архив СЭМД. Drill-through из KPI и карточки «Ошибки: тип × клиника» — в модель «Документы»: тип ошибки передаётся через `contains` по полному списку `error_types` (документ с несколькими ошибками не теряется), клиника — точным `=`, плюс общие фильтры дашборда (период/СЭМД/статус). Распределения/топы и фильтр «Тип ошибки» считаются на грейне `rpt_error_breakdown` (1 строка = 1 канонический тип на документ).
 
 | Файл | Содержание |
 | ---- | ---------- |
 | `01_integration_egisz.json` | Оперативный и архивный срез, healthcheck |
 | `05_executive.json` | Сводная статистика |
-| `07_client_service.json` | Срез одной клиники |
+| `07_client_service.json` | Личный кабинет клиники: 3 вкладки — обзор, ошибки регистрации ЭМД, документы |
 | `08_client_bianalytic.json` | Клиентская BI-выгрузка |
+
+**«Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ»** (`07_client_service.json`) — лицо сервиса для клиники, фильтруется по `JID Клиники` (обязательный). Три вкладки: **Обзор** (объёмы, статусы регистрации, динамика по дням, топ типов СЭМД), **Ошибки регистрации ЭМД** (объёмы и структура по категориям, топ типов ошибок с долей, динамика, топ СЭМД по ошибкам — на грейне `rpt_error_breakdown`), **Документы** (журнал документов клиники со статусом и сводкой ошибок). PII маскируется на уровне DWH.
+
+**Публичная страница без авторизации.** `setup-dashboards.sh` идемпотентно включает `enable-public-sharing` и создаёт публичную ссылку клиентского дашборда (`${METABASE_URL}/public/dashboard/<uuid>`, печатается в логах провижининга). Управляется `METABASE_PUBLIC_CLIENT_DASHBOARD` (по умолчанию `true`). `public_uuid` хранится в app-БД Metabase: стабилен между рестартами, регенерируется при пересоздании app-БД. На публичной ссылке фильтр `JID Клиники` открыт и переопределяется через URL.
 
 Metabase Models → витрины DWH:
 
@@ -266,14 +273,28 @@ Metabase Models → витрины DWH:
 
 ## Запуск контуров
 
+### Предварительные требования
+
+| Компонент | Требование |
+| --------- | ---------- |
+| Kubernetes | Кластер с `kubectl` и `helm` (локально — Docker Desktop, Kubernetes включён) |
+| PostgreSQL | БД `dwh_egisz`, роль `egisz` |
+| Схема DWH | Идемпотентный прогон: `psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
+| Секреты k8s | `up.ps1` копирует `k8s/**/*.example.yaml` → `*secret*.yaml`, если целевых файлов ещё нет |
+
+### Команды
+
 ```
-.\up.ps1                          # Airflow + Metabase
-.\up.ps1 -Action Airflow          # только Airflow
-.\up.ps1 -Action Metabase         # только Metabase
-.\up.ps1 -Action Stop             # остановка
+.\up.ps1                               # Airflow + Metabase
+.\up.ps1 -Action Airflow               # только Airflow
+.\up.ps1 -Action Metabase              # только Metabase
+.\up.ps1 -Action Metabase-Provisioning # переимпорт дашбордов и моделей Metabase
+.\up.ps1 -Action Stop                  # удаление namespace egisz-bi
+.\up.ps1 -Action Stop-Airflow          # остановка Airflow (данные на PVC сохраняются)
+.\up.ps1 -Action Stop-Metabase         # остановка Metabase (данные на PVC сохраняются)
 ```
 
-Airflow UI — `:8080`, Metabase — `:3000`, namespace `egisz-bi`.
+Airflow UI — `http://localhost:8080`, Metabase — `http://localhost:3000`, namespace `egisz-bi`.
 ---
 
 ## Глоссарий

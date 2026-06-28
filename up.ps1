@@ -11,6 +11,7 @@ $DwhPoolSlots = 1
 $DwhPoolDescription = "Exclusive DWH transform / reconcile / enriched mart maintenance"
 $AirflowImage = "egisz-airflow-worker:latest"
 $MetabaseImage = "egisz-metabase:latest"
+$MetabaseDeployStateFile = Join-Path $PSScriptRoot ".cache/metabase-deployed-manifest"
 
 function Invoke-Checked {
     param(
@@ -758,15 +759,69 @@ print(h.hexdigest())
     return $hash.Trim()
 }
 
-function Invoke-MetabaseDashboardProvision {
+function Get-MetabaseDeployState {
+    if (-not (Test-Path $MetabaseDeployStateFile)) {
+        return $null
+    }
+    return (Get-Content $MetabaseDeployStateFile -Raw).Trim()
+}
+
+function Set-MetabaseDeployState {
     param(
-        [string]$Namespace
+        [string]$Hash
     )
 
-    Write-Host "Running setup-dashboards.sh (forced import)..."
+    $dir = Split-Path $MetabaseDeployStateFile -Parent
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    Set-Content -Path $MetabaseDeployStateFile -Value $Hash -NoNewline
+}
+
+function Test-MetabaseManifestUnchanged {
+    $current = Get-DashboardsManifestHash
+    $deployed = Get-MetabaseDeployState
+    return (-not [string]::IsNullOrWhiteSpace($deployed)) -and ($deployed -eq $current)
+}
+
+function Test-DockerImageExists {
+    param(
+        [string]$Image
+    )
+
+    $ErrorActionPreference = 'Continue'
+    docker image inspect $Image 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
+function Get-MetabaseDeploymentImage {
+    $ErrorActionPreference = 'Continue'
+    $image = kubectl get deployment metabase -n $Namespace -o jsonpath='{.spec.template.spec.containers[0].image}' 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($image)) {
+        return $null
+    }
+    return $image.Trim()
+}
+
+function Invoke-MetabaseDashboardProvision {
+    param(
+        [string]$Namespace,
+        [string]$ForceProvision = "auto",
+        [bool]$SkipImportIfPresent = $false
+    )
+
+    if ($ForceProvision -eq "auto") {
+        Write-Host "Running setup-dashboards.sh (manifest-aware import)..."
+    } else {
+        Write-Host "Running setup-dashboards.sh (forced import)..."
+    }
+    $skipFlag = if ($SkipImportIfPresent) { "true" } else { "false" }
     $execOutput = Invoke-Kubectl -MaxAttempts 8 -Arguments @(
         'exec', '-n', $Namespace, 'deploy/metabase', '--',
-        'env', 'METABASE_FORCE_PROVISION=always', '/bin/bash', '/app/setup-dashboards.sh'
+        'env',
+        "METABASE_FORCE_PROVISION=$ForceProvision",
+        "METABASE_SKIP_IMPORT_IF_PRESENT=$skipFlag",
+        '/bin/bash', '/app/setup-dashboards.sh'
     )
     if ($LASTEXITCODE -ne 0) {
         $message = ($execOutput | Out-String).Trim()
@@ -784,7 +839,7 @@ function Wait-MetabaseApi {
 
     $deadline = (Get-Date).AddMinutes(5)
     while ((Get-Date) -lt $deadline) {
-        $ready = Get-ReadyPodCount -LabelSelector 'app=metabase'
+        $ready = Get-ReadyPodCount -LabelSelector 'app.kubernetes.io/name=metabase'
         if ($ready -ge 1) {
             break
         }
@@ -799,14 +854,40 @@ function Invoke-MetabaseProvisioning {
         [string]$Namespace
     )
 
+    $manifestHash = Get-DashboardsManifestHash
+    $manifestUnchanged = Test-MetabaseManifestUnchanged
+    $forceProvision = if ($manifestUnchanged) { "auto" } else { "always" }
+    if ($manifestUnchanged) {
+        Write-Host "Dashboard manifest unchanged; using fast Metabase provisioning path."
+    }
+
     Write-Host "Provisioning Metabase dashboards and models from repo..."
     Invoke-Checked "Wait for Metabase API" {
         Wait-MetabaseApi -Namespace $Namespace
     }
+    $skipImport = if ($manifestUnchanged) { "true" } else { "false" }
     Invoke-Checked "Metabase dashboard provisioning" {
-        Invoke-MetabaseDashboardProvision -Namespace $Namespace
+        Invoke-MetabaseDashboardProvision -Namespace $Namespace -ForceProvision $forceProvision -SkipImportIfPresent:$manifestUnchanged
     }
-    Test-MetabaseIntegrationDashboard
+
+    $verifyCardQueries = -not $manifestUnchanged
+    try {
+        Test-MetabaseIntegrationDashboard -VerifyCardQueries:$verifyCardQueries
+    } catch {
+        if (-not $manifestUnchanged) {
+            throw
+        }
+        Write-Host "Fast path verification failed; re-running forced dashboard import..."
+        Invoke-Checked "Metabase dashboard reprovisioning" {
+            Invoke-MetabaseDashboardProvision -Namespace $Namespace -ForceProvision "always"
+        }
+        Test-MetabaseIntegrationDashboard -VerifyCardQueries:$true
+        $manifestUnchanged = $false
+    }
+
+    if (-not $manifestUnchanged) {
+        Set-MetabaseDeployState $manifestHash
+    }
 }
 
 function Ensure-MetabaseRunning {
@@ -838,13 +919,21 @@ function Invoke-MetabaseProvisioningOnly {
 }
 
 function Test-MetabaseIntegrationDashboard {
+    param(
+        [bool]$VerifyCardQueries = $true
+    )
+
     Write-Host "Verifying integration dashboard matches repo JSON..."
     Invoke-Checked "Verify Metabase integration dashboard" {
         python scripts/verify_metabase_integration.py
     }
-    Write-Host "Verifying all dashboard card queries..."
-    Invoke-Checked "Verify Metabase dashboard cards" {
-        python scripts/verify_metabase_cards.py
+    if ($VerifyCardQueries) {
+        Write-Host "Verifying all dashboard card queries..."
+        Invoke-Checked "Verify Metabase dashboard cards" {
+            python scripts/verify_metabase_cards.py
+        }
+    } else {
+        Write-Host "Skipping card query verification (dashboard manifest unchanged)."
     }
 }
 
@@ -864,9 +953,13 @@ function Install-Metabase {
     }
 
     Write-Host "Building Metabase image ${MetabaseImage} (manifest ${dashboardsHash})..."
-    Invoke-Checked "Build Metabase image" {
-        docker build --build-arg "DASHBOARDS_CACHE_BUST=$dashboardsHash" -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile . 2>&1 | ForEach-Object {
-            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    if (Test-DockerImageExists $MetabaseImage) {
+        Write-Host "Metabase image ${MetabaseImage} already exists, skipping build."
+    } else {
+        Invoke-Checked "Build Metabase image" {
+            docker build --build-arg "DASHBOARDS_CACHE_BUST=$dashboardsHash" -t $MetabaseImage -t egisz-metabase:latest -f metabase/Dockerfile . 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            }
         }
     }
 
@@ -875,11 +968,16 @@ function Install-Metabase {
         kubectl apply -n $Namespace -f k8s/metabase/metabase.yaml
     }
 
-    Write-Host "Pointing Metabase deployment to image ${MetabaseImage}..."
-    Invoke-Checked "Set Metabase deployment image" {
-        kubectl set image -n $Namespace deployment/metabase metabase=$MetabaseImage
-        Invoke-Kubectl -Arguments @('rollout', 'restart', '-n', $Namespace, 'deployment/metabase') | Out-Null
-        Invoke-Kubectl -Arguments @('rollout', 'status', '-n', $Namespace, 'deployment/metabase', '--timeout=300s') | Out-Null
+    $currentImage = Get-MetabaseDeploymentImage
+    if ($currentImage -eq $MetabaseImage) {
+        Write-Host "Metabase deployment already uses ${MetabaseImage}; skipping rollout restart."
+    } else {
+        Write-Host "Pointing Metabase deployment to image ${MetabaseImage}..."
+        Invoke-Checked "Set Metabase deployment image" {
+            kubectl set image -n $Namespace deployment/metabase metabase=$MetabaseImage
+            Invoke-Kubectl -Arguments @('rollout', 'restart', '-n', $Namespace, 'deployment/metabase') | Out-Null
+            Invoke-Kubectl -Arguments @('rollout', 'status', '-n', $Namespace, 'deployment/metabase', '--timeout=300s') | Out-Null
+        }
     }
 
     Write-Host "Restoring Metabase replicas after any previous scale-to-zero stop..."

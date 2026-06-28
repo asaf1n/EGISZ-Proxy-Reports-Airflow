@@ -8,10 +8,14 @@ DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
 MODELS_DIR="${METABASE_MODELS_DIR:-/app/metabase_models}"
 MODEL_REGISTRY_FILE="${METABASE_MODEL_REGISTRY_FILE:-/tmp/metabase-model-registry.json}"
 METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
+METABASE_SKIP_IMPORT_IF_PRESENT="${METABASE_SKIP_IMPORT_IF_PRESENT:-false}"
 METABASE_AUTO_APPLY_FILTERS="${METABASE_AUTO_APPLY_FILTERS:-true}"
 DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
+# Публичная страница без авторизации для клиентского дашборда (личный кабинет клиники).
+CLIENT_DASHBOARD_NAME="${METABASE_CLIENT_DASHBOARD_NAME:-Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ}"
+METABASE_PUBLIC_CLIENT_DASHBOARD="${METABASE_PUBLIC_CLIENT_DASHBOARD:-true}"
 
 APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
@@ -197,6 +201,20 @@ ensure_app_database_report_timezone() {
       jq '.details["report-timezone"] = "Europe/Moscow" | {details: .details, engine: .engine, name: .name}'
   )
   api_request PUT "/api/database/${APP_DB_ID}" "${payload}" >/dev/null
+}
+
+# Группировку по суткам на дашбордах задаёт ГЛОБАЛЬНая настройка report-timezone, а не
+# per-database деталь выше: при пустой глобальной настройке Metabase раскладывает дни в UTC,
+# и сутки МСК «уезжают» на день назад. Пинуем её на Europe/Moscow, чтобы дашборды считали
+# границу суток по Москве.
+ensure_global_report_timezone() {
+  local current_tz
+  current_tz=$(api_request GET "/api/setting/report-timezone" | jq -r '. // ""')
+  if [ "${current_tz}" = "Europe/Moscow" ]; then
+    return
+  fi
+  log_info "Setting global Metabase report-timezone=Europe/Moscow"
+  api_request PUT "/api/setting/report-timezone" '{"value":"Europe/Moscow"}' >/dev/null
 }
 
 ensure_collection() {
@@ -753,6 +771,150 @@ prepare_dashboard_tabs() {
   ' "${file}"
 }
 
+model_click_behavior_json() {
+  local card_file="$1"
+  local dashboard_id="$2"
+  local saved_parameters="$3"
+  local tab_map_file="$4"
+  jq -c \
+    --arg dashId "${dashboard_id}" \
+    --argjson dashParams "${saved_parameters}" \
+    --slurpfile tabMap "${tab_map_file}" \
+    --slurpfile models_file "${MODEL_REGISTRY_FILE}" '
+    def resolve_param_id($slug):
+      ($dashParams[] | select(.slug == $slug) | .id) // empty;
+
+    def model_field_id($model_ref; $field_name):
+      ($models_file[0][$model_ref].fields[$field_name]) // empty;
+
+    def model_dimension($model_ref; $field_name):
+      (model_field_id($model_ref; $field_name)) as $fid
+      | ["dimension", ["field", $fid, {"stage-number": 0}]];
+
+    def model_dimension_key($model_ref; $field_name):
+      model_dimension($model_ref; $field_name) | tojson;
+
+    def dashboard_param_slug($base):
+      if $base == "dwh_date" then "dwh_date_filter" else $base + "_filter" end;
+
+    (."metabase-model-drill-params" // {}) as $drillParams
+    | (.click_behavior // null) as $raw
+    | if $raw == null or ($raw | type) != "object" or ($raw.type // "") != "link" then
+        empty
+      elif ($raw.linkType // "") == "question" and ($raw.targetModel // "") != "" then
+        (
+          $raw
+          | del(.targetModel, .targetQuestion, .targetDashboard, .tab)
+          | .targetId = ($models_file[0][$raw.targetModel].model_id | tonumber)
+          | ($raw.targetModel) as $mref
+          | .parameterMapping = (
+              reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
+                ($entry.value.target.model_ref // $mref) as $emref
+                | ($entry.value.target.field_name // $entry.key) as $fname
+                | (model_field_id($emref; $fname) // null) as $fid
+                # reduce-safe: пустой select() обнулял бы весь аккумулятор; ветвим через if.
+                | if ($fid == null or $fid == "") then .
+                  else
+                    (["dimension", ["field", $fid, {"stage-number": 0}]]) as $dim
+                    | ($dim | tojson) as $dimKey
+                    | .[$dimKey] = (
+                        $entry.value
+                        | .target = (
+                            {"type": "dimension", "id": $dimKey, "dimension": $dim}
+                            + (if ($entry.value.target.operator // "") != ""
+                               then {"operator": $entry.value.target.operator}
+                               else {} end)
+                          )
+                        | .source = (.source + {id: (.source.name // "")})
+                      )
+                  end
+              )
+              | reduce ($drillParams | to_entries[]) as $entry (.;
+                (resolve_param_id(dashboard_param_slug($entry.key))) as $pid
+                | (model_field_id($mref; $entry.value) // null) as $dfid
+                # Пропускаем параметр без id ИЛИ если измерение уже задано колонкой —
+                # через if, а не select(): select() в reduce обнулял parameterMapping.
+                | if ($pid == null or $pid == "" or $dfid == null) then .
+                  else
+                    (["dimension", ["field", $dfid, {"stage-number": 0}]]) as $dim
+                    | ($dim | tojson) as $dimKey
+                    | if (.[$dimKey] != null) then .
+                      else
+                        .[$dimKey] = {
+                          "source": {
+                            "type": "parameter",
+                            "id": $pid,
+                            "name": (($dashParams[] | select(.id == $pid) | .name) // $entry.key)
+                          },
+                          "target": {"type": "dimension", "id": $dimKey, "dimension": $dim}
+                        }
+                      end
+                  end
+              )
+            )
+        )
+      else
+        empty
+      end
+    ' "${card_file}"
+}
+
+finalize_dashboard_model_drills() {
+  local dashboard_id="$1"
+  local file="$2"
+  local dashboard_slug="$3"
+  local tab_map_file="$4"
+  local saved_parameters="$5"
+  local ordered_tabs_json="$6"
+  local num_cards i card_file card_name card_id click_payload cards_payload
+
+  cards_payload="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '
+    (.dashcards // []) | map({
+      id,
+      card_id,
+      card_name: (.card.name // ""),
+      dashboard_tab_id,
+      action_id,
+      size_x,
+      size_y,
+      row,
+      col,
+      parameter_mappings: (.parameter_mappings // []),
+      series: (.series // []),
+      visualization_settings: (.visualization_settings // {})
+    })
+  ')"
+  num_cards="$(jq '.cards | length' "${file}")"
+  for i in $(seq 0 $((num_cards - 1))); do
+    card_file="/tmp/metabase-dashcard-${dashboard_slug}-${i}.json"
+    jq -e -c ".cards[${i}]" "${file}" > "${card_file}" || continue
+    if [ "$(jq -r '.click_behavior.linkType // empty' "${card_file}")" != "question" ]; then
+      continue
+    fi
+    card_name="$(jq -r '.name' "${card_file}")"
+    click_payload="$(model_click_behavior_json "${card_file}" "${dashboard_id}" "${saved_parameters}" "${tab_map_file}")"
+    if [ -z "${click_payload}" ]; then
+      log_info "skip finalize model drill for ${card_name}: empty click payload"
+      continue
+    fi
+    log_info "finalize model drill for ${card_name}"
+    cards_payload="$(jq -c \
+      --arg cname "${card_name}" \
+      --argjson click "${click_payload}" \
+      'map(
+        if .card_name == $cname then
+          .visualization_settings = ((.visualization_settings // {}) + {click_behavior: $click})
+        else
+          .
+        end
+      )' <<< "${cards_payload}")"
+  done
+
+  api_request PUT "/api/dashboard/${dashboard_id}/cards" \
+    "$(jq -n --argjson cards "$(jq -c 'map(del(.card_name))' <<< "${cards_payload}")" --argjson tabs "${ordered_tabs_json}" '{tabs: $tabs, cards: $cards}')" \
+    >/dev/null
+}
+
 create_or_update_dashboard() {
   local file="$1"
   local payload dashboard_id saved_parameters cards num_cards i
@@ -794,6 +956,7 @@ create_or_update_dashboard() {
   fi
 
   saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
+  existing_dashcards="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.dashcards // []')"
   cards="[]"
   num_cards="$(jq '.cards | length' "${file}")"
   if [ "${num_cards}" -gt 0 ]; then
@@ -841,52 +1004,10 @@ create_or_update_dashboard() {
             | if $raw == null or ($raw | type) != "object" or ($raw.type // "") != "link" then
                 {}
               elif ($raw.linkType // "") == "question" and ($raw.targetModel // "") != "" then
-                {
-                  click_behavior: (
-                    $raw
-                    | del(.targetModel, .targetQuestion, .targetDashboard, .tab)
-                    | .targetId = ($models_file[0][$raw.targetModel].model_id | tonumber)
-                    | ($raw.targetModel) as $mref
-                    | .parameterMapping = (
-                        reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
-                          ($entry.value.target.model_ref // $mref) as $mref
-                          | ($entry.value.target.field_name // $entry.key) as $fname
-                          | (model_field_id($mref; $fname)) as $fid
-                          | select($fid != null and $fid != "")
-                          | (model_dimension_key($mref; $fname)) as $dimKey
-                          | (model_dimension($mref; $fname)) as $dim
-                          | .[$dimKey] = (
-                              $entry.value
-                              | .target = {
-                                  "type": "dimension",
-                                  "id": $dimKey,
-                                  "dimension": $dim
-                                }
-                              | .source = (.source + {id: (.source.name // "")})
-                            )
-                        )
-                        | reduce ($drillParams | to_entries[]) as $entry (.;
-                          (resolve_param_id(dashboard_param_slug($entry.key))) as $pid
-                          | select($pid != null and $pid != "")
-                          | (model_dimension_key($mref; $entry.value)) as $dimKey
-                          | select(.[$dimKey] == null)
-                          | (model_dimension($mref; $entry.value)) as $dim
-                          | .[$dimKey] = {
-                              "source": {
-                                "type": "parameter",
-                                "id": $pid,
-                                "name": (($dashParams[] | select(.id == $pid) | .name) // $entry.key)
-                              },
-                              "target": {
-                                "type": "dimension",
-                                "id": $dimKey,
-                                "dimension": $dim
-                              }
-                            }
-                        )
-                      )
-                  )
-                }
+                # Дрилл в модель собирается ОДНИМ местом — finalize_dashboard_model_drills
+                # (через model_click_behavior_json), поверх уже выставленных настроек
+                # dashcard. Здесь не дублируем сборку click_behavior.
+                {}
               else
                 {
                   click_behavior: (
@@ -966,6 +1087,11 @@ create_or_update_dashboard() {
                     }
                 ]
               )
+            | group_by(.parameter_id)
+            | map(
+                (map(select(.target[1][0] == "field")) | if length > 0 then .[0] else empty end)
+                // .[0]
+              )
           ' "${file}"
         )"
       fi
@@ -983,6 +1109,23 @@ create_or_update_dashboard() {
       fi
 
       dashcard_id=$((-(i + 1)))
+      if [ "${card_id_json}" != "null" ]; then
+        existing_id="$(jq -r --argjson cid "${card_id_json}" '[.[] | select(.card_id == $cid) | .id][0] // empty' <<< "${existing_dashcards}")"
+        if [ -n "${existing_id}" ]; then
+          dashcard_id="${existing_id}"
+        fi
+      else
+        existing_id="$(jq -r \
+          --argjson row "${row}" \
+          --argjson col "${col}" \
+          --argjson tabId "${dashboard_tab_id_json}" \
+          '[.[] | select(.card_id == null and .row == $row and .col == $col and (.dashboard_tab_id // null) == ($tabId | if . == "null" then null else . end)) | .id][0] // empty' \
+          <<< "${existing_dashcards}")"
+        if [ -n "${existing_id}" ]; then
+          dashcard_id="${existing_id}"
+        fi
+      fi
+
       dashcard="$(
         jq -n \
           --argjson dashcardId "${dashcard_id}" \
@@ -1017,6 +1160,13 @@ create_or_update_dashboard() {
     fi
 
     api_request PUT "/api/dashboard/${dashboard_id}/cards" "$(jq -n --argjson cards "${cards}" --argjson tabs "${ordered_tabs_json}" '{tabs: $tabs, cards: $cards}')" >/dev/null
+    finalize_dashboard_model_drills \
+      "${dashboard_id}" \
+      "${file}" \
+      "${dashboard_slug}" \
+      "${tab_map_file}" \
+      "${saved_parameters}" \
+      "${ordered_tabs_json}"
     rm -f "${tab_map_file}" >/dev/null 2>&1 || true
   fi
 
@@ -1092,6 +1242,29 @@ maybe_skip_dashboard_import() {
   esac
 }
 
+# Публичная страница без авторизации для клиентского дашборда. Идемпотентно: включаем
+# глобальный public-sharing и переиспользуем существующий public_uuid (живёт в app-БД
+# Metabase). На публичной ссылке фильтр «JID Клиники» открыт и переопределяется через URL.
+ensure_public_client_dashboard() {
+  [ "${METABASE_PUBLIC_CLIENT_DASHBOARD}" = "true" ] || return 0
+  local dashboard_id public_uuid
+  api_request PUT "/api/setting/enable-public-sharing" '{"value":true}' >/dev/null || true
+  dashboard_id="$(existing_dashboard_id "${CLIENT_DASHBOARD_NAME}")"
+  if [ -z "${dashboard_id}" ]; then
+    log_info "Public sharing: client dashboard not provisioned yet; deferring public link."
+    return 0
+  fi
+  public_uuid="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -r '.public_uuid // empty')"
+  if [ -z "${public_uuid}" ]; then
+    public_uuid="$(api_request POST "/api/dashboard/${dashboard_id}/public_link" '{}' | jq -r '.uuid // empty')"
+  fi
+  if [ -n "${public_uuid}" ]; then
+    log_info "Public client dashboard: ${METABASE_URL}/public/dashboard/${public_uuid}"
+  else
+    log_info "Public sharing: could not obtain public link for dashboard ${dashboard_id}."
+  fi
+}
+
 log_info "Waiting for Metabase at ${METABASE_URL}"
 until curl -sS --fail "${METABASE_URL}/api/health" >/dev/null; do
   sleep 5
@@ -1100,10 +1273,24 @@ done
 login
 resolve_or_create_app_database_id
 ensure_app_database_report_timezone
-DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
+ensure_global_report_timezone
+ensure_collection
+# До любого fast-path/skip: если дашборд уже есть — обеспечиваем и логируем публичную ссылку.
+ensure_public_client_dashboard
+if [ "${METABASE_FORCE_PROVISION}" = "auto" ] \
+  && [ "${METABASE_SKIP_IMPORT_IF_PRESENT}" = "true" ] \
+  && dashboards_present_with_cards; then
+  log_info "Fast path: dashboards already deployed for current manifest."
+  log_info "Setup complete: collection '${COLLECTION_NAME}' is up to date."
+  exit 0
+fi
+if [ "${METABASE_FORCE_PROVISION}" = "auto" ] && dashboards_present_with_cards && dashboard_manifest_unchanged; then
+  log_info "Dashboard manifest is unchanged and dashboards are complete; skipping import."
+  log_info "Setup complete: collection '${COLLECTION_NAME}' is up to date."
+  exit 0
+fi
 validate_dwh_contract
 sync_metabase_schema
-ensure_collection
 if declare -F sync_all_models >/dev/null; then
   sync_all_models
 else
@@ -1114,6 +1301,9 @@ maybe_skip_dashboard_import
 
 log_info "Importing dashboards to collection '${COLLECTION_NAME}' from ${DASHBOARDS_DIR}"
 api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+if declare -F build_model_registry >/dev/null; then
+  build_model_registry
+fi
 archive_stale_collection_cards
 sync_all_cards
 for file in "${DASHBOARDS_DIR}"/*.json; do
@@ -1129,4 +1319,6 @@ archive_stale_collection_dashboards
 verify_collection_contents
 verify_dashboard_cards
 write_dashboard_manifest
+# Первый импорт: дашборд только что создан — публикуем публичную ссылку.
+ensure_public_client_dashboard
 log_info "Setup complete: collection '${COLLECTION_NAME}' contains $(ls "${DASHBOARDS_DIR}"/*.json | wc -l | tr -d ' ') dashboard(s)."

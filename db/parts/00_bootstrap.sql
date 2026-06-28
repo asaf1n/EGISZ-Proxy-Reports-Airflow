@@ -27,6 +27,12 @@ BEGIN
 END;
 $$;
 
+-- Все компоненты работают в МСК. Extract пишет наивное Firebird-время (EXCHANGELOG.CREATEDATE,
+-- лицензии) как timestamptz: без фиксированного пояса сессии Postgres пометил бы его дефолтом
+-- сервера (не МСК) и сдвинул бы момент. Пин роли на Europe/Moscow гарантирует, что и ingest,
+-- и чтение раскладывают сутки по московской границе.
+ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
+
 GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
 GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 

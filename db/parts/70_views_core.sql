@@ -119,7 +119,23 @@ BEGIN
         doctor_name = EXCLUDED.doctor_name,
         patient_hash = EXCLUDED.patient_hash,
         doctor_hash = EXCLUDED.doctor_hash,
-        updated_at = now();
+        updated_at = now()
+    -- Change-guard: переписываем строку (и двигаем updated_at) только при реальном
+    -- расхождении. Без него полный reconcile (в т.ч. на каждом dwh_init) переписывал
+    -- весь архив и менял updated_at — повторный прогон не был no-op (CLAUDE.md §3).
+    WHERE
+        public.document_attributes.clinic_oid_xml IS DISTINCT FROM EXCLUDED.clinic_oid_xml
+     OR public.document_attributes.clinic_oid_jpersons IS DISTINCT FROM EXCLUDED.clinic_oid_jpersons
+     OR public.document_attributes.clinic_oid_license IS DISTINCT FROM EXCLUDED.clinic_oid_license
+     OR public.document_attributes.clinic_host IS DISTINCT FROM EXCLUDED.clinic_host
+     OR public.document_attributes.clinic_jid_resolve_method IS DISTINCT FROM EXCLUDED.clinic_jid_resolve_method
+     OR public.document_attributes.message_endpoint IS DISTINCT FROM EXCLUDED.message_endpoint
+     OR public.document_attributes.clinic_jid_mismatch IS DISTINCT FROM EXCLUDED.clinic_jid_mismatch
+     OR public.document_attributes.patient_name_masked IS DISTINCT FROM EXCLUDED.patient_name_masked
+     OR public.document_attributes.snils_masked IS DISTINCT FROM EXCLUDED.snils_masked
+     OR public.document_attributes.doctor_name IS DISTINCT FROM EXCLUDED.doctor_name
+     OR public.document_attributes.patient_hash IS DISTINCT FROM EXCLUDED.patient_hash
+     OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash;
 
     GET DIAGNOSTICS refreshed = ROW_COUNT;
     RETURN refreshed;

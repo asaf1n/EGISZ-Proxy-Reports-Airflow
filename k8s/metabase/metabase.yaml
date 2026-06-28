@@ -110,9 +110,9 @@ spec:
             - name: METABASE_SITE_NAME
               value: "Интеграция с ЕГИСЗ"
             - name: METABASE_AUTO_PROVISION
-              value: "true"
+              value: "false"
             - name: METABASE_FORCE_PROVISION
-              value: "always"
+              value: "auto"
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:MaxRAMPercentage=75 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Djava.net.preferIPv4Stack=true"
             - name: MB_DB_TYPE

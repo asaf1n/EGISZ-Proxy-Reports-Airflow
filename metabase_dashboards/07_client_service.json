@@ -1,7 +1,7 @@
 {
   "name": "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ",
   "width": "full",
-  "description": "Дашборд для клиники по умолчанию: общие объёмы, типы документооборота, статусы регистрации в РЭМД. JID резолвится через справочник лицензий (mo_uid / gost-endpoint). Фильтр **JID Клиники** обязателен — в будущем JID будет приходить из auth-токена и фильтр станет невидимым. Источник — `rpt_documents` (PII маскируется на уровне DWH).",
+  "description": "Личный кабинет клиники: общие объёмы и статусы регистрации СЭМД в РЭМД (вкладка «Обзор»), разбор ошибок регистрации ЭМД по категориям и типам (вкладка «Ошибки регистрации ЭМД») и детализация по документам (вкладка «Документы»). JID резолвится через справочник лицензий. Фильтр **JID Клиники** обязателен — в будущем JID придёт из auth-токена и фильтр станет невидимым. Источник — `rpt_documents` и `rpt_error_breakdown` (PII маскируется на уровне DWH). Доступна публичная страница без авторизации.",
   "parameters": [
     {
       "id": "07c00000-0000-4000-8000-000000000001",
@@ -25,12 +25,37 @@
       "type": "string/=",
       "sectionId": "string",
       "default": "65489"
+    },
+    {
+      "id": "07c00000-0000-4000-8000-000000000004",
+      "name": "Категория ошибки",
+      "slug": "client_error_category_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
+  "tabs": [
+    {
+      "id": "overview",
+      "name": "Обзор",
+      "position": 0
+    },
+    {
+      "id": "errors",
+      "name": "Ошибки регистрации ЭМД",
+      "position": 1
+    },
+    {
+      "id": "documents",
+      "name": "Документы",
+      "position": 2
     }
   ],
   "cards": [
     {
       "display": "text",
-      "text": "## Мониторинг интеграции с ЕГИСЗ\nОбщие объёмы и статусы регистрации СЭМД по вашей клинике. Личные данные пациентов маскированы.",
+      "tab": "overview",
+      "text": "## Мониторинг интеграции с ЕГИСЗ\nОбщие объёмы и статусы регистрации СЭМД по вашей клинике. Личные данные пациентов маскированы. Разбор причин отказов — на вкладке «Ошибки регистрации ЭМД», список документов — на вкладке «Документы».",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
@@ -39,6 +64,7 @@
     {
       "name": "Документов за период — клиент",
       "description": "Распознанные документы клиента с callback-статусом.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -98,6 +124,7 @@
     {
       "name": "Успешно зарегистрирован",
       "description": "Документы с финальным статусом «Успешно зарегистрирован» + конверсия от финальных ответов.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -151,6 +178,7 @@
     {
       "name": "Ошибка асинхронного ответа РЭМД",
       "description": "Документы с ошибкой регистрации в РЭМД.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -204,6 +232,7 @@
     {
       "name": "Ошибка связи",
       "description": "Документы с транспортной ошибкой связи.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -257,6 +286,7 @@
     {
       "name": "Динамика статусов по дням",
       "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке по дням (текущий статус документа).",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -340,6 +370,7 @@
     {
       "name": "Топ типов СЭМД — клиент",
       "description": "Pie по типам документов: на что приходится основная доля отправок.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -390,10 +421,6 @@
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
             "number_separators": ", "
-          },
-          "[\"name\",\"Тип документа\"]": {
-            "decimals": 0,
-            "number_separators": ", "
           }
         }
       },
@@ -413,61 +440,9 @@
       }
     },
     {
-      "name": "Среднее время регистрации СЭМД",
-      "description": "От создания СЭМД в МИС до получения ответа РЭМД. Конвертируется в минуты/часы для читаемости.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH base AS (SELECT AVG(delivery_seconds)::numeric AS avg_sec FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]]) SELECT CASE WHEN avg_sec IS NULL THEN 'нет данных' WHEN avg_sec < 60 THEN ROUND(avg_sec, 0)::text || ' сек' WHEN avg_sec < 3600 THEN ROUND(avg_sec / 60.0, 1)::text || ' мин' WHEN avg_sec < 86400 THEN ROUND(avg_sec / 3600.0, 1)::text || ' ч' ELSE ROUND(avg_sec / 86400.0, 1)::text || ' сут' END AS \"Среднее время доставки\" FROM base",
-          "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c70000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
-            },
-            "client_document_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип документа",
-              "id": "07c70000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
-            },
-            "client_period": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07c70000-0000-4000-8000-000000000001",
-              "name": "client_period",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.field": "Среднее время доставки"
-      },
-      "sizeX": 8,
-      "sizeY": 4,
-      "row": 11,
-      "col": 0,
-      "metabase-field-filters": {
-        "client_period": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
       "name": "Топ-10 типов СЭМД по документам",
       "description": "По объёму отправок: количество и доля успешных регистраций на каждый тип.",
+      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -513,10 +488,548 @@
           }
         }
       },
-      "sizeX": 16,
-      "sizeY": 4,
+      "sizeX": 24,
+      "sizeY": 5,
       "row": 11,
-      "col": 8,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        }
+      }
+    },
+    {
+      "display": "text",
+      "tab": "errors",
+      "text": "## Ошибки регистрации ЭМД\nПричины отказов РЭМД и связи по вашей клинике: объёмы по категориям и типам ошибок и динамика. Один документ может содержать несколько ошибок. Фильтр «Категория ошибки» сужает разбор до выбранной группы.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "Объёмы ошибок по категориям — клиент",
+      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию).",
+      "tab": "errors",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e10000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07e10000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e10000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_error_category": {
+              "widget-type": "string/=",
+              "display-name": "Категория ошибки",
+              "id": "07e10000-0000-4000-8000-000000000004",
+              "name": "client_error_category",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Категория ошибки"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.show_values": true,
+        "graph.label_value_formatting": "compact",
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.title_text": "",
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 1,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        },
+        "client_error_category": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_category"
+        }
+      }
+    },
+    {
+      "name": "Структура ошибок по категориям — клиент",
+      "description": "Доля категорий ошибок в общем объёме ошибочных документов клиники.",
+      "tab": "errors",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e20000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07e20000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e20000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_error_category": {
+              "widget-type": "string/=",
+              "display-name": "Категория ошибки",
+              "id": "07e20000-0000-4000-8000-000000000004",
+              "name": "client_error_category",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "pie",
+      "visualization_settings": {
+        "pie.decimal_places": 1,
+        "pie.dimension": [
+          "Категория ошибки"
+        ],
+        "pie.metric": "Документов",
+        "pie.percent_visibility": "inside",
+        "pie.show_legend": true,
+        "pie.show_total": true,
+        "pie.slice_threshold": 0,
+        "column_settings": {
+          "[\"name\",\"_percentage\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 1,
+      "col": 12,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        },
+        "client_error_category": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_category"
+        }
+      }
+    },
+    {
+      "name": "Топ типов ошибок — клиент",
+      "description": "Конкретные типы ошибок: количество документов и доля от всех ошибочных документов клиники.",
+      "tab": "errors",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH filtered AS ( SELECT dwh_id, error_category, error_type FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ) SELECT error_category AS \"Категория ошибки\", error_type AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM filtered GROUP BY error_category, error_type ORDER BY 3 DESC LIMIT 20",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e30000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07e30000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e30000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_error_category": {
+              "widget-type": "string/=",
+              "display-name": "Категория ошибки",
+              "id": "07e30000-0000-4000-8000-000000000004",
+              "name": "client_error_category",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.column_formatting": [
+          {
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "hsla(46, 81%, 52%, 1)",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "columns": [
+              "%"
+            ],
+            "max_type": "custom",
+            "max_value": 50,
+            "min_type": null,
+            "min_value": 0,
+            "type": "range"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"%\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 7,
+      "row": 8,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        },
+        "client_error_category": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_category"
+        }
+      }
+    },
+    {
+      "name": "Динамика ошибок по дням — клиент",
+      "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок.",
+      "tab": "errors",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT processed_day AS \"Дата\", error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY processed_day, error_category ORDER BY processed_day",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e40000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07e40000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e40000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_error_category": {
+              "widget-type": "string/=",
+              "display-name": "Категория ошибки",
+              "id": "07e40000-0000-4000-8000-000000000004",
+              "name": "client_error_category",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "bar",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Дата",
+          "Категория ошибки"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Документов",
+        "stackable.stack_type": "stacked",
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 15,
+      "col": 0,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        },
+        "client_error_category": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_category"
+        }
+      }
+    },
+    {
+      "name": "Топ СЭМД по ошибкам — клиент",
+      "description": "Типы СЭМД, дающие больше всего ошибочных документов.",
+      "tab": "errors",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e50000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07e50000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e50000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            },
+            "client_error_category": {
+              "widget-type": "string/=",
+              "display-name": "Категория ошибки",
+              "id": "07e50000-0000-4000-8000-000000000004",
+              "name": "client_error_category",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "СЭМД"
+        ],
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.show_values": true,
+        "graph.label_value_formatting": "compact",
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.title_text": "",
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 15,
+      "col": 12,
+      "metabase-field-filters": {
+        "client_period": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "processed_at"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        },
+        "client_error_category": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_category"
+        }
+      }
+    },
+    {
+      "display": "text",
+      "tab": "documents",
+      "text": "## Документы\nПоследние документы вашей клиники с текущим статусом и сводкой ошибок регистрации. Личные данные пациентов и медработников маскированы на уровне DWH. До 500 строк по дате обработки.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "Журнал документов — клиент",
+      "description": "Документы клиники: дата обработки, текущий статус, тип СЭМД, идентификаторы и сводка ошибок регистрации.",
+      "tab": "documents",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT processed_at AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY processed_at DESC LIMIT 500",
+          "template-tags": {
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07d10000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": true,
+              "widget-type": "string/="
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07d10000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_period": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07d10000-0000-4000-8000-000000000001",
+              "name": "client_period",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.column_widths": [
+          160,
+          220,
+          280,
+          200,
+          150,
+          360
+        ],
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Дата обработки"
+          },
+          {
+            "enabled": true,
+            "name": "Статус"
+          },
+          {
+            "enabled": true,
+            "name": "СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "localUid"
+          },
+          {
+            "enabled": true,
+            "name": "Рег. Номер РЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Ошибки регистрации"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Дата обработки\"]": {
+            "date_style": "D MMMM, YYYY",
+            "time_style": "HH:mm"
+          },
+          "[\"name\",\"Статус\"]": {
+            "column_title": "Статус"
+          },
+          "[\"name\",\"Ошибки регистрации\"]": {
+            "column_title": "Ошибки регистрации",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД",
+            "text_style": "wrap"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 12,
+      "row": 1,
+      "col": 0,
       "metabase-field-filters": {
         "client_period": {
           "table_ref": "public.rpt_documents",

@@ -44,10 +44,17 @@ dwh_column_exists() {
     -AtX \
     -v ON_ERROR_STOP=1 \
     -c "SELECT CASE WHEN EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = '${view_name}'
-            AND column_name = '${column_name}'
+          -- pg_attribute (а не information_schema.columns) — чтобы видеть колонки
+          -- MATERIALIZED VIEW (rpt_error_breakdown), которых нет в information_schema.
+          SELECT 1
+          FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public'
+            AND c.relname = '${view_name}'
+            AND a.attname = '${column_name}'
+            AND a.attnum > 0
+            AND NOT a.attisdropped
         ) THEN 'ok' ELSE 'missing' END;"
 }
 

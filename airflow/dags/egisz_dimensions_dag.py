@@ -13,6 +13,7 @@ from egisz_elt.common import (
     connect_fb,
     connect_pg,
     reconcile_document_attributes_ui,
+    refresh_error_breakdown,
     run_analyze,
 )
 from egisz_elt.dimensions import fetch_licenses, fetch_organizations, sync_directories
@@ -66,6 +67,8 @@ def egisz_dimensions_pipeline() -> None:
                 refreshed = reconcile_document_attributes_ui(pg_conn)
                 if refreshed > 0:
                     run_analyze(pg_conn, "ANALYZE public.document_attributes")
+                    # Имена клиник в matview разбивки ошибок могли измениться.
+                    refresh_error_breakdown(pg_conn)
                     log.info("Enriched mart reconcile refreshed %s row(s).", refreshed)
                 else:
                     log.info("Enriched mart reconcile: no drift detected.")

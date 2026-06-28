@@ -3,14 +3,14 @@
   "table_ref": "public.rpt_error_breakdown",
   "description": "Grain: 1 строка = 1 атомарный вид ошибки на документ.",
   "fields": {
-    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Обработано IPS" },
+    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
     "processed_day": { "semantic_type": "type/CreationDate", "display_name": "День" },
     "dwh_id": { "semantic_type": "type/FK" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
-    "clinic_name": { "semantic_type": "type/Title", "display_name": "Наименование клиники" },
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
     "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
-    "semd_code_name": { "semantic_type": "type/Title", "display_name": "СЭМД Код Наименование" },
+    "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
     "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
     "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" }
   },

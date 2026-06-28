@@ -4,10 +4,10 @@
   "description": "Сетевые сбои (status=network_error), grain: документ.",
   "fields": {
     "dwh_id": { "semantic_type": "type/PK" },
-    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата создания документа" },
+    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
-    "clinic_name": { "semantic_type": "type/Name", "display_name": "Клиника (транспорт)" },
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
     "network_error_type": { "semantic_type": "type/Category", "display_name": "Тип сетевой ошибки" },
     "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
     "semd_emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" }

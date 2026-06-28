@@ -141,21 +141,34 @@ def test_error_classify_uses_atomic_item_atoms() -> None:
     assert "error_interpretation_type" not in classify
 
 
-def test_rpt_error_breakdown_splits_composite_error_type() -> None:
+def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
-    breakdown = sql.split("CREATE OR REPLACE VIEW public.rpt_error_breakdown")[1].split("COMMENT ON VIEW public.rpt_error_breakdown")[0]
-    assert "' [·-] '" in breakdown
-    assert "regexp_split_to_table" in breakdown
+    # Матвью: горячая витрина «Анализ ошибок» предрассчитана и индексирована.
+    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
+    breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split("COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
+    assert "string_to_array" in breakdown
+    assert "' · '" in breakdown
+    # Канонизация set-based: нормализация + LEFT JOIN к словарю (без построчных подзапросов).
+    assert "error_atom_normalize" in breakdown
+    assert "dim_error_type_group" in breakdown
     assert "public.documents doc" in breakdown
-    assert "btrim(doc.error_type)" in breakdown
+    assert "btrim(doc.error_types)" in breakdown
+    # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
+    assert "uq_rpt_error_breakdown" in sql
+    # Дроп обоих видов объекта + REFRESH после transform.
+    drops = (DWH_INIT_SQL_PATH.parent / "parts" / "60_drop_dependents.sql").read_text(encoding="utf-8")
+    assert "DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE" in drops
 
 
-def test_rpt_documents_error_type_shows_first_atom_only() -> None:
+def test_rpt_documents_exposes_canonical_error_types_list_only() -> None:
+    """rpt_documents отдаёт только полный канонизированный список error_types
+    (первый-атомный error_type удалён — отбор по типу идёт через rpt_error_breakdown)."""
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
     rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_documents")[1].split("COMMENT ON VIEW public.rpt_documents")[0]
-    assert "split_part(" in rpt
-    assert "' · '" in rpt
-    assert "AS error_type" in rpt
+    assert "canonical_error_list(d.error_types)" in rpt
+    assert "AS error_types" in rpt
+    assert "AS error_type," not in rpt
+    assert "split_part(" not in rpt
 
 
 def test_document_attributes_maintained_without_enriched_mart() -> None:
@@ -201,7 +214,7 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "status_sort",
         "semd_code",
         "semd_name",
-        "semd_code_name",
+        "semd_label",
         "clinic_jid",
         "clinic_name",
         "clinic_oid",
@@ -212,7 +225,7 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "processed_day",
         "arrival_day",
         "semd_emdr_id",
-        "error_type",
+        "error_types",
         "error_summary",
         "error_text",
     ):
@@ -258,7 +271,11 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "tx.xml_dwh_id AS dwh_id_xml" in transform_sql
     assert "COALESCE(r.local_uid_xml, exch_ref.local_uid, gdf_ref.local_uid) AS local_uid_semd" in transform_sql
     assert "public.clean_text_value(d.local_uid)" in sql
-    assert "status_category = CASE" in sql
+    # status_category удалён как выводимый из status; transform им больше не управляет,
+    # а развёрнутые БД чистятся идемпотентным DROP COLUMN.
+    assert "status_category = CASE" not in sql
+    assert "status_category," not in sql
+    assert "DROP COLUMN IF EXISTS status_category" in sql
     assert "document_attributes AS" in transform_sql
     assert "document_resolved AS" in transform_sql
     assert "resolve_document_jid" in transform_sql
@@ -312,7 +329,7 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "CREATE OR REPLACE FUNCTION public.network_error_type" in sql
     assert "dim_error_rules" in sql
     assert "CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui" not in sql
-    assert "CREATE OR REPLACE VIEW public.rpt_error_breakdown" in sql
+    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "error_messages_row" in sql
     assert "FROM public.documents d" in sql

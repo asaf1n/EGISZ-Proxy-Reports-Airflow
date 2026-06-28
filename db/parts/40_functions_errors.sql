@@ -232,29 +232,16 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.error_interpretation_type(error_code text, error_message text)
-RETURNS text
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    label text;
-BEGIN
-    -- egisz_error_interpretation_item возвращает уже канонические лейблы
-    -- (правило из dim_error_rules ИЛИ название из
-    -- schematron-chunk). Нормализация ФИО/UUID/<...> здесь не нужна и
-    -- даже вредна: «case-insensitive» регэксп 3-слов случайно матчит
-    -- «Не указан адрес» и калечит лейбл в «<ФИО> пациента». Поэтому
-    -- просто обрезаем длину и возвращаем как есть.
-    label := btrim(COALESCE(public.error_interpretation_item(error_code, error_message), ''));
-    IF label = '' THEN
-        RETURN 'Неизвестная ошибка';
-    END IF;
-    RETURN left(label, 220);
-END;
-$$;
+-- error_interpretation_type() удалён как неиспользуемый: канонический тип даёт
+-- error_item_atoms (для error_type), а человекочитаемую сводку — error_interpretation_item.
+DROP FUNCTION IF EXISTS public.error_interpretation_type(text, text);
 
 -- Атомарные канонические типы для одного <item> (без склейки в псевдо-тип).
+-- ВСЕ возвращаемые значения каноничны (есть в dim_error_type_group): правило из
+-- dim_error_rules, code-фолбэк, единый «Ошибка Schematron-валидации» либо
+-- «Неизвестная ошибка». Детальная человекочитаемая расшифровка schematron-чанков
+-- живёт отдельно в error_interpretation_item (поле error_summary), а не в
+-- каноническом error_type — иначе rid-детали раздували бы таксономию.
 CREATE OR REPLACE FUNCTION public.error_item_atoms(p_code text, p_message text)
 RETURNS text[]
 LANGUAGE plpgsql
@@ -264,12 +251,6 @@ DECLARE
     c text;
     m text;
     rule_labels text[];
-    parts text[];
-    chunk text;
-    interpreted text;
-    out_parts text[] := ARRAY[]::text[];
-    deduped text[] := ARRAY[]::text[];
-    p text;
 BEGIN
     c := upper(btrim(COALESCE(p_code, '')));
     m := btrim(COALESCE(p_message, ''));
@@ -297,51 +278,18 @@ BEGIN
         RETURN ARRAY['Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже'];
     END IF;
 
-    IF m !~* 'schematron' AND m !~* 'схематрон' THEN
-        RETURN ARRAY['Неизвестная ошибка'];
+    -- Schematron без конкретного правила в dim_error_rules → единый канонический тип.
+    IF m ~* 'schematron' OR m ~* 'схематрон' THEN
+        RETURN ARRAY['Ошибка Schematron-валидации'];
     END IF;
 
-    parts := string_to_array(
-        regexp_replace(
-            m,
-            'Ошибка валидации (Schematron|схематрона)\s*:\s*',
-            E'\x1E',
-            'gi'
-        ),
-        E'\x1E'
-    );
-
-    FOREACH chunk IN ARRAY parts
-    LOOP
-        chunk := NULLIF(btrim(chunk), '');
-        IF chunk IS NULL THEN
-            CONTINUE;
-        END IF;
-        interpreted := public.error_interpretation_schematron_chunk(chunk);
-        IF interpreted IS NOT NULL THEN
-            out_parts := array_append(out_parts, interpreted);
-        END IF;
-    END LOOP;
-
-    IF COALESCE(array_length(out_parts, 1), 0) = 0 THEN
-        RETURN ARRAY['Неизвестная ошибка'];
-    END IF;
-
-    FOREACH p IN ARRAY out_parts
-    LOOP
-        IF p IS NULL OR p = '' OR p = ANY (deduped) THEN
-            CONTINUE;
-        END IF;
-        deduped := array_append(deduped, p);
-    END LOOP;
-
-    RETURN deduped;
+    RETURN ARRAY['Неизвестная ошибка'];
 END;
 $$;
 
 -- Возвращает категорию (~10 групп) для одиночной интерпретации ошибки.
--- Сначала ищет точное совпадение interpretation в таблице правил (с error_category),
--- затем падает на паттерн-матчинг для schematron-chunk текстов и прочих краевых случаев.
+-- Единый источник истины — dim_error_type_group (тип PK → группа). Паттерн-матчинг
+-- ниже остаётся подстраховкой для исторических/неканонических строк до канонизации.
 CREATE OR REPLACE FUNCTION public.error_category(p_interpretation text)
 RETURNS text
 LANGUAGE plpgsql
@@ -356,9 +304,9 @@ BEGIN
         RETURN 'Прочие';
     END IF;
 
-    SELECT r.error_category INTO cat
-    FROM dim_error_rules r
-    WHERE r.is_active AND r.interpretation = t
+    SELECT g.error_category INTO cat
+    FROM dim_error_type_group g
+    WHERE g.error_type = t
     LIMIT 1;
 
     IF cat IS NOT NULL THEN
@@ -386,97 +334,66 @@ $$;
 -- атомарных типов (error_item_atoms); уникальные типы дедуплицируются и
 -- объединяются через ' · '. Если ни один item не дал интерпретации —
 -- возвращается 'Неизвестная ошибка'.
+-- Нормализация payload ошибок (object|array|прочее → jsonb-массив). Общий вход для
+-- всех построчных свёрток ниже — устраняет тройное дублирование CTE normalized.
+CREATE OR REPLACE FUNCTION public.error_payload_array(p_errors jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
+        WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
+        WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
+        ELSE '[]'::jsonb
+    END;
+$$;
+
+-- Плоская таксономия error_types: каждый <item> → атомы (error_item_atoms),
+-- уникальные дедуплицируются и склеиваются через ' · ' (порядок детерминирован:
+-- позиция item, затем тип — детерминизм важен для идемпотентности transform).
 CREATE OR REPLACE FUNCTION public.error_classify(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    WITH normalized AS (
-        SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
-            WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
-            WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
-            ELSE '[]'::jsonb
-        END AS payload
-    ),
-    items AS (
-        SELECT
-            o,
-            NULLIF(btrim(atom), '') AS t
-        FROM normalized n
-        CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
-        CROSS JOIN LATERAL unnest(
-            public.error_item_atoms(e->>'code', e->>'message')
-        ) AS atom
-    ),
-    first_pos AS (
-        SELECT t, MIN(o) AS first_o
-        FROM items
-        WHERE t IS NOT NULL AND t <> 'Неизвестная ошибка'
-        GROUP BY t
-    ),
-    aggregated AS (
-        SELECT string_agg(t, ' · ' ORDER BY first_o) AS types
-        FROM first_pos
+    SELECT COALESCE(
+        public.error_join_deduped(
+            array_agg(btrim(atom) ORDER BY o, btrim(atom))
+                FILTER (WHERE NULLIF(btrim(atom), '') IS NOT NULL
+                          AND btrim(atom) <> 'Неизвестная ошибка'),
+            ' · '
+        ),
+        'Неизвестная ошибка'
     )
-    SELECT COALESCE(NULLIF(types, ''), 'Неизвестная ошибка') FROM aggregated;
+    FROM jsonb_array_elements(public.error_payload_array(p_errors)) WITH ORDINALITY AS x(e, o)
+    CROSS JOIN LATERAL unnest(public.error_item_atoms(e->>'code', e->>'message')) AS atom;
 $$;
 
+-- Сводка ошибки: интерпретация каждого <item> (с детальной расшифровкой Schematron),
+-- уникальные склеиваются через ' · ' в порядке первого появления.
 CREATE OR REPLACE FUNCTION public.error_interpretation_row(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    WITH normalized AS (
-        SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
-            WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
-            WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
-            ELSE '[]'::jsonb
-        END AS payload
-    ),
-    items AS (
-        SELECT
-            o,
-            NULLIF(btrim(public.error_interpretation_item(e->>'code', e->>'message')), '') AS t
-        FROM normalized n
-        CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
-    ),
-    first_pos AS (
-        SELECT t, MIN(o) AS first_o
-        FROM items
-        WHERE t IS NOT NULL
-        GROUP BY t
+    SELECT public.error_join_deduped(
+        array_agg(btrim(public.error_interpretation_item(e->>'code', e->>'message')) ORDER BY o),
+        ' · '
     )
-    SELECT NULLIF(string_agg(t, ' · ' ORDER BY first_o), '')
-    FROM first_pos;
+    FROM jsonb_array_elements(public.error_payload_array(p_errors)) WITH ORDINALITY AS x(e, o);
 $$;
 
+-- Исходные тексты <message> каждого <item>, уникальные через ' · ' в порядке появления.
 CREATE OR REPLACE FUNCTION public.error_messages_row(p_errors jsonb)
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    WITH normalized AS (
-        SELECT CASE jsonb_typeof(COALESCE(p_errors, '[]'::jsonb))
-            WHEN 'array' THEN COALESCE(p_errors, '[]'::jsonb)
-            WHEN 'object' THEN jsonb_build_array(COALESCE(p_errors, '{}'::jsonb))
-            ELSE '[]'::jsonb
-        END AS payload
-    ),
-    items AS (
-        SELECT
-            o,
-            NULLIF(btrim(e->>'message'), '') AS t
-        FROM normalized n
-        CROSS JOIN LATERAL jsonb_array_elements(n.payload) WITH ORDINALITY AS x(e, o)
-    ),
-    first_pos AS (
-        SELECT t, MIN(o) AS first_o
-        FROM items
-        WHERE t IS NOT NULL
-        GROUP BY t
+    SELECT public.error_join_deduped(
+        array_agg(btrim(e->>'message') ORDER BY o),
+        ' · '
     )
-    SELECT NULLIF(string_agg(t, ' · ' ORDER BY first_o), '')
-    FROM first_pos;
+    FROM jsonb_array_elements(public.error_payload_array(p_errors)) WITH ORDINALITY AS x(e, o);
 $$;
 
 CREATE OR REPLACE FUNCTION public.xml_error_items(payload text)
@@ -536,6 +453,84 @@ $$;
 
 -- Сворачивает формулировки LOGSTATE=3 в канонический тип: URL, gost-endpoint,
 -- UUID и IP не должны раздувать кардинальность топов на дашбордах 02/04.
+-- Нормализация лейбла БЕЗ обращения к словарю (чистые LIKE/CASE, IMMUTABLE): сводит
+-- исторические/неканонические лейблы прежнего chunk-движка к канону (адрес, ДУЛ, единый
+-- schematron, «в ФРМР»/«в элементе документа»). Вынесена отдельно, чтобы горячий путь
+-- (rpt_error_breakdown) канонизировал атомы set-based JOIN'ом к dim_error_type_group,
+-- а не коррелированным EXISTS на каждый из сотен тысяч атомов.
+CREATE OR REPLACE FUNCTION public.error_atom_normalize(p_atom text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN btrim(COALESCE(p_atom, '')) = '' THEN NULL
+        WHEN btrim(p_atom) = 'Адрес пациента не заполнен или некорректен'
+            THEN 'Не указан адрес пациента'
+        WHEN btrim(p_atom) LIKE 'ДУЛ:%'
+            THEN 'Документ, удостоверяющий личность пациента: некорректные реквизиты'
+        WHEN btrim(p_atom) = 'Должность врача не соответствует данным в ФРМР'
+            THEN 'Должность врача не соответствует данным ФРМР'
+        WHEN btrim(p_atom) = 'Ошибка справочника НСИ в элементе документа'
+            THEN 'Ошибка справочника НСИ'
+        WHEN btrim(p_atom) LIKE 'Ошибка Schematron-валидации%'
+            THEN 'Ошибка Schematron-валидации'
+        ELSE btrim(p_atom)
+    END;
+$$;
+
+-- Канонизация одного атома типа ошибки на ЧТЕНИИ: нормализация + проверка принадлежности
+-- к dim_error_type_group. Чинит таксономию без переобработки архива. Для горячих витрин
+-- предпочтительнее set-based JOIN (см. rpt_error_breakdown); эта скалярная версия —
+-- для построчного списка документа (canonical_error_list).
+CREATE OR REPLACE FUNCTION public.canonical_error_atom(p_atom text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    WITH norm AS (SELECT public.error_atom_normalize(p_atom) AS a)
+    SELECT CASE
+        WHEN n.a IS NULL THEN NULL
+        WHEN EXISTS (
+            SELECT 1 FROM public.dim_error_type_group g WHERE g.error_type = n.a
+        ) THEN n.a
+        WHEN n.a LIKE 'Код: %' THEN n.a
+        ELSE 'Неизвестная ошибка'
+    END
+    FROM norm n;
+$$;
+
+-- Канонизирует и дедуплицирует полный список типов документа (documents.error_type
+-- через ' · ' / legacy ' - ') для документной витрины. Порядок — по первому появлению.
+-- Один источник канона с canonical_error_atom: rpt_documents.error_types и
+-- rpt_error_breakdown показывают согласованную таксономию на одних и тех же данных.
+CREATE OR REPLACE FUNCTION public.canonical_error_list(p_csv text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    WITH atoms AS (
+        SELECT public.canonical_error_atom(btrim(atom)) AS a, ord
+        FROM unnest(
+            string_to_array(
+                regexp_replace(
+                    COALESCE(NULLIF(btrim(p_csv), ''), 'Неизвестная ошибка'),
+                    ' - ', ' · ', 'g'
+                ),
+                ' · '
+            )
+        ) WITH ORDINALITY AS u(atom, ord)
+    ),
+    dedup AS (
+        SELECT a, MIN(ord) AS first_ord
+        FROM atoms
+        WHERE a IS NOT NULL
+        GROUP BY a
+    )
+    SELECT NULLIF(string_agg(a, ' · ' ORDER BY first_ord), '')
+    FROM dedup;
+$$;
+
 CREATE OR REPLACE FUNCTION public.network_error_type(p_text text)
 RETURNS text
 LANGUAGE sql

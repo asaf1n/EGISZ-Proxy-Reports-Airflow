@@ -245,6 +245,28 @@ def reconcile_document_attributes_ui(con: psycopg2.extensions.connection) -> int
     return refreshed
 
 
+def refresh_error_breakdown(con: psycopg2.extensions.connection) -> None:
+    """Refresh the rpt_error_breakdown materialized view after facts change.
+
+    CONCURRENTLY (needs the unique index + a populated matview) keeps dashboard reads
+    unblocked during the ~seconds-long rebuild; falls back to a plain refresh if the
+    matview was never populated. Runs in autocommit — REFRESH CONCURRENTLY cannot run
+    inside a transaction block.
+    """
+    con.commit()
+    previous_autocommit = con.autocommit
+    con.set_session(autocommit=True)
+    try:
+        with con.cursor() as cur:
+            try:
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.rpt_error_breakdown")
+            except psycopg2.Error as exc:
+                log.warning("CONCURRENTLY refresh failed (%s); falling back to plain refresh", exc)
+                cur.execute("REFRESH MATERIALIZED VIEW public.rpt_error_breakdown")
+    finally:
+        con.set_session(autocommit=previous_autocommit)
+
+
 def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
     """Run ANALYZE outside a transaction (PostgreSQL forbids ANALYZE inside one).
 

@@ -10,34 +10,11 @@ DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui();
 DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[]);
 DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint);
 DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint, bigint);
+-- backfill_semd_codes() удалён: backfill типа СЭМД делает inline-блок batch_docs
+-- внутри transform_raw_to_facts (O(батч)); отдельная O(архив)-функция не вызывалась.
 DROP FUNCTION IF EXISTS public.backfill_semd_codes();
 
 -- reconcile_document_attributes — в 70_views_core.sql
--- Полный backfill semd_code для документов без типа СЭМД (reconcile / dimensions DAG).
-CREATE OR REPLACE FUNCTION public.backfill_semd_codes()
-RETURNS bigint
-LANGUAGE sql
-AS $$
-    WITH src AS (
-        SELECT DISTINCT ON (t.dwh_id)
-            t.dwh_id,
-            public.normalize_semd_code(t.semd_code) AS semd_code
-        FROM public.transactions t
-        INNER JOIN public.documents d ON d.dwh_id = t.dwh_id
-        WHERE t.dwh_id IS NOT NULL
-          AND NULLIF(btrim(t.semd_code), '') IS NOT NULL
-          AND NULLIF(btrim(d.semd_code), '') IS NULL
-        ORDER BY t.dwh_id, t.log_date DESC NULLS LAST, t.logid DESC
-    ),
-    updated AS (
-        UPDATE public.documents d
-        SET semd_code = src.semd_code, updated_at = now()
-        FROM src
-        WHERE d.dwh_id = src.dwh_id
-        RETURNING d.dwh_id
-    )
-    SELECT COALESCE(count(*)::bigint, 0) FROM updated;
-$$;
 
 CREATE OR REPLACE FUNCTION public.transform_raw_to_facts(
     from_logid bigint,
@@ -254,9 +231,9 @@ BEGIN
     )
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
-        status, status_category, sent_at, first_sent_at, source_logid,
+        status, sent_at, first_sent_at, source_logid,
         callback_log_id, last_callback_at, jid, org_oid, jid_resolve_method,
-        error_type, error_text, error_summary,
+        error_types, error_text, error_summary,
         updated_at
     )
     SELECT
@@ -264,7 +241,6 @@ BEGIN
         a.local_uid,
         a.semd_code,
         CASE WHEN a.has_network_error THEN 'network_error' ELSE 'waiting' END,
-        CASE WHEN a.has_network_error THEN 'error' ELSE 'waiting' END,
         a.sent_at,
         a.sent_at,
         a.source_logid,
@@ -300,11 +276,6 @@ BEGIN
             THEN public.documents.status
             ELSE EXCLUDED.status
         END,
-        status_category = CASE
-            WHEN public.documents.status_category IN ('success', 'error')
-            THEN public.documents.status_category
-            ELSE EXCLUDED.status_category
-        END,
         callback_log_id = COALESCE(EXCLUDED.callback_log_id, public.documents.callback_log_id),
         last_callback_at = COALESCE(EXCLUDED.last_callback_at, public.documents.last_callback_at),
         jid = COALESCE(EXCLUDED.jid, public.documents.jid),
@@ -314,7 +285,7 @@ BEGIN
             THEN public.documents.jid_resolve_method
             ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
         END,
-        error_type = COALESCE(EXCLUDED.error_type, public.documents.error_type),
+        error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
         error_summary = COALESCE(EXCLUDED.error_summary, public.documents.error_summary),
         source_logid = GREATEST(public.documents.source_logid, EXCLUDED.source_logid),
@@ -656,10 +627,10 @@ BEGIN
 
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
-        status, status_category, message_id, relates_to_id,
+        status, message_id, relates_to_id,
         callback_log_id, source_logid, document_created_at, registered_at,
         last_callback_at, last_status, jid, org_oid, jid_resolve_method,
-        error_type, error_text, error_summary,
+        error_types, error_text, error_summary,
         patient_hash, doctor_hash, updated_at
     )
     SELECT DISTINCT ON (f.dwh_id)
@@ -673,7 +644,6 @@ BEGIN
             WHEN f.status = 'error' THEN 'async_error'
             ELSE 'waiting'
         END,
-        CASE WHEN f.status = 'success' THEN 'success' WHEN f.status = 'error' THEN 'error' ELSE 'waiting' END,
         public.clean_text_value(f.message_id),
         public.clean_text_value(f.relates_to_id),
         f.logid,
@@ -706,12 +676,6 @@ BEGIN
             THEN EXCLUDED.status
             ELSE public.documents.status
         END,
-        status_category = CASE
-            WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.status_category
-            ELSE public.documents.status_category
-        END,
         message_id = COALESCE(EXCLUDED.message_id, public.documents.message_id),
         relates_to_id = COALESCE(EXCLUDED.relates_to_id, public.documents.relates_to_id),
         callback_log_id = CASE
@@ -732,11 +696,11 @@ BEGIN
             THEN public.documents.jid_resolve_method
             ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
         END,
-        error_type = CASE
+        error_types = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
                >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.error_type
-            ELSE public.documents.error_type
+            THEN EXCLUDED.error_types
+            ELSE public.documents.error_types
         END,
         error_text = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)

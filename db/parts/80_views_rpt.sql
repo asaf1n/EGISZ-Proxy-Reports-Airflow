@@ -14,16 +14,6 @@ SELECT
     d.status,
     ds.label AS status_label,
     ds.sort_order AS status_sort,
-    NULLIF(
-        btrim(
-            split_part(
-                COALESCE(NULLIF(btrim(d.error_type), ''), 'Неизвестная ошибка'),
-                ' · ',
-                1
-            )
-        ),
-        ''
-    ) AS error_type,
     d.error_summary,
     d.error_text,
     public.normalize_semd_code(d.semd_code) AS semd_code,
@@ -34,7 +24,7 @@ SELECT
         WHEN st.code IS NOT NULL
             THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
         ELSE NULL
-    END AS semd_code_name,
+    END AS semd_label,
     public.clean_text_value(d.local_uid) AS semd_local_uid,
     d.document_created_at AS semd_created_at,
     d.emdr_id AS semd_emdr_id,
@@ -77,7 +67,8 @@ SELECT
     (
         COALESCE(d.first_sent_at, d.document_created_at)
         AT TIME ZONE 'Europe/Moscow'
-    )::date AS arrival_day
+    )::date AS arrival_day,
+    COALESCE(public.canonical_error_list(d.error_types), 'Неизвестная ошибка') AS error_types
 FROM public.documents d
 LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
 LEFT JOIN public.dim_document_status ds ON ds.code = d.status
@@ -109,7 +100,7 @@ SELECT
     r.semd_local_uid,
     r.semd_code,
     r.semd_name,
-    r.semd_code_name,
+    r.semd_label,
     r.clinic_jid,
     r.clinic_name,
     r.clinic_label,
@@ -134,10 +125,10 @@ SELECT
     r.clinic_label,
     r.semd_code,
     r.semd_name,
-    r.semd_code_name,
+    r.semd_label,
     public.network_error_type(r.error_text) AS network_error_type,
     r.error_text,
-    r.error_type,
+    r.error_types,
     r.semd_emdr_id
 FROM public.rpt_documents r
 WHERE r.status = 'network_error';
@@ -145,45 +136,69 @@ WHERE r.status = 'network_error';
 COMMENT ON VIEW public.rpt_network_errors IS
 'Ошибки связи proxy_egisz: document-grain (status=network_error).';
 
-CREATE OR REPLACE VIEW public.rpt_error_breakdown AS
-WITH remd_errors AS (
-    SELECT
-        r.processed_at,
-        r.processed_day,
-        r.dwh_id,
-        r.clinic_jid,
-        r.clinic_name,
-        r.clinic_label,
-        r.semd_code,
-        r.semd_code_name,
-        trim(err_item) AS error_type
+-- МАТЕРИАЛИЗОВАННОЕ представление: грейн «тип×документ» агрегирует ~133k строк, и все
+-- карточки вкладки «Анализ ошибок» читают его. Live-view давал ~3.6с/запрос; matview с
+-- индексами — <1с. Обновляется в конце transform (extract/reconcile DAG) → свежесть та же,
+-- что у фактов (documents и так обновляются раз в 5 мин). См. refresh_error_breakdown().
+-- Построение в два дешёвых шага:
+--   1) atom_types — дедуп (dwh_id, канонический тип) на УЗКИХ данных прямо из documents
+--      (нормализация IMMUTABLE + один LEFT JOIN к dim_error_type_group);
+--   2) JOIN rpt_documents 1:1 по dwh_id — display-колонки добавляются ПОСЛЕ дедупа.
+CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
+WITH atom_types AS (
+    SELECT DISTINCT
+        doc.dwh_id,
+        CASE
+            WHEN g.error_type IS NOT NULL THEN n.norm
+            WHEN n.norm LIKE 'Код: %' THEN n.norm
+            ELSE 'Неизвестная ошибка'
+        END AS error_type,
+        COALESCE(g.error_category, 'Прочие') AS error_category
     FROM public.documents doc
-    INNER JOIN public.rpt_documents r ON r.dwh_id = doc.dwh_id
-    CROSS JOIN LATERAL regexp_split_to_table(
-        COALESCE(NULLIF(btrim(doc.error_type), ''), 'Неизвестная ошибка'),
-        ' [·-] '
-    ) AS err_item
-    WHERE r.status IN ('async_error', 'network_error')
-      AND doc.error_type IS NOT NULL
-      AND doc.dwh_id IS NOT NULL
-      AND btrim(doc.error_type) <> ''
-      AND trim(err_item) <> ''
+    CROSS JOIN LATERAL unnest(
+        string_to_array(
+            regexp_replace(
+                COALESCE(NULLIF(btrim(doc.error_types), ''), 'Неизвестная ошибка'),
+                ' - ',
+                ' · ',
+                'g'
+            ),
+            ' · '
+        )
+    ) AS atom
+    CROSS JOIN LATERAL (SELECT public.error_atom_normalize(trim(atom)) AS norm) n
+    LEFT JOIN public.dim_error_type_group g ON g.error_type = n.norm
+    WHERE doc.status IN ('async_error', 'network_error')
+      AND doc.error_types IS NOT NULL
+      AND btrim(doc.error_types) <> ''
+      AND n.norm IS NOT NULL
 )
 SELECT
-    processed_at,
-    processed_day,
-    dwh_id,
-    clinic_jid,
-    clinic_name,
-    clinic_label,
-    semd_code,
-    semd_code_name,
-    error_type,
-    public.error_category(error_type) AS error_category
-FROM remd_errors;
+    r.processed_at,
+    r.processed_day,
+    a.dwh_id,
+    r.clinic_jid,
+    r.clinic_name,
+    r.clinic_label,
+    r.semd_code,
+    r.semd_label,
+    a.error_type,
+    a.error_category
+FROM atom_types a
+INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
+WITH DATA;
 
-COMMENT ON VIEW public.rpt_error_breakdown IS
-'Разбивка ошибок: один ряд = один атомарный вид ошибки на документ (split documents.error_type по '' · '' и '' - '').';
+-- UNIQUE индекс нужен для REFRESH ... CONCURRENTLY; грейн = (dwh_id, error_type).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_error_breakdown
+    ON public.rpt_error_breakdown (dwh_id, error_type);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_processed_at ON public.rpt_error_breakdown (processed_at);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_type ON public.rpt_error_breakdown (error_type);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_category ON public.rpt_error_breakdown (error_category);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_clinic_jid ON public.rpt_error_breakdown (clinic_jid);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_semd_code ON public.rpt_error_breakdown (semd_code);
+
+COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
+'Разбивка ошибок (matview): один ряд = один атомарный канонический вид на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT

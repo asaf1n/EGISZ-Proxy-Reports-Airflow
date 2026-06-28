@@ -141,3 +141,62 @@ UPDATE dim_error_rules
 SET is_active = false, updated_at = now()
 WHERE rule_code = 'remd_async_response';
 
+-- Обогащение по данным архива: формулировки, которые раньше уходили в chunk-движок
+-- (error_interpretation_schematron_chunk) и давали неканонические лейблы, раздувавшие
+-- таксономию. Заводим их как правила со ССЫЛКОЙ на УЖЕ существующий канонический тип,
+-- чтобы один движок (dim_error_rules) покрывал все значимые сообщения.
+INSERT INTO dim_error_rules (rule_code, priority, match_code, match_pattern, interpretation, error_category)
+VALUES
+    -- Адрес пациента без литерала address:Type (schematron_patient_address_type не срабатывал)
+    ('schematron_patient_addr_generic', 10, 'VALIDATION_ERROR', '(?is)patientRole.*addr', 'Не указан адрес пациента', 'Данные пациента'),
+    -- ДУЛ по элементам CDA (IdentityCardType / identity:IssueDate) — раньше только текстовый dul_patient_text
+    ('schematron_identity_card', 78, NULL, '(?is)IdentityCardType|identity:IssueDate', 'Документ, удостоверяющий личность пациента: некорректные реквизиты', 'Данные пациента'),
+    -- «Вид документов [N] не актуален…» — скобочные значения не давали сработать коду NO_DOCUMENT_KIND_ON_DATE
+    ('document_kind_not_actual_text', 75, NULL, '(?is)вид документ.*не актуал', 'Вид документа не актуален на дату создания', 'Ошибки регистрации в РЭМД')
+ON CONFLICT (rule_code) DO UPDATE SET
+    priority = EXCLUDED.priority,
+    match_code = EXCLUDED.match_code,
+    match_pattern = EXCLUDED.match_pattern,
+    interpretation = EXCLUDED.interpretation,
+    error_category = EXCLUDED.error_category,
+    is_active = true,
+    updated_at = now();
+
+-- ============================================================================
+-- dim_error_type_group — ЕДИНЫЙ источник истины «канонический тип → группа».
+-- Раньше группа жила в dim_error_rules.error_category (по правилу, с дублированием
+-- на каждое правило одного типа); error_category() брал LIMIT 1, и конфликт
+-- «тип → две группы» прошёл бы молча. Теперь тип — PK, группа — единственная.
+-- Содержит интерпретации правил + специальные канонические типы, которые движок
+-- интерпретации может выдать вне таблицы правил (сеть, техсбои, единый schematron,
+-- «Неизвестная ошибка»). canonical_error_atom и error_category читают эту таблицу.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS dim_error_type_group (
+    error_type text PRIMARY KEY,
+    error_category text NOT NULL,
+    updated_at timestamptz DEFAULT now()
+);
+
+-- Канонические типы из активных правил (тип → его группа).
+INSERT INTO dim_error_type_group (error_type, error_category)
+SELECT DISTINCT r.interpretation, r.error_category
+FROM dim_error_rules r
+WHERE r.is_active
+ON CONFLICT (error_type) DO UPDATE SET
+    error_category = EXCLUDED.error_category,
+    updated_at = now();
+
+-- Специальные канонические типы вне таблицы правил (выдаются движком интерпретации/
+-- транспортом). Единый schematron-тип «Ошибка Schematron-валидации» заменяет прежние
+-- псевдо-типы «(правило У…)» / «(прочие требования)».
+INSERT INTO dim_error_type_group (error_type, error_category)
+VALUES
+    ('Неизвестная ошибка', 'Прочие'),
+    ('Ошибка Schematron-валидации', 'Ошибки структуры и валидации'),
+    ('Техническая ошибка на стороне РЭМД: повторите отправку позже', 'Технические ошибки РЭМД'),
+    ('Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже', 'Технические ошибки РЭМД'),
+    ('Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже', 'Технические ошибки РЭМД')
+ON CONFLICT (error_type) DO UPDATE SET
+    error_category = EXCLUDED.error_category,
+    updated_at = now();
+

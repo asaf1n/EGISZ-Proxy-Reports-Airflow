@@ -2,10 +2,26 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+# up.ps1 запускает скрипт под PowerShell с cp1251-консолью; имена карточек содержат
+# символы вне cp1251 (например «×»). Печатаем в UTF-8, иначе print() падает.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover - reconfigure доступен с Python 3.7+
+    pass
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
+
+
+def write_json_if_changed(path: Path, data: dict) -> bool:
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return False
+    path.write_text(text, encoding="utf-8")
+    return True
 
 OPERATIONAL_SCALAR_NAMES = frozenset({"Всего документов", "Всего клиник", "В обработке"})
 
@@ -14,7 +30,11 @@ OPERATIONAL_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Транзакции по дням и статусам": (8, 0, 16, 6),
     "Статусы за период": (8, 16, 8, 6),
     "Объём по клиникам": (14, 0, 12, 7),
-    "Топ типов СЭМД по документам": (14, 12, 12, 7),
+    "Объём по СЭМД": (14, 12, 12, 7),
+    "Успешность по клиникам": (21, 0, 12, 7),
+    "Успешность по типам СЭМД": (21, 12, 12, 7),
+    "Объём ошибок по клиникам": (28, 0, 24, 7),
+    "Тепловая карта: клиника × день": (35, 0, 24, 10),
 }
 
 ARCHIVE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -40,18 +60,13 @@ SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
 }
 
 ERRORS_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Тепловая карта: клиника × день": (0, 0, 24, 5),
-    "Топ категорий и типов ошибки": (5, 0, 12, 6),
-    "Топ типов СЭМД по видам ошибки": (5, 12, 12, 6),
-    "Объём ошибок по клиникам": (11, 0, 14, 6),
-    "Доля ошибок по дням": (11, 14, 10, 6),
-    "Успешность по клиникам": (17, 0, 12, 6),
-    "Успешность по типам СЭМД": (17, 12, 12, 6),
-    "Топ по типу ошибки": (23, 0, 12, 7),
-    "Топ типов СЭМД по ошибкам": (23, 12, 12, 7),
-    "% ошибок: клиника × тип СЭМД": (30, 0, 12, 7),
-    "% ошибок: тип ошибки × тип СЭМД": (30, 12, 12, 7),
-    "Ошибки: тип × клиника": (37, 0, 24, 8),
+    "% ошибок: клиника × тип СЭМД": (0, 0, 12, 7),
+    "% ошибок: тип ошибки × тип СЭМД": (0, 12, 12, 7),
+    "Топ типов СЭМД по ошибкам": (7, 0, 12, 7),
+    "Топ типов СЭМД по видам ошибки": (7, 12, 12, 7),
+    "Топ по типу ошибки": (14, 0, 12, 7),
+    "Топ категорий и типов ошибки": (14, 12, 12, 7),
+    "Ошибки: тип × клиника": (21, 0, 24, 8),
 }
 
 QUEUE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -85,15 +100,22 @@ EXECUTIVE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Очередь оттока: JID с нулём успехов": (31, 0, 24, 7),
 }
 
+# row/col отсчитываются ВНУТРИ вкладки (Обзор / Ошибки регистрации ЭМД / Документы),
+# поэтому карточки разных вкладок могут делить одинаковые координаты.
 CLIENT_SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Документов за период": (1, 0, 6, 3),
+    "Документов за период — клиент": (1, 0, 6, 3),
     "Успешно зарегистрирован": (1, 6, 6, 3),
     "Ошибка асинхронного ответа РЭМД": (1, 12, 6, 3),
     "Ошибка связи": (1, 18, 6, 3),
     "Динамика статусов по дням": (4, 0, 12, 7),
     "Топ типов СЭМД — клиент": (4, 12, 12, 7),
-    "Среднее время регистрации СЭМД": (11, 0, 8, 4),
-    "Топ-10 типов СЭМД по документам": (11, 8, 16, 4),
+    "Топ-10 типов СЭМД по документам": (11, 0, 24, 5),
+    "Объёмы ошибок по категориям — клиент": (1, 0, 12, 7),
+    "Структура ошибок по категориям — клиент": (1, 12, 12, 7),
+    "Топ типов ошибок — клиент": (8, 0, 24, 7),
+    "Динамика ошибок по дням — клиент": (15, 0, 12, 7),
+    "Топ СЭМД по ошибкам — клиент": (15, 12, 12, 7),
+    "Журнал документов — клиент": (1, 0, 24, 12),
 }
 
 CLIENT_BI_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -173,10 +195,7 @@ def _layout_integration(dashboard: dict) -> None:
 def main() -> None:
     integration = json.loads(INTEGRATION.read_text(encoding="utf-8"))
     _layout_integration(integration)
-    INTEGRATION.write_text(
-        json.dumps(integration, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_json_if_changed(INTEGRATION, integration)
     op = [c["name"] for c in integration["cards"] if c.get("tab") == "operational"]
     print(f"operational ({len(op)}):", ", ".join(op))
 
@@ -187,20 +206,14 @@ def main() -> None:
     for path, layout in other.items():
         dashboard = json.loads(path.read_text(encoding="utf-8"))
         _layout_named_cards(dashboard, layout)
-        path.write_text(
-            json.dumps(dashboard, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        print(f"updated {path.name}")
+        if write_json_if_changed(path, dashboard):
+            print(f"updated {path.name}")
 
     bi_path = ROOT / "metabase_dashboards" / "08_client_bianalytic.json"
     bi_dashboard = json.loads(bi_path.read_text(encoding="utf-8"))
     _layout_named_cards(bi_dashboard, CLIENT_BI_LAYOUT, text_layout=CLIENT_BI_TEXT_LAYOUT)
-    bi_path.write_text(
-        json.dumps(bi_dashboard, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    print(f"updated {bi_path.name}")
+    if write_json_if_changed(bi_path, bi_dashboard):
+        print(f"updated {bi_path.name}")
 
 
 if __name__ == "__main__":

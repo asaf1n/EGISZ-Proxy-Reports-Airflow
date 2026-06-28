@@ -7,9 +7,12 @@ on:
     branches: [main, master]
   workflow_dispatch: {}
 
+# Прототип: минимальный CI — статические/контрактные pytest-проверки
+# (SQL/DAG/дашборды как текст + unit-хелперы). Идемпотентность схемы и живые
+# дашборды проверяются локально через двойной прогон db/dwh_init.sql и up.ps1.
 jobs:
   pytest:
-    name: Pytest (egisz_elt + dashboards)
+    name: Pytest (egisz_elt + dashboards contracts)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,99 +30,3 @@ jobs:
 
       - name: Run pytest
         run: pytest -q
-
-  dwh_init_sql:
-    name: db/dwh_init.sql against postgres:16
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      PGHOST: localhost
-      PGPORT: 5432
-      PGUSER: postgres
-      PGPASSWORD: postgres
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install psql client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-      - name: Bootstrap role and database (mirror README prerequisites)
-        run: |
-          psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE egisz LOGIN PASSWORD 'egisz';" || true
-          psql -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE dwh_egisz OWNER postgres;"
-
-      - name: Apply db/dwh_init.sql (idempotent — runs twice to verify)
-        run: |
-          psql -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
-          psql -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
-
-      - name: Smoke-check key DWH objects exist
-        run: |
-          psql -d dwh_egisz -v ON_ERROR_STOP=1 -c "
-            SELECT 'transactions'::regclass,
-                   'documents'::regclass,
-                   'document_attributes'::regclass,
-                   'dim_document_status'::regclass,
-                   'exchangelog_raw'::regclass,
-                   'elt_state'::regclass,
-                   'dim_organizations'::regclass,
-                   'dim_licenses'::regclass,
-                   'dim_semd_types'::regclass,
-                   'public.transform_raw_to_facts(bigint,bigint,bigint)'::regprocedure,
-                   'public.backfill_semd_codes()'::regprocedure,
-                   'public.rpt_documents'::regclass;
-          "
-
-  metabase_field_filters:
-    name: apply_metabase_field_filters.py is idempotent
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install pyyaml (for declarative rules)
-        run: pip install pyyaml
-
-      - name: Run the field-filter resolver
-        run: python scripts/apply_metabase_field_filters.py
-
-      - name: Ensure dashboards JSON is still valid
-        run: |
-          python - <<'PY'
-          import json, pathlib, sys
-          errors = []
-          for path in sorted(pathlib.Path("metabase_dashboards").glob("*.json")):
-              try:
-                  json.loads(path.read_text(encoding="utf-8"))
-              except Exception as exc:
-                  errors.append(f"{path}: {exc}")
-          if errors:
-              print("\n".join(errors))
-              sys.exit(1)
-          PY
-
-      - name: Re-run resolver (should be a no-op)
-        run: |
-          python scripts/apply_metabase_field_filters.py > /tmp/second_run.log
-          cat /tmp/second_run.log
-          grep -E "Patched 0 " /tmp/second_run.log

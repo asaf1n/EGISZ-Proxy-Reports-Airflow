@@ -59,6 +59,17 @@ CREATE OR REPLACE VIEW public.rpt_health_signals AS
 WITH anchor AS (
     SELECT MAX(COALESCE(last_callback_at, sent_at, document_created_at)) AS last_fact_ts
     FROM public.documents
+),
+-- Доля сообщений, которые classify_async_status не распознал (status='unknown'),
+-- за 24ч. Растёт, если РЭМД присылает новый шаблон ответа — сигнал чинить регэкспы.
+unknown_24h AS (
+    SELECT ROUND(
+        100.0 * COUNT(*) FILTER (WHERE status = 'unknown')
+        / NULLIF(COUNT(*), 0),
+        1
+    ) AS pct
+    FROM public.transactions
+    WHERE log_date >= now() - INTERVAL '24 hours'
 )
 SELECT * FROM (
     VALUES
@@ -79,10 +90,14 @@ SELECT * FROM (
          'Проверить транспорт клиник в дашборде 03; до 3 дн. — норма, >7 дн. — эскалация'),
         ('unknown_high',
          'Доля «Нераспознан» (status=unknown)',
-         'green',
-         0::numeric,
+         CASE
+             WHEN COALESCE((SELECT pct FROM unknown_24h), 0) >= 5 THEN 'red'
+             WHEN COALESCE((SELECT pct FROM unknown_24h), 0) >= 1 THEN 'yellow'
+             ELSE 'green'
+         END,
+         COALESCE((SELECT pct FROM unknown_24h), 0)::numeric,
          '% (за 24ч)',
-         'documents: no unknown document status',
+         'transactions.status=unknown за 24ч',
          'Проверить regex classify_async_status, если появится новый шаблон ответа РЭМД'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
@@ -168,9 +183,13 @@ WHERE d.dwh_id = src.dwh_id
 
 -- Полная сборка атрибутов документов при init.
 SELECT public.reconcile_document_attributes(NULL::text[]);
+-- rpt_error_breakdown (matview) создан в 80 с данными, но после reconcile атрибутов
+-- обновляем, чтобы display-колонки (клиника/СЭМД) отражали финальное состояние.
+REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
 ANALYZE public.exchangelog_raw;
 ANALYZE public.documents;
 ANALYZE public.transactions;
 ANALYZE public.document_attributes;
+ANALYZE public.rpt_error_breakdown;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

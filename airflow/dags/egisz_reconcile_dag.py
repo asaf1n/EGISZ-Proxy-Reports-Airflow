@@ -18,6 +18,7 @@ from egisz_elt.common import (
     load_raw_logs,
     pending_transform_tail,
     reconcile_document_attributes_ui,
+    refresh_error_breakdown,
     run_analyze,
 )
 from egisz_elt.reconcile import (
@@ -103,6 +104,8 @@ def egisz_reconcile_pipeline() -> None:
 
             run_analyze(pg_conn, "ANALYZE public.documents")
             refreshed = reconcile_document_attributes_ui(pg_conn)
+            if reconciled > 0:
+                refresh_error_breakdown(pg_conn)
             log.info(
                 "Reconcile: recovered %s late chain message(s); "
                 "refreshed %s enriched row(s).",

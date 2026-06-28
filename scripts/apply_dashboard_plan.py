@@ -4,11 +4,58 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from copy import deepcopy
 from pathlib import Path
 
+# Запускается под PowerShell (cp1251-консоль); печатаем в UTF-8 во избежание падений
+# на символах вне cp1251 в именах карточек.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # pragma: no cover
+    pass
+
 ROOT = Path(__file__).resolve().parents[1]
 DASH_01 = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
+
+# Единая палитра по категориям ошибок (~10 групп + «Прочие»). Каждый тип наследует
+# цвет своей категории → сунберст и стэк-бар «парных» карточек согласованы по цвету.
+CATEGORY_COLORS: dict[str, str] = {
+    "Данные пациента": "#4E79A7",
+    "Данные медработника": "#59A14F",
+    "Ошибки структуры и валидации": "#B07AA1",
+    "Ошибки справочника НСИ": "#EDC948",
+    "Ошибки регистрации в РЭМД": "#E15759",
+    "Ошибки организации / ИС": "#76B7B2",
+    "Ошибки получения файла ЭМД": "#FF9DA7",
+    "Ошибки ЭП и сертификатов": "#F28E2B",
+    "Технические ошибки РЭМД": "#9C755F",
+    "Ошибки связи": "#499894",
+    "Прочие": "#BAB0AC",
+}
+
+
+def error_type_color_map() -> dict[str, str]:
+    """Map each canonical error type → its category color, derived from the seed
+    (db/parts/30_error_rules.sql: dim_error_rules + dim_error_type_group) so the
+    palette stays a single source of truth and never drifts from the dictionary."""
+    sql = (ROOT / "db" / "parts" / "30_error_rules.sql").read_text(encoding="utf-8")
+    cats = "|".join(re.escape(c) for c in CATEGORY_COLORS)
+    # ...'<type>', '<category>')  — последние две строки в строке VALUES (правило/спец-тип).
+    pairs = re.findall(r"'((?:[^']|'')+)',\s*'(" + cats + r")'\s*\)", sql)
+    colors = {"Категория ошибки": "#BAB0AC"}
+    colors.update(CATEGORY_COLORS)  # сами категории (внутреннее кольцо сунберста)
+    for label, cat in pairs:
+        colors[label.replace("''", "'")] = CATEGORY_COLORS[cat]
+    return colors
+
+
+def write_json_if_changed(path: Path, data: dict) -> bool:
+    text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if path.exists() and path.read_text(encoding="utf-8") == text:
+        return False
+    path.write_text(text, encoding="utf-8")
+    return True
 
 PARAM_IDS = {
     "jid_filter": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
@@ -21,7 +68,6 @@ MOVE_TO_ERRORS = {
     "Ошибки по типу",
     "Ошибок по СЭМД",
     "Ошибки по клиникам: объём и %",
-    "Доля ошибок по дням",
 }
 
 ARCHIVE_FROM_OPERATIONAL = frozenset({"Динамика документов по дням"})
@@ -64,28 +110,38 @@ DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
     "Транзакции по дням и статусам": [("status_filter", "Статус")],
     "РЭМД vs связь": [("status_filter", "Статус")],
     "Топ по типу ошибки": [],
-    "Топ типов СЭМД по ошибкам": [("semd_type_filter", "Код СЭМД")],
+    "Топ типов СЭМД по ошибкам": [("semd_type_filter", "СЭМД")],
     "Объём ошибок по клиникам": [("jid_filter", "JID Клиники")],
     "Топ категорий и типов ошибки": [],
-    "Топ типов СЭМД по видам ошибки": [("semd_type_filter", "Код СЭМД")],
+    "Топ типов СЭМД по видам ошибки": [("semd_type_filter", "СЭМД")],
     "Успешность по клиникам": [("jid_filter", "JID Клиники")],
     "Успешность по типам СЭМД": [("semd_type_filter", "Код СЭМД")],
     "Топ клиник в очереди по документам": [("jid_filter", "JID Клиники")],
     "Топ типов СЭМД в очереди": [("semd_type_filter", "Код СЭМД")],
-    "Топ типов СЭМД по документам": [("semd_type_filter", "Код СЭМД")],
+    "Объём по СЭМД": [("semd_type_filter", "Код СЭМД")],
 }
 
 DOCUMENTS_MODEL_REF = "Документы"
+ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 
-MODEL_DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
+ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
+
+# Дрилл из строки ведёт в модель «Документы»: тип ошибки — через CONTAINS по полному
+# списку error_types (документ с несколькими ошибками не теряется), клиника — точным
+# равенством. Общие фильтры дашборда (период/СЭМД/статус) переносятся через
+# metabase-model-drill-params ниже.
+MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Ошибки: тип × клиника": [
+        ("error_types", "Тип ошибки", "contains"),
         ("clinic_jid", "JID Клиники"),
-        ("error_type", "Тип ошибки"),
     ],
 }
 
+# Целевая модель дрилла по карточке (по умолчанию — «Документы»).
+MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {}
+
 MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
-    "Ошибки: тип × клиника": ["dwh_date", "jid", "semd_type", "error_type"],
+    "Ошибки: тип × клиника": ["dwh_date", "semd_type", "jid", "status"],
 }
 
 DOCUMENTS_PARAM_TARGETS = {
@@ -93,7 +149,6 @@ DOCUMENTS_PARAM_TARGETS = {
     "jid": {"model_ref": "Документы", "field_name": "clinic_jid"},
     "semd_type": {"model_ref": "Документы", "field_name": "semd_code"},
     "status": {"model_ref": "Документы", "field_name": "status_label"},
-    "error_type": {"model_ref": "Документы", "field_name": "error_type"},
     "local_uid": {"model_ref": "Документы", "field_name": "semd_local_uid"},
     "relates_to": {"model_ref": "Документы", "field_name": "relates_to_id"},
     "emdr_id": {"model_ref": "Документы", "field_name": "semd_emdr_id"},
@@ -136,7 +191,7 @@ LATEST_OPERATIONS_QUERY_FIELDS = [
     ["field", "Документы:status_label", None],
     ["field", "Документы:clinic_label", None],
     ["field", "Документы:clinic_host", None],
-    ["field", "Документы:semd_code_name", None],
+    ["field", "Документы:semd_label", None],
     ["field", "Документы:semd_local_uid", None],
     ["field", "Документы:semd_emdr_id", None],
     ["field", "Документы:error_summary", None],
@@ -239,28 +294,134 @@ CLINIC_ERROR_VOLUME_QUERY = (
     ') u ORDER BY "Документов" DESC'
 )
 
+# «Паттерн ошибки» = match_code + match_pattern правила для канонического типа (interpretation).
+# При нескольких правилах на один тип берётся паттерн с наименьшим priority.
 ERROR_TYPE_CLINIC_QUERY = (
-    "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS jid "
+    "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
     "FROM public.rpt_documents "
     "WHERE status IN ('success', 'async_error', 'network_error') "
     "AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
     "base AS ( SELECT "
-    "COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS err, "
-    "e.clinic_label AS lbl, e.clinic_jid::text AS jid, e.dwh_id "
+    "COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, "
+    "e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id "
     "FROM public.rpt_error_breakdown e "
     "INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id "
     "WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' "
     "[[AND {{error_type}}]] ), "
-    "pairs AS ( SELECT err, lbl, jid, COUNT(DISTINCT dwh_id)::bigint AS docs "
+    "error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, "
+    "COUNT(DISTINCT dwh_id)::bigint AS doc_count "
     "FROM base GROUP BY 1, 2, 3 ), "
-    "clinic_totals AS ( SELECT jid, COUNT(DISTINCT dwh_id)::numeric AS total "
-    "FROM period_docs GROUP BY jid ) "
-    'SELECT p.err AS "Тип ошибки", p.lbl AS "Клиника", p.jid AS "JID Клиники", '
-    'p.docs AS "Документов", '
-    'ROUND(100.0 * p.docs / NULLIF(ct.total, 0), 1) AS "% ошибок" '
-    "FROM pairs p JOIN clinic_totals ct ON ct.jid = p.jid "
-    "ORDER BY p.docs DESC"
+    "clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs "
+    "FROM period_docs GROUP BY clinic_jid ), "
+    "rule_patterns AS ( SELECT interpretation AS error_type, "
+    "(array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern "
+    "FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) "
+    'SELECT ec.error_type AS "Тип ошибки", ec.clinic_label AS "Клиника", '
+    'COALESCE(rp.error_pattern, ec.error_type) AS "Паттерн ошибки", '
+    'ec.clinic_jid AS "JID Клиники", ec.doc_count AS "Документов", '
+    'ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS "% ошибок" '
+    "FROM error_clinic ec "
+    "JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid "
+    "LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type "
+    "ORDER BY ec.doc_count DESC"
+)
+
+HEATMAP_QUERY = (
+    "WITH d AS ( "
+    "SELECT date_trunc('day', processed_at)::date AS day, "
+    "COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err "
+    "FROM public.rpt_documents "
+    "WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
+    "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] "
+    "GROUP BY 1, 2 ) "
+    'SELECT day AS "День", clinic AS "Клиника", '
+    'ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS "Доля ошибок, %" '
+    "FROM d ORDER BY 1, 2"
+)
+
+HEATMAP_VIZ = {
+    "table.pivot": True,
+    "table.pivot_column": "День",
+    "table.pivot_row": "Клиника",
+    "table.cell_column": "Доля ошибок, %",
+    "table.column_formatting": [
+        {
+            "colors": ["#10B981", "#F59E0B", "#EF4444"],
+            "columns": ["Доля ошибок, %"],
+            "max_type": "custom",
+            "max_value": 25,
+            "min_type": "custom",
+            "min_value": 0,
+            "type": "range",
+        }
+    ],
+    "column_settings": {
+        '["name","Доля ошибок, %"]': {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %",
+        },
+        '["name","Клиника"]': {"column_title": "Клиника"},
+    },
+}
+
+# «%» — доля документов с этим типом от всех документов с ошибками в срезе. Документ с
+# несколькими типами учитывается в каждой строке, поэтому сумма долей может быть >100%.
+TOP_ERROR_TYPE_QUERY = (
+    "WITH base AS ( "
+    'SELECT COALESCE(NULLIF(TRIM(error_category), \'\'), \'Прочие\') AS cat, '
+    'COALESCE(NULLIF(TRIM(error_type), \'\'), \'Неизвестная ошибка\') AS typ, dwh_id '
+    "FROM public.rpt_error_breakdown "
+    "WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
+    "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
+    "totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), "
+    "per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt "
+    "FROM base GROUP BY 1, 2 ) "
+    'SELECT cat AS "Категория ошибки", typ AS "Тип ошибки", cnt AS "Документов", '
+    'ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS "%" '
+    "FROM per_type ORDER BY cnt DESC"
+)
+
+TOP_SEMD_BY_ERROR_KIND_QUERY = (
+    "WITH base AS ( "
+    "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS t, "
+    "COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, "
+    "dwh_id AS doc FROM public.rpt_error_breakdown "
+    "WHERE COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' "
+    "AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
+    "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
+    "totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), "
+    "ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), "
+    "per_pair AS ( "
+    "SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs "
+    "FROM base b GROUP BY 1, 2 ), "
+    "ranked_pair AS ( "
+    "SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, "
+    "ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn "
+    "FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) "
+    'SELECT t AS "СЭМД", k AS "Тип ошибки", docs AS "Документов" '
+    "FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 "
+    "ORDER BY semd_rn, t, type_rn"
+)
+
+TOP_SEMD_BY_ERRORS_QUERY = (
+    "WITH per_code AS ( "
+    "SELECT semd_label AS label, "
+    "COUNT(DISTINCT dwh_id)::bigint AS total, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs "
+    "FROM public.rpt_documents "
+    "WHERE status IN ('success','async_error','network_error') "
+    "AND NULLIF(TRIM(semd_label), '') IS NOT NULL "
+    f"{DOCUMENT_FILTERS} GROUP BY 1 ), "
+    "ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn "
+    "FROM per_code WHERE errs > 0 ) "
+    'SELECT CASE WHEN rn <= 8 THEN label ELSE \'Прочие\' END AS "СЭМД", '
+    'SUM(errs)::bigint AS "Документов", '
+    'ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS "%" '
+    "FROM ranked GROUP BY 1 ORDER BY 2 DESC"
 )
 
 ERROR_TYPE_CLINIC_FIELD_FILTERS = {
@@ -273,12 +434,13 @@ ERROR_TYPE_CLINIC_FIELD_FILTERS = {
 ERROR_TYPE_CLINIC_TABLE_COLUMNS = [
     {"enabled": True, "name": "Тип ошибки"},
     {"enabled": True, "name": "Клиника"},
+    {"enabled": True, "name": "Паттерн ошибки"},
     {"enabled": False, "name": "JID Клиники"},
     {"enabled": True, "name": "Документов"},
     {"enabled": True, "name": "% ошибок"},
 ]
 
-ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [360, 220, 96, 104]
+ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [280, 200, 360, 88, 96, 104]
 
 SUCCESS_CLINIC_COLUMN_WIDTHS = [88, 300, 88, 88]
 SUCCESS_SEMD_COLUMN_WIDTHS = [88, 120, 88, 88, 88]
@@ -342,6 +504,7 @@ COUNT_COLUMN_SETTINGS = {
 
 def fix_sql(query: str) -> str:
     q = query
+    q = q.replace("semd_code_name", "semd_label")
     q = re.sub(r"END AS status_label,", 'END AS "Статус",', q)
     q = re.sub(
         r'SELECT DATE\(processed_at\) AS "Дата", status_label,',
@@ -396,7 +559,7 @@ def fix_sql(query: str) -> str:
         q,
     )
     q = q.replace(
-        "COALESCE(NULLIF(TRIM(semd_code_name), ''), NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Тип СЭМД\"",
+        "COALESCE(NULLIF(TRIM(semd_label), ''), NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Тип СЭМД\"",
         "COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\"",
     )
     q = re.sub(
@@ -504,7 +667,9 @@ def strip_chart_keys(viz: dict, display: str) -> None:
     if display != "table":
         return
     for key in list(viz.keys()):
-        if key.startswith("graph.") or key.startswith("pie.") or key == "table.pivot_column":
+        if key.startswith("graph.") or key.startswith("pie."):
+            del viz[key]
+        if key == "table.pivot_column" and not viz.get("table.pivot"):
             del viz[key]
 
 
@@ -670,22 +835,24 @@ def apply_transactions_trend(card: dict) -> None:
     }
 
 
-def apply_top_semd_operational(card: dict) -> None:
-    card["display"] = "row"
-    card["description"] = "Топ кодов СЭМД по числу документов в срезе (до 12 строк в визуализации)."
+def apply_semd_volume_table(card: dict) -> None:
+    """«Объём по СЭМД» — таблица кодов СЭМД по числу документов в срезе, по образцу
+    «Объём по клиникам». Колонка «%» — доля от общего числа документов."""
+    card["name"] = "Объём по СЭМД"
+    card["display"] = "table"
+    card["description"] = "Объём документов по кодам СЭМД в срезе. Колонка «%» — доля от общего числа документов."
     viz = card.setdefault("visualization_settings", {})
-    viz["graph.dimensions"] = ["Код СЭМД"]
-    viz["graph.metrics"] = ["Документов"]
-    viz["graph.x_axis.title_text"] = "Документов"
-    viz["graph.label_value_formatting"] = "compact"
-    viz["graph.show_values"] = True
-    cs = viz.setdefault("column_settings", {})
-    cs['["name","Документов"]'] = {
-        "column_title": "Документов",
-        "decimals": 0,
-        "number_separators": ", ",
-    }
-    strip_chart_keys(viz, "row")
+    for key in list(viz.keys()):
+        if key.startswith("graph.") or key.startswith("pie."):
+            del viz[key]
+    viz["table.columns"] = [
+        {"enabled": True, "name": "Код СЭМД"},
+        {"enabled": True, "name": "Документов"},
+        {"enabled": True, "name": "%"},
+    ]
+    viz["table.cell_column"] = "Код СЭМД"
+    viz["column_settings"] = deepcopy(COUNT_COLUMN_SETTINGS)
+    strip_chart_keys(viz, "table")
 
 
 def apply_clinic_volume(card: dict) -> None:
@@ -735,8 +902,9 @@ def apply_clinic_error_volume(card: dict) -> None:
 def apply_error_type_clinic(card: dict) -> None:
     card["description"] = (
         "Тип ошибки × клиника: COUNT(DISTINCT «ID») и доля от финализированного "
-        "документного универсума клиники. Клик — модель «Документы» с фильтрами "
-        "по JID и типу ошибки из строки и фильтрами дашборда."
+        "документного универсума клиники. Клик — модель «Разбивка ошибок» (грейн "
+        "тип×документ) с точным фильтром по типу ошибки и JID клиники из строки и "
+        "фильтрами дашборда."
     )
     card.pop("query_tier", None)
     card.pop("source_model", None)
@@ -750,6 +918,7 @@ def apply_error_type_clinic(card: dict) -> None:
     }
     card["metabase-field-filters"] = deepcopy(ERROR_TYPE_CLINIC_FIELD_FILTERS)
     card.pop("metabase-parameter-targets", None)
+    card.pop("metabase-model-drill-params", None)
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(ERROR_TYPE_CLINIC_TABLE_COLUMNS)
     viz["table.column_widths"] = deepcopy(ERROR_TYPE_CLINIC_COLUMN_WIDTHS)
@@ -767,9 +936,108 @@ def apply_error_type_clinic(card: dict) -> None:
             "suffix": " %",
         },
         '["name","Тип ошибки"]': {"column_title": "Тип ошибки", "text_style": "wrap"},
+        '["name","Паттерн ошибки"]': {
+            "column_title": "Паттерн ошибки",
+            "text_style": "wrap",
+        },
     }
     viz["column_settings"] = cs
     strip_chart_keys(viz, "table")
+
+
+def apply_heatmap(card: dict) -> None:
+    card["display"] = "table"
+    card["dataset_query"]["native"]["query"] = HEATMAP_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    viz.clear()
+    viz.update(deepcopy(HEATMAP_VIZ))
+
+
+def apply_top_error_type_table(card: dict) -> None:
+    """«Топ по типу ошибки» — табличный рейтинг атомарных видов ошибки (error_type)
+    с категорией и долей документов от всех документов с ошибками в срезе."""
+    card["display"] = "table"
+    card["description"] = (
+        "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. "
+        "Колонка «%» — доля документов с этим типом от всех документов с ошибками."
+    )
+    card["dataset_query"]["native"]["query"] = TOP_ERROR_TYPE_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    for key in list(viz.keys()):
+        if key.startswith("graph.") or key.startswith("pie."):
+            del viz[key]
+    viz.pop("series_settings", None)
+    viz["table.columns"] = [
+        {"enabled": True, "name": "Категория ошибки"},
+        {"enabled": True, "name": "Тип ошибки"},
+        {"enabled": True, "name": "Документов"},
+        {"enabled": True, "name": "%"},
+    ]
+    viz["table.cell_column"] = "Документов"
+    cs = deepcopy(COUNT_COLUMN_SETTINGS)
+    cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
+    viz["column_settings"] = cs
+    strip_chart_keys(viz, "table")
+
+
+def apply_top_category_type_bar(card: dict) -> None:
+    """«Топ категорий и типов ошибки» — стэк-бар категория×тип, где КАЖДЫЙ тип окрашен в
+    цвет своей категории (стэк категории становится одноцветным). Палитра — из словаря."""
+    card["display"] = "row"
+    card["description"] = (
+        "Категория ошибки (ось) × тип (стэк), документов COUNT(DISTINCT «ID»). "
+        "Каждый вид окрашен цветом своей категории."
+    )
+    viz = card.setdefault("visualization_settings", {})
+    viz["graph.dimensions"] = ["Категория ошибки", "Тип ошибки"]
+    viz["graph.metrics"] = ["Документов"]
+    viz["stackable.stack_type"] = "stacked"
+    viz["graph.label_value_formatting"] = "compact"
+    viz["graph.y_axis.scale"] = "linear"
+    viz["graph.x_axis.title_text"] = ""
+    viz["graph.y_axis.title_text"] = ""
+    # Цвет серии (типа) = цвет его категории; категории — свои цвета (единая палитра).
+    colors = error_type_color_map()
+    viz["series_settings"] = {
+        name: {"color": color} for name, color in colors.items()
+    }
+    cs = viz.setdefault("column_settings", {})
+    cs['["name","Документов"]'] = {
+        "column_title": "Документов",
+        "decimals": 0,
+        "number_separators": ", ",
+    }
+
+
+def apply_top_semd_by_error_kind(card: dict) -> None:
+    card["display"] = "row"
+    card["dataset_query"]["native"]["query"] = TOP_SEMD_BY_ERROR_KIND_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    viz["graph.dimensions"] = ["СЭМД", "Тип ошибки"]
+    viz["graph.metrics"] = ["Документов"]
+    viz["stackable.stack_type"] = "stacked"
+    viz["graph.show_stack_values"] = "total"
+    viz["graph.label_value_frequency"] = "all"
+    viz["graph.x_axis.scale"] = "ordinal"
+    viz["graph.x_axis.axis_enabled"] = "rotate-45"
+    cs = viz.setdefault("column_settings", {})
+    cs.pop('["name","Код СЭМД"]', None)
+    cs['["name","СЭМД"]'] = {"column_title": "СЭМД", "text_style": "wrap"}
+    cs['["name","Тип ошибки"]'] = {"column_title": "Вид ошибки"}
+    strip_chart_keys(viz, "row")
+
+
+def apply_top_semd_by_errors(card: dict) -> None:
+    card["dataset_query"]["native"]["query"] = TOP_SEMD_BY_ERRORS_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    dims = viz.get("graph.dimensions") or viz.get("pie.dimension")
+    if dims and "Код СЭМД" in dims:
+        viz["graph.dimensions"] = [
+            "СЭМД" if d == "Код СЭМД" else d for d in dims
+        ]
+    cs = viz.setdefault("column_settings", {})
+    if '["name","Код СЭМД"]' in cs:
+        cs['["name","СЭМД"]'] = cs.pop('["name","Код СЭМД"]')
 
 
 def apply_success_slice_tables(card: dict) -> None:
@@ -861,6 +1129,7 @@ def _dim(d: str) -> str:
         "Наименование клиники": "Клиника",
         "clinic_name": "Клиника",
         "semd_code": "Код СЭМД",
+        "СЭМД": "СЭМД",
         "Вид ошибки": "Тип ошибки",
         "error_category": "Категория ошибки",
         "network_error_type": "Тип сетевой ошибки",
@@ -889,17 +1158,22 @@ def build_drill(mappings: list[tuple[str, str]]) -> dict:
 
 def build_model_drill(
     model_ref: str,
-    mappings: list[tuple[str, str]],
+    mappings: list[ModelDrillMapping],
 ) -> dict:
     pm: dict = {}
-    for field_name, col in mappings:
+    for item in mappings:
+        field_name, col = item[0], item[1]
+        operator = item[2] if len(item) > 2 else None
+        target: dict = {
+            "type": "dimension",
+            "model_ref": model_ref,
+            "field_name": field_name,
+        }
+        if operator:
+            target["operator"] = operator
         pm[field_name] = {
             "source": {"type": "column", "name": col},
-            "target": {
-                "type": "dimension",
-                "model_ref": model_ref,
-                "field_name": field_name,
-            },
+            "target": target,
         }
     return {
         "type": "link",
@@ -992,8 +1266,7 @@ def apply_01(dash: dict) -> None:
                 pass
 
         if name == "Топ типов СЭМД по видам ошибки":
-            card["display"] = "row"
-            card.setdefault("visualization_settings", {})["graph.dimensions"] = ["Код СЭМД", "Тип ошибки"]
+            apply_top_semd_by_error_kind(card)
 
         if name == "Архив СЭМД":
             convert_archive_card(card)
@@ -1004,6 +1277,14 @@ def apply_01(dash: dict) -> None:
             apply_clinic_error_volume(card)
         elif name == "Ошибки: тип × клиника":
             apply_error_type_clinic(card)
+        elif name == "Тепловая карта: клиника × день":
+            apply_heatmap(card)
+        elif name == "Топ по типу ошибки":
+            apply_top_error_type_table(card)
+        elif name == "Топ категорий и типов ошибки":
+            apply_top_category_type_bar(card)
+        elif name == "Топ типов СЭМД по ошибкам":
+            apply_top_semd_by_errors(card)
         elif name in ("Успешность по клиникам", "Успешность по типам СЭМД"):
             apply_success_slice_tables(card)
         elif name == "Очередь без ответа":
@@ -1012,8 +1293,9 @@ def apply_01(dash: dict) -> None:
             apply_transactions_trend(card)
         elif name == "Динамика документов по дням" and dq.get("type") == "native":
             apply_document_volume_by_day(card)
-        elif name == "Топ типов СЭМД по документам" and card.get("tab") == "operational":
-            apply_top_semd_operational(card)
+        elif name in ("Топ типов СЭМД по документам", "Объём по СЭМД") and card.get("tab") == "operational":
+            apply_semd_volume_table(card)
+            name = card["name"]
         elif name == "Детализация контроля качества":
             apply_quality_detail(card)
 
@@ -1024,7 +1306,8 @@ def apply_01(dash: dict) -> None:
 
         if name in MODEL_DRILL_BY_NAME:
             card["click_behavior"] = build_model_drill(
-                DOCUMENTS_MODEL_REF, MODEL_DRILL_BY_NAME[name]
+                MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF),
+                MODEL_DRILL_BY_NAME[name],
             )
             params = MODEL_DRILL_DASHBOARD_PARAMS.get(name)
             if params:
@@ -1042,9 +1325,9 @@ def apply_01(dash: dict) -> None:
     restore_archive_top_semd(dash)
 
 
-def apply_renames(path: Path, mapping: dict[str, str]) -> None:
+def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
     if not path.exists():
-        return
+        return False
     dash = json.loads(path.read_text(encoding="utf-8"))
     for card in dash.get("cards", []):
         if card.get("name") in mapping:
@@ -1068,11 +1351,14 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> None:
                     q = q.replace("error_text AS error_text", 'error_summary AS "Сводка ошибки"')
                     q = q.replace('error_text AS "Текст ошибки"', 'error_summary AS "Сводка ошибки"')
                 dq["native"]["query"] = q
-    path.write_text(json.dumps(dash, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return write_json_if_changed(path, dash)
 
 
 def restore_archive_top_semd(dash: dict) -> None:
-    if any(c.get("name") == "Топ типов СЭМД по документам" for c in dash["cards"]):
+    if any(
+        c.get("name") in ("Топ типов СЭМД по документам", "Объём по СЭМД")
+        for c in dash["cards"]
+    ):
         return
     query = (
         "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt "
@@ -1150,11 +1436,15 @@ def fix_client_sql(query: str) -> str:
     return query.replace("clinic_jid = {{client_jid}}", "clinic_jid::text = {{client_jid}}")
 
 
-def apply_client_dashboards(path: Path) -> None:
+def apply_client_dashboards(path: Path) -> bool:
     if not path.exists():
-        return
+        return False
     dash = json.loads(path.read_text(encoding="utf-8"))
     for card in dash.get("cards", []):
+        filters = card.get("metabase-field-filters") or {}
+        doc_type = filters.get("client_document_type")
+        if isinstance(doc_type, dict) and doc_type.get("field_name") == "semd_code_name":
+            doc_type["field_name"] = "semd_label"
         if card.get("name") == "Динамика статусов по дням" and card.get("dataset_query", {}).get("type") == "native":
             card["dataset_query"]["native"]["query"] = CLIENT_STATUS_BY_DAY_QUERY
             card["description"] = (
@@ -1165,23 +1455,24 @@ def apply_client_dashboards(path: Path) -> None:
         if dq.get("type") == "native":
             dq["native"]["query"] = fix_client_sql(fix_sql(dq["native"]["query"]))
         fix_viz(card.get("visualization_settings") or {}, display=card.get("display", "table"))
-    path.write_text(json.dumps(dash, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return write_json_if_changed(path, dash)
 
 
 def main() -> None:
     dash = json.loads(DASH_01.read_text(encoding="utf-8"))
     apply_01(dash)
-    DASH_01.write_text(json.dumps(dash, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"Updated {DASH_01}")
+    if write_json_if_changed(DASH_01, dash):
+        print(f"Updated {DASH_01}")
 
     for fname, mapping in RENAME_OTHER.items():
         path = ROOT / "metabase_dashboards" / fname
-        apply_renames(path, mapping)
-        print(f"Updated {path}")
+        if apply_renames(path, mapping):
+            print(f"Updated {path}")
 
     for client_file in ("07_client_service.json", "08_client_bianalytic.json"):
-        apply_client_dashboards(ROOT / "metabase_dashboards" / client_file)
-        print(f"Updated metabase_dashboards/{client_file}")
+        client_path = ROOT / "metabase_dashboards" / client_file
+        if apply_client_dashboards(client_path):
+            print(f"Updated metabase_dashboards/{client_file}")
 
     archive_path = ROOT / "metabase_dashboards" / "06_semd_archive.json"
     if archive_path.exists():

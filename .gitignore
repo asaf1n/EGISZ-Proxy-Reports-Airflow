@@ -1,30 +1,43 @@
+.cache/
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+htmlcov/
+.coverage
+coverage.xml
 .venv/
-.idea/
-.vscode/
+venv/
 build/
 dist/
 *.egg-info/
+*.egg
 
-# Local secrets
-.env
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local secrets and k8s connection files (use *.example.yaml as template)
 k8s/**/**secret*.yaml
 !k8s/**/**.example.yaml
 
-# Local Claude/Cursor permissions — per-machine, must never be committed
-.claude/settings.local.json
-.claude/worktrees/
+# Per-machine agent/IDE config
+.claude/
 .cursor/
 
-# Ad-hoc verification files (psql -o output, temp SQL, profiling)
+# Ad-hoc local scripts and verification output
 tmp_*.txt
 tmp_*.sql
 scripts/_*
 profile_cold*.log
 tests/.pytest_airflow.db
 
-# Local runtime/build artifacts
+# Runtime logs and local Airflow artifacts
 *.log
 .dwh-init.last.log
+airflow/logs/

@@ -49,13 +49,13 @@ tags:
         table_ref: public.rpt_documents
         field_name: logid
 
+  # «Тип ошибки» работает только на грейне rpt_error_breakdown (1 строка = 1
+  # канонический тип на документ): точный матч по канону без потери документов с
+  # множественными ошибками. rpt_documents больше не имеет колонки error_type.
   error_type:
     rules:
       - query_contains: [rpt_error_breakdown]
         table_ref: public.rpt_error_breakdown
-        field_name: error_type
-      - query_contains: [rpt_documents]
-        table_ref: public.rpt_documents
         field_name: error_type
 
   jid:

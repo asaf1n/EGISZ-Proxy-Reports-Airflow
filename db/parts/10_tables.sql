@@ -41,14 +41,13 @@ CREATE TABLE IF NOT EXISTS documents (
     emdr_id text,
     semd_code text,
     status text,
-    status_category text,
     message_id text,
     relates_to_id text,
     callback_log_id bigint,
     sent_at timestamptz,
     document_created_at timestamptz,
     registered_at timestamptz,
-    error_type text,
+    error_types text,
     error_text text,
     patient_hash text,
     doctor_hash text,
@@ -121,6 +120,23 @@ END $$;
 DROP INDEX IF EXISTS idx_fact_document_key;
 DROP INDEX IF EXISTS idx_dim_exchangelog_refs_document_key;
 
+-- documents.error_type всегда хранил ПОЛНЫЙ список канонических типов через ' · '
+-- (один документ — один или несколько типов). Имя вводило в заблуждение и
+-- конфликтовало с атомарным rpt_error_breakdown.error_type. Переименовываем в
+-- error_types (множественное) как единый источник списка типов документа.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'error_type'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'error_types'
+    ) THEN
+        ALTER TABLE public.documents RENAME COLUMN error_type TO error_types;
+    END IF;
+END $$;
+
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS local_uid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
@@ -133,7 +149,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS callback_log_id bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS sent_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_type text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_types text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_text text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
@@ -146,6 +162,8 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid integer;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_oid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid_resolve_method text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
+-- status_category удалён: полностью выводится из status, downstream-потребителей нет.
+ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid integer PRIMARY KEY,

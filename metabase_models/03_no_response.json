@@ -10,7 +10,7 @@
     "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
     "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
     "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
-    "semd_code_name": { "semantic_type": "type/Title", "display_name": "СЭМД Код Наименование" },
+    "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
     "wait_segment": { "semantic_type": "type/Category", "display_name": "Сегмент ожидания" },
     "waiting_days": { "semantic_type": "type/Quantity", "display_name": "Дней в ожидании" }
   },
