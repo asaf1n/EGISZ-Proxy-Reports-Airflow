@@ -34,8 +34,7 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Документов за период — клиент",
@@ -92,7 +91,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -145,7 +144,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -198,7 +197,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -251,7 +250,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -261,7 +260,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort",
+          "query": "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_semd_label}}]] GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -334,7 +333,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -344,7 +343,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -374,16 +373,20 @@
       },
       "display": "pie",
       "visualization_settings": {
-        "pie.slice_threshold": 0,
-        "pie.percent_visibility": "inside",
+        "pie.decimal_places": 1,
         "pie.dimension": [
           "Тип документа"
         ],
         "pie.metric": "Документов",
+        "pie.percent_visibility": "inside",
         "pie.show_legend": true,
-        "pie.decimal_places": 1,
         "pie.show_total": true,
+        "pie.slice_threshold": 0,
         "column_settings": {
+          "[\"name\",\"_percentage\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
             "number_separators": ", "
@@ -391,10 +394,6 @@
           "[\"name\",\"Тип документа\"]": {
             "decimals": 0,
             "number_separators": ", "
-          },
-          "[\"name\",\"_percentage\"]": {
-            "number_separators": ", ",
-            "decimals": 1
           }
         }
       },
@@ -409,7 +408,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -462,7 +461,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -472,7 +471,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -525,7 +524,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     }

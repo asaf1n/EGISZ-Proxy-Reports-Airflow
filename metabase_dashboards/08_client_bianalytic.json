@@ -34,8 +34,7 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Документов за период — BI",
@@ -92,7 +91,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -136,8 +135,8 @@
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": ", "
+            "number_separators": ", ",
+            "suffix": " %"
           },
           "[\"name\",\"Доля успеха с первой попытки (клиент), %\"]": {
             "decimals": 1,
@@ -157,7 +156,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -216,7 +215,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -275,18 +274,9 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
-    },
-    {
-      "display": "text",
-      "text": "## Структура и качество потока (реальные данные)\nРаспределение объёма по типам СЭМД, доля успеха по типам, скорость доставки и журнал отклонённых документов.",
-      "sizeX": 24,
-      "sizeY": 1,
-      "row": 4,
-      "col": 0,
-      "visualization_settings": {}
     },
     {
       "name": "Динамика документов по типам СЭМД",
@@ -294,7 +284,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (SELECT date_trunc('month', processed_at)::date AS month_, COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS semd_code_name_, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND processed_at IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT semd_code_name_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.semd_code_name_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (semd_code_name_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+          "query": "WITH base AS (SELECT date_trunc('month', processed_at)::date AS month_, COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS semd_label_, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND processed_at IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT semd_label_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.semd_label_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (semd_label_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -350,9 +340,17 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
+    },
+    {
+      "display": "text",
+      "text": "## Структура и качество потока (реальные данные)\nРаспределение объёма по типам СЭМД, доля успеха по типам, скорость доставки и журнал отклонённых документов.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 4,
+      "col": 0
     },
     {
       "name": "% успеха регистрации по типам СЭМД",
@@ -360,7 +358,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -420,7 +418,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -430,7 +428,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_code_name, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{client_period}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -489,7 +487,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -499,7 +497,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT processed_at AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_code_name AS \"Тип СЭМД\", error_summary AS \"Сводка ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY processed_at DESC NULLS LAST LIMIT 50",
+          "query": "SELECT processed_at AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_label AS \"Тип СЭМД\", error_summary AS \"Сводка ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{client_period}}]] [[AND {{client_document_type}}]] ORDER BY processed_at DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -530,13 +528,13 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Исходный текст ошибки\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
           "[\"name\",\"error_text\"]": {
             "column_title": "Текст ошибки",
             "text_style": "wrap"
+          },
+          "[\"name\",\"Исходный текст ошибки\"]": {
+            "decimals": 0,
+            "number_separators": ", "
           },
           "[\"name\",\"Сводка ошибки\"]": {
             "column_title": "Сводка ошибки",
@@ -559,7 +557,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -569,8 +567,7 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 25,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Уникальных пациентов",
@@ -621,7 +618,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -674,7 +671,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -733,7 +730,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -798,7 +795,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     },
@@ -865,7 +862,7 @@
         },
         "client_document_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code_name"
+          "field_name": "semd_label"
         }
       }
     }
