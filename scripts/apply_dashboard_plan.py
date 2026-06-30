@@ -126,10 +126,10 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Объём по клиникам": [("clinic_jid", "JID Клиники")],
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
     "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
-    "Объём по СЭМД": [("semd_code", "Код СЭМД")],
+    "Топ типов СЭМД по документам": [("semd_code", "Код СЭМД")],
     "Успешность по типам СЭМД": [("semd_code", "Код СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
-    "Топ типов СЭМД по видам ошибки": [("semd_label", "СЭМД")],
+    "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
     "Топ клиник в очереди по документам": [("clinic_jid", "JID Клиники")],
     "Топ типов СЭМД в очереди": [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
@@ -155,7 +155,7 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Объём по клиникам": ["ips_date", "semd_type", "status"],
     "Успешность по клиникам": ["ips_date", "semd_type", "status"],
     "Объём ошибок по клиникам": ["ips_date", "semd_type", "status"],
-    "Объём по СЭМД": ["ips_date", "jid", "status"],
+    "Топ типов СЭМД по документам": ["ips_date", "jid", "status"],
     "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
     "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
     "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
@@ -424,12 +424,12 @@ TOP_ERROR_TYPE_QUERY = (
 
 TOP_SEMD_BY_ERROR_KIND_QUERY = (
     "WITH base AS ( "
-    "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS t, "
+    "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, "
     "COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, "
     "dwh_id AS doc FROM public.rpt_error_breakdown "
-    "WHERE COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' "
+    "WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' "
     "AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
-    "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
+    "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
     "totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), "
     "ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), "
     "per_pair AS ( "
@@ -481,6 +481,30 @@ ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [280, 200, 360, 88, 96, 104]
 
 SUCCESS_CLINIC_COLUMN_WIDTHS = [88, 300, 88, 88]
 SUCCESS_SEMD_COLUMN_WIDTHS = [88, 120, 88, 88, 88]
+CLINIC_VOLUME_COLUMN_WIDTHS = [186]
+TOP_SEMD_BY_ERRORS_COLUMN_WIDTHS = [396, 86]
+TOP_ERROR_TYPE_COLUMN_WIDTHS = [350, 87]
+TOP_ERROR_TYPE_TABLE_COLUMNS = [
+    {"enabled": True, "name": "Тип ошибки"},
+    {"enabled": True, "name": "Документов"},
+    {"enabled": True, "name": "%"},
+    {"enabled": True, "name": "Категория ошибки"},
+]
+TOP_ERROR_TYPE_COLUMN_FORMATTING = [
+    {
+        "columns": ["%"],
+        "type": "range",
+        "colors": [
+            "hsla(89, 48%, 40%, 1)",
+            "transparent",
+            "hsla(358, 71%, 62%, 1)",
+        ],
+        "min_type": "custom",
+        "max_type": None,
+        "min_value": -100,
+        "max_value": 100,
+    }
+]
 
 ERROR_TYPE_CLINIC_TEMPLATE_TAGS = {
     "jid": {
@@ -880,9 +904,8 @@ def apply_transactions_trend(card: dict) -> None:
 
 
 def apply_semd_volume_table(card: dict) -> None:
-    """«Объём по СЭМД» — таблица кодов СЭМД по числу документов в срезе, по образцу
-    «Объём по клиникам». Колонка «%» — доля от общего числа документов."""
-    card["name"] = "Объём по СЭМД"
+    """Таблица кодов СЭМД по числу документов в срезе (вкладка «Архив СЭМД»)."""
+    card["name"] = "Топ типов СЭМД по документам"
     card["display"] = "table"
     card["description"] = "Объём документов по кодам СЭМД в срезе. Колонка «%» — доля от общего числа документов."
     viz = card.setdefault("visualization_settings", {})
@@ -904,6 +927,7 @@ def apply_clinic_volume(card: dict) -> None:
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(CLINIC_VOLUME_TABLE_COLUMNS)
     viz["table.cell_column"] = "Клиника"
+    viz["table.column_widths"] = deepcopy(CLINIC_VOLUME_COLUMN_WIDTHS)
     viz["column_settings"] = deepcopy(COUNT_COLUMN_SETTINGS)
     strip_chart_keys(viz, card.get("display", "table"))
 
@@ -1011,15 +1035,20 @@ def apply_top_error_type_table(card: dict) -> None:
         if key.startswith("graph.") or key.startswith("pie."):
             del viz[key]
     viz.pop("series_settings", None)
-    viz["table.columns"] = [
-        {"enabled": True, "name": "Категория ошибки"},
-        {"enabled": True, "name": "Тип ошибки"},
-        {"enabled": True, "name": "Документов"},
-        {"enabled": True, "name": "%"},
-    ]
+    viz["table.columns"] = deepcopy(TOP_ERROR_TYPE_TABLE_COLUMNS)
     viz["table.cell_column"] = "Документов"
+    viz["table.pivot_column"] = "Документов"
+    viz["table.column_widths"] = deepcopy(TOP_ERROR_TYPE_COLUMN_WIDTHS)
+    viz["table.column_formatting"] = deepcopy(TOP_ERROR_TYPE_COLUMN_FORMATTING)
+    viz["version"] = 2
     cs = deepcopy(COUNT_COLUMN_SETTINGS)
     cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
+    cs['["name","%"]'] = {
+        "column_title": "%",
+        "decimals": 1,
+        "number_separators": ", ",
+        "suffix": " %",
+    }
     viz["column_settings"] = cs
     strip_chart_keys(viz, "table")
 
@@ -1056,6 +1085,11 @@ def apply_top_category_type_bar(card: dict) -> None:
 def apply_top_semd_by_error_kind(card: dict) -> None:
     card["display"] = "row"
     card["dataset_query"]["native"]["query"] = TOP_SEMD_BY_ERROR_KIND_QUERY
+    card["metabase-field-filters"] = {
+        "ips_date": {"table_ref": "public.rpt_error_breakdown", "field_name": "ips_date"},
+        "jid": {"table_ref": "public.rpt_error_breakdown", "field_name": "clinic_label"},
+        "semd_type": {"table_ref": "public.rpt_error_breakdown", "field_name": "semd_code"},
+    }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["СЭМД", "Тип ошибки"]
     viz["graph.metrics"] = ["Документов"]
@@ -1074,6 +1108,7 @@ def apply_top_semd_by_error_kind(card: dict) -> None:
 def apply_top_semd_by_errors(card: dict) -> None:
     card["dataset_query"]["native"]["query"] = TOP_SEMD_BY_ERRORS_QUERY
     viz = card.setdefault("visualization_settings", {})
+    viz["table.column_widths"] = deepcopy(TOP_SEMD_BY_ERRORS_COLUMN_WIDTHS)
     dims = viz.get("graph.dimensions") or viz.get("pie.dimension")
     if dims and "Код СЭМД" in dims:
         viz["graph.dimensions"] = [
@@ -1299,7 +1334,7 @@ FILTER_ORDER = [
 # Полный набор document-lookup (local_uid/relates_to/emdr_id/log_id) — лишь на вкладке archive.
 SLIM_FILTERS: dict[str, set[str]] = {
     "Объём по клиникам": {"ips_date", "semd_type", "jid", "status"},
-    "Объём по СЭМД": {"ips_date", "semd_type", "jid", "status"},
+    "Топ типов СЭМД по документам": {"ips_date", "semd_type", "jid", "status"},
     "Объём ошибок по клиникам": {"ips_date", "semd_type", "jid", "status"},
     "Топ типов СЭМД по ошибкам": {"ips_date", "semd_type", "jid"},
     "Отказы по часам: связь и асинхронный ответ": {"ips_date", "semd_type", "jid"},
@@ -1524,9 +1559,8 @@ def apply_01(dash: dict) -> None:
             apply_transactions_trend(card)
         elif name == "Динамика документов по дням" and dq.get("type") == "native":
             apply_document_volume_by_day(card)
-        elif name in ("Топ типов СЭМД по документам", "Объём по СЭМД") and card.get("tab") == "operational":
+        elif name == "Топ типов СЭМД по документам" and card.get("tab") == "archive":
             apply_semd_volume_table(card)
-            name = card["name"]
         elif name == "Детализация контроля качества":
             apply_quality_detail(card)
 
@@ -1551,7 +1585,21 @@ def apply_01(dash: dict) -> None:
             nat = card["dataset_query"]["native"]
             nat["query"] = set_filter_block(nat["query"], SLIM_FILTERS[name])
 
+        if name == "Объём по СЭМД" and card.get("tab") == "operational":
+            continue
+
         filtered.append(card)
+
+    errors_top = next(
+        (c for c in filtered if c.get("name") == "Топ по типу ошибки" and c.get("tab") == "errors"),
+        None,
+    )
+    if errors_top and not any(
+        c.get("name") == "Топ по типу ошибки" and c.get("tab") == "operational" for c in filtered
+    ):
+        operational_top = deepcopy(errors_top)
+        operational_top["tab"] = "operational"
+        filtered.append(operational_top)
 
     dash["cards"] = filtered
     restore_archive_top_semd(dash)
@@ -1589,10 +1637,7 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
 
 
 def restore_archive_top_semd(dash: dict) -> None:
-    if any(
-        c.get("name") in ("Топ типов СЭМД по документам", "Объём по СЭМД")
-        for c in dash["cards"]
-    ):
+    if any(c.get("name") == "Топ типов СЭМД по документам" for c in dash["cards"]):
         return
     query = (
         "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt "
@@ -1654,8 +1699,6 @@ def restore_archive_top_semd(dash: dict) -> None:
         },
         "sizeX": 12,
         "sizeY": 6,
-        "row": 3,
-        "col": 5,
         "tab": "archive",
         "metabase-field-filters": ff,
         "click_behavior": build_drill([("semd_type_filter", "Код СЭМД")]),

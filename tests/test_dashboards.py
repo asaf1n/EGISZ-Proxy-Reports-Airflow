@@ -478,7 +478,7 @@ def test_quality_error_rate_error_kind_by_semd_card() -> None:
     assert card["display"] == "table"
     assert card["sizeX"] == 12
     assert card["col"] == 12
-    assert card["row"] == 0
+    assert card["row"] == 22
     assert "rpt_error_breakdown" in query
     assert "WITH pairs AS" in query
     # Знаменатель «% ошибок» — документы (COUNT DISTINCT) по типу СЭМД, без двойного
@@ -497,7 +497,10 @@ def test_quality_error_rate_error_kind_by_semd_card() -> None:
 
 def test_semd_volume_table_shows_share_of_total() -> None:
     dashboard = _integration_dashboard()
-    card = next(c for c in _operational_tab_cards(dashboard) if c.get("name") == "Объём по СЭМД")
+    card = next(
+        c for c in dashboard["cards"]
+        if c.get("name") == "Топ типов СЭМД по документам" and c.get("tab") == "archive"
+    )
     assert card["display"] == "table"
     query = card["dataset_query"]["native"]["query"]
     assert "COUNT(DISTINCT dwh_id)" in query
@@ -509,8 +512,8 @@ def test_semd_volume_table_shows_share_of_total() -> None:
 def test_semd_volume_uses_same_document_universe_as_total() -> None:
     dashboard = _integration_dashboard()
     top = next(
-        card for card in _operational_tab_cards(dashboard)
-        if card["name"] == "Объём по СЭМД"
+        card for card in dashboard["cards"]
+        if card.get("name") == "Топ типов СЭМД по документам" and card.get("tab") == "archive"
     )
     top_query = top["dataset_query"]["native"]["query"]
 
@@ -569,7 +572,10 @@ def test_retired_error_interpretations_view_removed() -> None:
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     dashboard = _integration_dashboard()
-    card = next(card for card in _operational_tab_cards(dashboard) if card["name"] == "Объём по СЭМД")
+    card = next(
+        card for card in dashboard["cards"]
+        if card.get("name") == "Топ типов СЭМД по документам" and card.get("tab") == "archive"
+    )
     query = card["dataset_query"]["native"]["query"]
 
     assert '"СЭМД (архив)"' not in sql
@@ -652,12 +658,17 @@ def test_document_volume_by_day_uses_first_sent_not_sent_at() -> None:
 
 def test_quality_success_slices_sort_by_total_desc() -> None:
     dashboard = _integration_dashboard()
-    clinic = next(c for c in dashboard["cards"] if c.get("name") == "Успешность по клиникам")
-    semd = next(c for c in dashboard["cards"] if c.get("name") == "Успешность по типам СЭМД")
+    clinic = next(
+        c for c in dashboard["cards"]
+        if c.get("name") == "Успешность по клиникам" and c.get("tab") == "operational"
+    )
+    semd = next(
+        c for c in dashboard["cards"]
+        if c.get("name") == "Успешность по типам СЭМД" and c.get("tab") == "operational"
+    )
     assert "ORDER BY 2 DESC" in semd["dataset_query"]["native"]["query"]
     assert "ORDER BY 3 DESC" in clinic["dataset_query"]["native"]["query"]
-    # Перенесены на вкладку «Оперативный мониторинг» (row 21).
-    assert clinic["row"] == 21
+    assert clinic["row"] == 22
 
 
 def test_quality_dashboard_has_no_slice_section_headers() -> None:
@@ -701,7 +712,7 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     query = card["dataset_query"]["native"]["query"]
 
     assert card["display"] == "row"
-    assert "semd_label" in query
+    assert "semd_code" in query
     assert "rn <= 15" in query
     assert "rpt_error_breakdown" in query
     assert card["visualization_settings"]["graph.dimensions"] == ["СЭМД", "Тип ошибки"]
@@ -712,7 +723,7 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     assert card["visualization_settings"].get("graph.x_axis.scale") == "ordinal"
     assert card["visualization_settings"].get("graph.x_axis.title_text", "unset") == ""
     assert card["visualization_settings"].get("graph.y_axis.title_text", "unset") == ""
-    _assert_model_drill_through(card, "Разбивка ошибок", {"semd_label"})
+    _assert_model_drill_through(card, "Разбивка ошибок", {"semd_code"})
 
 
 def test_quality_percent_columns_use_comma_decimal_separator() -> None:
@@ -1186,7 +1197,11 @@ def test_top_error_type_card_is_table_with_share() -> None:
     assert 'AS "%"' in query
     assert "NULLIF((SELECT total FROM totals), 0)" in query
     columns = [col["name"] for col in viz["table.columns"]]
-    assert columns == ["Категория ошибки", "Тип ошибки", "Документов", "%"]
+    assert columns == ["Тип ошибки", "Документов", "%", "Категория ошибки"]
+    assert viz["table.column_widths"] == [350, 87]
+    formatting = viz["table.column_formatting"]
+    assert formatting[0]["columns"] == ["%"]
+    assert formatting[0]["colors"][1] == "transparent"
 
 
 def test_top_semd_by_errors_uses_semd_label() -> None:
@@ -1347,7 +1362,7 @@ def test_integration_dashboard_has_tabs_and_legacy_card_coverage() -> None:
     assert by_tab["service"] == 11
     assert by_tab["queue"] == 8
     assert by_tab["errors"] == 7
-    assert by_tab["archive"] == 5
+    assert by_tab["archive"] == 6
 
 
 def test_integration_dashboard_default_period_is_current_month() -> None:
@@ -1378,7 +1393,8 @@ def test_archive_tab_layout_matches_grid() -> None:
         "Всего клиник": (0, 4, 4, 2),
         "Динамика документов по дням": (0, 8, 16, 8),
         "Объём по клиникам": (2, 0, 8, 6),
-        "Архив СЭМД": (8, 0, 24, 10),
+        "Топ типов СЭМД по документам": (8, 0, 12, 6),
+        "Архив СЭМД": (14, 0, 24, 10),
     }
     for name, (row, col, size_x, size_y) in expected.items():
         card = next(
@@ -1410,12 +1426,13 @@ def test_archive_tab_uses_same_clinic_volume_card_as_operational() -> None:
     assert archive["row"] == 2 and archive["col"] == 0 and archive["sizeX"] == 8 and archive["sizeY"] == 6
 
 
-def test_archive_tab_has_five_cards() -> None:
+def test_archive_tab_has_six_cards() -> None:
     archive_names = {c["name"] for c in _archive_tab_cards()}
     assert archive_names == {
         "Всего документов",
         "Всего клиник",
         "Динамика документов по дням",
+        "Топ типов СЭМД по документам",
         "Архив СЭМД",
         "Объём по клиникам",
     }
@@ -1440,8 +1457,8 @@ def test_operational_tab_has_core_cards() -> None:
         "Последние операции",
         "Статусы за период",
         "Транзакции по дням и статусам",
+        "Топ по типу ошибки",
         "Объём по клиникам",
-        "Объём по СЭМД",
         "Успешность по клиникам",
         "Успешность по типам СЭМД",
         "Объём ошибок по клиникам",
@@ -1860,7 +1877,7 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
     """Дрилл из агрегатов идёт в модель (linkType=question), а не на вкладку «Архив»."""
     dash = _integration_dashboard()
     by_name = {c.get("name"): c for c in dash["cards"]}
-    for name in ("Объём по клиникам", "Объём по СЭМД", "Топ типов СЭМД по ошибкам", "Топ клиник в очереди по документам"):
+    for name in ("Объём по клиникам", "Топ типов СЭМД по ошибкам", "Топ клиник в очереди по документам"):
         click = by_name[name].get("click_behavior") or {}
         assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
         assert "targetDashboard" not in click and click.get("tab") != "archive"

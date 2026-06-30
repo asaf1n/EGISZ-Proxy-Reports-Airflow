@@ -80,10 +80,62 @@
       "name": "Последние операции",
       "description": "До 50 последних документов в периоде; сортировка по дате последней активности («Обработано IPS», новые сверху). Одна строка — один dwh_id.",
       "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "",
-          "template-tags": {}
+        "type": "query",
+        "query": {
+          "source-table": "model:Документы",
+          "order-by": [
+            [
+              "desc",
+              [
+                "field",
+                "Документы:ips_date",
+                null
+              ]
+            ]
+          ],
+          "limit": 50,
+          "fields": [
+            [
+              "field",
+              "Документы:ips_date",
+              null
+            ],
+            [
+              "field",
+              "Документы:status_label",
+              null
+            ],
+            [
+              "field",
+              "Документы:clinic_label",
+              null
+            ],
+            [
+              "field",
+              "Документы:clinic_host",
+              null
+            ],
+            [
+              "field",
+              "Документы:semd_label",
+              null
+            ],
+            [
+              "field",
+              "Документы:semd_local_uid",
+              null
+            ],
+            [
+              "field",
+              "Документы:semd_emdr_id",
+              null
+            ],
+            [
+              "field",
+              "Документы:error_summary",
+              null
+            ]
+          ]
         },
         "database": 1
       },
@@ -134,18 +186,23 @@
           }
         ],
         "column_settings": {
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника"
+          },
           "[\"name\",\"localUid СЭМД\"]": {
             "column_title": "localUid"
+          },
+          "[\"name\",\"OID Клиники\"]": {
+            "column_title": "OID Клиники"
           },
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
           },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки",
-            "text_style": "wrap"
+          "[\"name\",\"Host Клиники (ГОСТ VPN)\"]": {
+            "column_title": "Host"
           },
-          "[\"name\",\"OID Клиники\"]": {
-            "column_title": "OID Клиники"
+          "[\"name\",\"СЭМД CreateDate\"]": {
+            "column_title": "СЭМД CreateDate"
           },
           "[\"name\",\"Дата обработки\"]": {
             "column_title": "Обработано IPS",
@@ -153,29 +210,16 @@
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
           },
-          "[\"name\",\"Host Клиники (ГОСТ VPN)\"]": {
-            "column_title": "Host"
-          },
           "[\"name\",\"Наименование СЭМД\"]": {
             "column_title": "Наименование СЭМД"
-          },
-          "[\"name\",\"ИНН Клиники\"]": {
-            "column_title": "ИНН Клиники"
           },
           "[\"name\",\"Код СЭМД\"]": {
             "column_title": "Код СЭМД"
           },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
-            "text_style": "wrap"
-          },
-          "[\"name\",\"СЭМД CreateDate\"]": {
-            "column_title": "СЭМД CreateDate"
+          "[\"name\",\"ИНН Клиники\"]": {
+            "column_title": "ИНН Клиники"
           },
           "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
-          },
-          "[\"name\",\"Клиника\"]": {
             "column_title": "Клиника"
           },
           "[\"name\",\"Связанное сообщение\"]": {
@@ -187,105 +231,21 @@
           "[\"name\",\"СЭМД\"]": {
             "column_title": "СЭМД",
             "text_style": "wrap"
-          }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Клиника",
-                "id": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
           },
-          "targetId": 40
+          "[\"name\",\"Сводка ошибки\"]": {
+            "column_title": "Сводка ошибки",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
+          }
         }
       },
       "sizeX": 24,
       "sizeY": 8,
       "row": 0,
       "col": 0,
-      "tab": "operational",
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
@@ -306,101 +266,29 @@
           "field_name": "status_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "clinic_label": {
+            "source": {
+              "type": "column",
+              "name": "Клиника"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_label"
+            }
+          }
+        }
+      },
+      "tab": "operational",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Клиника",
-              "id": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
@@ -442,7 +330,6 @@
       "visualization_settings": {
         "graph.y_axis.title_text": "Документов",
         "graph.show_values": true,
-        "graph.series_order_dimension": "Статус",
         "graph.x_axis.axis_enabled": "rotate-45",
         "graph.x_axis.title_text": "Дата",
         "graph.label_value_frequency": "fit",
@@ -450,26 +337,6 @@
           "Документов"
         ],
         "graph.label_value_formatting": "compact",
-        "graph.series_order": [
-          {
-            "key": "Ошибка асинхронного ответа РЭМД",
-            "color": "#A989C5",
-            "enabled": true,
-            "name": "Ошибка асинхронного ответа РЭМД"
-          },
-          {
-            "key": "Ошибка связи",
-            "color": "#F2994A",
-            "enabled": true,
-            "name": "Ошибка связи"
-          },
-          {
-            "key": "Успешно зарегистрирован",
-            "color": "#84BB4C",
-            "enabled": true,
-            "name": "Успешно зарегистрирован"
-          }
-        ],
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
@@ -479,7 +346,7 @@
         },
         "series_settings": {
           "Ошибка асинхронного ответа РЭМД": {
-            "color": "#8A5EB0"
+            "color": "#A989C5"
           },
           "Ошибка связи": {
             "color": "#F2994A"
@@ -494,104 +361,12 @@
           "Статус"
         ],
         "stackable.stack_type": "stacked",
-        "graph.split_panels": false,
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Статус",
-                "id": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
-        }
+        "graph.split_panels": false
       },
       "sizeX": 16,
       "sizeY": 6,
       "row": 8,
       "col": 0,
-      "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -606,111 +381,71 @@
           "field_name": "clinic_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "status_label": {
+            "source": {
+              "type": "column",
+              "name": "Статус"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "status_label"
+            }
+          }
+        }
+      },
+      "tab": "operational",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "jid": "clinic_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Статус",
-              "id": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
       "name": "Статусы за период",
       "description": "Распределение документов с вердиктом РЭМД по исходу за период (без «Отправлено» — у них ещё нет результата).",
       "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "",
-          "template-tags": {}
+        "type": "query",
+        "query": {
+          "source-table": "model:Документы",
+          "aggregation": [
+            [
+              "aggregation-options",
+              [
+                "distinct",
+                [
+                  "field",
+                  "Документы:dwh_id",
+                  null
+                ]
+              ],
+              {
+                "name": "Документов",
+                "display-name": "Документов"
+              }
+            ]
+          ],
+          "breakout": [
+            [
+              "field",
+              "Документы:status_label",
+              null
+            ]
+          ],
+          "filter": [
+            "!=",
+            [
+              "field",
+              "Документы:status_label",
+              null
+            ],
+            "Отправлено"
+          ]
         },
         "database": 1
       },
@@ -735,44 +470,34 @@
           "Статус"
         ],
         "pie.show_labels": false,
-        "pie.sort_rows": false,
         "pie.rows": [
           {
             "color": "#88BF4D",
             "enabled": true,
             "key": "Успешно зарегистрирован",
             "name": "Успешно зарегистрирован",
-            "originalName": "Успешно зарегистрирован",
-            "hidden": false,
-            "isOther": false
+            "originalName": "Успешно зарегистрирован"
           },
           {
-            "color": "#8A5EB0",
+            "color": "#A989C5",
             "enabled": true,
             "key": "Ошибка асинхронного ответа РЭМД",
             "name": "Ошибка асинхронного ответа РЭМД",
-            "originalName": "Ошибка асинхронного ответа РЭМД",
-            "hidden": false,
-            "isOther": false,
-            "defaultColor": false
+            "originalName": "Ошибка асинхронного ответа РЭМД"
           },
           {
             "color": "#F2994A",
             "enabled": true,
             "key": "Ошибка связи",
             "name": "Ошибка связи",
-            "originalName": "Ошибка связи",
-            "hidden": false,
-            "isOther": false
+            "originalName": "Ошибка связи"
           },
           {
             "color": "#949AAB",
             "enabled": true,
             "key": "Отправлено",
             "name": "Отправлено",
-            "originalName": "Отправлено",
-            "hidden": true,
-            "isOther": false
+            "originalName": "Отправлено"
           }
         ],
         "pie.metric": "Документов",
@@ -789,104 +514,12 @@
             "column_title": "Статус"
           }
         },
-        "version": 2,
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Статус",
-                "id": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
-        }
+        "version": 2
       },
       "sizeX": 8,
       "sizeY": 6,
       "row": 8,
       "col": 16,
-      "tab": "operational",
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
@@ -907,536 +540,29 @@
           "field_name": "status_label"
         }
       },
-      "metabase-model-drill-params": {
-        "ips_date": "ips_date",
-        "semd_type": "semd_label",
-        "jid": "clinic_label"
-      },
+      "tab": "operational",
       "click_behavior": {
         "type": "link",
         "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
+          "status_label": {
             "source": {
               "type": "column",
-              "name": "Статус",
-              "id": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
-      }
-    },
-    {
-      "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fa000004-0004-4004-8004-0011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Обработано IPS",
-              "id": "fa000004-0004-4004-8004-0001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "fa000004-0004-4004-8004-0010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.cell_column": "Документов",
-        "table.column_formatting": [
-          {
-            "colors": [
-              "hsla(89, 48%, 40%, 1)",
-              "transparent",
-              "hsla(358, 71%, 62%, 1)"
-            ],
-            "columns": [
-              "%"
-            ],
-            "max_type": null,
-            "max_value": 20,
-            "min_type": "custom",
-            "min_value": -100,
-            "type": "range"
-          }
-        ],
-        "table.column_widths": [
-          347,
-          null,
-          78
-        ],
-        "table.columns": [
-          {
-            "enabled": true,
-            "name": "Тип ошибки"
-          },
-          {
-            "enabled": true,
-            "name": "%"
-          },
-          {
-            "enabled": true,
-            "name": "Документов"
-          },
-          {
-            "enabled": true,
-            "name": "Категория ошибки"
-          }
-        ],
-        "version": 2,
-        "table.pivot_column": "Категория ошибки",
-        "column_settings": {
-          "[\"name\",\"%\"]": {
-            "column_title": "%",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
-            "text_style": "wrap"
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 8,
-      "row": 14,
-      "col": 0,
-      "tab": "operational",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
-      "name": "Успешность по типам СЭМД",
-      "description": "Доля успешных документов по **типу СЭМД** (код · НСИ). Метрика: COUNT(DISTINCT «ID») по статусу. Строки без кода/типа СЭМД отсекаются.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
-          "template-tags": {
-            "semd_type": {
-              "name": "semd_type",
-              "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb040501-0501-4501-8501-000000000003"
-            },
-            "ips_date": {
-              "name": "ips_date",
-              "type": "dimension",
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fb040501-0501-4501-8501-000000000001"
-            },
-            "jid": {
-              "name": "jid",
-              "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fb040501-0501-4501-8501-000000000002"
-            },
-            "status": {
-              "name": "status",
-              "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Статус",
-              "id": "fb040501-0501-4501-8501-000000000004"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.cell_column": "Всего",
-        "table.column_formatting": [
-          {
-            "colors": [
-              "#DC2626",
-              "#FBBF24",
-              "#84BB4C"
-            ],
-            "columns": [
-              "% успеха"
-            ],
-            "max_type": "custom",
-            "max_value": 100,
-            "min_type": "custom",
-            "min_value": 0,
-            "type": "range"
-          }
-        ],
-        "table.column_widths": [
-          65,
-          391
-        ],
-        "table.columns": [
-          {
-            "enabled": true,
-            "name": "% успеха"
-          },
-          {
-            "name": "СЭМД",
-            "enabled": true
-          },
-          {
-            "enabled": true,
-            "name": "Всего"
-          },
-          {
-            "enabled": true,
-            "name": "Успешно"
-          },
-          {
-            "enabled": true,
-            "name": "Ошибок"
-          }
-        ],
-        "column_settings": {
-          "[\"name\",\"% успеха\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Всего\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Успешно\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",546,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Код СЭМД",
-                "id": "Код СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",546,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    546,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 8,
-      "row": 14,
-      "col": 12,
-      "tab": "operational",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "status": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
-        }
-      },
-      "metabase-model-drill-params": {
-        "ips_date": "ips_date",
-        "jid": "clinic_label",
-        "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",546,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Код СЭМД",
-              "id": "Код СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",546,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  546,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
               "name": "Статус"
             },
             "target": {
               "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
+              "model_ref": "Документы",
+              "field_name": "status_label"
             }
           }
-        },
-        "targetId": 40
+        }
+      },
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label"
       }
     },
     {
@@ -1524,115 +650,23 @@
         ],
         "table.row_index": true,
         "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
           "[\"name\",\"%\"]": {
             "column_title": "%",
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
           }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    552,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
         }
       },
       "sizeX": 12,
       "sizeY": 8,
       "row": 22,
       "col": 0,
-      "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -1651,101 +685,29 @@
           "field_name": "status_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "operational",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  552,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
@@ -1865,104 +827,12 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    552,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
         }
       },
       "sizeX": 12,
       "sizeY": 8,
       "row": 22,
       "col": 12,
-      "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -1981,101 +851,188 @@
           "field_name": "status_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "operational",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
+      }
+    },
+    {
+      "name": "Успешность по типам СЭМД",
+      "description": "Доля успешных документов по **типу СЭМД** (код · НСИ). Метрика: COUNT(DISTINCT «ID») по статусу. Строки без кода/типа СЭМД отсекаются.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "template-tags": {
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип СЭМД (код НСИ)",
+              "id": "fb040501-0501-4501-8501-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
             },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  552,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fb040501-0501-4501-8501-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
             },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fb040501-0501-4501-8501-000000000002",
+              "name": "jid",
+              "type": "dimension"
             },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "fb040501-0501-4501-8501-000000000004",
+              "name": "status",
+              "type": "dimension"
             }
           }
         },
-        "targetId": 40
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.cell_column": "Всего",
+        "table.column_formatting": [
+          {
+            "colors": [
+              "#DC2626",
+              "#FBBF24",
+              "#84BB4C"
+            ],
+            "columns": [
+              "% успеха"
+            ],
+            "max_type": "custom",
+            "max_value": 100,
+            "min_type": "custom",
+            "min_value": 0,
+            "type": "range"
+          }
+        ],
+        "table.column_widths": [
+          88,
+          120,
+          88,
+          88,
+          88
+        ],
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "% успеха"
+          },
+          {
+            "enabled": true,
+            "name": "Код СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Всего"
+          },
+          {
+            "enabled": true,
+            "name": "Успешно"
+          },
+          {
+            "enabled": true,
+            "name": "Ошибок"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"% успеха\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Всего\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Код СЭМД\"]": {
+            "column_title": "Код"
+          },
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 14,
+      "col": 12,
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_label"
+        }
+      },
+      "tab": "operational",
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "semd_code": {
+            "source": {
+              "type": "column",
+              "name": "Код СЭМД"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "semd_code"
+            }
+          }
+        }
+      },
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label",
+        "status": "status_label"
       }
     },
     {
@@ -2171,104 +1128,12 @@
         "graph.metrics": [
           "Документов",
           "% ошибок"
-        ],
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    552,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
-        }
+        ]
       },
       "sizeX": 24,
       "sizeY": 7,
       "row": 30,
       "col": 0,
-      "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -2287,101 +1152,29 @@
           "field_name": "status_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "operational",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  552,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
@@ -2419,6 +1212,9 @@
       },
       "display": "table",
       "visualization_settings": {
+        "table.pivot": true,
+        "table.pivot_column": "День",
+        "table.pivot_row": "Клиника",
         "table.cell_column": "Доля ошибок, %",
         "table.column_formatting": [
           {
@@ -2437,9 +1233,6 @@
             "type": "range"
           }
         ],
-        "table.pivot": true,
-        "table.pivot_column": "День",
-        "table.pivot_row": "Клиника",
         "column_settings": {
           "[\"name\",\"Доля ошибок, %\"]": {
             "decimals": 1,
@@ -2455,7 +1248,6 @@
       "sizeY": 10,
       "row": 37,
       "col": 0,
-      "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -2469,7 +1261,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "operational"
     },
     {
       "name": "Отказы по часам: связь и асинхронный ответ",
@@ -2479,18 +1272,18 @@
         "native": {
           "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::bigint AS \"Ошибка связи\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f3a00004-0004-4004-8004-000000099011",
-              "name": "jid",
-              "type": "dimension"
-            },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f3a00004-0004-4004-8004-000000099001",
               "name": "ips_date",
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f3a00004-0004-4004-8004-000000099011",
+              "name": "jid",
               "type": "dimension"
             },
             "semd_type": {
@@ -2544,7 +1337,6 @@
       "sizeY": 6,
       "row": 0,
       "col": 0,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -2558,7 +1350,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "РЭМД vs связь",
@@ -2568,18 +1361,18 @@
         "native": {
           "query": "SELECT CASE status WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'network_error' THEN 'Ошибка связи' END AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 2 DESC",
           "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f3a00004-0004-4004-8004-000000099011",
-              "name": "jid",
-              "type": "dimension"
-            },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f3a00004-0004-4004-8004-000000099001",
               "name": "ips_date",
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f3a00004-0004-4004-8004-000000099011",
+              "name": "jid",
               "type": "dimension"
             },
             "semd_type": {
@@ -2626,104 +1419,12 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Статус",
-                "id": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
         }
       },
       "sizeX": 4,
       "sizeY": 6,
       "row": 0,
       "col": 20,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -2738,101 +1439,29 @@
           "field_name": "clinic_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "status_label": {
+            "source": {
+              "type": "column",
+              "name": "Статус"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "status_label"
+            }
+          }
+        }
+      },
+      "tab": "service",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "jid": "clinic_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Статус",
-              "id": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
@@ -2975,7 +1604,6 @@
       "sizeY": 6,
       "row": 6,
       "col": 14,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -2989,7 +1617,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Детализация контроля качества",
@@ -3168,7 +1797,6 @@
       "sizeY": 8,
       "row": 12,
       "col": 0,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -3182,7 +1810,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Сбоев связи за период",
@@ -3231,7 +1860,6 @@
       "sizeY": 3,
       "row": 20,
       "col": 0,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3245,7 +1873,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Пик сбоев связи за день",
@@ -3294,7 +1923,6 @@
       "sizeY": 3,
       "row": 20,
       "col": 4,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3308,7 +1936,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Тренд ошибок связи по дням",
@@ -3366,7 +1995,6 @@
       "sizeY": 5,
       "row": 20,
       "col": 8,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3380,7 +2008,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Топ клиник по сбоям транспорта",
@@ -3440,7 +2069,6 @@
       "sizeY": 6,
       "row": 25,
       "col": 0,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3454,7 +2082,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Типы сетевых ошибок (за период)",
@@ -3514,7 +2143,6 @@
       "sizeY": 6,
       "row": 25,
       "col": 12,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3528,7 +2156,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "Последние сбои транспорта",
@@ -3576,7 +2205,6 @@
       "sizeY": 5,
       "row": 31,
       "col": 0,
-      "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_network_errors",
@@ -3590,7 +2218,8 @@
           "table_ref": "public.rpt_network_errors",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "service"
     },
     {
       "name": "В очереди (всего)",
@@ -3657,7 +2286,6 @@
       "sizeY": 3,
       "row": 0,
       "col": 0,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3679,7 +2307,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Зависших >3 дней",
@@ -3746,7 +2375,6 @@
       "sizeY": 3,
       "row": 0,
       "col": 6,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3768,7 +2396,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Зависших >7 дней",
@@ -3835,7 +2464,6 @@
       "sizeY": 3,
       "row": 0,
       "col": 12,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3857,7 +2485,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Зависших >30 дней",
@@ -3924,7 +2553,6 @@
       "sizeY": 3,
       "row": 0,
       "col": 18,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3946,7 +2574,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Очередь без ответа",
@@ -4106,7 +2735,6 @@
       "sizeY": 10,
       "row": 3,
       "col": 0,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -4128,7 +2756,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Топ клиник в очереди по документам",
@@ -4204,104 +2833,12 @@
         },
         "graph.metrics": [
           "Документов"
-        ],
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",588,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",588,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    588,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    580,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",587,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",587,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    587,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-                "name": "Сегмент ожидания"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    583,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 42
-        }
+        ]
       },
       "sizeX": 12,
       "sizeY": 7,
       "row": 13,
       "col": 0,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -4324,101 +2861,29 @@
           "field_name": "wait_segment"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Очередь без ответа",
+        "parameterMapping": {
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Очередь без ответа",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "queue",
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
         "semd_type": "semd_label",
         "wait_segment": "wait_segment"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",588,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",588,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  588,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  580,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",587,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",587,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  587,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-              "name": "Сегмент ожидания"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  583,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 42
       }
     },
     {
@@ -4510,7 +2975,6 @@
       "sizeY": 7,
       "row": 13,
       "col": 12,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -4532,7 +2996,8 @@
           "table_ref": "public.rpt_documents_waiting",
           "field_name": "wait_segment"
         }
-      }
+      },
+      "tab": "queue"
     },
     {
       "name": "Топ типов СЭМД в очереди",
@@ -4603,104 +3068,12 @@
         },
         "graph.metrics": [
           "Документов"
-        ],
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",585,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Код СЭМД",
-                "id": "Код СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",585,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    585,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    580,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",590,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",590,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    590,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-                "name": "Сегмент ожидания"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    583,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 42
-        }
+        ]
       },
       "sizeX": 24,
       "sizeY": 7,
       "row": 20,
       "col": 0,
-      "tab": "queue",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
@@ -4723,1438 +3096,29 @@
           "field_name": "wait_segment"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Очередь без ответа",
+        "parameterMapping": {
+          "semd_code": {
+            "source": {
+              "type": "column",
+              "name": "Код СЭМД"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Очередь без ответа",
+              "field_name": "semd_code"
+            }
+          }
+        }
+      },
+      "tab": "queue",
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
         "jid": "clinic_label",
         "wait_segment": "wait_segment"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",585,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Код СЭМД",
-              "id": "Код СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",585,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  585,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",580,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  580,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",590,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",590,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  590,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-              "name": "Сегмент ожидания"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",583,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  583,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 42
-      }
-    },
-    {
-      "name": "Топ типов СЭМД по ошибкам",
-      "description": "Топ-8 кодов СЭМД по объёму отказов РЭМД + «Прочие». Колонка «%» — доля ошибок среди всех документов данного типа (не доля в общем числе ошибок).",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fa000003-0003-4003-8003-000000000011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fa000003-0003-4003-8003-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "fa000003-0003-4003-8003-000000000010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.cell_column": "Документов",
-        "table.column_formatting": [
-          {
-            "colors": [
-              "hsla(89, 48%, 40%, 1)",
-              "hsla(46, 81%,  52%, 1)",
-              "hsla(358, 71%, 62%, 1)"
-            ],
-            "columns": [
-              "%"
-            ],
-            "max_type": "custom",
-            "max_value": 50,
-            "min_type": null,
-            "min_value": 0,
-            "type": "range"
-          }
-        ],
-        "table.column_widths": [
-          393
-        ],
-        "table.freeze_columns": true,
-        "table.freeze_columns_count": 1,
-        "version": 2,
-        "column_settings": {
-          "[\"name\",\"%\"]": {
-            "column_title": "%",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"СЭМД\"]": {
-            "column_title": "Код СЭМД"
-          }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "СЭМД",
-                "id": "СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    601,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    595,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    599,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 41
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 0,
-      "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      },
-      "metabase-model-drill-params": {
-        "ips_date": "ips_date",
-        "jid": "clinic_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "СЭМД",
-              "id": "СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  601,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  595,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  599,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 41
-      }
-    },
-    {
-      "name": "Топ типов СЭМД по видам ошибки",
-      "description": "Вертикальный stacked-bar: код СЭМД, сегменты — виды ошибки. Топ-15 кодов по объёму ошибок; метрика — COUNT(DISTINCT документ), на столбце — сумма (total).",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
-          "template-tags": {
-            "jid": {
-              "id": "fb040801-0801-4801-8801-000000000002",
-              "name": "jid",
-              "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "JID Клиники"
-            },
-            "ips_date": {
-              "id": "fb040801-0801-4801-8801-000000000001",
-              "name": "ips_date",
-              "type": "dimension",
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»"
-            },
-            "semd_type": {
-              "id": "fb040801-0801-4801-8801-000000000003",
-              "name": "semd_type",
-              "type": "dimension",
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.y_axis.title_text": "",
-        "graph.show_values": true,
-        "graph.x_axis.axis_enabled": "rotate-45",
-        "graph.x_axis.title_text": "",
-        "graph.y_axis.scale": "linear",
-        "graph.label_value_frequency": "all",
-        "graph.metrics": [
-          "Документов"
-        ],
-        "graph.show_stack_values": "total",
-        "graph.label_value_formatting": "compact",
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"СЭМД\"]": {
-            "column_title": "СЭМД",
-            "text_style": "wrap"
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Вид ошибки"
-          }
-        },
-        "graph.y_axis.auto_range": true,
-        "graph.x_axis.scale": "ordinal",
-        "graph.dimensions": [
-          "СЭМД",
-          "Тип ошибки"
-        ],
-        "stackable.stack_type": "stacked",
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "СЭМД",
-                "id": "СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    601,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    595,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    599,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 41
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 0,
-      "col": 12,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        }
-      },
-      "metabase-model-drill-params": {
-        "ips_date": "ips_date",
-        "jid": "clinic_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "СЭМД",
-              "id": "СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",601,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  601,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",595,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  595,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",599,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  599,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 41
-      }
-    },
-    {
-      "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fa000004-0004-4004-8004-0011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Обработано IPS",
-              "id": "fa000004-0004-4004-8004-0001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "fa000004-0004-4004-8004-0010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.cell_column": "Документов",
-        "table.column_formatting": [
-          {
-            "colors": [
-              "hsla(89, 48%, 40%, 1)",
-              "transparent",
-              "hsla(358, 71%, 62%, 1)"
-            ],
-            "columns": [
-              "%"
-            ],
-            "max_type": null,
-            "max_value": 20,
-            "min_type": "custom",
-            "min_value": -100,
-            "type": "range"
-          }
-        ],
-        "table.column_widths": [
-          347,
-          null,
-          78
-        ],
-        "table.columns": [
-          {
-            "enabled": true,
-            "name": "Тип ошибки"
-          },
-          {
-            "enabled": true,
-            "name": "%"
-          },
-          {
-            "enabled": true,
-            "name": "Документов"
-          },
-          {
-            "enabled": true,
-            "name": "Категория ошибки"
-          }
-        ],
-        "version": 2,
-        "table.pivot_column": "Категория ошибки",
-        "column_settings": {
-          "[\"name\",\"%\"]": {
-            "column_title": "%",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
-            "text_style": "wrap"
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 7,
-      "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
-      "name": "Топ категорий и типов ошибки",
-      "description": "Категория ошибки (ось) × тип (стэк), документов COUNT(DISTINCT «ID»). Каждый вид окрашен цветом своей категории.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fb040201-0201-4201-8201-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fb040201-0201-4201-8201-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип СЭМД (код НСИ)",
-              "id": "fb040201-0201-4201-8201-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.y_axis.title_text": "",
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "",
-        "graph.y_axis.scale": "linear",
-        "graph.metrics": [
-          "Документов"
-        ],
-        "graph.label_value_formatting": "compact",
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        },
-        "series_settings": {
-          "Ошибки справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Код типа документа не соответствует справочнику НСИ": {
-            "color": "#B07AA1"
-          },
-          "Документ не найден в РЭМД": {
-            "color": "#E15759"
-          },
-          "Категория ошибки": {
-            "color": "#BAB0AC"
-          },
-          "Код отсутствует в справочнике НСИ": {
-            "color": "#EDC948"
-          },
-          "Дата/время создания документа не заполнены или некорректны": {
-            "color": "#B07AA1"
-          },
-          "Дублирующий запрос": {
-            "color": "#E15759"
-          },
-          "Вид документа не актуален на дату создания": {
-            "color": "#E15759"
-          },
-          "СНИЛС не найден или не соответствует данным пациента/медработника": {
-            "color": "#4E79A7"
-          },
-          "ФИО пациента не заполнено или некорректно": {
-            "color": "#4E79A7"
-          },
-          "Медработник не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Ошибки связи": {
-            "color": "#499894"
-          },
-          "ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС": {
-            "color": "#76B7B2"
-          },
-          "Данные пациента": {
-            "color": "#4E79A7"
-          },
-          "Данные хранителя документа не заполнены": {
-            "color": "#B07AA1"
-          },
-          "Неактуальная версия справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Пол пациента в ЭМД не соответствует данным ЕГИСЗ": {
-            "color": "#4E79A7"
-          },
-          "Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Документ аннулирован": {
-            "color": "#E15759"
-          },
-          "Ошибка Schematron-валидации": {
-            "color": "#B07AA1"
-          },
-          "Сертификат ЭП истёк": {
-            "color": "#F28E2B"
-          },
-          "Ошибки получения файла ЭМД": {
-            "color": "#FF9DA7"
-          },
-          "ФИО пациента в ЭМД не соответствует данным ЕГИСЗ": {
-            "color": "#4E79A7"
-          },
-          "Данные медработника": {
-            "color": "#59A14F"
-          },
-          "Ошибки организации / ИС": {
-            "color": "#76B7B2"
-          },
-          "Дата рождения пациента не заполнена или некорректна": {
-            "color": "#4E79A7"
-          },
-          "Несоответствие данных организации в ФРМО": {
-            "color": "#76B7B2"
-          },
-          "Подпись роли не соответствует требованиям РЭМД": {
-            "color": "#F28E2B"
-          },
-          "Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию": {
-            "color": "#E15759"
-          },
-          "Подразделение или запись справочника не найдены на дату документа": {
-            "color": "#E15759"
-          },
-          "Не удалось получить файл ЭМД из предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию": {
-            "color": "#E15759"
-          },
-          "Данные подписи не соответствуют данным документа": {
-            "color": "#F28E2B"
-          },
-          "Данные заверителя документа не заполнены или некорректны": {
-            "color": "#B07AA1"
-          },
-          "Ошибки организации": {
-            "color": "#76B7B2"
-          },
-          "Данные медработника не соответствуют ФРМР": {
-            "color": "#59A14F"
-          },
-          "Не удалось проверить электронную подпись": {
-            "color": "#F28E2B"
-          },
-          "Ошибки структуры и валидации": {
-            "color": "#B07AA1"
-          },
-          "Неподдерживаемый тип СЭМД в РЭМД": {
-            "color": "#E15759"
-          },
-          "Сертификат подписи недействителен на дату создания документа": {
-            "color": "#F28E2B"
-          },
-          "Таймаут асинхронной обработки на стороне РЭМД": {
-            "color": "#9C755F"
-          },
-          "Доступ к операции запрещён в РЭМД": {
-            "color": "#E15759"
-          },
-          "Неверный идентификатор документа РЭМД": {
-            "color": "#E15759"
-          },
-          "Недоступен сервис проверки статуса сертификата (CRL/OCSP)": {
-            "color": "#F28E2B"
-          },
-          "Организация не найдена в реестре РЭМД": {
-            "color": "#76B7B2"
-          },
-          "Данные организации автора документа не заполнены": {
-            "color": "#59A14F"
-          },
-          "Неизвестная ошибка": {
-            "color": "#BAB0AC"
-          },
-          "Ошибки регистрации в РЭМД": {
-            "color": "#E15759"
-          },
-          "Недоступен сервис проверки подписи (УЦ) на стороне РЭМД": {
-            "color": "#9C755F"
-          },
-          "Организация не привязана к РМИС": {
-            "color": "#B07AA1"
-          },
-          "Организация не зарегистрирована в РЭМД": {
-            "color": "#76B7B2"
-          },
-          "Отчество врача не соответствует данным СЭМД": {
-            "color": "#59A14F"
-          },
-          "Специальность врача не соответствует справочнику НСИ": {
-            "color": "#59A14F"
-          },
-          "Подписант из сертификата не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Документ уже зарегистрирован в РЭМД": {
-            "color": "#E15759"
-          },
-          "Данные пациента не соответствуют ГИП": {
-            "color": "#4E79A7"
-          },
-          "Запрашиваемая запись ЭМД не найдена в предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "Ошибки ЭП и сертификатов": {
-            "color": "#F28E2B"
-          },
-          "Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию": {
-            "color": "#E15759"
-          },
-          "СНИЛС пациента не заполнен или некорректен": {
-            "color": "#4E79A7"
-          },
-          "ИС не передала файл ЭМД в ответе getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Ошибка разбора XML-структуры документа": {
-            "color": "#B07AA1"
-          },
-          "Срок действия сертификата организации истек": {
-            "color": "#F28E2B"
-          },
-          "Недействительный сертификат подписи": {
-            "color": "#F28E2B"
-          },
-          "Должность врача не соответствует данным ФРМР": {
-            "color": "#59A14F"
-          },
-          "Для данного вида ЭМД запрещена регистрация новых версий": {
-            "color": "#E15759"
-          },
-          "Наименование не соответствует справочнику НСИ": {
-            "color": "#EDC948"
-          },
-          "Некорректно заполнен телефон": {
-            "color": "#B07AA1"
-          },
-          "Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
-          },
-          "Сертификат ЭП отозван": {
-            "color": "#F28E2B"
-          },
-          "Сетевая ошибка": {
-            "color": "#499894"
-          },
-          "Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
-          },
-          "Прочие": {
-            "color": "#BAB0AC"
-          },
-          "Неверный формат запроса": {
-            "color": "#E15759"
-          },
-          "Ошибка справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Техническая ошибка на стороне РЭМД": {
-            "color": "#9C755F"
-          },
-          "СНИЛС автора (врача) не заполнен или некорректен": {
-            "color": "#59A14F"
-          },
-          "Техническая ошибка на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
-          },
-          "Документ, удостоверяющий личность пациента: некорректные реквизиты": {
-            "color": "#4E79A7"
-          },
-          "Неверный формат или контрольная сумма СНИЛС": {
-            "color": "#4E79A7"
-          },
-          "Метаописание документа не соответствует зарегистрированному в РЭМД": {
-            "color": "#E15759"
-          },
-          "РЭМД не смог обработать запрос": {
-            "color": "#9C755F"
-          },
-          "Технические ошибки РЭМД": {
-            "color": "#9C755F"
-          },
-          "Ошибка XSD-валидации XML": {
-            "color": "#B07AA1"
-          },
-          "Получатель из запроса не найден в СЭМД": {
-            "color": "#4E79A7"
-          },
-          "Дата подписи МО позже даты поступления запроса на регистрацию": {
-            "color": "#E15759"
-          },
-          "Лицензия организации не найдена": {
-            "color": "#76B7B2"
-          },
-          "Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию": {
-            "color": "#E15759"
-          },
-          "Не указан адрес пациента": {
-            "color": "#4E79A7"
-          },
-          "ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные": {
-            "color": "#76B7B2"
-          }
-        },
-        "legend.is_reversed": false,
-        "graph.dimensions": [
-          "Категория ошибки",
-          "Тип ошибки"
-        ],
-        "stackable.stack_type": "stacked"
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 7,
-      "col": 12,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
-      "name": "Ошибки: тип × клиника",
-      "description": "Тип ошибки × клиника: COUNT(DISTINCT «ID») и доля от финализированного документного универсума клиники. Клик — модель «Разбивка ошибок» (грейн тип×документ) с точным фильтром по типу ошибки и JID клиники из строки и фильтрами дашборда.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id FROM public.rpt_error_breakdown e INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "fb050601-0601-4601-8601-000000000002",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "error_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип ошибки",
-              "id": "fb050601-0601-4601-8601-000000000004",
-              "name": "error_type",
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "fb050601-0601-4601-8601-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "fb050601-0601-4601-8601-000000000003",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "table",
-      "visualization_settings": {
-        "table.cell_column": "Документов",
-        "table.column_widths": [
-          280,
-          200,
-          360,
-          88,
-          96,
-          104
-        ],
-        "table.columns": [
-          {
-            "enabled": true,
-            "name": "Тип ошибки"
-          },
-          {
-            "enabled": true,
-            "name": "Клиника"
-          },
-          {
-            "enabled": true,
-            "name": "Паттерн ошибки"
-          },
-          {
-            "enabled": false,
-            "name": "JID Клиники"
-          },
-          {
-            "enabled": true,
-            "name": "Документов"
-          },
-          {
-            "enabled": true,
-            "name": "% ошибок"
-          }
-        ],
-        "column_settings": {
-          "[\"name\",\"% ошибок\"]": {
-            "column_title": "% ошибок",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Паттерн ошибки\"]": {
-            "column_title": "Паттерн ошибки",
-            "text_style": "wrap"
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
-            "text_style": "wrap"
-          }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",573,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "Тип ошибки",
-                "id": "Тип ошибки"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",573,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    573,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ],
-                "operator": "contains"
-              }
-            },
-            "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    552,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-                "name": "Клиника"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    554,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
-        }
-      },
-      "sizeX": 24,
-      "sizeY": 8,
-      "row": 14,
-      "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "error_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_type"
-        }
-      },
-      "metabase-model-drill-params": {
-        "ips_date": "ips_date",
-        "semd_type": "semd_label",
-        "jid": "clinic_label",
-        "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",573,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "Тип ошибки",
-              "id": "Тип ошибки"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",573,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  573,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ],
-              "operator": "contains"
-            }
-          },
-          "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  552,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-              "name": "Клиника"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",554,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  554,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
@@ -6253,19 +3217,19 @@
             "decimals": 0,
             "number_separators": ", "
           },
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника"
+          },
+          "[\"name\",\"Наименование клиники\"]": {
+            "column_title": "Клиника"
+          },
           "[\"name\",\"Документов\"]": {
             "column_title": "Документов",
             "decimals": 0,
             "number_separators": ", "
           },
-          "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника"
-          },
           "[\"name\",\"Код СЭМД\"]": {
             "column_title": "Код"
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
           }
         }
       },
@@ -6273,7 +3237,6 @@
       "sizeY": 7,
       "row": 22,
       "col": 0,
-      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -6287,7 +3250,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
-      }
+      },
+      "tab": "errors"
     },
     {
       "name": "% ошибок: тип ошибки × тип СЭМД",
@@ -6360,12 +3324,6 @@
             "name": "Документов"
           }
         ],
-        "table.column_widths": [
-          60,
-          373,
-          null,
-          93
-        ],
         "column_settings": {
           "[\"name\",\"% ошибок\"]": {
             "column_title": "% ошибок",
@@ -6390,7 +3348,6 @@
       "sizeY": 7,
       "row": 22,
       "col": 12,
-      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -6404,6 +3361,861 @@
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "semd_label"
         }
+      },
+      "tab": "errors"
+    },
+    {
+      "name": "Топ типов СЭМД по ошибкам",
+      "description": "Топ-8 кодов СЭМД по объёму отказов РЭМД + «Прочие». Колонка «%» — доля ошибок среди всех документов данного типа (не доля в общем числе ошибок).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
+          "template-tags": {
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "fa000003-0003-4003-8003-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fa000003-0003-4003-8003-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fa000003-0003-4003-8003-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.cell_column": "Документов",
+        "table.column_formatting": [
+          {
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "hsla(46, 81%,  52%, 1)",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "columns": [
+              "%"
+            ],
+            "max_type": "custom",
+            "max_value": 50,
+            "min_type": null,
+            "min_value": 0,
+            "type": "range"
+          }
+        ],
+        "table.column_widths": [
+          396,
+          86
+        ],
+        "table.freeze_columns": true,
+        "table.freeze_columns_count": 1,
+        "version": 2,
+        "column_settings": {
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "Код СЭМД"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 0,
+      "col": 0,
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Разбивка ошибок",
+        "parameterMapping": {
+          "semd_label": {
+            "source": {
+              "type": "column",
+              "name": "СЭМД"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Разбивка ошибок",
+              "field_name": "semd_label"
+            }
+          }
+        }
+      },
+      "tab": "errors",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label"
+      }
+    },
+    {
+      "name": "Топ типов СЭМД по видам ошибки",
+      "description": "Вертикальный stacked-bar: код СЭМД, сегменты — виды ошибки. Топ-15 кодов по объёму ошибок; метрика — COUNT(DISTINCT документ), на столбце — сумма (total).",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fb040801-0801-4801-8801-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fb040801-0801-4801-8801-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип СЭМД (код НСИ)",
+              "id": "fb040801-0801-4801-8801-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.y_axis.title_text": "",
+        "graph.show_values": true,
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.scale": "linear",
+        "graph.label_value_frequency": "all",
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.show_stack_values": "total",
+        "graph.label_value_formatting": "compact",
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Вид ошибки"
+          }
+        },
+        "graph.y_axis.auto_range": true,
+        "graph.x_axis.scale": "ordinal",
+        "graph.dimensions": [
+          "СЭМД",
+          "Тип ошибки"
+        ],
+        "stackable.stack_type": "stacked"
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 0,
+      "col": 12,
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "ips_date"
+        },
+        "jid": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Разбивка ошибок",
+        "parameterMapping": {
+          "semd_code": {
+            "source": {
+              "type": "column",
+              "name": "СЭМД"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Разбивка ошибок",
+              "field_name": "semd_code"
+            }
+          }
+        }
+      },
+      "tab": "errors",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label"
+      }
+    },
+    {
+      "name": "Топ по типу ошибки",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fa000004-0004-4004-8004-0011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Обработано IPS",
+              "id": "fa000004-0004-4004-8004-0001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "fa000004-0004-4004-8004-0010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.cell_column": "Документов",
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Тип ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
+          },
+          {
+            "enabled": true,
+            "name": "%"
+          },
+          {
+            "enabled": true,
+            "name": "Категория ошибки"
+          }
+        ],
+        "version": 2,
+        "table.column_widths": [
+          350,
+          87
+        ],
+        "table.column_formatting": [
+          {
+            "columns": [
+              "%"
+            ],
+            "type": "range",
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "transparent",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "min_type": "custom",
+            "max_type": null,
+            "min_value": -100,
+            "max_value": 100
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 7,
+      "col": 0,
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
+        },
+        "ips_date": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        }
+      },
+      "tab": "errors"
+    },
+    {
+      "name": "Топ категорий и типов ошибки",
+      "description": "Категория ошибки (ось) × тип (стэк), документов COUNT(DISTINCT «ID»). Каждый вид окрашен цветом своей категории.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fb040201-0201-4201-8201-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fb040201-0201-4201-8201-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип СЭМД (код НСИ)",
+              "id": "fb040201-0201-4201-8201-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "row",
+      "visualization_settings": {
+        "graph.y_axis.title_text": "",
+        "graph.show_values": false,
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.scale": "linear",
+        "graph.metrics": [
+          "Документов"
+        ],
+        "graph.label_value_formatting": "compact",
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        },
+        "series_settings": {
+          "Категория ошибки": {
+            "color": "#BAB0AC"
+          },
+          "Данные пациента": {
+            "color": "#4E79A7"
+          },
+          "Данные медработника": {
+            "color": "#59A14F"
+          },
+          "Ошибки структуры и валидации": {
+            "color": "#B07AA1"
+          },
+          "Ошибки справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "Ошибки регистрации в РЭМД": {
+            "color": "#E15759"
+          },
+          "Ошибки организации / ИС": {
+            "color": "#76B7B2"
+          },
+          "Ошибки получения файла ЭМД": {
+            "color": "#FF9DA7"
+          },
+          "Ошибки ЭП и сертификатов": {
+            "color": "#F28E2B"
+          },
+          "Технические ошибки РЭМД": {
+            "color": "#9C755F"
+          },
+          "Ошибки связи": {
+            "color": "#499894"
+          },
+          "Прочие": {
+            "color": "#BAB0AC"
+          },
+          "Не указан адрес пациента": {
+            "color": "#4E79A7"
+          },
+          "Организация не привязана к РМИС": {
+            "color": "#B07AA1"
+          },
+          "Некорректно заполнен телефон": {
+            "color": "#B07AA1"
+          },
+          "Ошибка XSD-валидации XML": {
+            "color": "#B07AA1"
+          },
+          "Документ уже зарегистрирован в РЭМД": {
+            "color": "#E15759"
+          },
+          "Данные пациента не соответствуют ГИП": {
+            "color": "#4E79A7"
+          },
+          "Должность врача не соответствует данным ФРМР": {
+            "color": "#59A14F"
+          },
+          "Медработник не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Данные медработника не соответствуют ФРМР": {
+            "color": "#59A14F"
+          },
+          "Подписант из сертификата не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Данные подписи не соответствуют данным документа": {
+            "color": "#F28E2B"
+          },
+          "Неактуальная версия справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "Код отсутствует в справочнике НСИ": {
+            "color": "#EDC948"
+          },
+          "Наименование не соответствует справочнику НСИ": {
+            "color": "#EDC948"
+          },
+          "Ошибка справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС": {
+            "color": "#76B7B2"
+          },
+          "ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные": {
+            "color": "#76B7B2"
+          },
+          "Метаописание документа не соответствует зарегистрированному в РЭМД": {
+            "color": "#E15759"
+          },
+          "Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile": {
+            "color": "#FF9DA7"
+          },
+          "Запрашиваемая запись ЭМД не найдена в предоставляющей ИС": {
+            "color": "#FF9DA7"
+          },
+          "ИС не передала файл ЭМД в ответе getDocumentFile": {
+            "color": "#FF9DA7"
+          },
+          "Не удалось получить файл ЭМД из предоставляющей ИС": {
+            "color": "#FF9DA7"
+          },
+          "Недействительный сертификат подписи": {
+            "color": "#F28E2B"
+          },
+          "Сертификат подписи недействителен на дату создания документа": {
+            "color": "#F28E2B"
+          },
+          "Не удалось проверить электронную подпись": {
+            "color": "#F28E2B"
+          },
+          "СНИЛС не найден или не соответствует данным пациента/медработника": {
+            "color": "#4E79A7"
+          },
+          "Получатель из запроса не найден в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Вид документа не актуален на дату создания": {
+            "color": "#E15759"
+          },
+          "Подразделение или запись справочника не найдены на дату документа": {
+            "color": "#E15759"
+          },
+          "Отчество врача не соответствует данным СЭМД": {
+            "color": "#59A14F"
+          },
+          "РЭМД не смог обработать запрос": {
+            "color": "#9C755F"
+          },
+          "Техническая ошибка на стороне РЭМД": {
+            "color": "#9C755F"
+          },
+          "Специальность врача не соответствует справочнику НСИ": {
+            "color": "#59A14F"
+          },
+          "СНИЛС автора (врача) не заполнен или некорректен": {
+            "color": "#59A14F"
+          },
+          "Дата рождения пациента не заполнена или некорректна": {
+            "color": "#4E79A7"
+          },
+          "ФИО пациента не заполнено или некорректно": {
+            "color": "#4E79A7"
+          },
+          "СНИЛС пациента не заполнен или некорректен": {
+            "color": "#4E79A7"
+          },
+          "Данные заверителя документа не заполнены или некорректны": {
+            "color": "#B07AA1"
+          },
+          "Дата/время создания документа не заполнены или некорректны": {
+            "color": "#B07AA1"
+          },
+          "Код типа документа не соответствует справочнику НСИ": {
+            "color": "#B07AA1"
+          },
+          "Данные хранителя документа не заполнены": {
+            "color": "#B07AA1"
+          },
+          "Данные организации автора документа не заполнены": {
+            "color": "#59A14F"
+          },
+          "Документ не найден в РЭМД": {
+            "color": "#E15759"
+          },
+          "Неверный идентификатор документа РЭМД": {
+            "color": "#E15759"
+          },
+          "Организация не найдена в реестре РЭМД": {
+            "color": "#76B7B2"
+          },
+          "Доступ к операции запрещён в РЭМД": {
+            "color": "#E15759"
+          },
+          "Дублирующий запрос": {
+            "color": "#E15759"
+          },
+          "Неподдерживаемый тип СЭМД в РЭМД": {
+            "color": "#E15759"
+          },
+          "Неверный формат запроса": {
+            "color": "#E15759"
+          },
+          "Лицензия организации не найдена": {
+            "color": "#76B7B2"
+          },
+          "Неверный формат или контрольная сумма СНИЛС": {
+            "color": "#4E79A7"
+          },
+          "Организация не зарегистрирована в РЭМД": {
+            "color": "#76B7B2"
+          },
+          "Сертификат ЭП истёк": {
+            "color": "#F28E2B"
+          },
+          "Сертификат ЭП отозван": {
+            "color": "#F28E2B"
+          },
+          "Недоступен сервис проверки статуса сертификата (CRL/OCSP)": {
+            "color": "#F28E2B"
+          },
+          "Таймаут асинхронной обработки на стороне РЭМД": {
+            "color": "#9C755F"
+          },
+          "Недоступен сервис проверки подписи (УЦ) на стороне РЭМД": {
+            "color": "#9C755F"
+          },
+          "Документ аннулирован": {
+            "color": "#E15759"
+          },
+          "Ошибка разбора XML-структуры документа": {
+            "color": "#B07AA1"
+          },
+          "Сетевая ошибка": {
+            "color": "#499894"
+          },
+          "Подпись роли не соответствует требованиям РЭМД": {
+            "color": "#F28E2B"
+          },
+          "Документ, удостоверяющий личность пациента: некорректные реквизиты": {
+            "color": "#4E79A7"
+          },
+          "Срок действия сертификата организации истек": {
+            "color": "#F28E2B"
+          },
+          "Несоответствие данных организации в ФРМО": {
+            "color": "#76B7B2"
+          },
+          "Ошибки организации": {
+            "color": "#76B7B2"
+          },
+          "ФИО пациента в ЭМД не соответствует данным ЕГИСЗ": {
+            "color": "#4E79A7"
+          },
+          "Пол пациента в ЭМД не соответствует данным ЕГИСЗ": {
+            "color": "#4E79A7"
+          },
+          "Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию": {
+            "color": "#E15759"
+          },
+          "Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию": {
+            "color": "#E15759"
+          },
+          "Дата подписи МО позже даты поступления запроса на регистрацию": {
+            "color": "#E15759"
+          },
+          "Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию": {
+            "color": "#E15759"
+          },
+          "Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию": {
+            "color": "#E15759"
+          },
+          "Для данного вида ЭМД запрещена регистрация новых версий": {
+            "color": "#E15759"
+          },
+          "Неизвестная ошибка": {
+            "color": "#BAB0AC"
+          },
+          "Ошибка Schematron-валидации": {
+            "color": "#B07AA1"
+          },
+          "Техническая ошибка на стороне РЭМД: повторите отправку позже": {
+            "color": "#9C755F"
+          },
+          "Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже": {
+            "color": "#9C755F"
+          },
+          "Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже": {
+            "color": "#9C755F"
+          }
+        },
+        "legend.is_reversed": false,
+        "graph.dimensions": [
+          "Категория ошибки",
+          "Тип ошибки"
+        ],
+        "stackable.stack_type": "stacked"
+      },
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 7,
+      "col": 12,
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "ips_date"
+        },
+        "jid": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        }
+      },
+      "tab": "errors"
+    },
+    {
+      "name": "Ошибки: тип × клиника",
+      "description": "Тип ошибки × клиника: COUNT(DISTINCT «ID») и доля от финализированного документного универсума клиники. Клик — модель «Разбивка ошибок» (грейн тип×документ) с точным фильтром по типу ошибки и JID клиники из строки и фильтрами дашборда.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id FROM public.rpt_error_breakdown e INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fb050601-0601-4601-8601-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "fb050601-0601-4601-8601-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "fb050601-0601-4601-8601-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.cell_column": "Документов",
+        "table.column_widths": [
+          280,
+          200,
+          360,
+          88,
+          96,
+          104
+        ],
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Тип ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Клиника"
+          },
+          {
+            "enabled": true,
+            "name": "Паттерн ошибки"
+          },
+          {
+            "enabled": false,
+            "name": "JID Клиники"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
+          },
+          {
+            "enabled": true,
+            "name": "% ошибок"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "column_title": "% ошибок",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Паттерн ошибки\"]": {
+            "column_title": "Паттерн ошибки",
+            "text_style": "wrap"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 8,
+      "row": 14,
+      "col": 0,
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
+        }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "error_types": {
+            "source": {
+              "type": "column",
+              "name": "Тип ошибки"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "error_types",
+              "operator": "contains"
+            }
+          },
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "errors",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label",
+        "status": "status_label"
       }
     },
     {
@@ -6421,18 +4233,18 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f6a00001-0001-4001-8001-000000000006",
-              "name": "emdr_id",
-              "type": "dimension"
-            },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате обработки",
               "id": "f6a00001-0001-4001-8001-000000000001",
               "name": "ips_date",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. Номер РЭМД",
+              "id": "f6a00001-0001-4001-8001-000000000006",
+              "name": "emdr_id",
               "type": "dimension"
             },
             "jid": {
@@ -6489,7 +4301,6 @@
       "sizeY": 2,
       "row": 0,
       "col": 0,
-      "tab": "archive",
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
@@ -6523,7 +4334,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "logid"
         }
-      }
+      },
+      "tab": "archive"
     },
     {
       "name": "Всего клиник",
@@ -6540,18 +4352,18 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f6a00002-0002-4002-8002-000000000006",
-              "name": "emdr_id",
-              "type": "dimension"
-            },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате обработки",
               "id": "f6a00002-0002-4002-8002-000000000001",
               "name": "ips_date",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. Номер РЭМД",
+              "id": "f6a00002-0002-4002-8002-000000000006",
+              "name": "emdr_id",
               "type": "dimension"
             },
             "jid": {
@@ -6608,7 +4420,6 @@
       "sizeY": 2,
       "row": 0,
       "col": 4,
-      "tab": "archive",
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
@@ -6642,6 +4453,125 @@
           "table_ref": "public.rpt_documents",
           "field_name": "logid"
         }
+      },
+      "tab": "archive"
+    },
+    {
+      "name": "Топ типов СЭМД по документам",
+      "description": "Объём документов по кодам СЭМД в срезе. Колонка «%» — доля от общего числа документов.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT semd_code AS \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f6a00003-0003-4003-8003-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате обработки",
+              "id": "f6a00003-0003-4003-8003-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f6a00003-0003-4003-8003-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f6a00003-0003-4003-8003-000000000007",
+              "name": "status",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Код СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
+          },
+          {
+            "enabled": true,
+            "name": "%"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          }
+        },
+        "table.cell_column": "Код СЭМД"
+      },
+      "sizeX": 12,
+      "sizeY": 6,
+      "tab": "archive",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_label"
+        }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "semd_code": {
+            "source": {
+              "type": "column",
+              "name": "Код СЭМД"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "semd_code"
+            }
+          }
+        }
+      },
+      "row": 8,
+      "col": 0,
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label",
+        "status": "status_label"
       }
     },
     {
@@ -6659,18 +4589,18 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f6a00005-0005-4005-8005-000000000006",
-              "name": "emdr_id",
-              "type": "dimension"
-            },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате поступления",
               "id": "f6a00005-0005-4005-8005-000000000001",
               "name": "ips_date",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. Номер РЭМД",
+              "id": "f6a00005-0005-4005-8005-000000000006",
+              "name": "emdr_id",
               "type": "dimension"
             },
             "jid": {
@@ -6746,7 +4676,6 @@
       "sizeY": 8,
       "row": 0,
       "col": 8,
-      "tab": "archive",
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
@@ -6780,7 +4709,8 @@
           "table_ref": "public.rpt_documents",
           "field_name": "logid"
         }
-      }
+      },
+      "tab": "archive"
     },
     {
       "name": "Объём по клиникам",
@@ -6867,115 +4797,23 @@
         ],
         "table.row_index": true,
         "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
           "[\"name\",\"%\"]": {
             "column_title": "%",
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
-          },
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
           }
-        },
-        "click_behavior": {
-          "type": "link",
-          "linkType": "question",
-          "parameterMapping": {
-            "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "column",
-                "name": "JID Клиники",
-                "id": "JID Клиники"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    552,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-                "name": "Обработано IPS"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    540,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-                "name": "Тип СЭМД"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    548,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            },
-            "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-              "source": {
-                "type": "parameter",
-                "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-                "name": "Статус"
-              },
-              "target": {
-                "type": "dimension",
-                "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-                "dimension": [
-                  "dimension",
-                  [
-                    "field",
-                    542,
-                    {
-                      "stage-number": 0
-                    }
-                  ]
-                ]
-              }
-            }
-          },
-          "targetId": 40
         }
       },
       "sizeX": 8,
       "sizeY": 6,
       "row": 2,
       "col": 0,
-      "tab": "archive",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -6994,113 +4832,51 @@
           "field_name": "status_label"
         }
       },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "question",
+        "targetModel": "Документы",
+        "parameterMapping": {
+          "clinic_jid": {
+            "source": {
+              "type": "column",
+              "name": "JID Клиники"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
+            }
+          }
+        }
+      },
+      "tab": "archive",
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "status": "status_label"
-      },
-      "click_behavior": {
-        "type": "link",
-        "linkType": "question",
-        "parameterMapping": {
-          "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "column",
-              "name": "JID Клиники",
-              "id": "JID Клиники"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",552,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  552,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-              "name": "Обработано IPS"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",540,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  540,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-              "name": "Тип СЭМД"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",548,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  548,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          },
-          "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]": {
-            "source": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "dimension",
-              "id": "[\"dimension\",[\"field\",542,{\"stage-number\":0}]]",
-              "dimension": [
-                "dimension",
-                [
-                  "field",
-                  542,
-                  {
-                    "stage-number": 0
-                  }
-                ]
-              ]
-            }
-          }
-        },
-        "targetId": 40
       }
     },
     {
       "name": "Архив СЭМД",
       "description": "Список документов за выбранный период и фильтры. Одна строка — один документ (dwh_id). До 1000 последних по дате обработки.",
       "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "",
-          "template-tags": {}
-        },
-        "database": 1
+        "type": "query",
+        "database": 1,
+        "query": {
+          "source-table": "model:Документы",
+          "limit": 1000,
+          "order-by": [
+            [
+              "desc",
+              [
+                "field",
+                "Документы:ips_date",
+                null
+              ]
+            ]
+          ]
+        }
       },
       "display": "table",
       "visualization_settings": {
@@ -7218,9 +4994,8 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 8,
+      "row": 14,
       "col": 0,
-      "tab": "archive",
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
@@ -7256,7 +5031,124 @@
           "model_ref": "Документы",
           "field_name": "logid"
         }
-      }
+      },
+      "tab": "archive"
+    },
+    {
+      "name": "Топ по типу ошибки",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "fa000004-0004-4004-8004-0011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Обработано IPS",
+              "id": "fa000004-0004-4004-8004-0001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "fa000004-0004-4004-8004-0010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.cell_column": "Документов",
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Тип ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
+          },
+          {
+            "enabled": true,
+            "name": "%"
+          },
+          {
+            "enabled": true,
+            "name": "Категория ошибки"
+          }
+        ],
+        "version": 2,
+        "table.column_widths": [
+          350,
+          87
+        ],
+        "table.column_formatting": [
+          {
+            "columns": [
+              "%"
+            ],
+            "type": "range",
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "transparent",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "min_type": "custom",
+            "max_type": null,
+            "min_value": -100,
+            "max_value": 100
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "column_title": "Документов",
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 8,
+      "row": 14,
+      "col": 0,
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
+        },
+        "ips_date": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "semd_label"
+        }
+      },
+      "tab": "operational"
     }
   ],
   "tabs": [

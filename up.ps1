@@ -34,7 +34,7 @@ function Invoke-Checked {
 function Test-KubectlTransientError {
     param([string]$Message)
 
-    return $Message -match 'TLS handshake timeout|connection refused|i/o timeout|temporary failure|the server is currently unable|dial tcp|EOF|client connection lost|unable to decode an event'
+    return $Message -match 'TLS handshake timeout|connection refused|i/o timeout|temporary failure|the server is currently unable|dial tcp|EOF|client connection lost|unable to decode an event|object has been deleted'
 }
 
 function Invoke-Kubectl {
@@ -977,7 +977,6 @@ function Install-Metabase {
         Write-Host "Pointing Metabase deployment to image ${MetabaseImage}..."
         Invoke-Checked "Set Metabase deployment image" {
             kubectl set image -n $Namespace deployment/metabase metabase=$MetabaseImage
-            Invoke-Kubectl -Arguments @('rollout', 'restart', '-n', $Namespace, 'deployment/metabase') | Out-Null
             Invoke-Kubectl -Arguments @('rollout', 'status', '-n', $Namespace, 'deployment/metabase', '--timeout=300s') | Out-Null
         }
     }
