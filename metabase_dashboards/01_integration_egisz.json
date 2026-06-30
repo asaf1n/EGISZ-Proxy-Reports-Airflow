@@ -5,22 +5,22 @@
   "parameters": [
     {
       "id": "a1b2c3d4-e5f6-4789-a01b-0123456789ab",
-      "name": "Период",
-      "slug": "dwh_date_filter",
+      "name": "Обработано IPS",
+      "slug": "ips_date_filter",
       "type": "date/all-options",
       "sectionId": "date",
       "default": "thismonth"
     },
     {
       "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-      "name": "JID Клиники",
+      "name": "Клиника",
       "slug": "jid_filter",
       "type": "string/=",
       "sectionId": "string"
     },
     {
       "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-      "name": "Код СЭМД",
+      "name": "Тип СЭМД",
       "slug": "semd_type_filter",
       "type": "string/=",
       "sectionId": "string"
@@ -78,7 +78,7 @@
   "cards": [
     {
       "name": "Последние операции",
-      "description": "До 50 последних документов в периоде; сортировка по дате последней активности (processed_at, новые сверху). Одна строка — один dwh_id.",
+      "description": "До 50 последних документов в периоде; сортировка по дате последней активности («Обработано IPS», новые сверху). Одна строка — один dwh_id.",
       "dataset_query": {
         "type": "query",
         "query": {
@@ -88,7 +88,7 @@
               "desc",
               [
                 "field",
-                "Документы:processed_at",
+                "Документы:ips_date",
                 null
               ]
             ]
@@ -97,7 +97,7 @@
           "fields": [
             [
               "field",
-              "Документы:processed_at",
+              "Документы:ips_date",
               null
             ],
             [
@@ -249,17 +249,17 @@
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
-        "dwh_date": {
+        "ips_date": {
           "model_ref": "Документы",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "model_ref": "Документы",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "model_ref": "Документы",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "status": {
           "model_ref": "Документы",
@@ -268,51 +268,36 @@
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_label": {
             "source": {
               "type": "column",
-              "name": "JID Клиники"
+              "name": "Клиника"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
-            }
-          },
-          "semd_type_filter": {
-            "source": {
-              "type": "column",
-              "name": "Код СЭМД"
-            },
-            "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
-            }
-          },
-          "status_filter": {
-            "source": {
-              "type": "column",
-              "name": "Статус"
-            },
-            "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_label"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Транзакции по дням и статусам",
-      "description": "Объём документов по дням и текущему статусу (stacked). Клик по сегменту — архив с фильтром по статусу.",
+      "description": "Документы с вердиктом РЭМД по дням и исходу (stacked, без «Отправлено»). Клик по сегменту — архив с фильтром по статусу.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status <> 'waiting' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -322,11 +307,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000099-0099-4099-8099-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -360,9 +345,6 @@
           }
         },
         "series_settings": {
-          "В обработке": {
-            "color": "#509EE3"
-          },
           "Ошибка асинхронного ответа РЭМД": {
             "color": "#A989C5"
           },
@@ -386,42 +368,47 @@
       "row": 8,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "status_filter": {
+          "status_label": {
             "source": {
               "type": "column",
               "name": "Статус"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "status_label"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label"
+      }
     },
     {
       "name": "Статусы за период",
-      "description": "Единая нотификация статуса документа (4 значения): Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи / В обработке. Сумма долей = общему числу документов за период (тот же универсум, что у счётчиков «всего документов»). Очередь «В обработке» — вкладка **Документы без ответа** дашборда «Интеграция с ЕГИСЗ».",
+      "description": "Распределение документов с вердиктом РЭМД по исходу за период (без «Отправлено» — у них ещё нет результата).",
       "dataset_query": {
         "type": "query",
         "query": {
@@ -449,6 +436,15 @@
               "Документы:status_label",
               null
             ]
+          ],
+          "filter": [
+            "!=",
+            [
+              "field",
+              "Документы:status_label",
+              null
+            ],
+            "Отправлено"
           ]
         },
         "database": 1
@@ -497,11 +493,11 @@
             "originalName": "Ошибка связи"
           },
           {
-            "color": "#509EE3",
+            "color": "#949AAB",
             "enabled": true,
-            "key": "В обработке",
-            "name": "В обработке",
-            "originalName": "В обработке"
+            "key": "Отправлено",
+            "name": "Отправлено",
+            "originalName": "Отправлено"
           }
         ],
         "pie.metric": "Документов",
@@ -527,17 +523,17 @@
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
-        "dwh_date": {
+        "ips_date": {
           "model_ref": "Документы",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "model_ref": "Документы",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "model_ref": "Документы",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "status": {
           "model_ref": "Документы",
@@ -547,21 +543,26 @@
       "tab": "operational",
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "status_filter": {
+          "status_label": {
             "source": {
               "type": "column",
               "name": "Статус"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "status_label"
             }
           }
         }
+      },
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label"
       }
     },
     {
@@ -570,7 +571,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -579,18 +580,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000002-0002-4002-8002-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f2000002-0002-4002-8002-000000000014",
-              "name": "emdr_id",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -598,27 +592,6 @@
               "display-name": "JID Клиники",
               "id": "f2000002-0002-4002-8002-000000000011",
               "name": "jid",
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f2000002-0002-4002-8002-000000000012",
-              "name": "local_uid",
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "f2000002-0002-4002-8002-000000000015",
-              "name": "log_id",
-              "type": "dimension"
-            },
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "f2000002-0002-4002-8002-000000000013",
-              "name": "relates_to",
               "type": "dimension"
             },
             "status": {
@@ -695,58 +668,47 @@
       "row": 14,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
+          "field_name": "clinic_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_label"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_jid": {
             "source": {
               "type": "column",
               "name": "JID Клиники"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Объём по СЭМД",
@@ -754,7 +716,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT semd_code AS \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT semd_code AS \"Код СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "display-name": "Код СЭМД",
@@ -763,45 +725,17 @@
               "type": "dimension",
               "widget-type": "string/="
             },
-            "dwh_date": {
+            "ips_date": {
               "display-name": "По дате обработки",
               "id": "f6a00003-0003-4003-8003-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension",
               "widget-type": "date/all-options"
-            },
-            "emdr_id": {
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f6a00003-0003-4003-8003-000000000006",
-              "name": "emdr_id",
-              "type": "dimension",
-              "widget-type": "string/="
             },
             "jid": {
               "display-name": "JID Клиники",
               "id": "f6a00003-0003-4003-8003-000000000002",
               "name": "jid",
-              "type": "dimension",
-              "widget-type": "string/="
-            },
-            "local_uid": {
-              "display-name": "localUid СЭМД",
-              "id": "f6a00003-0003-4003-8003-000000000004",
-              "name": "local_uid",
-              "type": "dimension",
-              "widget-type": "string/="
-            },
-            "log_id": {
-              "display-name": "LOGID",
-              "id": "f6a00003-0003-4003-8003-000000000008",
-              "name": "log_id",
-              "type": "dimension",
-              "widget-type": "string/="
-            },
-            "relates_to": {
-              "display-name": "Связанное сообщение",
-              "id": "f6a00003-0003-4003-8003-000000000005",
-              "name": "relates_to",
               "type": "dimension",
               "widget-type": "string/="
             },
@@ -873,64 +807,53 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
+          "field_name": "semd_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_label"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "semd_type_filter": {
+          "semd_code": {
             "source": {
               "type": "column",
               "name": "Код СЭМД"
             },
             "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "semd_code"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Успешность по клиникам",
-      "description": "По клиникам, COUNT DISTINCT «ID». «Всего документов» — единый документный универсум (все 4 статуса). % успеха — по финализированным (success + ошибки), без «В обработке». Строки без JID отсекаются.",
+      "description": "По клиникам, COUNT DISTINCT «ID». «Всего документов» — единый документный универсум (все 4 статуса). % успеха — по финализированным (success + ошибки), без «Отправлено». Строки без JID отсекаются.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='waiting')::bigint AS \"В обработке\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='waiting')::bigint AS \"Отправлено\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -939,11 +862,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040401-0401-4401-8401-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -1013,7 +936,7 @@
           },
           {
             "enabled": false,
-            "name": "В обработке"
+            "name": "Отправлено"
           },
           {
             "enabled": false,
@@ -1048,17 +971,17 @@
       "row": 21,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
@@ -1067,23 +990,28 @@
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_jid": {
             "source": {
               "type": "column",
               "name": "JID Клиники"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Успешность по типам СЭМД",
@@ -1091,7 +1019,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -1100,11 +1028,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040501-0501-4501-8501-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -1202,17 +1130,17 @@
       "row": 21,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
@@ -1222,21 +1150,26 @@
       "tab": "operational",
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "semd_type_filter": {
+          "semd_code": {
             "source": {
               "type": "column",
               "name": "Код СЭМД"
             },
             "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "semd_code"
             }
           }
         }
+      },
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label",
+        "status": "status_label"
       }
     },
     {
@@ -1245,7 +1178,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -1255,19 +1188,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fc000004-0004-4004-8004-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "fc000004-0004-4004-8004-000000000014",
-              "name": "emdr_id",
-              "required": false,
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -1275,30 +1200,6 @@
               "display-name": "JID Клиники",
               "id": "fc000004-0004-4004-8004-000000000011",
               "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "fc000004-0004-4004-8004-000000000012",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "fc000004-0004-4004-8004-000000000016",
-              "name": "log_id",
-              "required": false,
-              "type": "dimension"
-            },
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "fc000004-0004-4004-8004-000000000013",
-              "name": "relates_to",
               "required": false,
               "type": "dimension"
             },
@@ -1371,58 +1272,47 @@
       "row": 28,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
+          "field_name": "clinic_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_label"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_jid": {
             "source": {
               "type": "column",
               "name": "JID Клиники"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
             }
           }
         }
       },
-      "tab": "operational"
+      "tab": "operational",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Тепловая карта: клиника × день",
@@ -1430,7 +1320,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', processed_at)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err FROM public.rpt_documents WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', ips_date)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err FROM public.rpt_documents WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1439,11 +1329,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040301-0301-4301-8301-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -1496,17 +1386,17 @@
       "row": 35,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "operational"
@@ -1517,27 +1407,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('hour', processed_at) AS \"Час\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::bigint AS \"Ошибка связи\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::bigint AS \"Ошибка связи\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "f3a00004-0004-4004-8004-000000099013",
-              "name": "relates_to",
-              "type": "dimension"
-            },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f3a00004-0004-4004-8004-000000099001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f3a00004-0004-4004-8004-000000099014",
-              "name": "emdr_id",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -1545,20 +1421,6 @@
               "display-name": "JID Клиники",
               "id": "f3a00004-0004-4004-8004-000000099011",
               "name": "jid",
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f3a00004-0004-4004-8004-000000099012",
-              "name": "local_uid",
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "f3a00004-0004-4004-8004-000000099015",
-              "name": "log_id",
               "type": "dimension"
             },
             "semd_type": {
@@ -1613,33 +1475,17 @@
       "row": 0,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
+          "field_name": "clinic_label"
         }
       },
       "tab": "service"
@@ -1650,27 +1496,13 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CASE status WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'network_error' THEN 'Ошибка связи' END AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{log_id}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 2 DESC",
+          "query": "SELECT CASE status WHEN 'async_error' THEN 'Ошибка асинхронного ответа РЭМД' WHEN 'network_error' THEN 'Ошибка связи' END AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 2 DESC",
           "template-tags": {
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "f3a00004-0004-4004-8004-000000099013",
-              "name": "relates_to",
-              "type": "dimension"
-            },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f3a00004-0004-4004-8004-000000099001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f3a00004-0004-4004-8004-000000099014",
-              "name": "emdr_id",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -1678,20 +1510,6 @@
               "display-name": "JID Клиники",
               "id": "f3a00004-0004-4004-8004-000000099011",
               "name": "jid",
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f3a00004-0004-4004-8004-000000099012",
-              "name": "local_uid",
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "f3a00004-0004-4004-8004-000000099015",
-              "name": "log_id",
               "type": "dimension"
             },
             "semd_type": {
@@ -1745,58 +1563,47 @@
       "row": 0,
       "col": 20,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
+          "field_name": "clinic_label"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "status_filter": {
+          "status_label": {
             "source": {
               "type": "column",
               "name": "Статус"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef4"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "status_label"
             }
           }
         }
       },
-      "tab": "service"
+      "tab": "service",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label"
+      }
     },
     {
       "name": "Детализация healthcheck",
-      "description": "Сигналы ELT-контура без очереди документов без callback; документы без ответа — вкладка **Документы без ответа** дашборда «Интеграция с ЕГИСЗ».",
+      "description": "Сигналы ELT-контура без очереди документов без callback; документы без ответа — вкладка **Отправленные** дашборда «Интеграция с ЕГИСЗ».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1864,7 +1671,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'Расхождение OID и JID',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_jid_mismatch = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND processed_at IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
+          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'Расхождение OID и JID',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_jid_mismatch = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1873,11 +1680,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000007-0007-4007-8007-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -1935,17 +1742,17 @@
       "row": 6,
       "col": 14,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -1956,7 +1763,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (\n  SELECT\n    rpt_documents.processed_at AS \"Дата обработки\",\n    rpt_documents.status_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из XML\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n    END AS \"OID из JPERSONS\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n    END AS \"OID из лицензий\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.processed_at IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
+          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из XML\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n    END AS \"OID из JPERSONS\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n    END AS \"OID из лицензий\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1965,11 +1772,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000008-0008-4008-8008-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2128,17 +1935,17 @@
       "row": 12,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2149,7 +1956,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Сбоев связи\" FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Сбоев связи\" FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2158,11 +1965,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2191,17 +1998,17 @@
       "row": 20,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2212,7 +2019,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT MAX(daily_cnt)::bigint AS \"Пик сбоев за день\" FROM ( SELECT date_trunc('day', processed_at)::date AS d, COUNT(DISTINCT dwh_id)::bigint AS daily_cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) q",
+          "query": "SELECT MAX(daily_cnt)::bigint AS \"Пик сбоев за день\" FROM ( SELECT date_trunc('day', ips_date)::date AS d, COUNT(DISTINCT dwh_id)::bigint AS daily_cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) q",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2221,11 +2028,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2254,17 +2061,17 @@
       "row": 20,
       "col": 4,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2275,7 +2082,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('day', processed_at)::date AS \"День\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов с ошибкой связи\" FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('day', ips_date)::date AS \"День\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов с ошибкой связи\" FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2284,11 +2091,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2326,17 +2133,17 @@
       "row": 20,
       "col": 8,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2347,7 +2154,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(clinic_name), ''), 'Неизвестно') AS lbl, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT COALESCE(NULLIF(TRIM(clinic_name), ''), 'Неизвестно') AS lbl, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2356,11 +2163,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2400,17 +2207,17 @@
       "row": 25,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2421,7 +2228,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(network_error_type), ''), 'Неизвестно'), 120) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_kind AS ( SELECT LEFT(COALESCE(NULLIF(TRIM(network_error_type), ''), 'Неизвестно'), 120) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип сетевой ошибки\", SUM(r.cnt)::bigint AS \"Документов\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2430,11 +2237,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2474,17 +2281,17 @@
       "row": 25,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2495,7 +2302,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT processed_at AS \"Создано\", clinic_label AS \"Клиника\", LEFT(network_error_type, 80) AS \"Тип\", LEFT(error_text, 140) AS \"Сообщение\", logid AS logid, message_id AS message_id FROM public.rpt_network_errors WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY processed_at DESC LIMIT 50",
+          "query": "SELECT ips_date AS \"Создано\", clinic_label AS \"Клиника\", LEFT(network_error_type, 80) AS \"Тип\", LEFT(error_text, 140) AS \"Сообщение\", logid AS logid, result_msgid AS message_id FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY ips_date DESC LIMIT 50",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2504,11 +2311,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате создания документа",
               "id": "f2041c01-00",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -2536,17 +2343,17 @@
       "row": 31,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "service"
@@ -2557,7 +2364,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2567,11 +2374,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f4000100-0100-4000-8000-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -2617,17 +2424,17 @@
       "row": 0,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -2646,7 +2453,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>3 дней', '>7 дней', '>30 дней') [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>3 дней', '>7 дней', '>30 дней') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2656,11 +2463,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f4000101-0101-4001-8001-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -2706,17 +2513,17 @@
       "row": 0,
       "col": 6,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -2735,7 +2542,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>7 дней', '>30 дней') [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>7 дней', '>30 дней') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2745,11 +2552,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f4000102-0102-4002-8002-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -2795,17 +2602,17 @@
       "row": 0,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -2824,7 +2631,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment = '>30 дней' [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment = '>30 дней' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2834,11 +2641,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f4000103-0103-4003-8003-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -2884,17 +2691,17 @@
       "row": 0,
       "col": 18,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -2913,7 +2720,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", sent_at AS \"Дата отправки\", waiting_days AS \"Дней в ожидании\", wait_segment AS \"Сегмент ожидания\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] ORDER BY sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", waiting_days AS \"Дней в ожидании\", wait_segment AS \"Сегмент ожидания\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2923,11 +2730,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f4000001-0001-4001-8001-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -3066,17 +2873,17 @@
       "row": 3,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3095,7 +2902,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
+          "query": "SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -3105,11 +2912,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f8000001-0001-4001-8001-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -3170,17 +2977,17 @@
       "row": 13,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3193,23 +3000,28 @@
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Очередь без ответа",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_jid": {
             "source": {
               "type": "column",
               "name": "JID Клиники"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
+              "type": "dimension",
+              "model_ref": "Очередь без ответа",
+              "field_name": "clinic_jid"
             }
           }
         }
       },
-      "tab": "queue"
+      "tab": "queue",
+      "metabase-model-drill-params": {
+        "ips_date": "first_sent_at",
+        "semd_type": "semd_label",
+        "wait_segment": "wait_segment"
+      }
     },
     {
       "name": "Сегменты ожидания",
@@ -3217,7 +3029,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT wait_segment AS \"Сегмент ожидания\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY MIN(waiting_days) DESC NULLS LAST",
+          "query": "SELECT wait_segment AS \"Сегмент ожидания\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY MIN(waiting_days) DESC NULLS LAST",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -3227,11 +3039,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f8000002-0002-4002-8002-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -3301,17 +3113,17 @@
       "row": 13,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3330,7 +3142,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -3340,11 +3152,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Отправлено»",
               "id": "f8000003-0003-4003-8003-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -3400,17 +3212,17 @@
       "row": 20,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "sent_at"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents_waiting",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents_waiting",
@@ -3423,23 +3235,28 @@
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Очередь без ответа",
         "parameterMapping": {
-          "semd_type_filter": {
+          "semd_code": {
             "source": {
               "type": "column",
               "name": "Код СЭМД"
             },
             "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
+              "type": "dimension",
+              "model_ref": "Очередь без ответа",
+              "field_name": "semd_code"
             }
           }
         }
       },
-      "tab": "queue"
+      "tab": "queue",
+      "metabase-model-drill-params": {
+        "ips_date": "first_sent_at",
+        "jid": "clinic_label",
+        "wait_segment": "wait_segment"
+      }
     },
     {
       "name": "% ошибок: клиника × тип СЭМД",
@@ -3447,7 +3264,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% ошибок\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) > 0 ORDER BY 4 DESC, 5 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% ошибок\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) > 0 ORDER BY 4 DESC, 5 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3456,11 +3273,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040701-0701-4701-8701-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -3558,17 +3375,17 @@
       "row": 0,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "errors"
@@ -3579,7 +3396,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pairs AS ( SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS err, COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::numeric AS total FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
+          "query": "WITH pairs AS ( SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS err, COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::numeric AS total FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3588,11 +3405,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040801-0801-4801-8801-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -3669,17 +3486,17 @@
       "row": 0,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "errors"
@@ -3690,7 +3507,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -3700,19 +3517,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fa000003-0003-4003-8003-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "fa000003-0003-4003-8003-000000000014",
-              "name": "emdr_id",
-              "required": false,
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -3720,38 +3529,6 @@
               "display-name": "JID Клиники",
               "id": "fa000003-0003-4003-8003-000000000011",
               "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "fa000003-0003-4003-8003-000000000012",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "fa000003-0003-4003-8003-000000000016",
-              "name": "log_id",
-              "required": false,
-              "type": "dimension"
-            },
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "fa000003-0003-4003-8003-000000000013",
-              "name": "relates_to",
-              "required": false,
-              "type": "dimension"
-            },
-            "status": {
-              "widget-type": "string/=",
-              "display-name": "Статус",
-              "id": "fa000003-0003-4003-8003-000000000015",
-              "name": "status",
               "required": false,
               "type": "dimension"
             }
@@ -3807,58 +3584,42 @@
       "row": 7,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
-        },
-        "status": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
+          "field_name": "clinic_label"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Разбивка ошибок",
         "parameterMapping": {
-          "semd_type_filter": {
+          "semd_label": {
             "source": {
               "type": "column",
               "name": "СЭМД"
             },
             "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
+              "type": "dimension",
+              "model_ref": "Разбивка ошибок",
+              "field_name": "semd_label"
             }
           }
         }
       },
-      "tab": "errors"
+      "tab": "errors",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label"
+      }
     },
     {
       "name": "Топ типов СЭМД по видам ошибки",
@@ -3866,7 +3627,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3875,11 +3636,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040801-0801-4801-8801-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -3932,38 +3693,42 @@
       "row": 7,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Разбивка ошибок",
         "parameterMapping": {
-          "semd_type_filter": {
+          "semd_label": {
             "source": {
               "type": "column",
               "name": "СЭМД"
             },
             "target": {
-              "type": "parameter",
-              "id": "d2b3c4d5-e6f7-4890-b123-456789abcdef"
+              "type": "dimension",
+              "model_ref": "Разбивка ошибок",
+              "field_name": "semd_label"
             }
           }
         }
       },
-      "tab": "errors"
+      "tab": "errors",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "jid": "clinic_label"
+      }
     },
     {
       "name": "Топ по типу ошибки",
@@ -3971,7 +3736,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3981,11 +3746,11 @@
               "required": false,
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "Обработано IPS",
               "id": "fa000004-0004-4004-8004-0001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -4067,15 +3832,15 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "errors"
@@ -4086,7 +3851,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4095,11 +3860,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb040201-0201-4201-8201-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -4414,17 +4179,17 @@
       "row": 14,
       "col": 12,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         }
       },
       "tab": "errors"
@@ -4436,7 +4201,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id FROM public.rpt_error_breakdown e INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id FROM public.rpt_error_breakdown e INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4445,11 +4210,11 @@
               "name": "jid",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "fb050601-0601-4601-8601-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "semd_type": {
@@ -4533,17 +4298,17 @@
       "row": 21,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "error_type": {
           "table_ref": "public.rpt_error_breakdown",
@@ -4582,9 +4347,9 @@
       },
       "tab": "errors",
       "metabase-model-drill-params": {
-        "dwh_date": "processed_at",
-        "semd_type": "semd_code",
-        "jid": "clinic_jid",
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "jid": "clinic_label",
         "status": "status_label"
       }
     },
@@ -4594,7 +4359,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4603,11 +4368,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате обработки",
               "id": "f6a00001-0001-4001-8001-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "emdr_id": {
@@ -4674,15 +4439,15 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents",
@@ -4690,7 +4455,7 @@
         },
         "relates_to": {
           "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
+          "field_name": "relates_to_msgid"
         },
         "emdr_id": {
           "table_ref": "public.rpt_documents",
@@ -4713,7 +4478,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT clinic_jid)::bigint AS \"Клиник\" FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
+          "query": "SELECT COUNT(DISTINCT clinic_jid)::bigint AS \"Клиник\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4722,11 +4487,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате обработки",
               "id": "f6a00002-0002-4002-8002-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "emdr_id": {
@@ -4793,15 +4558,15 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents",
@@ -4809,7 +4574,7 @@
         },
         "relates_to": {
           "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
+          "field_name": "relates_to_msgid"
         },
         "emdr_id": {
           "table_ref": "public.rpt_documents",
@@ -4828,11 +4593,11 @@
     },
     {
       "name": "Динамика документов по дням",
-      "description": "Поступление документов на прокси по дням (first_sent_at или CreateDate из XML, без sent_at). Фильтр «Период» — по дате поступления (arrival_day), не по дате обработки.",
+      "description": "Поступление документов на прокси по дням первой отправки (first_sent_at). Фильтр «Период» — по дате поступления, не по «Обработано IPS» (ips_date).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT arrival_day AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE arrival_day IS NOT NULL [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY arrival_day ORDER BY arrival_day ASC",
+          "query": "SELECT first_sent_at::date AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE first_sent_at::date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY first_sent_at::date ORDER BY first_sent_at::date ASC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4841,11 +4606,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате поступления",
               "id": "f6a00005-0005-4005-8005-000000000001",
-              "name": "dwh_date",
+              "name": "ips_date",
               "type": "dimension"
             },
             "emdr_id": {
@@ -4931,15 +4696,15 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "arrival_day"
+          "field_name": "first_sent_at"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "local_uid": {
           "table_ref": "public.rpt_documents",
@@ -4947,7 +4712,7 @@
         },
         "relates_to": {
           "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
+          "field_name": "relates_to_msgid"
         },
         "emdr_id": {
           "table_ref": "public.rpt_documents",
@@ -4970,7 +4735,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4979,18 +4744,11 @@
               "name": "semd_type",
               "type": "dimension"
             },
-            "dwh_date": {
+            "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "По дате «Обработано»",
               "id": "f2000002-0002-4002-8002-000000000001",
-              "name": "dwh_date",
-              "type": "dimension"
-            },
-            "emdr_id": {
-              "widget-type": "string/=",
-              "display-name": "Рег. Номер РЭМД",
-              "id": "f2000002-0002-4002-8002-000000000014",
-              "name": "emdr_id",
+              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
@@ -4998,27 +4756,6 @@
               "display-name": "JID Клиники",
               "id": "f2000002-0002-4002-8002-000000000011",
               "name": "jid",
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f2000002-0002-4002-8002-000000000012",
-              "name": "local_uid",
-              "type": "dimension"
-            },
-            "log_id": {
-              "widget-type": "string/=",
-              "display-name": "LOGID",
-              "id": "f2000002-0002-4002-8002-000000000015",
-              "name": "log_id",
-              "type": "dimension"
-            },
-            "relates_to": {
-              "widget-type": "string/=",
-              "display-name": "Связанное сообщение",
-              "id": "f2000002-0002-4002-8002-000000000013",
-              "name": "relates_to",
               "type": "dimension"
             },
             "status": {
@@ -5095,58 +4832,47 @@
       "row": 2,
       "col": 0,
       "metabase-field-filters": {
-        "dwh_date": {
+        "ips_date": {
           "table_ref": "public.rpt_documents",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "semd_type": {
           "table_ref": "public.rpt_documents",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "jid": {
           "table_ref": "public.rpt_documents",
-          "field_name": "clinic_jid"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_local_uid"
-        },
-        "relates_to": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "relates_to_id"
-        },
-        "emdr_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_emdr_id"
+          "field_name": "clinic_label"
         },
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_label"
-        },
-        "log_id": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "logid"
         }
       },
       "click_behavior": {
         "type": "link",
-        "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
+        "linkType": "question",
+        "targetModel": "Документы",
         "parameterMapping": {
-          "jid_filter": {
+          "clinic_jid": {
             "source": {
               "type": "column",
               "name": "JID Клиники"
             },
             "target": {
-              "type": "parameter",
-              "id": "e3c4d5e6-f7a8-4901-c234-56789abcdef0"
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "clinic_jid"
             }
           }
         }
       },
-      "tab": "archive"
+      "tab": "archive",
+      "metabase-model-drill-params": {
+        "ips_date": "ips_date",
+        "semd_type": "semd_label",
+        "status": "status_label"
+      }
     },
     {
       "name": "Архив СЭМД",
@@ -5162,7 +4888,7 @@
               "desc",
               [
                 "field",
-                "Документы:processed_at",
+                "Документы:ips_date",
                 null
               ]
             ]
@@ -5290,17 +5016,17 @@
       "query_tier": "query_builder",
       "source_model": "Документы",
       "metabase-parameter-targets": {
-        "dwh_date": {
+        "ips_date": {
           "model_ref": "Документы",
-          "field_name": "processed_at"
+          "field_name": "ips_date"
         },
         "jid": {
           "model_ref": "Документы",
-          "field_name": "clinic_jid"
+          "field_name": "clinic_label"
         },
         "semd_type": {
           "model_ref": "Документы",
-          "field_name": "semd_code"
+          "field_name": "semd_label"
         },
         "status": {
           "model_ref": "Документы",
@@ -5312,7 +5038,7 @@
         },
         "relates_to": {
           "model_ref": "Документы",
-          "field_name": "relates_to_id"
+          "field_name": "relates_to_msgid"
         },
         "emdr_id": {
           "model_ref": "Документы",
@@ -5339,7 +5065,7 @@
     },
     {
       "id": "queue",
-      "name": "Документы без ответа",
+      "name": "Отправленные",
       "position": 2
     },
     {

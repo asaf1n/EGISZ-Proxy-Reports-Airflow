@@ -90,10 +90,10 @@ def verify_dashboard_contracts(
 
     live = api_json(f"{base_url}/api/dashboard/{item['id']}", headers=headers)
     expected_period = next(
-        p["default"] for p in integration["parameters"] if p.get("slug") == "dwh_date_filter"
+        p["default"] for p in integration["parameters"] if p.get("slug") == "ips_date_filter"
     )
     live_period = next(
-        p["default"] for p in live.get("parameters", []) if p.get("slug") == "dwh_date_filter"
+        p["default"] for p in live.get("parameters", []) if p.get("slug") == "ips_date_filter"
     )
     if live_period != expected_period:
         errors.append(

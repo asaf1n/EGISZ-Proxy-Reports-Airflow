@@ -369,7 +369,9 @@ function Initialize-AirflowInternalMetadataDatabase {
 
 function Initialize-EgiszEltNamespace {
     Write-Host "Ensuring namespace $Namespace exists..."
-    $existing = kubectl get namespace $Namespace -o name
+    # 2>$null + Continue: на свежем кластере namespace отсутствует, и stderr «NotFound» от kubectl
+    # под $ErrorActionPreference='Stop' иначе обрывает бутстрап до создания namespace.
+    $existing = & { $ErrorActionPreference = 'Continue'; kubectl get namespace $Namespace -o name 2>$null }
     if ([string]::IsNullOrWhiteSpace($existing)) {
         Invoke-Checked "Create namespace $Namespace" {
             kubectl create namespace $Namespace

@@ -103,34 +103,35 @@ RENAME_OTHER = {
     },
 }
 
-DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
-    "Последние операции": [("jid_filter", "JID Клиники"), ("semd_type_filter", "Код СЭМД"), ("status_filter", "Статус")],
-    "Статусы за период": [("status_filter", "Статус")],
-    "Объём по клиникам": [("jid_filter", "JID Клиники")],
-    "Транзакции по дням и статусам": [("status_filter", "Статус")],
-    "РЭМД vs связь": [("status_filter", "Статус")],
-    "Топ по типу ошибки": [],
-    "Топ типов СЭМД по ошибкам": [("semd_type_filter", "СЭМД")],
-    "Объём ошибок по клиникам": [("jid_filter", "JID Клиники")],
-    "Топ категорий и типов ошибки": [],
-    "Топ типов СЭМД по видам ошибки": [("semd_type_filter", "СЭМД")],
-    "Успешность по клиникам": [("jid_filter", "JID Клиники")],
-    "Успешность по типам СЭМД": [("semd_type_filter", "Код СЭМД")],
-    "Топ клиник в очереди по документам": [("jid_filter", "JID Клиники")],
-    "Топ типов СЭМД в очереди": [("semd_type_filter", "Код СЭМД")],
-    "Объём по СЭМД": [("semd_type_filter", "Код СЭМД")],
-}
-
 DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
+WAITING_MODEL_REF = "Очередь без ответа"
+
+# Карточки без дрилла (агрегаты-рейтинги без естественного грейна для строки).
+DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
+    "Топ по типу ошибки": [],
+    "Топ категорий и типов ошибки": [],
+}
 
 ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
 
-# Дрилл из строки ведёт в модель «Документы»: тип ошибки — через CONTAINS по полному
-# списку error_types (документ с несколькими ошибками не теряется), клиника — точным
-# равенством. Общие фильтры дашборда (период/СЭМД/статус) переносятся через
-# metabase-model-drill-params ниже.
+# Дрилл из строки ведёт СРАЗУ в модель (не на вкладку «Архив»): строка передаёт свой грейн
+# точным равенством + активные фильтры дашборда через metabase-model-drill-params. Тип ошибки —
+# через CONTAINS по полному списку error_types (документ с несколькими ошибками не теряется).
 MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
+    "Последние операции": [("clinic_label", "Клиника")],
+    "Статусы за период": [("status_label", "Статус")],
+    "Транзакции по дням и статусам": [("status_label", "Статус")],
+    "РЭМД vs связь": [("status_label", "Статус")],
+    "Объём по клиникам": [("clinic_jid", "JID Клиники")],
+    "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
+    "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
+    "Объём по СЭМД": [("semd_code", "Код СЭМД")],
+    "Успешность по типам СЭМД": [("semd_code", "Код СЭМД")],
+    "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
+    "Топ типов СЭМД по видам ошибки": [("semd_label", "СЭМД")],
+    "Топ клиник в очереди по документам": [("clinic_jid", "JID Клиники")],
+    "Топ типов СЭМД в очереди": [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
         ("error_types", "Тип ошибки", "contains"),
         ("clinic_jid", "JID Клиники"),
@@ -138,19 +139,53 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
 }
 
 # Целевая модель дрилла по карточке (по умолчанию — «Документы»).
-MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {}
+MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {
+    "Топ типов СЭМД по ошибкам": ERROR_BREAKDOWN_MODEL_REF,
+    "Топ типов СЭМД по видам ошибки": ERROR_BREAKDOWN_MODEL_REF,
+    "Топ клиник в очереди по документам": WAITING_MODEL_REF,
+    "Топ типов СЭМД в очереди": WAITING_MODEL_REF,
+}
 
+# Активные фильтры дашборда, переносимые в модель (без измерения-грейна самой строки).
 MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
-    "Ошибки: тип × клиника": ["dwh_date", "semd_type", "jid", "status"],
+    "Последние операции": ["ips_date", "semd_type", "status"],
+    "Статусы за период": ["ips_date", "semd_type", "jid"],
+    "Транзакции по дням и статусам": ["ips_date", "semd_type", "jid"],
+    "РЭМД vs связь": ["ips_date", "semd_type", "jid"],
+    "Объём по клиникам": ["ips_date", "semd_type", "status"],
+    "Успешность по клиникам": ["ips_date", "semd_type", "status"],
+    "Объём ошибок по клиникам": ["ips_date", "semd_type", "status"],
+    "Объём по СЭМД": ["ips_date", "jid", "status"],
+    "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
+    "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
+    "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
+    "Топ клиник в очереди по документам": ["ips_date", "semd_type", "wait_segment"],
+    "Топ типов СЭМД в очереди": ["ips_date", "jid", "wait_segment"],
+    "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid", "status"],
+}
+
+# Поля модели для переноса дашборд-фильтра (на грейне модели): JID/СЭМД — по label.
+MODEL_PARAM_FIELDS: dict[str, dict[str, str]] = {
+    DOCUMENTS_MODEL_REF: {
+        "ips_date": "ips_date", "semd_type": "semd_label",
+        "jid": "clinic_label", "status": "status_label",
+    },
+    ERROR_BREAKDOWN_MODEL_REF: {
+        "ips_date": "ips_date", "semd_type": "semd_label", "jid": "clinic_label",
+    },
+    WAITING_MODEL_REF: {
+        "ips_date": "first_sent_at", "semd_type": "semd_label",
+        "jid": "clinic_label", "wait_segment": "wait_segment",
+    },
 }
 
 DOCUMENTS_PARAM_TARGETS = {
-    "dwh_date": {"model_ref": "Документы", "field_name": "processed_at"},
-    "jid": {"model_ref": "Документы", "field_name": "clinic_jid"},
-    "semd_type": {"model_ref": "Документы", "field_name": "semd_code"},
+    "ips_date": {"model_ref": "Документы", "field_name": "ips_date"},
+    "jid": {"model_ref": "Документы", "field_name": "clinic_label"},
+    "semd_type": {"model_ref": "Документы", "field_name": "semd_label"},
     "status": {"model_ref": "Документы", "field_name": "status_label"},
     "local_uid": {"model_ref": "Документы", "field_name": "semd_local_uid"},
-    "relates_to": {"model_ref": "Документы", "field_name": "relates_to_id"},
+    "relates_to": {"model_ref": "Документы", "field_name": "relates_to_msgid"},
     "emdr_id": {"model_ref": "Документы", "field_name": "semd_emdr_id"},
     "log_id": {"model_ref": "Документы", "field_name": "logid"},
 }
@@ -225,10 +260,12 @@ DOCUMENT_VOLUME_BY_DAY_QUERY = (
     f"{DOCUMENT_FILTERS} GROUP BY arrival_day ORDER BY arrival_day ASC"
 )
 
+# Распределение по статусам строится только на корпусе с вердиктом РЭМД (status <> 'waiting'):
+# «Отправлено» не имеет исхода и не входит в статистику (см. README §«Учёт отправленных»).
 TRANSACTIONS_BY_DAY_STATUS_QUERY = (
     "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM public.rpt_documents WHERE 1=1 "
+    "FROM public.rpt_documents WHERE status <> 'waiting' "
     "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY processed_day, status_label, status_sort "
     "ORDER BY processed_day, status_sort"
@@ -237,7 +274,7 @@ TRANSACTIONS_BY_DAY_STATUS_QUERY = (
 CLIENT_STATUS_BY_DAY_QUERY = (
     "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM public.rpt_documents WHERE clinic_jid = {{clinic_jid}} "
+    "FROM public.rpt_documents WHERE clinic_jid = {{clinic_jid}} AND status <> 'waiting' "
     "[[AND {{client_period}}]] [[AND {{client_semd_code_name}}]] "
     "GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort"
 )
@@ -676,8 +713,8 @@ def strip_chart_keys(viz: dict, display: str) -> None:
 def apply_document_volume_by_day(card: dict) -> None:
     card["display"] = "bar"
     card["description"] = (
-        "Поступление документов на прокси по дням (first_sent_at или CreateDate из XML, "
-        "без sent_at). Фильтр «Период» — по дате поступления (arrival_day), не по дате обработки."
+        "Поступление документов на прокси по дням первой отправки (first_sent_at). "
+        "Фильтр «Период» — по дате поступления, не по «Обработано IPS» (ips_date)."
     )
     dq = card.setdefault("dataset_query", {})
     dq["native"]["query"] = DOCUMENT_VOLUME_BY_DAY_QUERY
@@ -799,7 +836,7 @@ def apply_quality_detail(card: dict) -> None:
 def apply_transactions_trend(card: dict) -> None:
     card["display"] = "bar"
     card["description"] = (
-        "Объём документов по дням и текущему статусу (stacked). "
+        "Документы с вердиктом РЭМД по дням и исходу (stacked, без «Отправлено»). "
         "Клик по сегменту — архив с фильтром по статусу."
     )
     dq = card.setdefault("dataset_query", {})
@@ -819,14 +856,21 @@ def apply_transactions_trend(card: dict) -> None:
     viz["graph.show_values"] = True
     viz["graph.label_value_formatting"] = "compact"
     viz["stackable.stack_type"] = "stacked"
-    viz.setdefault("series_settings", {}).update(
+    series = viz.setdefault("series_settings", {})
+    series.pop("Отправлено", None)  # «Отправлено» исключён из распределения статусов
+    series.update(
         {
-            "В обработке": {"color": "#509EE3"},
             "Ошибка асинхронного ответа РЭМД": {"color": "#A989C5"},
             "Ошибка связи": {"color": "#F2994A"},
             "Успешно зарегистрирован": {"color": "#84BB4C"},
         }
     )
+    # graph.series_order может нести устаревшую серию «Отправлено» из прежней раскладки.
+    if isinstance(viz.get("graph.series_order"), list):
+        viz["graph.series_order"] = [
+            s for s in viz["graph.series_order"]
+            if not (isinstance(s, dict) and s.get("key") == "Отправлено")
+        ]
     cs = viz.setdefault("column_settings", {})
     cs['["name","Документов"]'] = {
         "column_title": "Документов",
@@ -1058,7 +1102,7 @@ def apply_queue_table(card: dict) -> None:
 def apply_latest_operations(card: dict) -> None:
     card["description"] = (
         "До 50 последних документов в периоде; сортировка по дате последней активности "
-        "(processed_at, новые сверху). Одна строка — один dwh_id."
+        "(«Обработано IPS», новые сверху). Одна строка — один dwh_id."
     )
     q = card.setdefault("dataset_query", {}).setdefault("query", {})
     q["fields"] = deepcopy(LATEST_OPERATIONS_QUERY_FIELDS)
@@ -1221,6 +1265,184 @@ def ensure_dashboard_parameters(dash: dict) -> None:
         )
 
 
+# --- Единая модель имён дат + label-поиск + конфайн фильтров ----------------------
+# Дата-токен фильтра во всех дашбордах сводится к ips_date (обработка транспортом IPS,
+# EXCHANGELOG.CREATEDATE). Колоночные привязки JID/СЭМД/Статус — на label («код · имя»),
+# чтобы фильтр искал и по коду, и по наименованию.
+# normalize_dashboard — единственная точка приведения к модели имён: authoring-константы и
+# JSON-карточки могут нести доменные токены (dwh_date/processed_at/processed_day/arrival_day,
+# клиентский client_period, управленческий mgmt_period); проход ниже канонизирует их к ips_date /
+# first_sent_at и привязки JID/СЭМД/Статус к label-колонкам — идемпотентно, на выходе один смысл.
+DATE_FILTER_TOKENS = ("dwh_date", "mgmt_period", "client_period")
+DATE_PARAM_SLUGS = ("dwh_date_filter", "mgmt_period_filter", "client_period_filter")
+IPS_DATE_DISPLAY = "Обработано IPS"
+
+LABEL_FIELD_BY_KEY = {
+    "jid": "clinic_label",
+    "semd_type": "semd_label",
+    "status": "status_label",
+}
+DATE_FIELD_RENAME = {
+    "processed_at": "ips_date",
+    "processed_day": "ips_date",
+    "arrival_day": "first_sent_at",
+    "sent_at": "first_sent_at",
+}
+
+# Каноничный порядок фильтров в WHERE-блоке.
+FILTER_ORDER = [
+    "ips_date", "semd_type", "jid", "local_uid", "relates_to",
+    "emdr_id", "status", "log_id", "wait_segment", "error_type",
+]
+
+# Конфайн lookup-фильтров: агрегатные карточки несут только 3 общих (+ status, где осмыслен).
+# Полный набор document-lookup (local_uid/relates_to/emdr_id/log_id) — лишь на вкладке archive.
+SLIM_FILTERS: dict[str, set[str]] = {
+    "Объём по клиникам": {"ips_date", "semd_type", "jid", "status"},
+    "Объём по СЭМД": {"ips_date", "semd_type", "jid", "status"},
+    "Объём ошибок по клиникам": {"ips_date", "semd_type", "jid", "status"},
+    "Топ типов СЭМД по ошибкам": {"ips_date", "semd_type", "jid"},
+    "Отказы по часам: связь и асинхронный ответ": {"ips_date", "semd_type", "jid"},
+    "РЭМД vs связь": {"ips_date", "semd_type", "jid"},
+}
+
+
+def _rename_sql_tokens(query: str) -> str:
+    if not query:
+        return query
+    q = query
+    for tok in DATE_FILTER_TOKENS:
+        q = re.sub(r"\{\{\s*" + tok + r"\s*\}\}", "{{ips_date}}", q)
+    # День берём из полной даты инлайн (стек уже МСК-pinned, без AT TIME ZONE).
+    q = re.sub(r"\bprocessed_day\b", "ips_date::date", q)
+    q = re.sub(r"\barrival_day\b", "first_sent_at::date", q)
+    q = re.sub(r"\bprocessed_at\b", "ips_date", q)
+    q = re.sub(r"\bsent_at\b", "first_sent_at", q)  # \b не задевает first_sent_at
+    return q
+
+
+def set_filter_block(query: str, keys: set[str]) -> str:
+    """Заменяет непрерывный ран [[AND {{x}}]] в WHERE на ровно keys (в каноне порядка)."""
+    if "[[AND" not in query:
+        return query
+    block = " ".join("[[AND {{" + k + "}}]]" for k in FILTER_ORDER if k in keys)
+    return re.sub(r"(?:\[\[AND \{\{[^}]+\}\}\]\]\s*)+", block + " ", query, count=1)
+
+
+def _normalize_template_tags(tags: dict) -> dict:
+    out: dict = {}
+    for key, tag in tags.items():
+        nkey = "ips_date" if key in DATE_FILTER_TOKENS else key
+        if isinstance(tag, dict):
+            tag = dict(tag)
+            tag["name"] = nkey
+        out[nkey] = tag
+    return out
+
+
+def _normalize_filter_bindings(mapping: dict) -> dict:
+    out: dict = {}
+    for key, spec in mapping.items():
+        nkey = "ips_date" if key in DATE_FILTER_TOKENS else key
+        if isinstance(spec, dict):
+            spec = dict(spec)
+            if nkey in LABEL_FIELD_BY_KEY:
+                spec["field_name"] = LABEL_FIELD_BY_KEY[nkey]
+            elif spec.get("field_name") in DATE_FIELD_RENAME:
+                spec["field_name"] = DATE_FIELD_RENAME[spec["field_name"]]
+        out[nkey] = spec
+    return out
+
+
+# Привязки дашборд-параметров в модель-дрилле: дата→ips_date, JID/СЭМД/Статус→label.
+MODEL_DRILL_FIELD_RENAME = {
+    "processed_at": "ips_date",
+    "sent_at": "first_sent_at",
+    "arrival_day": "first_sent_at",
+    "clinic_jid": "clinic_label",
+    "semd_code": "semd_label",
+    "status": "status_label",
+}
+
+
+def _rename_qb_field_refs(node):
+    """QB-карточки ссылаются на поля модели строкой «Модель:processed_at» — синхронно с rename."""
+    if isinstance(node, list):
+        return [_rename_qb_field_refs(x) for x in node]
+    if isinstance(node, dict):
+        return {k: _rename_qb_field_refs(v) for k, v in node.items()}
+    if isinstance(node, str):
+        node = re.sub(r":(processed_at|processed_day)\b", ":ips_date", node)
+        node = re.sub(r":(arrival_day|sent_at)\b", ":first_sent_at", node)
+        return node
+    return node
+
+
+def normalize_card(card: dict) -> None:
+    dq = card.get("dataset_query") or {}
+    if dq.get("type") == "native":
+        nat = dq.get("native") or {}
+        if nat.get("query"):
+            nat["query"] = _rename_sql_tokens(nat["query"])
+        if nat.get("template-tags"):
+            nat["template-tags"] = _normalize_template_tags(nat["template-tags"])
+    elif dq.get("type") == "query" and dq.get("query"):
+        dq["query"] = _rename_qb_field_refs(dq["query"])
+    if card.get("metabase-field-filters"):
+        card["metabase-field-filters"] = _normalize_filter_bindings(card["metabase-field-filters"])
+    if card.get("metabase-parameter-targets"):
+        card["metabase-parameter-targets"] = _normalize_filter_bindings(card["metabase-parameter-targets"])
+    mdp = card.get("metabase-model-drill-params")
+    if isinstance(mdp, dict):
+        card["metabase-model-drill-params"] = {
+            ("ips_date" if k in DATE_FILTER_TOKENS else k): MODEL_DRILL_FIELD_RENAME.get(v, v)
+            for k, v in mdp.items()
+        }
+    cb = card.get("click_behavior") or {}
+    if cb.get("linkType") == "dashboard" and isinstance(cb.get("parameterMapping"), dict):
+        cb["parameterMapping"] = {
+            ("ips_date_filter" if slug in DATE_PARAM_SLUGS else slug): m
+            for slug, m in cb["parameterMapping"].items()
+        }
+
+
+def prune_unused_filters(card: dict) -> None:
+    """Native: убрать template-tags/field-filters, чьих {{name}} нет в SQL (синхронизация)."""
+    dq = card.get("dataset_query") or {}
+    if dq.get("type") != "native":
+        return
+    nat = dq.get("native") or {}
+    query = nat.get("query") or ""
+    tags = nat.get("template-tags") or {}
+    keep = {k for k in tags if re.search(r"\{\{\s*" + re.escape(k) + r"\s*\}\}", query)}
+    nat["template-tags"] = {k: v for k, v in tags.items() if k in keep}
+    ff = card.get("metabase-field-filters")
+    if ff:
+        card["metabase-field-filters"] = {k: v for k, v in ff.items() if k in keep}
+
+
+def normalize_parameters(dash: dict) -> None:
+    for p in dash.get("parameters", []):
+        slug = p.get("slug")
+        if slug in DATE_PARAM_SLUGS:
+            p["slug"] = "ips_date_filter"
+            p["name"] = IPS_DATE_DISPLAY
+        elif slug == "jid_filter":
+            p["name"] = "Клиника"
+        elif slug == "semd_type_filter":
+            p["name"] = "Тип СЭМД"
+
+
+def normalize_dashboard(dash: dict) -> None:
+    """Единый идемпотентный проход: даты→ips_date, привязки→label, чистка orphan-тегов."""
+    normalize_parameters(dash)
+    for card in dash.get("cards", []):
+        if card.get("display") == "text":
+            continue
+        normalize_card(card)
+        prune_unused_filters(card)
+
+
 def apply_01(dash: dict) -> None:
     ensure_dashboard_parameters(dash)
     dash["description"] = (
@@ -1262,6 +1484,15 @@ def apply_01(dash: dict) -> None:
                         {"name": "Документов", "display-name": "Документов"},
                     ]
                 ]
+                # Только корпус с вердиктом РЭМД: «Отправлено» (status='waiting') не имеет
+                # исхода и искажает распределение — исключаем из статус-карточки. Фильтруем по
+                # видимому status_label: скрытые поля модели не резолвятся импортёром и фильтр
+                # молча отбрасывается (status — в hidden_fields модели «Документы»).
+                query["filter"] = ["!=", ["field", "Документы:status_label", None], "Отправлено"]
+                card["description"] = (
+                    "Распределение документов с вердиктом РЭМД по исходу за период "
+                    "(без «Отправлено» — у них ещё нет результата)."
+                )
             if name == "Ошибки: тип × клиника":
                 pass
 
@@ -1305,24 +1536,26 @@ def apply_01(dash: dict) -> None:
             apply_latest_operations(card)
 
         if name in MODEL_DRILL_BY_NAME:
-            card["click_behavior"] = build_model_drill(
-                MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF),
-                MODEL_DRILL_BY_NAME[name],
-            )
+            target = MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF)
+            card["click_behavior"] = build_model_drill(target, MODEL_DRILL_BY_NAME[name])
             params = MODEL_DRILL_DASHBOARD_PARAMS.get(name)
             if params:
-                card["metabase-model-drill-params"] = {
-                    key: DOCUMENTS_PARAM_TARGETS[key]["field_name"] for key in params
-                }
+                fields = MODEL_PARAM_FIELDS[target]
+                card["metabase-model-drill-params"] = {key: fields[key] for key in params}
         elif name in DRILL_BY_NAME and DRILL_BY_NAME[name]:
             card["click_behavior"] = build_drill(DRILL_BY_NAME[name])
         elif name in DRILL_BY_NAME:
             card.pop("click_behavior", None)
 
+        if name in SLIM_FILTERS and card.get("dataset_query", {}).get("type") == "native":
+            nat = card["dataset_query"]["native"]
+            nat["query"] = set_filter_block(nat["query"], SLIM_FILTERS[name])
+
         filtered.append(card)
 
     dash["cards"] = filtered
     restore_archive_top_semd(dash)
+    normalize_dashboard(dash)
 
 
 def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
@@ -1351,6 +1584,7 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
                     q = q.replace("error_text AS error_text", 'error_summary AS "Сводка ошибки"')
                     q = q.replace('error_text AS "Текст ошибки"', 'error_summary AS "Сводка ошибки"')
                 dq["native"]["query"] = q
+    normalize_dashboard(dash)
     return write_json_if_changed(path, dash)
 
 
@@ -1374,7 +1608,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         k: {"table_ref": "public.rpt_documents", "field_name": v}
         for k, v in {
             "jid": "clinic_jid", "dwh_date": "processed_at", "semd_type": "semd_code",
-            "local_uid": "semd_local_uid", "relates_to": "relates_to_id",
+            "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
             "emdr_id": "semd_emdr_id", "status": "status_label", "log_id": "logid",
         }.items()
     }
@@ -1449,12 +1683,14 @@ def apply_client_dashboards(path: Path) -> bool:
             card["dataset_query"]["native"]["query"] = CLIENT_STATUS_BY_DAY_QUERY
             card["description"] = (
                 "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / "
-                "Ошибка связи / В обработке по дням (текущий статус документа)."
+                "Ошибка связи по дням (текущий статус документа). «Отправлено» (без финального "
+                "ответа) исключено — см. отдельную карточку «Отправленные — клиент»."
             )
         dq = card.get("dataset_query", {})
         if dq.get("type") == "native":
             dq["native"]["query"] = fix_client_sql(fix_sql(dq["native"]["query"]))
         fix_viz(card.get("visualization_settings") or {}, display=card.get("display", "table"))
+    normalize_dashboard(dash)
     return write_json_if_changed(path, dash)
 
 

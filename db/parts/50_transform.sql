@@ -16,6 +16,128 @@ DROP FUNCTION IF EXISTS public.backfill_semd_codes();
 
 -- reconcile_document_attributes — в 70_views_core.sql
 
+-- Слой версий/логического документа (README §«Версии и идентичность документа»).
+-- Пересобирает document_group_id / version / цепочку / is_current_version для групп,
+-- затронутых батчем (p_dwh_ids); p_dwh_ids = NULL — полный пересчёт (обслуживание).
+--
+-- Ключ логического документа = (jid + semd_code + doc_number), где doc_number = PROTOCOLID
+-- (номер протокола/ИБ в МИС). Проверено на базе: пара (jid, doc_number) всегда несёт ровно
+-- ОДИН semd_code — это ключ ДОКУМЕНТА, а localUid меняется при каждой правке/ре-выгрузке
+-- ⇒ несколько localUid на (jid, semd_code, doc_number) = версии одного документа.
+-- Провенанс в document_group_confidence: 'doc_number' (сгруппировано) | 'singleton' (нет
+-- doc_number / уникальный документ). Защитный c_cap: группы крупнее порога не считаем
+-- версиями (страховка от клиник, переиспользующих счётчик протокола) — остаются singleton
+-- и видны в rpt_health_versions.
+CREATE OR REPLACE FUNCTION public.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected integer := 0;
+    c_cap constant integer := 50;  -- макс. версий в группе; max по базе = 7
+BEGIN
+    -- Шаг 0: documents.doc_number наполняется из transactions (PROTOCOLID не хранится в
+    -- documents при INSERT). Только затронутые dwh_id (или весь архив при p_dwh_ids=NULL).
+    UPDATE public.documents d
+    SET doc_number = src.docnum
+    FROM (
+        SELECT
+            t.dwh_id,
+            COALESCE(
+                max(NULLIF(btrim(t.doc_number), '')),
+                max(NULLIF(btrim(t.xml_doc_number), ''))
+            ) AS docnum
+        FROM public.transactions t
+        WHERE t.dwh_id IS NOT NULL
+          AND (p_dwh_ids IS NULL OR t.dwh_id = ANY (p_dwh_ids))
+        GROUP BY t.dwh_id
+    ) src
+    WHERE d.dwh_id = src.dwh_id
+      AND src.docnum IS NOT NULL
+      AND d.doc_number IS DISTINCT FROM src.docnum;
+
+    WITH keyed AS (
+        SELECT
+            d.dwh_id,
+            CASE
+                WHEN d.jid IS NOT NULL
+                     AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
+                     AND NULLIF(btrim(d.doc_number), '') IS NOT NULL
+                    THEN 'd:' || d.jid || '|' || lower(btrim(d.semd_code)) || '|' || lower(btrim(d.doc_number))
+                ELSE 'one:' || d.dwh_id
+            END AS grp_key,
+            CASE
+                WHEN d.jid IS NOT NULL
+                     AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
+                     AND NULLIF(btrim(d.doc_number), '') IS NOT NULL THEN 'doc_number'
+                ELSE 'singleton'
+            END AS conf
+        FROM public.documents d
+    ),
+    affected_keys AS (
+        SELECT DISTINCT k.grp_key
+        FROM keyed k
+        WHERE p_dwh_ids IS NULL OR k.dwh_id = ANY (p_dwh_ids)
+    ),
+    members AS (
+        SELECT
+            k.dwh_id, k.grp_key, k.conf,
+            d.status, d.registered_at, d.last_callback_at, d.first_sent_at, d.request_logid
+        FROM keyed k
+        JOIN affected_keys ak ON ak.grp_key = k.grp_key
+        JOIN public.documents d ON d.dwh_id = k.dwh_id
+    ),
+    ranked AS (
+        SELECT
+            m.*,
+            count(*) OVER (PARTITION BY m.grp_key) AS grp_size,
+            -- Порядок версий: старейшая отправка = 1.
+            row_number() OVER (
+                PARTITION BY m.grp_key
+                ORDER BY COALESCE(m.first_sent_at, '-infinity'::timestamptz), m.request_logid, m.dwh_id
+            ) AS vnum,
+            -- Текущая версия: зарегистрированный success приоритетнее, иначе последнее событие.
+            row_number() OVER (
+                PARTITION BY m.grp_key
+                ORDER BY
+                    (CASE WHEN m.status = 'success' THEN 1 ELSE 0 END) DESC,
+                    COALESCE(m.last_callback_at, m.registered_at, m.first_sent_at, '-infinity'::timestamptz) DESC,
+                    m.request_logid DESC, m.dwh_id DESC
+            ) AS cur_rank
+        FROM members m
+    ),
+    final AS (
+        SELECT
+            r.*,
+            -- Реальная группа: 2..c_cap версий с doc_number-ключом. Крупнее cap — страховка
+            -- от переиспользованного счётчика протокола: трактуем как singleton.
+            (r.conf = 'doc_number' AND r.grp_size > 1 AND r.grp_size <= c_cap) AS is_real_group,
+            LAG(r.dwh_id)  OVER (PARTITION BY r.grp_key ORDER BY r.vnum) AS prev_dwh,
+            LEAD(r.dwh_id) OVER (PARTITION BY r.grp_key ORDER BY r.vnum) AS next_dwh
+        FROM ranked r
+    )
+    UPDATE public.documents d SET
+        document_group_id         = CASE WHEN f.is_real_group THEN f.grp_key ELSE d.dwh_id END,
+        document_group_confidence = CASE WHEN f.is_real_group THEN f.conf ELSE 'singleton' END,
+        semd_version_number       = CASE WHEN f.is_real_group THEN f.vnum ELSE 1 END,
+        supersedes_dwh_id         = CASE WHEN f.is_real_group THEN f.prev_dwh ELSE NULL END,
+        superseded_by_dwh_id      = CASE WHEN f.is_real_group THEN f.next_dwh ELSE NULL END,
+        is_current_version        = CASE WHEN f.is_real_group THEN (f.cur_rank = 1) ELSE TRUE END
+    FROM final f
+    WHERE d.dwh_id = f.dwh_id
+      AND (
+            d.document_group_id         IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.grp_key ELSE d.dwh_id END)
+         OR d.document_group_confidence IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.conf ELSE 'singleton' END)
+         OR d.semd_version_number       IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.vnum ELSE 1 END)
+         OR d.supersedes_dwh_id         IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.prev_dwh ELSE NULL END)
+         OR d.superseded_by_dwh_id      IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.next_dwh ELSE NULL END)
+         OR d.is_current_version        IS DISTINCT FROM (CASE WHEN f.is_real_group THEN (f.cur_rank = 1) ELSE TRUE END)
+      );
+    GET DIAGNOSTICS affected = ROW_COUNT;
+    RETURN affected;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.transform_raw_to_facts(
     from_logid bigint,
     to_logid bigint,
@@ -103,7 +225,7 @@ BEGIN
         xml_patient_name, xml_snils, xml_doctor_name,
         xml_has_fault_marker, xml_has_register_response, xml_has_register_result,
         xml_has_processing_marker, xml_has_error_ilike,
-        xml_parsed_at, processed_at
+        xml_parsed_at, loaded_at
     )
     SELECT
         t.logid,
@@ -169,7 +291,7 @@ BEGIN
         xml_has_processing_marker = COALESCE(EXCLUDED.xml_has_processing_marker, public.transactions.xml_has_processing_marker),
         xml_has_error_ilike = COALESCE(EXCLUDED.xml_has_error_ilike, public.transactions.xml_has_error_ilike),
         xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, public.transactions.xml_parsed_at),
-        processed_at = now();
+        loaded_at = now();
 
     WITH document_source_rows AS (
         SELECT tx.logid
@@ -201,7 +323,7 @@ BEGIN
                 WHERE NULLIF(btrim(COALESCE(gr.logtext, '') || COALESCE(gr.msgtext, '')), '') IS NOT NULL
             ))[1] AS endpoint_text,
             min(COALESCE(gr.createdate, gr.logdate)) AS sent_at,
-            max(gr.logid) AS source_logid,
+            max(gr.logid) AS request_logid,
             bool_or(gr.logstate = 3) AS has_network_error,
             max(gr.logid) FILTER (WHERE gr.logstate = 3) AS network_logid,
             max(COALESCE(gr.createdate, gr.logdate)) FILTER (WHERE gr.logstate = 3) AS network_at,
@@ -231,8 +353,8 @@ BEGIN
     )
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
-        status, sent_at, first_sent_at, source_logid,
-        callback_log_id, last_callback_at, jid, org_oid, jid_resolve_method,
+        status, first_sent_at, request_logid,
+        result_logid, last_callback_at, jid, org_oid, jid_resolve_method,
         error_types, error_text, error_summary,
         updated_at
     )
@@ -242,8 +364,7 @@ BEGIN
         a.semd_code,
         CASE WHEN a.has_network_error THEN 'network_error' ELSE 'waiting' END,
         a.sent_at,
-        a.sent_at,
-        a.source_logid,
+        a.request_logid,
         CASE WHEN a.has_network_error THEN a.network_logid END,
         CASE WHEN a.has_network_error THEN a.network_at END,
         a.resolved_jid,
@@ -267,16 +388,12 @@ BEGIN
             COALESCE(public.documents.first_sent_at, EXCLUDED.first_sent_at),
             COALESCE(EXCLUDED.first_sent_at, public.documents.first_sent_at)
         ),
-        sent_at = LEAST(
-            COALESCE(public.documents.sent_at, EXCLUDED.sent_at),
-            COALESCE(EXCLUDED.sent_at, public.documents.sent_at)
-        ),
         status = CASE
             WHEN public.documents.status IN ('success', 'async_error', 'network_error')
             THEN public.documents.status
             ELSE EXCLUDED.status
         END,
-        callback_log_id = COALESCE(EXCLUDED.callback_log_id, public.documents.callback_log_id),
+        result_logid = COALESCE(EXCLUDED.result_logid, public.documents.result_logid),
         last_callback_at = COALESCE(EXCLUDED.last_callback_at, public.documents.last_callback_at),
         jid = COALESCE(EXCLUDED.jid, public.documents.jid),
         org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
@@ -288,10 +405,10 @@ BEGIN
         error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
         error_summary = COALESCE(EXCLUDED.error_summary, public.documents.error_summary),
-        source_logid = GREATEST(public.documents.source_logid, EXCLUDED.source_logid),
+        request_logid = GREATEST(public.documents.request_logid, EXCLUDED.request_logid),
         updated_at = now()
-    WHERE public.documents.source_logid IS NULL
-       OR public.documents.source_logid <= EXCLUDED.source_logid;
+    WHERE public.documents.request_logid IS NULL
+       OR public.documents.request_logid <= EXCLUDED.request_logid;
 
     WITH candidate_log_ids AS (
         SELECT r.logid
@@ -454,7 +571,7 @@ BEGIN
             FROM public.documents fd
             WHERE r.emdr_id IS NOT NULL
               AND lower(NULLIF(btrim(fd.emdr_id), '')) = lower(NULLIF(btrim(r.emdr_id), ''))
-            ORDER BY fd.last_callback_at DESC NULLS LAST, fd.source_logid DESC NULLS LAST
+            ORDER BY fd.last_callback_at DESC NULLS LAST, fd.request_logid DESC NULLS LAST
             LIMIT 1
         ) emdr_ref ON TRUE
         LEFT JOIN LATERAL (
@@ -551,7 +668,7 @@ BEGIN
     INSERT INTO transactions (
         logid, dwh_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, callback_url, jid, jid_resolve_method, semd_code,
-        semd_name, error_code, creation_date, processed_at,
+        semd_name, error_code, creation_date, loaded_at,
         error_type, error_json_text, error_summary,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
@@ -613,7 +730,7 @@ BEGIN
         semd_name = EXCLUDED.semd_name,
         error_code = EXCLUDED.error_code,
         creation_date = EXCLUDED.creation_date,
-        processed_at = now(),
+        loaded_at = now(),
         error_type = EXCLUDED.error_type,
         error_json_text = EXCLUDED.error_json_text,
         error_summary = EXCLUDED.error_summary,
@@ -627,8 +744,8 @@ BEGIN
 
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
-        status, message_id, relates_to_id,
-        callback_log_id, source_logid, document_created_at, registered_at,
+        status, result_msgid, relates_to_msgid,
+        result_logid, request_logid, document_created_at, registered_at,
         last_callback_at, last_status, jid, org_oid, jid_resolve_method,
         error_types, error_text, error_summary,
         patient_hash, doctor_hash, updated_at
@@ -676,17 +793,17 @@ BEGIN
             THEN EXCLUDED.status
             ELSE public.documents.status
         END,
-        message_id = COALESCE(EXCLUDED.message_id, public.documents.message_id),
-        relates_to_id = COALESCE(EXCLUDED.relates_to_id, public.documents.relates_to_id),
-        callback_log_id = CASE
+        result_msgid = COALESCE(EXCLUDED.result_msgid, public.documents.result_msgid),
+        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, public.documents.relates_to_msgid),
+        result_logid = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
                >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.callback_log_id
-            ELSE public.documents.callback_log_id
+            THEN EXCLUDED.result_logid
+            ELSE public.documents.result_logid
         END,
         document_created_at = COALESCE(EXCLUDED.document_created_at, public.documents.document_created_at),
         registered_at = COALESCE(EXCLUDED.registered_at, public.documents.registered_at),
-        source_logid = GREATEST(COALESCE(public.documents.source_logid, 0), COALESCE(EXCLUDED.source_logid, 0)),
+        request_logid = GREATEST(COALESCE(public.documents.request_logid, 0), COALESCE(EXCLUDED.request_logid, 0)),
         last_callback_at = GREATEST(COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
         last_status = COALESCE(EXCLUDED.last_status, public.documents.last_status),
         jid = COALESCE(EXCLUDED.jid, public.documents.jid),
@@ -743,6 +860,16 @@ BEGIN
 
     -- Инкрементальное сопровождение document_attributes по dwh_id из батча.
     PERFORM public.reconcile_document_attributes(
+        ARRAY(
+            SELECT d.dwh_id::text
+            FROM public.documents d
+            WHERE d.updated_at = transaction_timestamp()
+        )
+    );
+
+    -- Пересбор слоя версий (document_group_id / is_current_version / цепочка) для групп,
+    -- затронутых батчем. Детерминирован и идемпотентен (пишет только при изменении).
+    PERFORM public.recompute_document_versions(
         ARRAY(
             SELECT d.dwh_id::text
             FROM public.documents d

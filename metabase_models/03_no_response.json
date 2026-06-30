@@ -4,7 +4,7 @@
   "description": "Документы в ожидании колбэка (grain: semd_local_uid).",
   "fields": {
     "semd_local_uid": { "semantic_type": "type/PK", "display_name": "localUid СЭМД" },
-    "sent_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Отправлено" },
+    "first_sent_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Первая отправка" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
     "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },

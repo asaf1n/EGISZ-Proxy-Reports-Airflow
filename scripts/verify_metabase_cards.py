@@ -34,7 +34,7 @@ ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 ERROR_TYPE_CLINIC_CARD = "Ошибки: тип × клиника"
 ERROR_TYPE_CLINIC_DRILL_COLUMNS = frozenset({"Тип ошибки", "JID Клиники"})
 ERROR_TYPE_CLINIC_DASHBOARD_PARAMS = frozenset(
-    {"dwh_date_filter", "semd_type_filter"}
+    {"ips_date_filter", "semd_type_filter"}
 )
 TOP_ERROR_TYPE_CARD = "Топ по типу ошибки"
 

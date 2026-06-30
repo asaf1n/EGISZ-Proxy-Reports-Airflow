@@ -90,6 +90,28 @@ api_request() {
   echo "${body}"
 }
 
+# Как api_request, но не валит провижининг при не-2xx: для необязательных дефолтов инстанса,
+# которые в разных версиях Metabase бывают read-only или называются иначе.
+api_request_optional() {
+  local method="$1" path="$2" payload="${3:-}" response code body
+  if [ -z "${payload}" ]; then
+    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+      -H "X-Metabase-Session: ${SESSION_TOKEN}")
+  else
+    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+      -H "Content-Type: application/json" \
+      -H "X-Metabase-Session: ${SESSION_TOKEN}" \
+      -d "${payload}")
+  fi
+  code=$(echo "${response}" | tail -n1)
+  body=$(echo "${response}" | sed '$d')
+  if [[ "${code}" =~ ^2 ]]; then
+    echo "${body}"
+  else
+    log_info "WARN: ${method} ${path} -> HTTP ${code} (необязательная настройка пропущена)"
+  fi
+}
+
 login() {
   local body setup_token payload
   body=$(curl -sS -X POST "${METABASE_URL}/api/session" \
@@ -209,12 +231,29 @@ ensure_app_database_report_timezone() {
 # границу суток по Москве.
 ensure_global_report_timezone() {
   local current_tz
-  current_tz=$(api_request GET "/api/setting/report-timezone" | jq -r '. // ""')
+  # Metabase (v0.62+) отдаёт строковые настройки сырым текстом, а не JSON — `jq` на «Europe/Moscow»
+  # без кавычек падает с parse error и валит весь импорт. Парсим терпимо к обоим форматам.
+  current_tz=$(api_request GET "/api/setting/report-timezone" | tr -d '"' | tr -d '[:space:]')
   if [ "${current_tz}" = "Europe/Moscow" ]; then
     return
   fi
   log_info "Setting global Metabase report-timezone=Europe/Moscow"
   api_request PUT "/api/setting/report-timezone" '{"value":"Europe/Moscow"}' >/dev/null
+}
+
+# Дефолты инстанса Metabase (идемпотентно на каждый прогон): язык — русский, формат времени —
+# 24 часа сокращённый (HH:mm), валюта — рубль (₽), кеширование результатов — включено.
+# Локация (часовой пояс Europe/Moscow) пинится ensure_global_report_timezone. PUT идемпотентен —
+# повторная установка того же значения безопасна; ошибки не валят импорт (|| true).
+ensure_localization_defaults() {
+  log_info "Applying Metabase defaults: locale=ru, time=HH:mm, currency=RUB, query-caching=on"
+  api_request_optional PUT "/api/setting/site-locale" '{"value":"ru"}' >/dev/null
+  api_request_optional PUT "/api/setting/custom-formatting" \
+    '{"value":{"type/Temporal":{"time_style":"HH:mm"},"type/Currency":{"currency":"RUB","currency_style":"symbol"}}}' >/dev/null
+  # v0.62: enable-query-caching доступна только на чтение — результат-кеш включаем корневой
+  # адаптивной TTL-стратегией через /api/cache (кеш живёт multiplier × время выполнения запроса).
+  api_request_optional PUT "/api/cache" \
+    '{"model":"root","model_id":0,"strategy":{"type":"ttl","multiplier":10,"min_duration_ms":1000}}' >/dev/null
 }
 
 ensure_collection() {
@@ -795,7 +834,7 @@ model_click_behavior_json() {
       model_dimension($model_ref; $field_name) | tojson;
 
     def dashboard_param_slug($base):
-      if $base == "dwh_date" then "dwh_date_filter" else $base + "_filter" end;
+      $base + "_filter";
 
     (."metabase-model-drill-params" // {}) as $drillParams
     | (.click_behavior // null) as $raw
@@ -971,7 +1010,18 @@ create_or_update_dashboard() {
           virtual_card: {name: null, display: "text", dataset_query: {}, visualization_settings: {}},
           text: (.text // "")
         }' "${card_file}")"
-        mappings="[]"
+        # Текстовые карточки подставляют {{slug}} из значения dashboard-параметра с тем же
+        # slug — связь идёт через text-tag mapping (card_id: null). Параметр приходит по URL.
+        mappings="$(
+          jq -c --argjson dashParams "${saved_parameters}" '
+            [ (.text // "") | scan("\\{\\{[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*\\}\\}") | .[0] ]
+            | unique
+            | map(. as $tag
+                | ($dashParams[] | select(.slug == $tag) | .id) as $pid
+                | select($pid != null)
+                | {parameter_id: $pid, card_id: null, target: ["text-tag", $tag]})
+          ' "${card_file}"
+        )"
       else
         card_name="$(jq -r '.name' "${card_file}")"
         card_id="${CARD_REGISTRY[${card_name}]:-}"
@@ -997,7 +1047,7 @@ create_or_update_dashboard() {
               model_dimension($model_ref; $field_name) | tojson;
 
             def dashboard_param_slug($base):
-              if $base == "dwh_date" then "dwh_date_filter" else $base + "_filter" end;
+              $base + "_filter";
 
             (."metabase-model-drill-params" // {}) as $drillParams
             | (.click_behavior // null) as $raw
@@ -1274,6 +1324,7 @@ login
 resolve_or_create_app_database_id
 ensure_app_database_report_timezone
 ensure_global_report_timezone
+ensure_localization_defaults
 ensure_collection
 # До любого fast-path/skip: если дашборд уже есть — обеспечиваем и логируем публичную ссылку.
 ensure_public_client_dashboard

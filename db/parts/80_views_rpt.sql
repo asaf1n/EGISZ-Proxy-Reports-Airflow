@@ -3,14 +3,13 @@
 -- Loaded by db/dwh_init.sql via \i db/parts/80_views_rpt.sql.
 -- ============================================================================
 
-CREATE OR REPLACE VIEW public.rpt_documents AS
+CREATE OR REPLACE VIEW public.rpt_document_versions AS
 SELECT
     d.dwh_id,
-    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) AS processed_at,
-    (
-        COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)
-        AT TIME ZONE 'Europe/Moscow'
-    )::date AS processed_day,
+    -- Дата обработки транспортом IPS (EXCHANGELOG.CREATEDATE): последнее доступное
+    -- IPS-событие документа. XML CDA (document_created_at) сюда не входит — это отдельная
+    -- сущность времени создания контента, см. semd_created_at и delivery_seconds.
+    COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) AS ips_date,
     d.status,
     ds.label AS status_label,
     ds.sort_order AS status_sort,
@@ -40,17 +39,23 @@ SELECT
     ) AS clinic_oid,
     a.clinic_host,
     a.clinic_jid_mismatch,
-    public.clean_text_value(d.relates_to_id) AS relates_to_id,
-    d.callback_log_id::text AS logid,
-    d.message_id,
+    -- Транспорт СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
+    -- relates_to_msgid (relatesToMessage ответа) = request_msgid у склеенных — ключ корреляции.
+    public.clean_text_value(d.relates_to_msgid) AS relates_to_msgid,
+    -- LOGID состояния: исход если есть, иначе LOGID отправки — у «Отправлено» больше не пусто.
+    COALESCE(d.result_logid, d.request_logid)::text AS logid,
+    d.request_logid::text AS request_logid,
+    d.result_logid::text AS result_logid,
+    a.request_msgid,
+    d.result_msgid,
     CASE
         WHEN d.status = 'success'
          AND d.document_created_at IS NOT NULL
-         AND COALESCE(d.last_callback_at, d.sent_at, d.document_created_at) >= d.document_created_at
+         AND COALESCE(d.last_callback_at, d.first_sent_at, d.document_created_at) >= d.document_created_at
         THEN ROUND(
             EXTRACT(
                 EPOCH FROM (
-                    COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)
+                    COALESCE(d.last_callback_at, d.first_sent_at, d.document_created_at)
                     - d.document_created_at
                 )
             )::numeric,
@@ -64,11 +69,15 @@ SELECT
     a.patient_hash,
     a.doctor_hash,
     d.registered_at,
-    (
-        COALESCE(d.first_sent_at, d.document_created_at)
-        AT TIME ZONE 'Europe/Moscow'
-    )::date AS arrival_day,
-    COALESCE(public.canonical_error_list(d.error_types), 'Неизвестная ошибка') AS error_types
+    d.first_sent_at,
+    COALESCE(public.canonical_error_list(d.error_types), 'Неизвестная ошибка') AS error_types,
+    -- Слой версий (README §«Версии и идентичность документа»).
+    d.document_group_id,
+    COALESCE(d.is_current_version, true) AS is_current_version,
+    d.semd_version_number,
+    d.document_group_confidence,
+    d.superseded_by_dwh_id,
+    d.supersedes_dwh_id
 FROM public.documents d
 LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
 LEFT JOIN public.dim_document_status ds ON ds.code = d.status
@@ -82,19 +91,30 @@ LEFT JOIN LATERAL (
 ) st ON TRUE
 WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
 
+COMMENT ON VIEW public.rpt_document_versions IS
+'Все экземпляры/версии отправки СЭМД: одна строка на dwh_id (полный аудит, включая superseded).';
+
+-- Основная витрина — ТЕКУЩИЕ версии (один логический документ = одна строка). Все попытки
+-- (включая superseded) — rpt_document_versions. Сегодня группы почти все singleton (нет
+-- CDA setId / patient_hash), поэтому фильтр эквивалентен прежнему поведению и автоматически
+-- схлопывает версии, как только появится стабильный ключ (см. §«Версии и идентичность»).
+CREATE OR REPLACE VIEW public.rpt_documents AS
+SELECT * FROM public.rpt_document_versions
+WHERE is_current_version;
+
 COMMENT ON VIEW public.rpt_documents IS
-'Единая документная витрина: одна строка на dwh_id.';
+'Документная витрина (текущие версии, is_current_version): одна строка на логический документ. Полный аудит версий — rpt_document_versions.';
 
 CREATE OR REPLACE VIEW public.rpt_documents_waiting AS
 SELECT
-    d.sent_at,
-    EXTRACT(EPOCH FROM (now() - d.sent_at)) / 3600.0 AS waiting_hours,
-    ROUND(EXTRACT(EPOCH FROM (now() - d.sent_at)) / 86400.0, 1) AS waiting_days,
+    d.first_sent_at,
+    EXTRACT(EPOCH FROM (now() - d.first_sent_at)) / 3600.0 AS waiting_hours,
+    ROUND(EXTRACT(EPOCH FROM (now() - d.first_sent_at)) / 86400.0, 1) AS waiting_days,
     CASE
-        WHEN d.sent_at IS NULL THEN 'дата неизвестна'
-        WHEN now() - d.sent_at > INTERVAL '30 days' THEN '>30 дней'
-        WHEN now() - d.sent_at > INTERVAL '7 days' THEN '>7 дней'
-        WHEN now() - d.sent_at > INTERVAL '3 days' THEN '>3 дней'
+        WHEN d.first_sent_at IS NULL THEN 'дата неизвестна'
+        WHEN now() - d.first_sent_at > INTERVAL '30 days' THEN '>30 дней'
+        WHEN now() - d.first_sent_at > INTERVAL '7 days' THEN '>7 дней'
+        WHEN now() - d.first_sent_at > INTERVAL '3 days' THEN '>3 дней'
         ELSE 'до 3 дней'
     END AS wait_segment,
     r.semd_local_uid,
@@ -104,8 +124,9 @@ SELECT
     r.clinic_jid,
     r.clinic_name,
     r.clinic_label,
-    r.relates_to_id,
-    r.message_id,
+    r.relates_to_msgid,
+    r.request_msgid,
+    r.result_msgid,
     r.clinic_host
 FROM public.documents d
 INNER JOIN public.rpt_documents r ON r.dwh_id = d.dwh_id
@@ -113,12 +134,13 @@ WHERE d.status = 'waiting';
 
 CREATE OR REPLACE VIEW public.rpt_network_errors AS
 SELECT
-    r.processed_at,
+    r.ips_date,
     r.logid,
-    r.message_id,
+    r.result_msgid,
+    r.request_msgid,
     r.dwh_id,
     r.semd_local_uid,
-    r.relates_to_id,
+    r.relates_to_msgid,
     r.clinic_host,
     r.clinic_jid,
     r.clinic_name,
@@ -174,8 +196,7 @@ WITH atom_types AS (
       AND n.norm IS NOT NULL
 )
 SELECT
-    r.processed_at,
-    r.processed_day,
+    r.ips_date,
     a.dwh_id,
     r.clinic_jid,
     r.clinic_name,
@@ -191,7 +212,7 @@ WITH DATA;
 -- UNIQUE индекс нужен для REFRESH ... CONCURRENTLY; грейн = (dwh_id, error_type).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_error_breakdown
     ON public.rpt_error_breakdown (dwh_id, error_type);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_processed_at ON public.rpt_error_breakdown (processed_at);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_ips_date ON public.rpt_error_breakdown (ips_date);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_type ON public.rpt_error_breakdown (error_type);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_category ON public.rpt_error_breakdown (error_category);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_clinic_jid ON public.rpt_error_breakdown (clinic_jid);

@@ -17,8 +17,15 @@ CREATE TABLE IF NOT EXISTS public.document_attributes (
     doctor_name text,
     patient_hash text,
     doctor_hash text,
+    request_msgid text,
     updated_at timestamptz DEFAULT now()
 );
+
+-- request_msgid — MSGID исходящего запроса (getDocumentFile), нормализованный source MSGID строки
+-- request_logid. На грейне документа его нет (documents.result_msgid — это MSGID ответа РЭМД), а
+-- для «Отправлено» нужен именно MSGID запроса: пара request_msgid ↔ relates_to_msgid (relatesTo
+-- ответа) — штатный ключ корреляции запрос↔ответ (README §«Парсинг», офиц. request_id/response_to_request_id).
+ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS request_msgid text;
 
 CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
@@ -56,6 +63,7 @@ BEGIN
         doctor_name,
         patient_hash,
         doctor_hash,
+        request_msgid,
         updated_at
     )
     SELECT
@@ -77,6 +85,7 @@ BEGIN
         tx.doctor_name,
         COALESCE(tx.patient_hash, d.patient_hash) AS patient_hash,
         COALESCE(tx.doctor_hash, d.doctor_hash) AS doctor_hash,
+        req.request_msgid,
         now() AS updated_at
     FROM public.documents d
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
@@ -102,9 +111,16 @@ BEGIN
     LEFT JOIN LATERAL (
         SELECT public.extract_gost_endpoint(COALESCE(tx.xml_message, '')) AS endpoint
         FROM public.transactions tx
-        WHERE tx.logid = COALESCE(d.callback_log_id, d.source_logid)
+        WHERE tx.logid = COALESCE(d.result_logid, d.request_logid)
         LIMIT 1
     ) ep ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT t.source_message_id_norm AS request_msgid
+        FROM public.transactions t
+        WHERE t.logid = d.request_logid
+          AND t.source_message_id_norm IS NOT NULL
+        LIMIT 1
+    ) req ON TRUE
     WHERE d.dwh_id = ANY (p_dwh_ids)
     ON CONFLICT (dwh_id) DO UPDATE SET
         clinic_oid_xml = EXCLUDED.clinic_oid_xml,
@@ -119,6 +135,7 @@ BEGIN
         doctor_name = EXCLUDED.doctor_name,
         patient_hash = EXCLUDED.patient_hash,
         doctor_hash = EXCLUDED.doctor_hash,
+        request_msgid = EXCLUDED.request_msgid,
         updated_at = now()
     -- Change-guard: переписываем строку (и двигаем updated_at) только при реальном
     -- расхождении. Без него полный reconcile (в т.ч. на каждом dwh_init) переписывал
@@ -135,7 +152,8 @@ BEGIN
      OR public.document_attributes.snils_masked IS DISTINCT FROM EXCLUDED.snils_masked
      OR public.document_attributes.doctor_name IS DISTINCT FROM EXCLUDED.doctor_name
      OR public.document_attributes.patient_hash IS DISTINCT FROM EXCLUDED.patient_hash
-     OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash;
+     OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash
+     OR public.document_attributes.request_msgid IS DISTINCT FROM EXCLUDED.request_msgid;
 
     GET DIAGNOSTICS refreshed = ROW_COUNT;
     RETURN refreshed;

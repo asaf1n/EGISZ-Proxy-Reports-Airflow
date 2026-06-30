@@ -142,7 +142,7 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 | ------- | ---------- |
 | `xml_text` | Текст тега XML без привязки к namespace |
 | `normalize_message_id` | `urn:uuid:` → единый формат |
-| `dwh_id` | Ключ документа: `lower(localUid)` |
+| `dwh_id` | Ключ **экземпляра/версии** документа: `lower(localUid)` (см. §«Версии и идентичность документа») |
 | `resolve_document_jid` | JID: `mo_uid` из XML → fallback по host/gost-endpoint |
 | `normalize_semd_code` | Код СЭМД из payload |
 | `classify_async_status` | Статус сообщения до уровня документа |
@@ -151,8 +151,8 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 | Поле | Источник | Правило |
 | ---- | -------- | ------- |
-| ID сообщения | `<messageId>` / `MSGID` | Приоритет XML |
-| Связанное сообщение | `<relatesToMessage>` / `<relatesTo>` | Корреляция callback |
+| MSGID запроса | `<messageId>` / `MSGID` | ЕГИСЗ `request_id`; на документе — `request_msgid` (MSGID отправки) |
+| Связанное сообщение | `<relatesToMessage>` / `<relatesTo>` | ЕГИСЗ `response_to_request_id`; на документе — `relates_to_msgid` (= `request_msgid` у склеенных) |
 | Локальный ID | `<localUid>` / `<DOCUMENTID>` | Приоритет `localUid` |
 | ID в РЭМД | `<emdrId>` | |
 | OID организации | `<organization>` | → `dim_licenses.mo_uid` → JID |
@@ -160,9 +160,18 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 | Ошибка | `<code>`, `<message>`; при `LOGSTATE = 3` — `LOGTEXT` | Вход классификатора |
 | Дата создания | `<creationDateTime>` | `safe_cast_timestamptz` |
 
-**Статус сообщения** (`classify_async_status`): синхронный `RegisterDocumentResponse` с `<status>success</status>` — только приём запроса (`pending`), не регистрация. Регистрация — асинхронный callback с `registerDocumentResult` / `<documentStatus>Зарегистрировано</documentStatus>`. `LOGSTATE = 3` — транспортная ошибка.
+**Статус сообщения** (`classify_async_status`): синхронный `RegisterDocumentResponse` с `<status>success</status>` — только приём запроса (`pending`), не регистрация. Регистрация — асинхронный callback с `registerDocumentResult` / `<documentStatus>Зарегистрировано</documentStatus>`. `LOGSTATE = 3` — транспортная ошибка. **NB:** в журнале этого шлюза синхронный ack не наблюдается (маркер `RegisterDocumentResponse` = 0 строк), поэтому `pending` зарезервирован; документ в неконечном состоянии создаёт `getDocumentFile` (РЭМД забрал CDA и обрабатывает).
 
-**Статус документа** в `documents`: `success`, `async_error` (отказ РЭМД), `network_error` (`LOGSTATE = 3`), `waiting` (callback не пришёл). Подписи — `dim_document_status`; в Metabase Models — поле «Статус».
+**Статус документа** в `documents` (4 канонических, `dim_document_status`):
+
+| `status` | Метка | LOGID-якорь | MSGID-якорь |
+| --- | --- | --- | --- |
+| `waiting` | **Отправлено** (серый) | `request_logid` | `request_msgid` |
+| `network_error` | Ошибка связи | `result_logid` (LOGSTATE 3) | — |
+| `async_error` | Ошибка проверки РЭМД | `result_logid` | `relates_to_msgid` |
+| `success` | Успешно зарегистрирован | `result_logid` | `relates_to_msgid` |
+
+Транспорт СЭМД именуется по записям журнала: **отправка** (`getDocumentFile`) = `request_*`, **исход** (ответ РЭМД или сбой связи) = `result_*`. В витрине `logid = COALESCE(result_logid, request_logid)` — у «Отправлено» больше не пусто.
 
 **JID:** `resolve_document_jid(org_oid, endpoint)`. Флаг `clinic_jid_mismatch` — расхождение OID из XML, `JPERSONS.fir_oid`, `EGISZ_LICENSES.mo_uid`.
 
@@ -174,11 +183,33 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 1. **Сообщение** — `transform_raw_to_facts` парсит новые строки `exchangelog_raw` в `transactions` (поля `xml_*`, классификация callback на уровне строки). Повторный парсинг той же строки пропускается (`xml_parsed_at`).
 
-2. **Документ** — UPSERT в `documents` (PK `dwh_id`). Несколько строк журнала одной отправки сходятся в одну запись: ключ `lower(localUid)`; callback привязывается по `relatesTo` / `emdrId` (`normalize_message_id`). Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, итоговый `status`, `error_types`, `jid`.
+2. **Экземпляр документа** — UPSERT в `documents` (PK `dwh_id` = `lower(localUid)`). Несколько строк журнала одной отправки сходятся в одну запись: callback привязывается по `relatesTo` / `emdrId` (`normalize_message_id`). Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, итоговый `status`, `error_types`, `jid`. Грейн записи — **версия отправки**, а не «вечный» документ: правка ошибок меняет `localUid` ⇒ создаётся новый экземпляр (см. §«Версии и идентичность документа»).
 
 Lookback при transform: extract использует окно по ширине батча; reconcile передаёт prefix журнала, чтобы поздний callback связался с ранним `getDocumentFile`.
 
-`document_attributes` (1:1 к документу): lineage OID, host, endpoint, BI-маски; обновляется после transform и `sync_dimensions`.
+`document_attributes` (1:1 к экземпляру): lineage OID, host, endpoint, `request_msgid` (MSGID отправки — на грейне документа `result_msgid` хранит MSGID ответа, поэтому MSGID запроса берётся из source-транзакции), BI-маски; обновляется после transform и `sync_dimensions`.
+
+### Учёт отправленных vs корпус результатов
+
+«Отправлено» (`status='waiting'`) — это объём отправки без определённого вердикта РЭМД (и почти не схлопывается: синхронного ack в журнале нет). Поэтому учёт раздельный (грейн `is_current_version`):
+
+- **Отправлено** = `COUNT(DISTINCT dwh_id)` со `status='waiting'` — отдельный счётчик объёма/очереди (+ возрастные сегменты `rpt_documents_waiting.wait_segment`).
+- **Корпус результатов** = `status <> 'waiting'` (success / async_error / network_error) — документы с вердиктом. **Все статус-карточки и рейтинги** (распределение статусов, доля успеха/ошибок, время доставки, здоровье клиник) строятся только на нём: «Отправлено» исключается, иначе нерешаемая очередь искажает статистику. Доля успеха = `success / (success+async_error+network_error)`. Корпус выводится прямо из `status` — отдельного флага не вводим.
+
+---
+
+## Версии и идентичность документа
+
+Журнал даёт только обёртку SOAP-сообщений РЭМД, **без тела СЭМД** (base64-CDA шлюзом не сохраняется). Из идентификаторов в обёртке есть `localUid`, `documentNumber`, `emdrId`, `messageId`/`relatesTo` — но **нет** CDA-полей `setId` / `versionNumber` / `relatedDocument` (проба: 0 строк из 928k; источник их и не отдаёт). Отсюда два уровня идентичности:
+
+| Уровень | Что это | Источник | Поле |
+| ------- | ------- | -------- | ---- |
+| Экземпляр/версия | CDA `ClinicalDocument/id` — UUID конкретной версии. По правилам РЭМД меняется при **любой** правке СЭМД и при ряде повторных выгрузок без изменений | обёртка `localUid` | `dwh_id` (PK) |
+| Логический документ | один документ через все версии | `jid` + `semd_code` + `documentNumber` | `document_group_id` (рассчитанный слой) |
+
+Поскольку CDA `setId` недостижим, логический документ собирается из обёртки по **`(клиника jid + тип СЭМД + documentNumber)`**, где `documentNumber` = `PROTOCOLID` (номер протокола/ИБ в МИС). Проверено на базе: пара `(jid, documentNumber)` всегда несёт **ровно один** `semd_code` — то есть это ключ **документа**, а не случая; несколько `localUid` на такую пару = версии одного документа (max 7 по базе). Группировка ограничена защитным порогом `c_cap = 50` (страховка от клиник, переиспользующих счётчик протокола); более крупные группы остаются `singleton`. Провенанс — `document_group_confidence` (`doc_number` | `singleton`).
+
+`documentNumber` заполнен лишь у части потока (≈3.6% документов), остальные остаются `singleton` (сами себе группа). В каждой группе ровно один экземпляр помечен `is_current_version = true` (зарегистрированный `success` приоритетнее, иначе последний по дате); цепочка версий — `supersedes_dwh_id` / `superseded_by_dwh_id`, порядковый номер — `semd_version_number`. **Основные счётчики витрин считают уникальные документы** (`WHERE is_current_version`); срез «все попытки» доступен через `rpt_document_versions`. Наблюдаемость группировки — `rpt_health_versions` (детектор перемола: макс. размер группы, коллизии `localUid`).
 
 ---
 
@@ -213,7 +244,7 @@ Lookback при transform: extract использует окно по ширин
 | Состояние | `elt_state` | `last_logid` — курсор инкрементальной обработки |
 | Raw | `exchangelog_raw` | Строка журнала как в источнике |
 | Транзакции | `transactions` | Строка журнала + `xml_*` (parse-once) + `error_type` на callback |
-| Факт | `documents` | Один СЭМД — одна строка |
+| Факт | `documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
 | Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID |
 | Справочники | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_document_status` | Клиники, лицензии, типы СЭМД, подписи статусов |
 | Правила | `dim_error_rules` | `match_code` + `match_pattern` → `interpretation` |
@@ -223,7 +254,8 @@ Lookback при transform: extract использует окно по ширин
 
 | Представление | Содержание |
 | ------------- | ---------- |
-| `rpt_documents` | `documents` + `document_attributes` + справочники |
+| `rpt_documents` | `documents` + `document_attributes` + справочники; **текущие версии** (`is_current_version`) |
+| `rpt_document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
 | `rpt_documents_waiting` | `status = waiting` |
 | `rpt_network_errors` | `status = network_error` |
 | `rpt_error_breakdown` | Split `error_types` по `·` / ` - ` → атомарный канонический вид (`error_type` + `error_category`) |
@@ -236,9 +268,9 @@ Lookback при transform: extract использует окно по ширин
 | ------- | ------- |
 | `semd_*` | `semd_code`, `semd_name`, `semd_local_uid`, `semd_emdr_id` |
 | `clinic_*` | `clinic_jid`, `clinic_name`, `clinic_jid_mismatch` |
-| без префикса | `status`, `status_label`, `error_types` (модель «Документы», полный список), `error_type` (модель «Разбивка ошибок», атомарный), `error_category`, `error_summary`, `error_text`, `processed_at`, `processed_day`, `arrival_day` |
+| без префикса | `status`, `status_label`, `error_types` (модель «Документы», полный список), `error_type` (модель «Разбивка ошибок», атомарный), `error_category`, `error_summary`, `error_text`, `ips_date`, `first_sent_at` |
 
-`processed_at` / `processed_day` — по последней активности (`last_callback_at` → `sent_at` → `document_created_at`). `arrival_day` — день поступления на прокси (`first_sent_at` → `document_created_at`). Карточка «Динамика документов по дням» на дашборде «Интеграция с ЕГИСЗ» строится и фильтруется по `arrival_day` (не по `processed_day`).
+`ips_date` — дата обработки транспортом IPS (`EXCHANGELOG.CREATEDATE`): `COALESCE(last_callback_at, registered_at, first_sent_at)` — любая доступная стадия IPS-события документа; XML-дата создания (`document_created_at`/`semd_created_at`) сюда не входит. День берётся из полной даты инлайн (`ips_date::date`), без `AT TIME ZONE` — стек уже пиннится МСК. `first_sent_at` — поступление на прокси (первое IPS-событие); карточка «Динамика документов по дням» строится и фильтруется по `first_sent_at` (не по `ips_date`). Фильтр периода во всех дашбордах — `ips_date` («Обработано IPS»).
 
 ---
 
@@ -246,7 +278,7 @@ Lookback при transform: extract использует окно по ширин
 
 Четыре JSON-дашборда (`metabase_dashboards/`). Импорт — `metabase/setup-dashboards.sh`, модели — `metabase/sync-models.sh`.
 
-**«Интеграция с ЕГИСЗ»** — пять вкладок: оперативный мониторинг, сервис интеграции, документы без ответа, анализ ошибок, архив СЭМД. Drill-through из KPI и карточки «Ошибки: тип × клиника» — в модель «Документы»: тип ошибки передаётся через `contains` по полному списку `error_types` (документ с несколькими ошибками не теряется), клиника — точным `=`, плюс общие фильтры дашборда (период/СЭМД/статус). Распределения/топы и фильтр «Тип ошибки» считаются на грейне `rpt_error_breakdown` (1 строка = 1 канонический тип на документ).
+**«Интеграция с ЕГИСЗ»** — пять вкладок: оперативный мониторинг, сервис интеграции, отправленные (документы без callback-ответа), анализ ошибок, архив СЭМД. Drill-through из KPI и карточки «Ошибки: тип × клиника» — в модель «Документы»: тип ошибки передаётся через `contains` по полному списку `error_types` (документ с несколькими ошибками не теряется), клиника — точным `=`, плюс общие фильтры дашборда (период/СЭМД/статус). Распределения/топы и фильтр «Тип ошибки» считаются на грейне `rpt_error_breakdown` (1 строка = 1 канонический тип на документ).
 
 | Файл | Содержание |
 | ---- | ---------- |
@@ -255,9 +287,11 @@ Lookback при transform: extract использует окно по ширин
 | `07_client_service.json` | Личный кабинет клиники: 3 вкладки — обзор, ошибки регистрации ЭМД, документы |
 | `08_client_bianalytic.json` | Клиентская BI-выгрузка |
 
-**«Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ»** (`07_client_service.json`) — лицо сервиса для клиники, фильтруется по `JID Клиники` (обязательный). Три вкладки: **Обзор** (объёмы, статусы регистрации, динамика по дням, топ типов СЭМД), **Ошибки регистрации ЭМД** (объёмы и структура по категориям, топ типов ошибок с долей, динамика, топ СЭМД по ошибкам — на грейне `rpt_error_breakdown`), **Документы** (журнал документов клиники со статусом и сводкой ошибок). PII маскируется на уровне DWH.
+**«Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ»** (`07_client_service.json`) — лицо сервиса для клиники, фильтруется по `JID Клиники` (обязательный). Три вкладки: **Обзор** (объёмы, статусы регистрации, динамика по дням, топ типов СЭМД), **Ошибки регистрации ЭМД** (объёмы и структура по категориям, топ типов ошибок с долей, динамика, топ СЭМД по ошибкам — на грейне `rpt_error_breakdown`), **Документы** (журнал документов с финальным ответом РЭМД + отдельная карточка «Отправленные — клиент» с документами без callback-ответа). «Отправлено» (`status='waiting'`) нигде не смешивается с реальными статусами регистрации — все объёмы и распределения вкладки «Обзор» считаются только по документам с финальным ответом РЭМД (фактические), отправленные без ответа вынесены в отдельную карточку «Отправленные — клиент». BI-дашборд (`08`) — это аналитика производства ЭМД и считает объёмы по всем произведённым документам (включая in-flight); его ставки «% успеха» — по финальным. PII маскируется на уровне DWH.
 
-**Публичная страница без авторизации.** `setup-dashboards.sh` идемпотентно включает `enable-public-sharing` и создаёт публичную ссылку клиентского дашборда (`${METABASE_URL}/public/dashboard/<uuid>`, печатается в логах провижининга). Управляется `METABASE_PUBLIC_CLIENT_DASHBOARD` (по умолчанию `true`). `public_uuid` хранится в app-БД Metabase: стабилен между рестартами, регенерируется при пересоздании app-БД. На публичной ссылке фильтр `JID Клиники` открыт и переопределяется через URL.
+**Дефолты инстанса Metabase.** `setup-dashboards.sh` (`ensure_localization_defaults`) идемпотентно проставляет: язык `site-locale=ru`, часовой пояс `report-timezone=Europe/Moscow`, формат времени 24ч сокращённый (`custom-formatting.type/Temporal.time_style=HH:mm`), валюту рубль (`type/Currency.currency=RUB`, символ ₽), и включает кеш результатов адаптивной TTL-стратегией через `PUT /api/cache` (в v0.62 `enable-query-caching` — read-only). Необязательные настройки ставятся через `api_request_optional` (не валят провижининг при несовместимой версии).
+
+**Публичная страница без авторизации.** `setup-dashboards.sh` идемпотентно включает `enable-public-sharing` и создаёт публичную ссылку клиентского дашборда (`${METABASE_URL}/public/dashboard/<uuid>`, печатается в логах провижининга). Управляется `METABASE_PUBLIC_CLIENT_DASHBOARD` (по умолчанию `true`). `public_uuid` хранится в app-БД Metabase: стабилен между рестартами, регенерируется при пересоздании app-БД. На публичной ссылке фильтр `JID Клиники` открыт и переопределяется через URL. Наименование клиники в заголовке вкладки «Обзор» подставляется из параметра `clinic_name` (`{{clinic_name}}` в текстовой карточке) — он только отображает значение, переданное в URL (как и JID, в будущем — из auth-токена), и не фильтрует данные; на публичной ссылке его скрывают через `#hide_parameters=clinic_name`.
 
 Metabase Models → витрины DWH:
 
@@ -319,7 +353,10 @@ Airflow UI — `http://localhost:8080`, Metabase — `http://localhost:3000`, na
 | ОГРН / ИНН / КПП          | Реквизиты юридического лица                                                   |
 | OID                       | Object Identifier (для справочников НСИ)                                      |
 | `emdrId`                  | Идентификатор зарегистрированного документа в РЭМД                            |
-| `localUid`                | Идентификатор документа на стороне МИС (до регистрации в РЭМД)                |
+| `localUid`                | CDA `ClinicalDocument/id` — идентификатор **версии** документа в МИС; меняется при правке/ре-выгрузке ⇒ `dwh_id` |
+| `setId` / `versionNumber` | CDA-ключ набора версий и номер версии; в журнал не попадают (нет тела СЭМД)    |
+| `documentNumber`          | `PROTOCOLID` — номер протокола/ИБ в МИС; стабилен между версиями, ровно один `semd_code` на пару `(jid, documentNumber)` |
+| `document_group_id`       | Рассчитанный ключ логического документа = `(jid + semd_code + documentNumber)` |
 | `messageId` / `relatesTo` | Корреляционные идентификаторы SOAP-сообщений                                  |
 | callback                  | Асинхронный ответ РЭМД на исходящее сообщение                                |
 | DWH                       | Аналитическое хранилище (`dwh_egisz`)                                         |

@@ -41,21 +41,20 @@ CREATE TABLE IF NOT EXISTS documents (
     emdr_id text,
     semd_code text,
     status text,
-    message_id text,
-    relates_to_id text,
-    callback_log_id bigint,
-    sent_at timestamptz,
+    result_msgid text,
+    relates_to_msgid text,
+    result_logid bigint,
     document_created_at timestamptz,
     registered_at timestamptz,
     error_types text,
     error_text text,
     patient_hash text,
     doctor_hash text,
-    source_logid bigint,
+    request_logid bigint,
     first_sent_at timestamptz,
     last_callback_at timestamptz,
     last_status text,
-    jid integer,
+    jid bigint,
     updated_at timestamptz DEFAULT now()
 );
 
@@ -137,16 +136,43 @@ BEGIN
     END IF;
 END $$;
 
+-- Единое именование транспорта СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
+-- callback_log_id вводил в заблуждение (для network_error исход — сбой LOGSTATE=3, не callback),
+-- message_id/relates_to_id на грейне документа — это MSGID/relatesTo ответа РЭМД. Переименование
+-- идемпотентно: мигрирует только при наличии старого имени и отсутствии нового.
+DO $$
+DECLARE
+    rn record;
+BEGIN
+    FOR rn IN
+        SELECT * FROM (VALUES
+            ('source_logid',   'request_logid'),
+            ('callback_log_id','result_logid'),
+            ('message_id',     'result_msgid'),
+            ('relates_to_id',  'relates_to_msgid')
+        ) AS m(old_name, new_name)
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = rn.old_name
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = rn.new_name
+        ) THEN
+            EXECUTE format('ALTER TABLE public.documents RENAME COLUMN %I TO %I', rn.old_name, rn.new_name);
+        END IF;
+    END LOOP;
+END $$;
+
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS local_uid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
 ALTER TABLE documents ALTER COLUMN semd_code DROP NOT NULL;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status_category text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS message_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS relates_to_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS callback_log_id bigint;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS result_msgid text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS relates_to_msgid text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS result_logid bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_types text;
@@ -154,19 +180,42 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_text text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS doctor_hash text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_logid bigint;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS request_logid bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid integer;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_oid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid_resolve_method text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 -- status_category удалён: полностью выводится из status, downstream-потребителей нет.
 ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
 
+-- Слой версий/логического документа (README §«Версии и идентичность документа»).
+-- dwh_id (PK) — ЭКЗЕМПЛЯР/ВЕРСИЯ (localUid), меняется при каждой правке/ре-выгрузке.
+-- Логический документ собирается по (clinic jid + тип СЭМД + documentNumber=PROTOCOLID).
+-- Проверено на базе: пара (jid, doc_number) всегда несёт ровно ОДИН semd_code (это ключ
+-- ДОКУМЕНТА, не случая), max 7 версий на группу; CDA setId в журнал не попадает и источником
+-- не отдаётся — не используем.
+--   doc_number                 — PROTOCOLID (номер протокола/ИБ в МИС), ключ группировки версий
+--   document_group_id          — 'd:'||jid||'|'||semd||'|'||docnum (группа) либо dwh_id (singleton)
+--   document_group_confidence  — провенанс группы: 'doc_number' | 'singleton'
+--   semd_version_number        — порядковый номер версии в группе
+--   superseded_by_dwh_id /     — цепочка версий между экземплярами
+--     supersedes_dwh_id
+--   is_current_version         — текущая (последняя) версия своей группы
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_number text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_group_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_group_confidence text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_version_number integer;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS superseded_by_dwh_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS supersedes_dwh_id text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_current_version boolean;
+-- setId в журнале отсутствует и источник его не отдаёт — зарезервированную колонку убираем.
+ALTER TABLE documents DROP COLUMN IF EXISTS semd_set_id;
+
 CREATE TABLE IF NOT EXISTS dim_organizations (
-    jid integer PRIMARY KEY,
+    jid bigint PRIMARY KEY,
     name text,
     inn text,
     address text,
@@ -187,7 +236,7 @@ VALUES
     ('success', 'Успешно зарегистрирован', 1, true),
     ('async_error', 'Ошибка асинхронного ответа РЭМД', 2, true),
     ('network_error', 'Ошибка связи', 3, true),
-    ('waiting', 'В обработке', 4, false)
+    ('waiting', 'Отправлено', 4, false)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order,
@@ -196,7 +245,7 @@ ON CONFLICT (code) DO UPDATE SET
 CREATE TABLE IF NOT EXISTS dim_licenses (
     id bigint PRIMARY KEY,
     service_type integer,
-    jid integer,
+    jid bigint,
     mo_uid text,
     mo_domen text,
     bdate date,
@@ -489,12 +538,12 @@ CREATE TABLE IF NOT EXISTS transactions (
     status text,
     message text,
     callback_url text,
-    jid integer,
+    jid bigint,
     semd_code text,
     semd_name text,
     error_code text,
     creation_date timestamptz,
-    processed_at timestamptz DEFAULT now()
+    loaded_at timestamptz DEFAULT now()
 );
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS dwh_id text;
@@ -511,6 +560,17 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS message text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS jid_resolve_method text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_msgid text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_message_id_norm text;
+-- transactions.processed_at (ELT now()) → loaded_at: «обработано IPS» — это бизнес-дата
+-- ips_date (rpt_documents), а это поле фиксирует момент загрузки строки в ELT.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'transactions'
+                 AND column_name = 'processed_at') THEN
+        ALTER TABLE public.transactions RENAME COLUMN processed_at TO loaded_at;
+    END IF;
+END $$;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_action text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_dwh_id text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_local_uid text;
@@ -523,7 +583,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_error_code text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_message text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_raw_status text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_document_status text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_jid integer;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_jid bigint;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_creation_date timestamptz;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_patient_name text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_snils text;
@@ -605,7 +665,7 @@ BEGIN
 
     IF relkind IS NOT NULL AND relkind <> 'p' THEN
         UPDATE public.transactions
-        SET log_date = COALESCE(log_date, processed_at, creation_date, now())
+        SET log_date = COALESCE(log_date, loaded_at, creation_date, now())
         WHERE log_date IS NULL;
 
         CREATE TABLE public.transactions_partitioned (
@@ -708,10 +768,29 @@ CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON documents (last_cal
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status);
 CREATE INDEX IF NOT EXISTS idx_documents_jid ON documents (jid);
-CREATE INDEX IF NOT EXISTS idx_documents_sent_at ON documents (sent_at);
+CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON documents (first_sent_at);
 CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON documents (document_created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON documents (registered_at);
-CREATE INDEX IF NOT EXISTS idx_documents_callback_log_id ON documents (callback_log_id);
+DROP INDEX IF EXISTS idx_documents_callback_log_id;
+CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON documents (result_logid);
+-- Слой версий: rpt по умолчанию фильтрует по is_current_version; transform пересобирает
+-- группу по document_group_id для затронутых батчем экземпляров.
+CREATE INDEX IF NOT EXISTS idx_documents_doc_number ON documents (doc_number);
+CREATE INDEX IF NOT EXISTS idx_documents_group_id ON documents (document_group_id);
+CREATE INDEX IF NOT EXISTS idx_documents_group_current
+    ON documents (document_group_id, is_current_version);
+CREATE INDEX IF NOT EXISTS idx_documents_is_current_version
+    ON documents (is_current_version) WHERE is_current_version;
+
+-- Разовый бэкфилл слоя версий для архива: до первого transform каждый существующий
+-- документ — собственная группа (singleton, текущая версия). recompute_document_versions
+-- уточняет группы по мере поступления батчей. Идемпотентно: WHERE ловит только NULL.
+UPDATE documents SET
+    document_group_id         = COALESCE(document_group_id, dwh_id),
+    document_group_confidence = COALESCE(document_group_confidence, 'singleton'),
+    semd_version_number       = COALESCE(semd_version_number, 1),
+    is_current_version        = COALESCE(is_current_version, true)
+WHERE is_current_version IS NULL OR document_group_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id ON transactions (dwh_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);

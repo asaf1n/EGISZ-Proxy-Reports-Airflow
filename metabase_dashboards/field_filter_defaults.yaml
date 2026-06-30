@@ -1,5 +1,7 @@
-# Декларативные правила для scripts/apply_metabase_field_filters.py.
-# field_name — физическое имя колонки в DWH (snake_case).
+# Декларативные правила для scripts/apply_metabase_field_filters.py (ручной repair-инструмент).
+# field_name — физическое имя колонки в DWH (snake_case). Единая модель имён:
+# дата = ips_date (EXCHANGELOG.CREATEDATE), поступление = first_sent_at; JID/СЭМД/Статус — по
+# label-колонкам (поиск по коду и наименованию).
 
 version: 2
 
@@ -8,13 +10,13 @@ tags:
     rules:
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
-        field_name: processed_at
+        field_name: ips_date
 
   parse_created:
     rules:
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
-        field_name: processed_at
+        field_name: ips_date
 
   local_uid:
     rules:
@@ -29,7 +31,7 @@ tags:
     rules:
       - query_contains: [rpt_documents]
         table_ref: public.rpt_documents
-        field_name: relates_to_id
+        field_name: relates_to_msgid
 
   emdr_id:
     rules:
@@ -58,69 +60,59 @@ tags:
         table_ref: public.rpt_error_breakdown
         field_name: error_type
 
+  # Поиск по клинике «код или наименование» → label-колонка.
   jid:
     rules:
       - query_contains: [rpt_error_breakdown]
         table_ref: public.rpt_error_breakdown
-        field_name: clinic_jid
+        field_name: clinic_label
       - query_contains: [rpt_health_by_clinic]
         table_ref: public.rpt_health_by_clinic
-        field_name: clinic_jid
+        field_name: clinic_label
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
-        field_name: clinic_jid
+        field_name: clinic_label
       - query_contains: [rpt_documents]
         table_ref: public.rpt_documents
-        field_name: clinic_jid
+        field_name: clinic_label
       - query_contains: [rpt_documents_waiting]
         table_ref: public.rpt_documents_waiting
-        field_name: clinic_jid
+        field_name: clinic_label
 
+  # Поиск по СЭМД «код или наименование» → label-колонка.
   semd_type:
     rules:
       - query_contains: [rpt_error_breakdown]
         table_ref: public.rpt_error_breakdown
-        field_name: semd_code
+        field_name: semd_label
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
-        field_name: semd_code
+        field_name: semd_label
       - query_contains: [rpt_documents]
         table_ref: public.rpt_documents
-        field_name: semd_code
+        field_name: semd_label
       - query_contains: [rpt_documents_waiting]
         table_ref: public.rpt_documents_waiting
-        field_name: semd_code
+        field_name: semd_label
 
-  dwh_date:
+  # Период «Обработано IPS» (ips_date). На очереди — поступление (first_sent_at);
+  # день берётся из полной даты инлайн, отдельной day-колонки нет.
+  ips_date:
     rules:
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
-        field_name: processed_at
+        field_name: ips_date
       - query_contains: [rpt_error_breakdown]
         table_ref: public.rpt_error_breakdown
-        field_name: processed_at
-      - display_name_contains: [Отправлено]
+        field_name: ips_date
+      - display_name_contains_lower: [очередь, поступл, отправ]
         table_ref: public.rpt_documents_waiting
-        field_name: sent_at
-      - display_name_contains_lower: [очередь]
+        field_name: first_sent_at
+      - query_contains: [rpt_documents_waiting]
         table_ref: public.rpt_documents_waiting
-        field_name: sent_at
-      - display_name_contains: ["День"]
-        query_contains: [rpt_documents]
-        table_ref: public.rpt_documents
-        field_name: processed_day
-      - display_name_contains: [Дата обработки]
-        query_contains: [rpt_documents]
-        table_ref: public.rpt_documents
-        field_name: processed_at
+        field_name: first_sent_at
       - table_ref: public.rpt_documents
-        field_name: processed_at
-
-  mgmt_period:
-    rules:
-      - query_contains: [rpt_documents]
-        table_ref: public.rpt_documents
-        field_name: processed_at
+        field_name: ips_date
 
   clinic_jid:
     rules:

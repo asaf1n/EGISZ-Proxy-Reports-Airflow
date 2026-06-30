@@ -161,14 +161,50 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
 
 
 def test_rpt_documents_exposes_canonical_error_types_list_only() -> None:
-    """rpt_documents отдаёт только полный канонизированный список error_types
-    (первый-атомный error_type удалён — отбор по типу идёт через rpt_error_breakdown)."""
+    """rpt_document_versions (база rpt_documents) отдаёт только полный канонизированный
+    список error_types (первый-атомный error_type удалён — отбор по типу идёт через
+    rpt_error_breakdown). rpt_documents = тот же проекшн, отфильтрованный по is_current_version."""
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
-    rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_documents")[1].split("COMMENT ON VIEW public.rpt_documents")[0]
+    rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_document_versions")[1].split("COMMENT ON VIEW public.rpt_document_versions")[0]
     assert "canonical_error_list(d.error_types)" in rpt
     assert "AS error_types" in rpt
     assert "AS error_type," not in rpt
     assert "split_part(" not in rpt
+
+
+def test_document_version_layer_groups_by_doc_number() -> None:
+    """Логический документ = (jid + semd_code + doc_number=PROTOCOLID); localUid — версия.
+    CDA setId источником не отдаётся ⇒ зарезервированная колонка снята, группируем по журналу."""
+    parts = DWH_INIT_SQL_PATH.parent / "parts"
+    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
+    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
+    rpt = (parts / "80_views_rpt.sql").read_text(encoding="utf-8")
+    health = (parts / "90_views_health_and_finalize.sql").read_text(encoding="utf-8")
+
+    for col in (
+        "doc_number",
+        "document_group_id",
+        "document_group_confidence",
+        "semd_version_number",
+        "superseded_by_dwh_id",
+        "supersedes_dwh_id",
+        "is_current_version",
+    ):
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in tables
+    assert "DROP COLUMN IF EXISTS semd_set_id" in tables
+
+    assert "CREATE OR REPLACE FUNCTION public.recompute_document_versions" in transform
+    assert "lower(btrim(d.doc_number))" in transform
+    assert "'doc_number'" in transform
+    assert "c_cap" in transform
+    assert "semd_set_id" not in transform
+    assert "PERFORM public.recompute_document_versions" in transform
+    assert "public.recompute_document_versions(NULL::text[])" in health
+
+    assert "CREATE OR REPLACE VIEW public.rpt_document_versions" in rpt
+    assert "CREATE OR REPLACE VIEW public.rpt_documents AS" in rpt
+    assert "WHERE is_current_version" in rpt
+    assert "rpt_health_versions" in health
 
 
 def test_document_attributes_maintained_without_enriched_mart() -> None:
@@ -221,9 +257,6 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "clinic_host",
         "clinic_inn",
         "clinic_jid_mismatch",
-        "processed_at",
-        "processed_day",
-        "arrival_day",
         "semd_emdr_id",
         "error_types",
         "error_summary",

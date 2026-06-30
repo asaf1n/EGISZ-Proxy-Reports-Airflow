@@ -1,12 +1,10 @@
 {
   "name": "Документы",
   "table_ref": "public.rpt_documents",
-  "description": "Единая модель документов (grain: 1 строка = 1 document). Фильтры по status_label или status. Отбор по типу ошибки — через модель «Разбивка ошибок» (грейн тип×документ).",
+  "description": "Единая модель документов (grain: 1 строка = 1 текущая версия логического документа, rpt_documents.is_current_version). Полный аудит всех версий — витрина rpt_document_versions. Транспорт СЭМД: request_* — отправка (getDocumentFile), result_* — исход (ответ РЭМД или сбой связи); пара MSGID запроса ↔ Связанное сообщение — ключ корреляции. Учёт: «Отправлено» (status «Отправлено») — объём отправки; статус-распределение и рейтинги (доля успеха/ошибок) считаются только на документах с вердиктом РЭМД (status ≠ «Отправлено»). Отбор по типу ошибки — через модель «Разбивка ошибок».",
   "fields": {
     "dwh_id": { "semantic_type": "type/PK" },
-    "processed_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
-    "processed_day": { "semantic_type": "type/CreationDate", "display_name": "День" },
-    "arrival_day": { "semantic_type": "type/CreationDate", "display_name": "День поступления" },
+    "ips_date": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
     "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
@@ -19,19 +17,22 @@
     "error_summary": { "semantic_type": "type/Description", "display_name": "Сводка ошибки" },
     "error_text": { "semantic_type": "type/Description", "display_name": "Исходный текст ошибки" },
     "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
-    "relates_to_id": { "semantic_type": "type/Category", "display_name": "Связанное сообщение" },
+    "request_msgid": { "semantic_type": "type/Category", "display_name": "MSGID запроса" },
+    "result_msgid": { "semantic_type": "type/Category", "display_name": "MSGID ответа" },
+    "relates_to_msgid": { "semantic_type": "type/Category", "display_name": "Связанное сообщение (relatesTo)" },
     "semd_emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" },
     "semd_created_at": { "semantic_type": "type/CreationTimestamp", "display_name": "СЭМД CreateDate" },
     "delivery_seconds": { "semantic_type": "type/Quantity", "display_name": "Время доставки, сек" },
-    "logid": { "semantic_type": "type/Category", "display_name": "LOGID" }
+    "logid": { "semantic_type": "type/Category", "display_name": "LOGID" },
+    "request_logid": { "semantic_type": "type/Category", "display_name": "LOGID запроса" },
+    "result_logid": { "semantic_type": "type/Category", "display_name": "LOGID ответа" },
+    "semd_version_number": { "semantic_type": "type/Quantity", "display_name": "Версия СЭМД" },
+    "document_group_id": { "semantic_type": "type/Category", "display_name": "ID логического документа" }
   },
   "hidden_fields": [
     "dwh_id",
     "status",
     "status_sort",
-    "message_id",
-    "processed_day",
-    "arrival_day",
     "semd_code",
     "semd_name",
     "clinic_jid",
@@ -43,7 +44,12 @@
     "snils_masked",
     "doctor_name",
     "patient_hash",
-    "doctor_hash"
+    "doctor_hash",
+    "document_group_id",
+    "document_group_confidence",
+    "is_current_version",
+    "superseded_by_dwh_id",
+    "supersedes_dwh_id"
   ],
   "metrics": {
     "Документов": {

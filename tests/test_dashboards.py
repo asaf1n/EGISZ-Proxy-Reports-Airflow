@@ -122,7 +122,7 @@ def test_service_network_top_groups_by_typed_label() -> None:
     assert "network_error_type" in query
     assert "public.network_error_type(r.error_text) AS network_error_type" in sql
     assert "per_kind AS" in query
-    assert "[[AND {{dwh_date}}]]" in query
+    assert "[[AND {{ips_date}}]]" in query
     assert "Остальные (" in query
 
 
@@ -214,7 +214,9 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
 def test_operational_latest_operations_table_matches_documents_view() -> None:
     dashboard = _legacy_dashboard("01_operational.json")
     card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
-    view_columns = _view_column_names("rpt_documents")
+    # rpt_documents = SELECT * FROM rpt_document_versions WHERE is_current_version —
+    # колоночный проекшн (с алиасами) живёт в базовой rpt_document_versions.
+    view_columns = _view_column_names("rpt_document_versions")
     allowed_columns = _model_display_names("01_documents.json") | DOCUMENTS_TABLE_LEGACY_LABELS | view_columns
     configured_columns = {
         column["name"]
@@ -260,8 +262,8 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
         if c.get("name") == "Отказы по часам: связь и асинхронный ответ"
     )
     query = card["dataset_query"]["native"]["query"]
-    assert "date_trunc('hour', processed_at)" in query
-    assert "[[AND {{dwh_date}}]]" in query
+    assert "date_trunc('hour', ips_date)" in query
+    assert "[[AND {{ips_date}}]]" in query
     assert card["visualization_settings"]["graph.dimensions"] == ["Час"]
     metrics = card["visualization_settings"]["graph.metrics"]
     assert "Ошибка связи" in metrics
@@ -315,30 +317,30 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     assert card.get("query_tier") == "query_builder"
     assert card["source_model"] == "Документы"
     assert "public.v_egisz_transactions_enriched_ui" not in trend_query
-    assert latest_card["metabase-parameter-targets"]["dwh_date"] == {
+    assert latest_card["metabase-parameter-targets"]["ips_date"] == {
         "model_ref": "Документы",
-        "field_name": "processed_at",
+        "field_name": "ips_date",
     }
     assert card["dataset_query"]["query"]["breakout"] == [["field", "Документы:status_label", None]]
     assert card["visualization_settings"]["pie.metric"] == "Документов"
     assert "Успешно зарегистрирован" in row_keys
     assert "Ошибка асинхронного ответа РЭМД" in row_keys
     assert "Ошибка связи" in row_keys
-    assert "В обработке" in row_keys
+    assert "Отправлено" in row_keys
     assert "Успешный ответ" not in row_keys
     assert "Неизвестная ошибка" not in row_keys
     assert "Нераспознан" not in row_keys
-    # Тренд по дням: текущий статус документа и дата processed_at.
+    # Тренд по дням: текущий статус документа и день из ips_date.
     assert "public.rpt_documents" in trend_query
-    assert "processed_day" in trend_query
+    assert "ips_date::date" in trend_query
     assert "status_label" in trend_query
     assert "public.transactions" not in trend_query
     assert "WHERE \"Статус\" IN ('success', 'error')" not in trend_query
     assert "CREATE OR REPLACE VIEW public.rpt_documents" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
     assert "FROM public.rpt_documents" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert trend_card["metabase-field-filters"]["dwh_date"] == {
+    assert trend_card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "public.rpt_documents",
-        "field_name": "processed_at",
+        "field_name": "ips_date",
     }
 
 
@@ -351,13 +353,67 @@ def test_documents_view_exposes_canonical_status_label_and_code() -> None:
     assert "'Успешно зарегистрирован'" in tables_sql
     assert "'Ошибка асинхронного ответа РЭМД'" in tables_sql
     assert "'Ошибка связи'" in tables_sql
-    assert "'В обработке'" in tables_sql
+    assert "'Отправлено'" in tables_sql
     assert "ds.label AS status_label" in sql
     assert "d.status" in sql
-    assert "COALESCE(d.last_callback_at, d.sent_at, d.document_created_at)" in sql
-    assert "processed_day" in sql
+    assert "COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) AS ips_date" in sql
+    assert "ips_date" in sql
     assert "status," in sql
     assert "status_label," in sql
+
+
+def test_documents_view_unifies_logid_msgid_naming() -> None:
+    """Транспорт СЭМД: request_*/result_* + COALESCE LOGID (у «Отправлено» не пусто) +
+    request_msgid из document_attributes (README §«Парсинг»)."""
+    rpt = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    core = Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
+    transform = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+
+    # LOGID состояния: исход если есть, иначе отправка — больше не NULL для «Отправлено».
+    assert "COALESCE(d.result_logid, d.request_logid)::text AS logid" in rpt
+    assert "d.request_logid::text AS request_logid" in rpt
+    assert "d.result_logid::text AS result_logid" in rpt
+    # MSGID: запрос (из document_attributes) + ответ + relatesTo.
+    assert "a.request_msgid" in rpt
+    assert "d.result_msgid" in rpt
+    assert "AS relates_to_msgid" in rpt
+    # Корпус результатов выводится из status напрямую — отдельного флага is_resolved нет.
+    assert "is_resolved" not in rpt
+    # request_msgid наполняется из source-транзакции в document_attributes.
+    assert "request_msgid text" in core
+    assert "AS request_msgid" in core
+    # Stored-схема использует новые имена (старые callback_log_id/source_logid отсутствуют).
+    assert "callback_log_id" not in transform
+    assert "source_logid" not in transform
+
+
+def test_documents_model_exposes_transport_fields() -> None:
+    documents = json.loads(Path("metabase_models/01_documents.json").read_text(encoding="utf-8"))
+    for field in ("request_logid", "result_logid", "request_msgid", "result_msgid",
+                  "relates_to_msgid", "logid"):
+        assert field in documents["fields"], field
+    assert "message_id" not in documents["hidden_fields"]
+    # Корпус — из status; отдельной сущности is_resolved быть не должно.
+    assert "is_resolved" not in documents["fields"]
+
+
+def test_status_distribution_cards_exclude_waiting() -> None:
+    """Статус-карточки строятся только на документах с вердиктом РЭМД: «Отправлено»
+    (status='waiting') не входит в распределение (статистика не искажается)."""
+    dashboard = _integration_dashboard()
+    by_name = {c.get("name"): c for c in dashboard["cards"]}
+
+    trend = by_name["Транзакции по дням и статусам"]
+    trend_sql = trend["dataset_query"]["native"]["query"]
+    assert "status <> 'waiting'" in trend_sql
+    assert "Отправлено" not in trend.get("visualization_settings", {}).get("series_settings", {})
+
+    # Фильтр по видимому status_label, а не по скрытому status: скрытые поля модели не
+    # резолвятся импортёром Metabase и фильтр молча отбрасывается (карточка показывала
+    # «Отправлено»). status_label виден (используется в breakout) и резолвится корректно.
+    donut = by_name["Статусы за период"]
+    flt = donut["dataset_query"]["query"].get("filter")
+    assert flt == ["!=", ["field", "Документы:status_label", None], "Отправлено"]
 
 
 def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None:
@@ -408,9 +464,9 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     assert "HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) > 0" in query
     assert "ORDER BY 4 DESC" in query
     assert "semd_code" in query
-    assert card["metabase-field-filters"]["dwh_date"] == {
+    assert card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "public.rpt_documents",
-        "field_name": "processed_at",
+        "field_name": "ips_date",
     }
 
 
@@ -433,9 +489,9 @@ def test_quality_error_rate_error_kind_by_semd_card() -> None:
     assert "COUNT(DISTINCT dwh_id)" in query
     assert "ORDER BY 3 DESC" in query
     assert "LIMIT" not in query
-    assert card["metabase-field-filters"]["dwh_date"] == {
+    assert card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "public.rpt_error_breakdown",
-        "field_name": "processed_at",
+        "field_name": "ips_date",
     }
 
 
@@ -585,13 +641,13 @@ def test_document_volume_by_day_uses_first_sent_not_sent_at() -> None:
     )
     query = card["dataset_query"]["native"]["query"]
     assert "first_sent_at" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert "arrival_day" in query
+    assert "first_sent_at" in query
     assert "FROM public.rpt_documents" in query
     assert "documents fd" not in query
     assert "COALESCE(fd.first_sent_at" not in query
     assert "processed_day AS" not in query
     assert " r " not in query
-    assert card["metabase-field-filters"]["dwh_date"]["field_name"] == "arrival_day"
+    assert card["metabase-field-filters"]["ips_date"]["field_name"] == "first_sent_at"
 
 
 def test_quality_success_slices_sort_by_total_desc() -> None:
@@ -656,7 +712,7 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     assert card["visualization_settings"].get("graph.x_axis.scale") == "ordinal"
     assert card["visualization_settings"].get("graph.x_axis.title_text", "unset") == ""
     assert card["visualization_settings"].get("graph.y_axis.title_text", "unset") == ""
-    _assert_archive_tab_click(card)
+    _assert_model_drill_through(card, "Разбивка ошибок", {"semd_label"})
 
 
 def test_quality_percent_columns_use_comma_decimal_separator() -> None:
@@ -714,7 +770,7 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
 
     assert dashboard["name"] == "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ"
     assert any(p["name"] == "JID Клиники" for p in dashboard["parameters"])
-    assert any(p["name"] == "Период" and p.get("default") == "past7days~" for p in dashboard["parameters"])
+    assert any(p["name"] == "Обработано IPS" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
     # Обзор/Документы читают rpt_documents, вкладка ошибок — rpt_error_breakdown (модель ошибок).
     assert all(
@@ -747,24 +803,27 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
 
             assert tags["client_jid"]["type"] == "text", f"{path_name}: JID должен быть text-тегом, иначе JID-фильтр не работает"
             assert tags["client_jid"]["required"] is True, f"{path_name}: JID должен быть required"
-            assert tags["client_period"]["type"] == "dimension"
-            assert tags["client_document_type"]["type"] == "dimension"
             # Field-filters периода/типа биндятся к source-витрине карточки: карточки ошибок
-            # читают rpt_error_breakdown, остальные — rpt_documents (обе несут processed_at/semd_label).
+            # читают rpt_error_breakdown, остальные — rpt_documents (обе несут ips_date/semd_label).
+            # Неиспользуемые в SQL фильтры карточки вычищены (prune), поэтому проверяем по наличию.
             query = card["dataset_query"]["native"]["query"]
             source_view = (
                 "public.rpt_error_breakdown"
                 if "public.rpt_error_breakdown" in query
                 else "public.rpt_documents"
             )
-            assert filters["client_period"] == {
-                "table_ref": source_view,
-                "field_name": "processed_at",
-            }
-            assert filters["client_document_type"] == {
-                "table_ref": source_view,
-                "field_name": "semd_label",
-            }
+            if "ips_date" in tags:
+                assert tags["ips_date"]["type"] == "dimension"
+                assert filters["ips_date"] == {
+                    "table_ref": source_view,
+                    "field_name": "ips_date",
+                }
+            if "client_document_type" in tags:
+                assert tags["client_document_type"]["type"] == "dimension"
+                assert filters["client_document_type"] == {
+                    "table_ref": source_view,
+                    "field_name": "semd_label",
+                }
 
 
 def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
@@ -1011,7 +1070,7 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "COUNT(DISTINCT dwh_id)" in query
     assert "period_docs" in query
-    assert query.count("[[AND {{dwh_date}}]]") == 1
+    assert query.count("[[AND {{ips_date}}]]") == 1
     assert 'AS "Тип ошибки"' in query
     assert 'AS "Клиника"' in query
     assert 'AS "JID Клиники"' in query
@@ -1032,9 +1091,9 @@ def test_error_period_card_uses_breakdown_model() -> None:
     assert card["dataset_query"]["type"] == "native"
     assert "rpt_error_breakdown" in query
     assert "rpt_documents" in query
-    assert card.get("metabase-field-filters")["dwh_date"] == {
+    assert card.get("metabase-field-filters")["ips_date"] == {
         "table_ref": "public.rpt_documents",
-        "field_name": "processed_at",
+        "field_name": "ips_date",
     }
 
 
@@ -1043,9 +1102,9 @@ def test_error_period_card_uses_canonical_filter_tags() -> None:
     dashboard = _legacy_dashboard("04_quality_and_errors.json")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     filters = card.get("metabase-field-filters") or {}
-    assert filters["jid"]["field_name"] == "clinic_jid"
+    assert filters["jid"]["field_name"] == "clinic_label"
     assert filters["jid"]["table_ref"] == "public.rpt_documents"
-    assert filters["semd_type"]["field_name"] == "semd_code"
+    assert filters["semd_type"]["field_name"] == "semd_label"
     assert filters["error_type"]["field_name"] == "error_type"
     assert filters["error_type"]["table_ref"] == "public.rpt_error_breakdown"
     query = card["dataset_query"]["native"]["query"]
@@ -1061,9 +1120,9 @@ def test_error_period_card_uses_canonical_filter_tags() -> None:
         contains_fields={"error_types"},
     )
     drill_params = card.get("metabase-model-drill-params") or {}
-    assert drill_params.get("dwh_date") == "processed_at"
-    assert drill_params.get("semd_type") == "semd_code"
-    assert drill_params.get("jid") == "clinic_jid"
+    assert drill_params.get("ips_date") == "ips_date"
+    assert drill_params.get("semd_type") == "semd_label"
+    assert drill_params.get("jid") == "clinic_label"
 
 
 def test_pie_cards_do_not_keep_graph_dimensions() -> None:
@@ -1275,7 +1334,7 @@ def test_integration_dashboard_has_tabs_and_legacy_card_coverage() -> None:
     assert [tab["name"] for tab in tabs] == [
         "Оперативный мониторинг",
         "Сервис интеграции",
-        "Документы без ответа",
+        "Отправленные",
         "Анализ ошибок",
         "Архив СЭМД",
     ]
@@ -1293,7 +1352,7 @@ def test_integration_dashboard_has_tabs_and_legacy_card_coverage() -> None:
 
 def test_integration_dashboard_default_period_is_current_month() -> None:
     dashboard = _integration_dashboard()
-    period = next(p for p in dashboard["parameters"] if p.get("slug") == "dwh_date_filter")
+    period = next(p for p in dashboard["parameters"] if p.get("slug") == "ips_date_filter")
     assert period.get("default") == "thismonth"
     dashboard = _integration_dashboard()
     removed = {
@@ -1305,7 +1364,7 @@ def test_integration_dashboard_default_period_is_current_month() -> None:
         "Документов за период",
         "Доля ошибок за период, %",
         "Успешно за период",
-        "В обработке",
+        "Отправлено",
     }
     for tab in ("errors", "service"):
         names = {c.get("name") for c in dashboard["cards"] if c.get("tab") == tab}
@@ -1393,7 +1452,7 @@ def test_operational_tab_has_core_cards() -> None:
 def test_operational_tab_has_no_scalar_kpi_row() -> None:
     dashboard = _integration_dashboard()
     names = {c.get("name") for c in dashboard["cards"] if c.get("tab") == "operational"}
-    assert not names & {"Всего документов", "Всего клиник", "В обработке"}
+    assert not names & {"Всего документов", "Всего клиник", "Отправлено"}
     scalars = [
         c for c in dashboard["cards"]
         if c.get("tab") == "operational" and c.get("display") == "scalar"
@@ -1442,7 +1501,7 @@ def test_quality_qb_cards_use_models_and_archive_click() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
     assert 'AS "%"' in query
-    _assert_archive_tab_click(card)
+    _assert_model_drill_through(card, "Документы", {"clinic_jid"})
 
 
 def test_operational_volume_card_shows_share_of_total() -> None:
@@ -1719,3 +1778,89 @@ def test_click_behavior_source_columns_exist_in_sql() -> None:
             if f'AS "{col}"' not in query and f'"{col}"' not in query:
                 violations.append(f"{card.get('name')}: drill column {col!r}")
     assert not violations, "; ".join(violations)
+
+
+# --- Единая модель ips_date + конфайн фильтров + label-поиск + drill в модель ----------
+
+_LOOKUP_FILTERS = {"local_uid", "relates_to", "emdr_id", "log_id"}
+_COMMON_FILTERS = {"ips_date", "jid", "semd_type"}
+
+
+def _card_filter_keys(card: dict) -> set[str]:
+    return set((card.get("metabase-field-filters") or {})) | set(
+        (card.get("metabase-parameter-targets") or {})
+    )
+
+
+def test_no_legacy_date_tokens_anywhere() -> None:
+    """ips_date — единственное имя бизнес-даты: ни dwh_date/processed_at/processed_day/arrival_day,
+    ни двойного сдвига AT TIME ZONE в документных rpt-витринах, ни в дашбордах."""
+    for path in _dashboard_paths():
+        blob = path.read_text(encoding="utf-8")
+        for tok in ("dwh_date", "processed_at", "processed_day", "arrival_day", "mgmt_period", "client_period"):
+            assert tok not in blob, f"{path.name}: stale date token {tok!r}"
+    views = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) AS ips_date" in views
+    assert "AT TIME ZONE 'Europe/Moscow'" not in views  # день берём из полной даты, стек МСК-pinned
+    assert "AS processed_at" not in views and "AS processed_day" not in views
+    tables = Path("db/parts/10_tables.sql").read_text(encoding="utf-8")
+    assert "DROP COLUMN sent_at" in Path("db/parts/60_drop_dependents.sql").read_text(encoding="utf-8")
+    assert "loaded_at timestamptz DEFAULT now()" in tables  # transactions.processed_at → loaded_at
+
+
+def test_common_filters_wired_on_every_tab() -> None:
+    """Период/JID/Код СЭМД — общие сквозные фильтры: привязаны ≥1 карточкой на каждой вкладке 01."""
+    dash = _integration_dashboard()
+    tabs = {t["id"] for t in dash.get("tabs", [])}
+    by_tab: dict[str, set[str]] = {t: set() for t in tabs}
+    for card in dash["cards"]:
+        if card.get("display") == "text":
+            continue
+        by_tab.setdefault(card.get("tab", ""), set()).update(_card_filter_keys(card))
+    for tab in tabs:
+        assert _COMMON_FILTERS <= by_tab[tab], f"tab {tab}: missing {_COMMON_FILTERS - by_tab[tab]}"
+
+
+def test_lookup_filters_confined_to_archive() -> None:
+    """Document-lookup фильтры конфайнятся: агрегаты op/service/errors их не несут; на queue
+    допустим только localUid (поиск зависшего документа), полный набор — на archive."""
+    dash = _integration_dashboard()
+    for card in dash["cards"]:
+        if card.get("display") == "text" or card.get("tab") == "archive":
+            continue
+        # queue — тоже lookup-контекст: localUid там уместен, остальные lookup-фильтры нет.
+        forbidden = _LOOKUP_FILTERS - {"local_uid"} if card.get("tab") == "queue" else _LOOKUP_FILTERS
+        leaked = _card_filter_keys(card) & forbidden
+        assert not leaked, f"{card.get('name')} (tab={card.get('tab')}): lookup filters leaked {leaked}"
+    archive_keys: set[str] = set()
+    for card in dash["cards"]:
+        if card.get("tab") == "archive" and card.get("display") != "text":
+            archive_keys |= _card_filter_keys(card)
+    assert _LOOKUP_FILTERS <= archive_keys, f"archive missing lookup filters {_LOOKUP_FILTERS - archive_keys}"
+
+
+def test_jid_semd_status_bound_to_label_columns() -> None:
+    """Поиск по «код или наименование»: JID/СЭМД/Статус привязаны к label-колонкам во всех дашбордах."""
+    label_field = {"jid": "clinic_label", "semd_type": "semd_label", "status": "status_label"}
+    for path in _dashboard_paths():
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        for card in dashboard["cards"]:
+            bindings = {
+                **(card.get("metabase-field-filters") or {}),
+                **(card.get("metabase-parameter-targets") or {}),
+            }
+            for key, expected in label_field.items():
+                if key in bindings and "field_name" in bindings[key]:
+                    assert bindings[key]["field_name"] == expected, (
+                        f"{path.name}/{card.get('name')}: {key} -> {bindings[key]['field_name']} (ждали {expected})"
+                    )
+
+
+def test_grain_cards_drill_into_model_not_archive() -> None:
+    """Дрилл из агрегатов идёт в модель (linkType=question), а не на вкладку «Архив»."""
+    dash = _integration_dashboard()
+    by_name = {c.get("name"): c for c in dash["cards"]}
+    for name in ("Объём по клиникам", "Объём по СЭМД", "Топ типов СЭМД по ошибкам", "Топ клиник в очереди по документам"):
+        click = by_name[name].get("click_behavior") or {}
+        assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
+        assert "targetDashboard" not in click and click.get("tab") != "archive"

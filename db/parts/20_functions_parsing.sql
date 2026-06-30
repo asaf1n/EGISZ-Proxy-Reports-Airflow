@@ -109,8 +109,10 @@ $$;
 
 -- Primary: JID клиники по OID медорганизации (<organization>) через dim_licenses.mo_uid.
 -- Один mo_uid может иметь несколько лицензий — берём последнюю по modifydate.
+-- DROP перед CREATE: смена типа возврата integer→bigint несовместима с CREATE OR REPLACE (JID > int4).
+DROP FUNCTION IF EXISTS public.jid_from_mo_uid(text);
 CREATE OR REPLACE FUNCTION public.jid_from_mo_uid(p_org_oid text)
-RETURNS integer
+RETURNS bigint
 LANGUAGE sql
 STABLE
 AS $$
@@ -123,8 +125,9 @@ AS $$
 $$;
 
 -- Fallback: JID по адресу gost-endpoint через dim_licenses.mo_domen (host).
+DROP FUNCTION IF EXISTS public.jid_from_host(text);
 CREATE OR REPLACE FUNCTION public.jid_from_host(p_text text)
-RETURNS integer
+RETURNS bigint
 LANGUAGE sql
 STABLE
 AS $$
@@ -185,8 +188,9 @@ AS $$
 $$;
 
 -- Единая цепочка резолва JID документа: mo_uid (primary) → host/gost-endpoint (fallback).
+DROP FUNCTION IF EXISTS public.resolve_document_jid(text, text);
 CREATE OR REPLACE FUNCTION public.resolve_document_jid(p_org_oid text, p_endpoint_text text)
-RETURNS TABLE (jid integer, resolve_method text)
+RETURNS TABLE (jid bigint, resolve_method text)
 LANGUAGE sql
 STABLE
 AS $$
@@ -241,12 +245,20 @@ AS $$
     FROM normalized;
 $$;
 
--- Канонический ключ учёта документа — ВСЕГДА lower(localUid). localUid выдаёт МИС,
--- он уникален в рамках источника и стабилен на всём жизненном цикле СЭМД.
--- emdrId (рег. номер РЭМД) и OID (код типа в справочнике НСИ / OID организации)
--- НЕ являются ключом: emdrId — атрибут регистрации, OID — классификатор, не идентификатор
--- экземпляра. Колбэк без localUid не порождает новый ключ, а резолвится к существующей
--- строке по relatesToMessage / emdrId (см. egisz_transform_raw_to_facts).
+-- dwh_id — ключ ЭКЗЕМПЛЯРА/ВЕРСИИ отправки СЭМД: всегда lower(localUid).
+-- localUid = CDA ClinicalDocument/id (UUID конкретной версии документа). По правилам РЭМД
+-- он ОБЯЗАН меняться при любой правке СЭМД и в ряде сценариев даже при повторной выгрузке
+-- без изменений (UpdateCase/UpdateMedRecord) — то есть НЕ стабилен на жизненном цикле
+-- документа: корректировка ошибок штатно порождает новый localUid ⇒ новый dwh_id (новый
+-- экземпляр), а не переписывает прежний.
+-- Стабильный ключ набора версий (CDA setId) в журнал не попадает: тело СЭМД (base64-CDA)
+-- шлюзом не сохраняется (см. README §«Версии и идентичность документа»). Поэтому
+-- группировка версий в один логический документ ведётся отдельным слоем document_group_id,
+-- а не через dwh_id.
+-- emdrId (рег. номер РЭМД) и OID (код типа в справочнике НСИ / OID организации) НЕ являются
+-- ключом: emdrId — атрибут регистрации, OID — классификатор, не идентификатор экземпляра.
+-- Колбэк без localUid не порождает новый ключ, а резолвится к существующей строке по
+-- relatesToMessage / emdrId (см. egisz_transform_raw_to_facts).
 CREATE OR REPLACE FUNCTION public.dwh_id(
     p_local_uid text
 ) RETURNS text
@@ -258,6 +270,8 @@ $$;
 
 -- Разложение payload EXCHANGELOG: каждый XML-тег и regex-маркер статуса
 -- вычисляется ровно один раз; transform и связка документов читают transactions (xml_*).
+-- DROP перед CREATE: jid_from_payload integer→bigint меняет тип возврата (JID > int4).
+DROP FUNCTION IF EXISTS public.parse_exchangelog_row(text, text, text);
 CREATE OR REPLACE FUNCTION public.parse_exchangelog_row(
     p_msgtext text,
     p_msgid text,
@@ -277,7 +291,7 @@ RETURNS TABLE (
     xml_message text,
     raw_status text,
     document_status text,
-    jid_from_payload integer,
+    jid_from_payload bigint,
     creation_date timestamptz,
     raw_patient_name text,
     raw_snils text,
@@ -383,7 +397,7 @@ BEGIN
         COALESCE(v_error_message, v_message_xml, v_faultstring),
         lower(COALESCE(v_status_xml, '')),
         v_document_status,
-        NULLIF((regexp_match(v_text_blob, 'gost-([0-9]+)', 'i'))[1], '')::integer,
+        NULLIF((regexp_match(v_text_blob, 'gost-([0-9]+)', 'i'))[1], '')::bigint,
         public.safe_cast_timestamptz(COALESCE(v_creation_datetime, v_creation_date)),
         COALESCE(
             v_patient_name,
@@ -416,10 +430,14 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (publi
 -- Финальный статус документа по EXCHANGELOG-сообщению. Ключевое различие синхронного и
 -- асинхронного ответов РЭМД (см. README §«Парсинг и классификация»):
 --   * Синхронный RegisterDocumentResponse со <status>success</status> подтверждает только
---     приём запроса РЭМД, а не регистрацию документа — трактуется как 'pending' (в обработке).
+--     приём запроса РЭМД, а не регистрацию документа — трактуется как 'pending'.
 --   * Регистрация подтверждается ТОЛЬКО асинхронным callback'ом registerDocumentResult с
 --     <documentStatus>Зарегистрировано</documentStatus> либо <status>OK</status>.
 -- В аналитике остаются только финальные success/error и техническая ошибка LOGSTATE=3.
+-- NB: в текущем журнале этого шлюза синхронный ack не наблюдается (маркер RegisterDocumentResponse
+-- = 0 строк из ~931k; 'pending' — 2 строки). Документы в неконечном состоянии создаёт ветка
+-- getDocumentFile (status='waiting' → метка «Отправлено»). Ветку 'pending' оставляем
+-- зарезервированной на случай появления sync-ack — логику не трогаем.
 CREATE OR REPLACE FUNCTION public.classify_async_status(
     p_logstate               integer,
     p_raw_status             text,
