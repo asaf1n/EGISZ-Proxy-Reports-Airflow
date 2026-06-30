@@ -19,8 +19,7 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Успешных СЭМД (NSM)",
@@ -127,8 +126,8 @@
         "column_settings": {
           "[\"name\",\"First-pass acceptance, %\"]": {
             "decimals": 1,
-            "suffix": " %",
-            "number_separators": ", "
+            "number_separators": ", ",
+            "suffix": " %"
           },
           "[\"name\",\"Доля успеха с первой попытки, %\"]": {
             "decimals": 1,
@@ -154,8 +153,7 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 4,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "MRR (30 дн.), ₽",
@@ -270,8 +268,7 @@
       "sizeX": 24,
       "sizeY": 1,
       "row": 9,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Динамика MRR (30 дн.), ₽",
@@ -372,8 +369,7 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 16,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Зависших >7 дн., %",
@@ -504,8 +500,7 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 21,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     },
     {
       "name": "Сегменты ценности (MRR × ₽/успех)",
@@ -713,15 +708,15 @@
             "number_separators": ", ",
             "suffix": " ₽"
           },
+          "[\"name\",\"Клиника\"]": {
+            "column_title": "Клиника"
+          },
           "[\"name\",\"Наименование клиники\"]": {
             "column_title": "Клиника"
           },
           "[\"name\",\"Попыток\"]": {
             "decimals": 0,
             "number_separators": ", "
-          },
-          "[\"name\",\"Клиника\"]": {
-            "column_title": "Клиника"
           }
         }
       },
@@ -742,8 +737,7 @@
       "sizeX": 24,
       "sizeY": 2,
       "row": 38,
-      "col": 0,
-      "visualization_settings": {}
+      "col": 0
     }
   ]
 }

@@ -42,37 +42,19 @@
       "values_query_type": "none"
     }
   ],
-  "tabs": [
-    {
-      "id": "overview",
-      "name": "Обзор",
-      "position": 0
-    },
-    {
-      "id": "errors",
-      "name": "Ошибки регистрации ЭМД",
-      "position": 1
-    },
-    {
-      "id": "documents",
-      "name": "Документы",
-      "position": 2
-    }
-  ],
   "cards": [
     {
       "display": "text",
-      "tab": "overview",
       "text": "## Мониторинг интеграции с ЕГИСЗ {{clinic_name}}\nОбщие объёмы и статусы регистрации СЭМД по вашей клинике. Личные данные пациентов маскированы. Разбор причин отказов — на вкладке «Ошибки регистрации ЭМД», список документов — на вкладке «Документы».",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0
+      "col": 0,
+      "tab": "overview"
     },
     {
       "name": "Документов за период — клиент",
       "description": "Документы клиента с финальным ответом РЭМД (успех/ошибка). «Отправлено» (без ответа) не учитывается — оно на карточке «Отправленные — клиент».",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -118,6 +100,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 0,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -132,7 +115,6 @@
     {
       "name": "Успешно зарегистрирован",
       "description": "Документы с финальным статусом «Успешно зарегистрирован» + конверсия от финальных ответов.",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -172,6 +154,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 6,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -186,7 +169,6 @@
     {
       "name": "Ошибка асинхронного ответа РЭМД",
       "description": "Документы с ошибкой регистрации в РЭМД.",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -226,6 +208,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 12,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -240,7 +223,6 @@
     {
       "name": "Ошибка связи",
       "description": "Документы с транспортной ошибкой связи.",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -280,6 +262,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 18,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -294,7 +277,6 @@
     {
       "name": "Динамика статусов по дням",
       "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи по дням (текущий статус документа). «Отправлено» (без финального ответа) исключено — см. отдельную карточку «Отправленные — клиент».",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -354,6 +336,7 @@
       "sizeY": 7,
       "row": 4,
       "col": 0,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -364,7 +347,6 @@
     {
       "name": "Топ типов СЭМД — клиент",
       "description": "Pie по типам документов: на что приходится основная доля отправок.",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -422,6 +404,7 @@
       "sizeY": 7,
       "row": 4,
       "col": 12,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -436,7 +419,6 @@
     {
       "name": "Топ-10 типов СЭМД по документам",
       "description": "По объёму отправок: количество и доля успешных регистраций на каждый тип.",
-      "tab": "overview",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -486,6 +468,7 @@
       "sizeY": 5,
       "row": 11,
       "col": 0,
+      "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -499,17 +482,16 @@
     },
     {
       "display": "text",
-      "tab": "errors",
       "text": "## Ошибки регистрации ЭМД\nПричины отказов РЭМД и связи по вашей клинике: объёмы по категориям и типам ошибок и динамика. Один документ может содержать несколько ошибок. Фильтр «Категория ошибки» сужает разбор до выбранной группы.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0
+      "col": 0,
+      "tab": "errors"
     },
     {
       "name": "Объёмы ошибок по категориям — клиент",
       "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию).",
-      "tab": "errors",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -530,18 +512,18 @@
               "name": "client_document_type",
               "type": "dimension"
             },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e10000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
               "id": "07e10000-0000-4000-8000-000000000004",
               "name": "client_error_category",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e10000-0000-4000-8000-000000000001",
+              "name": "ips_date",
               "type": "dimension"
             }
           }
@@ -553,11 +535,8 @@
         "graph.dimensions": [
           "Категория ошибки"
         ],
-        "graph.metrics": [
-          "Документов"
-        ],
-        "graph.show_values": true,
         "graph.label_value_formatting": "compact",
+        "graph.show_values": true,
         "graph.x_axis.title_text": "",
         "graph.y_axis.title_text": "",
         "column_settings": {
@@ -565,12 +544,16 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
       },
       "sizeX": 12,
       "sizeY": 7,
       "row": 1,
       "col": 0,
+      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -589,7 +572,6 @@
     {
       "name": "Структура ошибок по категориям — клиент",
       "description": "Доля категорий ошибок в общем объёме ошибочных документов клиники.",
-      "tab": "errors",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -610,18 +592,18 @@
               "name": "client_document_type",
               "type": "dimension"
             },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e20000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
               "id": "07e20000-0000-4000-8000-000000000004",
               "name": "client_error_category",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e20000-0000-4000-8000-000000000001",
+              "name": "ips_date",
               "type": "dimension"
             }
           }
@@ -654,6 +636,7 @@
       "sizeY": 7,
       "row": 1,
       "col": 12,
+      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -672,7 +655,6 @@
     {
       "name": "Топ типов ошибок — клиент",
       "description": "Конкретные типы ошибок: количество документов и доля от всех ошибочных документов клиники.",
-      "tab": "errors",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -693,18 +675,18 @@
               "name": "client_document_type",
               "type": "dimension"
             },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e30000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
               "id": "07e30000-0000-4000-8000-000000000004",
               "name": "client_error_category",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e30000-0000-4000-8000-000000000001",
+              "name": "ips_date",
               "type": "dimension"
             }
           }
@@ -746,6 +728,7 @@
       "sizeY": 7,
       "row": 8,
       "col": 0,
+      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -764,7 +747,6 @@
     {
       "name": "Динамика ошибок по дням — клиент",
       "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок.",
-      "tab": "errors",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -785,18 +767,18 @@
               "name": "client_document_type",
               "type": "dimension"
             },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e40000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
               "id": "07e40000-0000-4000-8000-000000000004",
               "name": "client_error_category",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e40000-0000-4000-8000-000000000001",
+              "name": "ips_date",
               "type": "dimension"
             }
           }
@@ -809,9 +791,6 @@
           "Дата",
           "Категория ошибки"
         ],
-        "graph.metrics": [
-          "Документов"
-        ],
         "graph.show_values": false,
         "graph.x_axis.title_text": "День",
         "graph.y_axis.title_text": "Документов",
@@ -821,12 +800,16 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
       },
       "sizeX": 12,
       "sizeY": 7,
       "row": 15,
       "col": 0,
+      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -845,7 +828,6 @@
     {
       "name": "Топ СЭМД по ошибкам — клиент",
       "description": "Типы СЭМД, дающие больше всего ошибочных документов.",
-      "tab": "errors",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -866,18 +848,18 @@
               "name": "client_document_type",
               "type": "dimension"
             },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e50000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
               "id": "07e50000-0000-4000-8000-000000000004",
               "name": "client_error_category",
+              "type": "dimension"
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07e50000-0000-4000-8000-000000000001",
+              "name": "ips_date",
               "type": "dimension"
             }
           }
@@ -889,11 +871,8 @@
         "graph.dimensions": [
           "СЭМД"
         ],
-        "graph.metrics": [
-          "Документов"
-        ],
-        "graph.show_values": true,
         "graph.label_value_formatting": "compact",
+        "graph.show_values": true,
         "graph.x_axis.title_text": "",
         "graph.y_axis.title_text": "",
         "column_settings": {
@@ -901,12 +880,16 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        }
+        },
+        "graph.metrics": [
+          "Документов"
+        ]
       },
       "sizeX": 12,
       "sizeY": 7,
       "row": 15,
       "col": 12,
+      "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_error_breakdown",
@@ -924,17 +907,16 @@
     },
     {
       "display": "text",
-      "tab": "documents",
       "text": "## Документы\nПоследние документы вашей клиники с текущим статусом и сводкой ошибок регистрации. Личные данные пациентов и медработников маскированы на уровне DWH. До 500 строк по дате обработки.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
-      "col": 0
+      "col": 0,
+      "tab": "documents"
     },
     {
       "name": "Журнал документов — клиент",
       "description": "Документы клиники с финальным ответом РЭМД: дата обработки, статус (успех/ошибка), тип СЭМД, идентификаторы и сводка ошибок регистрации. Отправленные без ответа — на отдельной карточке «Отправленные — клиент».",
-      "tab": "documents",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1007,9 +989,6 @@
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
           },
-          "[\"name\",\"Статус\"]": {
-            "column_title": "Статус"
-          },
           "[\"name\",\"Ошибки регистрации\"]": {
             "column_title": "Ошибки регистрации",
             "text_style": "wrap"
@@ -1017,6 +996,9 @@
           "[\"name\",\"СЭМД\"]": {
             "column_title": "СЭМД",
             "text_style": "wrap"
+          },
+          "[\"name\",\"Статус\"]": {
+            "column_title": "Статус"
           }
         }
       },
@@ -1024,6 +1006,7 @@
       "sizeY": 12,
       "row": 1,
       "col": 0,
+      "tab": "documents",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -1038,7 +1021,6 @@
     {
       "name": "Отправленные — клиент",
       "description": "Документы клиники, отправленные в РЭМД и пока без финального ответа (статус «Отправлено»). Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. До 500 строк по дате отправки.",
-      "tab": "documents",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1101,13 +1083,13 @@
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
           },
-          "[\"name\",\"СЭМД\"]": {
-            "column_title": "СЭМД",
-            "text_style": "wrap"
-          },
           "[\"name\",\"Дней в ожидании\"]": {
             "decimals": 1,
             "number_separators": ", "
+          },
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД",
+            "text_style": "wrap"
           }
         }
       },
@@ -1115,6 +1097,7 @@
       "sizeY": 10,
       "row": 13,
       "col": 0,
+      "tab": "documents",
       "metabase-field-filters": {
         "ips_date": {
           "table_ref": "public.rpt_documents",
@@ -1125,6 +1108,23 @@
           "field_name": "semd_label"
         }
       }
+    }
+  ],
+  "tabs": [
+    {
+      "id": "overview",
+      "name": "Обзор",
+      "position": 0
+    },
+    {
+      "id": "errors",
+      "name": "Ошибки регистрации ЭМД",
+      "position": 1
+    },
+    {
+      "id": "documents",
+      "name": "Документы",
+      "position": 2
     }
   ]
 }
