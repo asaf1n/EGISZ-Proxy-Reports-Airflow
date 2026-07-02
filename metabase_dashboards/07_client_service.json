@@ -24,7 +24,10 @@
       "slug": "client_jid_filter",
       "type": "string/=",
       "sectionId": "string",
-      "default": "65489"
+      "values_query_type": "search",
+      "filteringParameters": [
+        "07c00000-0000-4000-8000-000000000005"
+      ]
     },
     {
       "id": "07c00000-0000-4000-8000-000000000004",
@@ -35,17 +38,25 @@
     },
     {
       "id": "07c00000-0000-4000-8000-000000000005",
-      "name": "Наименование клиники",
-      "slug": "clinic_name",
+      "name": "Клиника",
+      "slug": "clinic_label",
       "type": "string/=",
       "sectionId": "string",
-      "values_query_type": "none"
+      "default": [
+        "— · —"
+      ],
+      "required": true,
+      "isMultiSelect": false,
+      "values_query_type": "search",
+      "filteringParameters": [
+        "07c00000-0000-4000-8000-000000000003"
+      ]
     }
   ],
   "cards": [
     {
       "display": "text",
-      "text": "## Мониторинг интеграции с ЕГИСЗ {{clinic_name}}\nОбщие объёмы и статусы регистрации СЭМД по вашей клинике. Личные данные пациентов маскированы. Разбор причин отказов — на вкладке «Ошибки регистрации ЭМД», список документов — на вкладке «Документы».",
+      "text": "## Мониторинг интеграции с ЕГИСЗ {{clinic_label}}\nОбщие объёмы и статусы регистрации СЭМД по вашей клинике. Личные данные пациентов маскированы. Разбор причин отказов — на вкладке «Ошибки регистрации ЭМД», список документов — на вкладке «Документы».",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
@@ -58,15 +69,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c10000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00010000-0000-4000-8000-000000000001",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -74,6 +84,14 @@
               "id": "07c10000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c10000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -109,6 +127,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -118,15 +140,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c20000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00020000-0000-4000-8000-000000000002",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -134,6 +155,14 @@
               "id": "07c20000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c20000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -163,6 +192,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -172,15 +205,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c30000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00030000-0000-4000-8000-000000000003",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -188,6 +220,14 @@
               "id": "07c30000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c30000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -217,6 +257,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -226,15 +270,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c40000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00040000-0000-4000-8000-000000000004",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -242,6 +285,14 @@
               "id": "07c40000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c40000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -271,6 +322,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -280,14 +335,28 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_semd_label}}]] GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort",
           "template-tags": {
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00010000-0000-4000-8000-000000000001",
+              "name": "clinic_label",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07c50000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
             "client_jid": {
               "type": "text",
               "display-name": "JID Клиники",
               "id": "07c50000-0000-4000-8000-000000000003",
               "name": "client_jid",
-              "required": true,
+              "required": false,
               "widget-type": "string/="
             },
             "ips_date": {
@@ -341,6 +410,14 @@
         "ips_date": {
           "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
         }
       }
     },
@@ -350,15 +427,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c60000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00060000-0000-4000-8000-000000000006",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -366,6 +442,14 @@
               "id": "07c60000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c60000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -413,6 +497,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -422,15 +510,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c80000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00070000-0000-4000-8000-000000000007",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -438,6 +525,14 @@
               "id": "07c80000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c80000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -477,6 +572,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -490,39 +589,46 @@
       "tab": "errors"
     },
     {
-      "name": "Объёмы ошибок по категориям — клиент",
-      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию).",
+      "name": "Динамика ошибок по дням — клиент",
+      "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "query": "SELECT ips_date::date AS \"Дата\", error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY ips_date::date, error_category ORDER BY ips_date::date",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e10000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000b0000-0000-4000-8000-00000000000b",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "07e10000-0000-4000-8000-000000000002",
+              "id": "07e40000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
-              "id": "07e10000-0000-4000-8000-000000000004",
+              "id": "07e40000-0000-4000-8000-000000000004",
               "name": "client_error_category",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e40000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "07e10000-0000-4000-8000-000000000001",
+              "id": "07e40000-0000-4000-8000-000000000001",
               "name": "ips_date",
               "type": "dimension"
             }
@@ -530,15 +636,16 @@
         },
         "database": 1
       },
-      "display": "row",
+      "display": "bar",
       "visualization_settings": {
         "graph.dimensions": [
+          "Дата",
           "Категория ошибки"
         ],
-        "graph.label_value_formatting": "compact",
-        "graph.show_values": true,
-        "graph.x_axis.title_text": "",
-        "graph.y_axis.title_text": "",
+        "graph.show_values": false,
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "Документов",
+        "stackable.stack_type": "stacked",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
@@ -551,7 +658,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 1,
+      "row": 15,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -566,6 +673,10 @@
         "client_error_category": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_category"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -575,15 +686,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e20000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00090000-0000-4000-8000-000000000009",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -598,6 +708,14 @@
               "id": "07e20000-0000-4000-8000-000000000004",
               "name": "client_error_category",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e20000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -649,6 +767,10 @@
         "client_error_category": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_category"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -658,15 +780,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT dwh_id, error_category, error_type FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ) SELECT error_category AS \"Категория ошибки\", error_type AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM filtered GROUP BY error_category, error_type ORDER BY 3 DESC LIMIT 20",
+          "query": "WITH filtered AS ( SELECT dwh_id, error_category, error_type FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ) SELECT error_category AS \"Категория ошибки\", error_type AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM filtered GROUP BY error_category, error_type ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e30000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000a0000-0000-4000-8000-00000000000a",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -681,6 +802,14 @@
               "id": "07e30000-0000-4000-8000-000000000004",
               "name": "client_error_category",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e30000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -741,43 +870,54 @@
         "client_error_category": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_category"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
         }
       }
     },
     {
-      "name": "Динамика ошибок по дням — клиент",
-      "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок.",
+      "name": "Объёмы ошибок по категориям — клиент",
+      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY ips_date::date, error_category ORDER BY ips_date::date",
+          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e40000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c00080000-0000-4000-8000-000000000008",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "07e40000-0000-4000-8000-000000000002",
+              "id": "07e10000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
             },
             "client_error_category": {
               "widget-type": "string/=",
               "display-name": "Категория ошибки",
-              "id": "07e40000-0000-4000-8000-000000000004",
+              "id": "07e10000-0000-4000-8000-000000000004",
               "name": "client_error_category",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e10000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "07e40000-0000-4000-8000-000000000001",
+              "id": "07e10000-0000-4000-8000-000000000001",
               "name": "ips_date",
               "type": "dimension"
             }
@@ -785,16 +925,15 @@
         },
         "database": 1
       },
-      "display": "bar",
+      "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Дата",
           "Категория ошибки"
         ],
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Документов",
-        "stackable.stack_type": "stacked",
+        "graph.label_value_formatting": "compact",
+        "graph.show_values": true,
+        "graph.x_axis.title_text": "",
+        "graph.y_axis.title_text": "",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
@@ -807,7 +946,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 15,
+      "row": 1,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -822,6 +961,10 @@
         "client_error_category": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_category"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -831,15 +974,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e50000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000c0000-0000-4000-8000-00000000000c",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -854,6 +996,14 @@
               "id": "07e50000-0000-4000-8000-000000000004",
               "name": "client_error_category",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07e50000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -902,6 +1052,10 @@
         "client_error_category": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_category"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -920,15 +1074,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07d10000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000d0000-0000-4000-8000-00000000000d",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -936,6 +1089,14 @@
               "id": "07d10000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07d10000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1015,6 +1176,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     },
@@ -1024,15 +1189,14 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", ROUND(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400.0, 1) AS \"Дней в ожидании\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status = 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "SELECT ips_date AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", ROUND(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400.0, 1) AS \"Дней в ожидании\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status = 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
           "template-tags": {
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07d20000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": true,
-              "widget-type": "string/="
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000e0000-0000-4000-8000-00000000000e",
+              "name": "clinic_label",
+              "type": "dimension"
             },
             "client_document_type": {
               "widget-type": "string/=",
@@ -1040,6 +1204,14 @@
               "id": "07d20000-0000-4000-8000-000000000002",
               "name": "client_document_type",
               "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07d20000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
             },
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1106,6 +1278,10 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
         }
       }
     }

@@ -45,6 +45,9 @@ PARAM_KEYS = (
     # values_query_type="none" подавляет выпадающий список значений фильтра — на
     # клиентских дашбордах не раскрывает справочник клиник; терять при экспорте нельзя.
     "values_query_type",
+    "values_source_type",
+    "values_source_config",
+    "filteringParameters",
 )
 
 
@@ -233,10 +236,25 @@ def merge_visualization_settings(card: dict, dashcard: dict) -> dict:
     viz = dict(card.get("visualization_settings") or {})
     dash_viz = dashcard.get("visualization_settings") or {}
     for key, value in dash_viz.items():
-        if key == "virtual_card":
+        if key in ("virtual_card", "click_behavior"):
             continue
         viz[key] = value
     return viz
+
+
+def is_volatile_click_behavior(behavior: dict | None) -> bool:
+    """Metabase serializes model drill with instance field ids — not portable in git."""
+    if not behavior:
+        return False
+    for key in (behavior.get("parameterMapping") or {}):
+        if key.startswith('["dimension",["field",'):
+            return True
+    return False
+
+
+def is_model_compiled_native(query: str) -> bool:
+    """Query Builder on a model is returned by the API as native SQL over __mb_source."""
+    return '"__mb_source"' in query or '"public"."rpt_documents"' in query
 
 
 def apply_provisioning_metadata(card_obj: dict, prior: dict | None, tags: dict, live_viz: dict) -> None:
@@ -245,9 +263,14 @@ def apply_provisioning_metadata(card_obj: dict, prior: dict | None, tags: dict, 
             if key in prior:
                 card_obj[key] = prior[key]
 
-    live_click = live_viz.get("click_behavior")
-    if live_click:
+    live_click = live_viz.get("click_behavior") or card_obj.get("click_behavior")
+    prior_click = prior.get("click_behavior") if prior else None
+    if live_click and not is_volatile_click_behavior(live_click):
         card_obj["click_behavior"] = live_click
+    elif prior_click and not is_volatile_click_behavior(prior_click):
+        card_obj["click_behavior"] = prior_click
+    elif is_volatile_click_behavior(card_obj.get("click_behavior")):
+        card_obj.pop("click_behavior", None)
 
     if card_obj.get("query_tier") == "query_builder" or "dataset_query" in card_obj and card_obj["dataset_query"].get("type") == "query":
         if "query_tier" not in card_obj:
@@ -371,6 +394,18 @@ def export_dashboard(token: str, dash_id: int, keep_params_from: Path | None) ->
             card_obj["tab"] = tab_slug
 
         apply_provisioning_metadata(card_obj, prior, tags, live_viz)
+
+        if (
+            prior
+            and prior.get("query_tier") == "query_builder"
+            and card_obj.get("dataset_query", {}).get("type") == "native"
+            and isinstance(query, str)
+            and is_model_compiled_native(query)
+        ):
+            card_obj["query_tier"] = prior["query_tier"]
+            if "source_model" in prior:
+                card_obj["source_model"] = prior["source_model"]
+            card_obj["dataset_query"] = prior["dataset_query"]
         cards.append(card_obj)
 
     parameters = export_parameters(

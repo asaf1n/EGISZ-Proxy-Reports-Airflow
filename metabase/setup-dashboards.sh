@@ -657,6 +657,13 @@ create_or_update_card() {
   card_id="$(existing_card_id "${card_name}")"
   if [ -n "${card_id}" ]; then
     existing_card="$(api_request GET "/api/card/${card_id}")"
+    if printf '%s' "${existing_card}" | jq -e '(.query_type // "") == "query"' >/dev/null \
+      && printf '%s' "${payload}" | jq -e '(.dataset_query.type // "") == "native"' >/dev/null; then
+      log_info "Migrating card from Query Builder to native SQL: ${card_name}"
+      api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null
+      printf '%s\n' "${card_id}"
+      return 0
+    fi
     if printf '%s' "${existing_card}" | card_native_query_missing >/dev/null; then
       log_info "Repairing card with missing native query: ${card_name}"
       api_request PUT "/api/card/${card_id}" "${payload}" >/dev/null

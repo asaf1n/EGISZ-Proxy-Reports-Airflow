@@ -233,13 +233,17 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
     assert "День" not in configured_columns
     assert "error_type" in configured_columns or "Тип ошибки" in configured_columns or "Сводка ошибки" in configured_columns
     assert "Host Клиники (ГОСТ VPN)" in configured_columns or "Host" in configured_columns
-    query = card["dataset_query"]["query"]
-    assert "fields" in query
-    field_refs = {f[1] for f in query["fields"]}
-    assert "Документы:semd_label" in field_refs
-    assert "Документы:semd_code" not in field_refs
-    assert "Документы:error_summary" in field_refs
-    assert "Документы:error_type" not in field_refs
+    query = card["dataset_query"]["native"]["query"]
+    assert card["dataset_query"]["type"] == "native"
+    assert "public.rpt_documents" in query
+    assert "semd_label" in query
+    assert "semd_code" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
+    assert "error_summary" in query
+    assert "error_type" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
+    assert card["metabase-field-filters"]["ips_date"] == {
+        "table_ref": "public.rpt_documents",
+        "field_name": "ips_date",
+    }
 
 
 def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
@@ -313,15 +317,14 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
     rows = card["visualization_settings"]["pie.rows"]
     row_keys = {row["key"] for row in rows}
 
-    assert latest_card.get("query_tier") == "query_builder"
-    assert card.get("query_tier") == "query_builder"
-    assert card["source_model"] == "Документы"
-    assert "public.v_egisz_transactions_enriched_ui" not in trend_query
-    assert latest_card["metabase-parameter-targets"]["ips_date"] == {
-        "model_ref": "Документы",
+    assert latest_card["dataset_query"]["type"] == "native"
+    assert card["dataset_query"]["type"] == "native"
+    assert latest_card["metabase-field-filters"]["ips_date"] == {
+        "table_ref": "public.rpt_documents",
         "field_name": "ips_date",
     }
-    assert card["dataset_query"]["query"]["breakout"] == [["field", "Документы:status_label", None]]
+    assert "status <> 'waiting'" in card["dataset_query"]["native"]["query"]
+    assert "status_label" in card["dataset_query"]["native"]["query"]
     assert card["visualization_settings"]["pie.metric"] == "Документов"
     assert "Успешно зарегистрирован" in row_keys
     assert "Ошибка асинхронного ответа РЭМД" in row_keys
@@ -408,12 +411,10 @@ def test_status_distribution_cards_exclude_waiting() -> None:
     assert "status <> 'waiting'" in trend_sql
     assert "Отправлено" not in trend.get("visualization_settings", {}).get("series_settings", {})
 
-    # Фильтр по видимому status_label, а не по скрытому status: скрытые поля модели не
-    # резолвятся импортёром Metabase и фильтр молча отбрасывается (карточка показывала
-    # «Отправлено»). status_label виден (используется в breakout) и резолвится корректно.
     donut = by_name["Статусы за период"]
-    flt = donut["dataset_query"]["query"].get("filter")
-    assert flt == ["!=", ["field", "Документы:status_label", None], "Отправлено"]
+    donut_sql = donut["dataset_query"]["native"]["query"]
+    assert "status <> 'waiting'" in donut_sql
+    assert "Отправлено" not in donut.get("visualization_settings", {}).get("series_settings", {})
 
 
 def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None:
@@ -506,7 +507,7 @@ def test_semd_volume_table_shows_share_of_total() -> None:
     assert "COUNT(DISTINCT dwh_id)" in query
     assert 'AS "%"' in query
     columns = {col["name"] for col in card["visualization_settings"]["table.columns"]}
-    assert {"Код СЭМД", "Документов", "%"} <= columns
+    assert {"СЭМД", "Документов", "%"} <= columns
 
 
 def test_semd_volume_uses_same_document_universe_as_total() -> None:
@@ -517,7 +518,7 @@ def test_semd_volume_uses_same_document_universe_as_total() -> None:
     )
     top_query = top["dataset_query"]["native"]["query"]
 
-    assert "semd_code" in top_query
+    assert "semd_label" in top_query
     assert "rpt_documents" in top_query
     assert "COUNT(DISTINCT dwh_id)" in top_query
 
@@ -581,7 +582,7 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
     assert '"СЭМД (архив)"' not in sql
     assert "semd_name" in sql
     assert "error_type" in sql
-    assert "semd_code" in query
+    assert "semd_label" in query
     assert "rpt_documents" in query
     assert "NULLIF(TRIM(semd_code" not in query
 
@@ -788,8 +789,12 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
         "public.rpt_documents" in query or "public.rpt_error_breakdown" in query
         for query in queries
     )
-    assert all("clinic_jid::text = {{client_jid}}" in query for query in queries)
-    assert all("clinic_jid = {{client_jid}}" not in query for query in queries)
+    assert all(
+        "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]]" in query
+        for query in queries
+    )
+    jid_param = next(p for p in dashboard["parameters"] if p["slug"] == "client_jid_filter")
+    assert "default" not in jid_param
     dashboard = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
 
@@ -803,6 +808,18 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     assert any("doctor_hash" in q for q in queries)
 
 
+def test_client_service_dashboard_uses_linked_clinic_label_filters() -> None:
+    dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    jid = next(p for p in dashboard["parameters"] if p["slug"] == "client_jid_filter")
+    clinic = next(p for p in dashboard["parameters"] if p["slug"] == "clinic_label")
+    assert jid.get("filteringParameters") == [clinic["id"]]
+    assert clinic.get("filteringParameters") == [jid["id"]]
+    assert jid.get("values_query_type") == "search"
+    assert clinic.get("values_query_type") == "search"
+    text_card = next(c for c in dashboard["cards"] if c.get("display") == "text" and c.get("tab") == "overview")
+    assert "{{clinic_label}}" in text_card["text"]
+
+
 def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
     for path_name in ("07_client_service.json", "08_client_bianalytic.json"):
         dashboard = json.loads(Path(f"metabase_dashboards/{path_name}").read_text(encoding="utf-8"))
@@ -811,18 +828,29 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
                 continue
             tags = card["dataset_query"]["native"]["template-tags"]
             filters = card.get("metabase-field-filters", {})
-
-            assert tags["client_jid"]["type"] == "text", f"{path_name}: JID должен быть text-тегом, иначе JID-фильтр не работает"
-            assert tags["client_jid"]["required"] is True, f"{path_name}: JID должен быть required"
-            # Field-filters периода/типа биндятся к source-витрине карточки: карточки ошибок
-            # читают rpt_error_breakdown, остальные — rpt_documents (обе несут ips_date/semd_label).
-            # Неиспользуемые в SQL фильтры карточки вычищены (prune), поэтому проверяем по наличию.
             query = card["dataset_query"]["native"]["query"]
+            if "client_jid" not in tags:
+                continue
             source_view = (
                 "public.rpt_error_breakdown"
                 if "public.rpt_error_breakdown" in query
                 else "public.rpt_documents"
             )
+            if path_name == "07_client_service.json":
+                assert tags["client_jid"]["type"] == "text"
+                assert tags["client_jid"]["required"] is False
+                assert "client_jid" not in filters
+                assert tags["clinic_label"]["type"] == "dimension"
+                assert filters["clinic_label"] == {
+                    "table_ref": source_view,
+                    "field_name": "clinic_label",
+                }
+            else:
+                assert tags["client_jid"]["type"] == "text"
+                assert tags["client_jid"]["required"] is True
+            # Field-filters периода/типа биндятся к source-витрине карточки: карточки ошибок
+            # читают rpt_error_breakdown, остальные — rpt_documents (обе несут ips_date/semd_label).
+            # Неиспользуемые в SQL фильтры карточки вычищены (prune), поэтому проверяем по наличию.
             if "ips_date" in tags:
                 assert tags["ips_date"]["type"] == "dimension"
                 assert filters["ips_date"] == {
@@ -1389,12 +1417,12 @@ def test_integration_dashboard_default_period_is_current_month() -> None:
 def test_archive_tab_layout_matches_grid() -> None:
     dashboard = _integration_dashboard()
     expected = {
-        "Всего документов": (0, 0, 4, 2),
-        "Всего клиник": (0, 4, 4, 2),
-        "Динамика документов по дням": (0, 8, 16, 8),
-        "Объём по клиникам": (2, 0, 8, 6),
-        "Топ типов СЭМД по документам": (8, 0, 12, 6),
-        "Архив СЭМД": (14, 0, 24, 10),
+        "Всего документов": (8, 0, 4, 3),
+        "Всего клиник": (6, 0, 4, 2),
+        "Динамика документов по дням": (6, 4, 20, 5),
+        "Объём по клиникам": (0, 0, 11, 6),
+        "Топ типов СЭМД по документам": (0, 11, 13, 6),
+        "Архив СЭМД": (11, 0, 24, 10),
     }
     for name, (row, col, size_x, size_y) in expected.items():
         card = next(
@@ -1423,7 +1451,7 @@ def test_archive_tab_uses_same_clinic_volume_card_as_operational() -> None:
     assert _card_query_fingerprint(operational) == _card_query_fingerprint(archive)
     assert 'AS "%"' in query
     assert "NULLIF((SELECT total FROM totals), 0)" in query
-    assert archive["row"] == 2 and archive["col"] == 0 and archive["sizeX"] == 8 and archive["sizeY"] == 6
+    assert archive["row"] == 0 and archive["col"] == 0 and archive["sizeX"] == 11 and archive["sizeY"] == 6
 
 
 def test_archive_tab_has_six_cards() -> None:

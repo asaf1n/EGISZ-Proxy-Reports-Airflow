@@ -126,7 +126,7 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Объём по клиникам": [("clinic_jid", "JID Клиники")],
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
     "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
-    "Топ типов СЭМД по документам": [("semd_code", "Код СЭМД")],
+    "Топ типов СЭМД по документам": [("semd_label", "СЭМД")],
     "Успешность по типам СЭМД": [("semd_code", "Код СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
@@ -272,12 +272,74 @@ TRANSACTIONS_BY_DAY_STATUS_QUERY = (
 )
 
 CLIENT_STATUS_BY_DAY_QUERY = (
-    "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", "
+    "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM public.rpt_documents WHERE clinic_jid = {{clinic_jid}} AND status <> 'waiting' "
-    "[[AND {{client_period}}]] [[AND {{client_semd_code_name}}]] "
-    "GROUP BY processed_day, status_label, status_sort ORDER BY processed_day, status_sort"
+    "FROM public.rpt_documents "
+    "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] "
+    "AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] "
+    "GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort"
 )
+
+LATEST_OPERATIONS_QUERY = (
+    "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", "
+    "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
+    "semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", "
+    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_summary AS \"Сводка ошибки\" "
+    "FROM public.rpt_documents WHERE 1=1 "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] "
+    "ORDER BY ips_date DESC LIMIT 50"
+)
+
+STATUS_PERIOD_QUERY = (
+    "SELECT status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
+    "FROM public.rpt_documents WHERE status <> 'waiting' "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "GROUP BY status_label, status_sort ORDER BY status_sort"
+)
+
+DOCUMENTS_FILTER_TEMPLATE_TAGS = {
+    "ips_date": {
+        "widget-type": "date/all-options",
+        "display-name": "По дате «Обработано»",
+        "id": "f2000099-0099-4099-8099-000000000001",
+        "name": "ips_date",
+        "type": "dimension",
+    },
+    "semd_type": {
+        "widget-type": "string/=",
+        "display-name": "Код СЭМД",
+        "id": "f2000099-0099-4099-8099-000000000010",
+        "name": "semd_type",
+        "required": False,
+        "type": "dimension",
+    },
+    "jid": {
+        "widget-type": "string/=",
+        "display-name": "JID Клиники",
+        "id": "f2000099-0099-4099-8099-000000000011",
+        "name": "jid",
+        "required": False,
+        "type": "dimension",
+    },
+    "status": {
+        "widget-type": "string/=",
+        "display-name": "Статус",
+        "id": "f2000099-0099-4099-8099-000000000012",
+        "name": "status",
+        "required": False,
+        "type": "dimension",
+    },
+}
+
+DOCUMENTS_FILTER_FIELD_FILTERS = {
+    "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "status": {"table_ref": "public.rpt_documents", "field_name": "status_label"},
+}
+
+CLIENT_JID_PARAM_ID = "07c00000-0000-4000-8000-000000000003"
+CLIENT_CLINIC_PARAM_ID = "07c00000-0000-4000-8000-000000000005"
 
 CLINIC_VOLUME_QUERY = (
     "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id "
@@ -913,11 +975,11 @@ def apply_semd_volume_table(card: dict) -> None:
         if key.startswith("graph.") or key.startswith("pie."):
             del viz[key]
     viz["table.columns"] = [
-        {"enabled": True, "name": "Код СЭМД"},
+        {"enabled": True, "name": "СЭМД"},
         {"enabled": True, "name": "Документов"},
         {"enabled": True, "name": "%"},
     ]
-    viz["table.cell_column"] = "Код СЭМД"
+    viz["table.cell_column"] = "СЭМД"
     viz["column_settings"] = deepcopy(COUNT_COLUMN_SETTINGS)
     strip_chart_keys(viz, "table")
 
@@ -1139,11 +1201,18 @@ def apply_latest_operations(card: dict) -> None:
         "До 50 последних документов в периоде; сортировка по дате последней активности "
         "(«Обработано IPS», новые сверху). Одна строка — один dwh_id."
     )
-    q = card.setdefault("dataset_query", {}).setdefault("query", {})
-    q["fields"] = deepcopy(LATEST_OPERATIONS_QUERY_FIELDS)
-    q["order-by"] = [["desc", ["field", "Документы:processed_at", None]]]
-    q["limit"] = 50
-    q["source-table"] = "model:Документы"
+    card.pop("query_tier", None)
+    card.pop("source_model", None)
+    card.pop("metabase-parameter-targets", None)
+    card["dataset_query"] = {
+        "type": "native",
+        "database": 1,
+        "native": {
+            "query": LATEST_OPERATIONS_QUERY,
+            "template-tags": deepcopy(DOCUMENTS_FILTER_TEMPLATE_TAGS),
+        },
+    }
+    card["metabase-field-filters"] = deepcopy(DOCUMENTS_FILTER_FIELD_FILTERS)
     viz = card.setdefault("visualization_settings", {})
     viz.pop("table", None)
     viz["table.columns"] = deepcopy(LATEST_OPERATIONS_TABLE_COLUMNS)
@@ -1153,6 +1222,31 @@ def apply_latest_operations(card: dict) -> None:
     for key, value in LATEST_OPERATIONS_COLUMN_SETTINGS.items():
         cs[key] = value
     strip_chart_keys(viz, card.get("display", "table"))
+
+
+def apply_status_period(card: dict) -> None:
+    card["description"] = (
+        "Распределение документов с вердиктом РЭМД по исходу за период "
+        "(без «Отправлено» — у них ещё нет результата)."
+    )
+    card.pop("query_tier", None)
+    card.pop("source_model", None)
+    card.pop("metabase-parameter-targets", None)
+    status_tags = {
+        k: v for k, v in DOCUMENTS_FILTER_TEMPLATE_TAGS.items() if k != "status"
+    }
+    status_filters = {
+        k: v for k, v in DOCUMENTS_FILTER_FIELD_FILTERS.items() if k != "status"
+    }
+    card["dataset_query"] = {
+        "type": "native",
+        "database": 1,
+        "native": {
+            "query": STATUS_PERIOD_QUERY,
+            "template-tags": deepcopy(status_tags),
+        },
+    }
+    card["metabase-field-filters"] = deepcopy(status_filters)
 
 
 def fix_viz(viz: dict, *, display: str = "table") -> None:
@@ -1275,7 +1369,7 @@ def convert_archive_card(card: dict) -> None:
         "query": {
             "source-table": "model:Документы",
             "limit": 1000,
-            "order-by": [["desc", ["field", "Документы:processed_at", None]]],
+            "order-by": [["desc", ["field", "Документы:ips_date", None]]],
         },
     }
     card["metabase-parameter-targets"] = deepcopy(DOCUMENTS_PARAM_TARGETS)
@@ -1511,23 +1605,6 @@ def apply_01(dash: dict) -> None:
                 dq["native"]["query"] = fix_sql(dq["native"]["query"])
         elif dq.get("type") == "query":
             query = dq.get("query", {})
-            if name == "Статусы за период":
-                query["aggregation"] = [
-                    [
-                        "aggregation-options",
-                        ["distinct", ["field", "Документы:dwh_id", None]],
-                        {"name": "Документов", "display-name": "Документов"},
-                    ]
-                ]
-                # Только корпус с вердиктом РЭМД: «Отправлено» (status='waiting') не имеет
-                # исхода и искажает распределение — исключаем из статус-карточки. Фильтруем по
-                # видимому status_label: скрытые поля модели не резолвятся импортёром и фильтр
-                # молча отбрасывается (status — в hidden_fields модели «Документы»).
-                query["filter"] = ["!=", ["field", "Документы:status_label", None], "Отправлено"]
-                card["description"] = (
-                    "Распределение документов с вердиктом РЭМД по исходу за период "
-                    "(без «Отправлено» — у них ещё нет результата)."
-                )
             if name == "Ошибки: тип × клиника":
                 pass
 
@@ -1568,6 +1645,8 @@ def apply_01(dash: dict) -> None:
 
         if name == "Последние операции":
             apply_latest_operations(card)
+        elif name == "Статусы за период":
+            apply_status_period(card)
 
         if name in MODEL_DRILL_BY_NAME:
             target = MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF)
@@ -1640,19 +1719,19 @@ def restore_archive_top_semd(dash: dict) -> None:
     if any(c.get("name") == "Топ типов СЭМД по документам" for c in dash["cards"]):
         return
     query = (
-        "WITH base AS ( SELECT semd_code, COUNT(DISTINCT dwh_id)::bigint AS cnt "
-        "FROM public.rpt_documents WHERE 1=1 [[AND {{dwh_date}}]] [[AND {{semd_type}}]] "
+        "WITH base AS ( SELECT semd_label, COUNT(DISTINCT dwh_id)::bigint AS cnt "
+        "FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] "
         "[[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] "
         "[[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), "
         "totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) "
-        'SELECT semd_code AS "Код СЭМД", cnt AS "Документов", '
+        'SELECT semd_label AS "СЭМД", cnt AS "Документов", '
         'ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS "%" '
         "FROM base ORDER BY cnt DESC"
     )
     ff = {
         k: {"table_ref": "public.rpt_documents", "field_name": v}
         for k, v in {
-            "jid": "clinic_jid", "dwh_date": "processed_at", "semd_type": "semd_code",
+            "jid": "clinic_label", "ips_date": "ips_date", "semd_type": "semd_label",
             "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
             "emdr_id": "semd_emdr_id", "status": "status_label", "log_id": "logid",
         }.items()
@@ -1667,8 +1746,8 @@ def restore_archive_top_semd(dash: dict) -> None:
                 "template-tags": {
                     "jid": {"widget-type": "string/=", "display-name": "JID Клиники",
                             "id": "f6a00003-0003-4003-8003-000000000002", "name": "jid", "type": "dimension"},
-                    "dwh_date": {"widget-type": "date/all-options", "display-name": "По дате обработки",
-                                 "id": "f6a00003-0003-4003-8003-000000000001", "name": "dwh_date", "type": "dimension"},
+                    "ips_date": {"widget-type": "date/all-options", "display-name": "По дате обработки",
+                                 "id": "f6a00003-0003-4003-8003-000000000001", "name": "ips_date", "type": "dimension"},
                     "semd_type": {"widget-type": "string/=", "display-name": "Код СЭМД",
                                   "id": "f6a00003-0003-4003-8003-000000000003", "name": "semd_type", "type": "dimension"},
                     "local_uid": {"widget-type": "string/=", "display-name": "localUid СЭМД",
@@ -1688,7 +1767,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         "display": "table",
         "visualization_settings": {
             "table.columns": [
-                {"enabled": True, "name": "Код СЭМД"},
+                {"enabled": True, "name": "СЭМД"},
                 {"enabled": True, "name": "Документов"},
                 {"enabled": True, "name": "%"},
             ],
@@ -1701,14 +1780,105 @@ def restore_archive_top_semd(dash: dict) -> None:
         "sizeY": 6,
         "tab": "archive",
         "metabase-field-filters": ff,
-        "click_behavior": build_drill([("semd_type_filter", "Код СЭМД")]),
+        "click_behavior": build_drill([("semd_type_filter", "СЭМД")]),
     }
     idx = next(i for i, c in enumerate(dash["cards"]) if c.get("name") == "Всего клиник" and c.get("tab") == "archive")
     dash["cards"].insert(idx + 1, card)
 
 
+def _patch_client_where(query: str) -> str:
+    """JID — опциональная text-переменная; клиника — field filter по clinic_label."""
+    q = query
+    for old in (
+        r"WHERE clinic_jid::text = \{\{client_jid\}\} \[\[AND \{\{clinic_label\}\}\]\]",
+        r"WHERE 1=1 \[\[AND \{\{client_jid\}\}\]\] \[\[AND \{\{clinic_label\}\}\]\]",
+        r"WHERE 1=1 \[\[AND \{\{clinic_label\}\}\]\] \[\[AND \{\{client_jid\}\}\]\]",
+    ):
+        q = re.sub(
+            old,
+            "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]]",
+            q,
+        )
+    return q.replace("[[AND {{client_jid}}]]", "[[AND clinic_jid::text = {{client_jid}}]]")
+
+
+def _ensure_client_jid_text_tag(tags: dict) -> None:
+    cj = tags.setdefault(
+        "client_jid",
+        {
+            "type": "text",
+            "display-name": "JID Клиники",
+            "name": "client_jid",
+            "required": False,
+            "widget-type": "string/=",
+        },
+    )
+    cj["type"] = "text"
+    cj["required"] = False
+    cj.setdefault("widget-type", "string/=")
+    cj.setdefault("display-name", "JID Клиники")
+
+
+def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
+    """07: связанные field filters JID ↔ clinic_label (код · наименование)."""
+    if dash.get("name") != "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ":
+        return
+    for p in dash.get("parameters", []):
+        if p.get("slug") == "client_jid_filter":
+            p["name"] = "JID Клиники"
+            p.pop("default", None)
+            p.pop("required", None)
+            p["values_query_type"] = "search"
+            p.pop("values_source_type", None)
+            p.pop("values_source_config", None)
+            p["filteringParameters"] = [CLIENT_CLINIC_PARAM_ID]
+        elif p.get("slug") in ("clinic_name", "clinic_label"):
+            p["name"] = "Клиника"
+            p["slug"] = "clinic_label"
+            p["values_query_type"] = "search"
+            p.pop("values_source_type", None)
+            p.pop("values_source_config", None)
+            p["filteringParameters"] = [CLIENT_JID_PARAM_ID]
+    for card in dash.get("cards", []):
+        if card.get("display") == "text" and "{{clinic_name}}" in (card.get("text") or ""):
+            card["text"] = card["text"].replace("{{clinic_name}}", "{{clinic_label}}")
+    tag_counter = 0
+    for card in dash.get("cards", []):
+        dq = card.get("dataset_query") or {}
+        if dq.get("type") != "native":
+            continue
+        native = dq.setdefault("native", {})
+        query = native.get("query") or ""
+        if "{{client_jid}}" not in query:
+            continue
+        native["query"] = _patch_client_where(query)
+        tags = native.setdefault("template-tags", {})
+        _ensure_client_jid_text_tag(tags)
+        tags.pop("clinic_name", None)
+        if "clinic_label" not in tags:
+            tag_counter += 1
+            tags["clinic_label"] = {
+                "type": "dimension",
+                "display-name": "Клиника",
+                "id": f"07c{tag_counter:04x}0000-0000-4000-8000-00000000{tag_counter:04x}",
+                "name": "clinic_label",
+                "widget-type": "string/=",
+            }
+        source = (
+            "public.rpt_error_breakdown"
+            if "public.rpt_error_breakdown" in native["query"]
+            else "public.rpt_documents"
+        )
+        ff = dict(card.get("metabase-field-filters") or {})
+        ff.pop("client_jid", None)
+        ff["clinic_label"] = {"table_ref": source, "field_name": "clinic_label"}
+        ff.pop("clinic_name", None)
+        card["metabase-field-filters"] = ff
+
+
 def fix_client_sql(query: str) -> str:
     query = query.replace("[[AND {{client_semd_code_name}}]]", "[[AND {{client_document_type}}]]")
+    query = query.replace("[[AND {{client_semd_label}}]]", "[[AND {{client_document_type}}]]")
     query = query.replace("{{clinic_jid}}", "{{client_jid}}")
     return query.replace("clinic_jid = {{client_jid}}", "clinic_jid::text = {{client_jid}}")
 
@@ -1717,13 +1887,32 @@ def apply_client_dashboards(path: Path) -> bool:
     if not path.exists():
         return False
     dash = json.loads(path.read_text(encoding="utf-8"))
+    ensure_client_service_linked_clinic_filters(dash)
     for card in dash.get("cards", []):
         filters = card.get("metabase-field-filters") or {}
         doc_type = filters.get("client_document_type")
         if isinstance(doc_type, dict) and doc_type.get("field_name") == "semd_code_name":
             doc_type["field_name"] = "semd_label"
         if card.get("name") == "Динамика статусов по дням" and card.get("dataset_query", {}).get("type") == "native":
-            card["dataset_query"]["native"]["query"] = CLIENT_STATUS_BY_DAY_QUERY
+            native = card["dataset_query"]["native"]
+            native["query"] = CLIENT_STATUS_BY_DAY_QUERY
+            tags = native.setdefault("template-tags", {})
+            tags.setdefault(
+                "client_document_type",
+                {
+                    "widget-type": "string/=",
+                    "display-name": "Тип документа",
+                    "id": "07c50000-0000-4000-8000-000000000002",
+                    "name": "client_document_type",
+                    "type": "dimension",
+                },
+            )
+            ff = dict(card.get("metabase-field-filters") or {})
+            ff["client_document_type"] = {
+                "table_ref": "public.rpt_documents",
+                "field_name": "semd_label",
+            }
+            card["metabase-field-filters"] = ff
             card["description"] = (
                 "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / "
                 "Ошибка связи по дням (текущий статус документа). «Отправлено» (без финального "

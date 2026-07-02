@@ -812,6 +812,27 @@ function Invoke-MetabaseDashboardProvision {
         [bool]$SkipImportIfPresent = $false
     )
 
+    $podName = kubectl get pods -n $Namespace -l app.kubernetes.io/name=metabase -o jsonpath='{.items[0].metadata.name}' 2>$null
+    if (-not [string]::IsNullOrWhiteSpace($podName)) {
+        Write-Host "Syncing dashboard JSON into Metabase pod ${podName}..."
+        $dashboardsDir = Join-Path $PSScriptRoot "metabase_dashboards"
+        Invoke-Checked "Copy metabase_dashboards into pod" {
+            Push-Location $PSScriptRoot
+            try {
+                foreach ($file in Get-ChildItem -Path $dashboardsDir -Filter "*.json" -File) {
+                    $localPath = "metabase_dashboards/$($file.Name)"
+                    $remotePath = "${Namespace}/${podName}:/app/metabase_dashboards/$($file.Name)"
+                    kubectl cp $localPath $remotePath 2>&1 | ForEach-Object { Write-Host $_ }
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "kubectl cp failed for $($file.Name)"
+                    }
+                }
+            } finally {
+                Pop-Location
+            }
+        }
+    }
+
     if ($ForceProvision -eq "auto") {
         Write-Host "Running setup-dashboards.sh (manifest-aware import)..."
     } else {

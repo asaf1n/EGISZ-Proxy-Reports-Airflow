@@ -116,6 +116,18 @@ tags:
 
   clinic_jid:
     rules:
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: clinic_jid
       - query_contains: [rpt_documents]
         table_ref: public.rpt_documents
         field_name: clinic_jid
+
+  clinic_label:
+    rules:
+      - query_contains: [rpt_error_breakdown]
+        table_ref: public.rpt_error_breakdown
+        field_name: clinic_label
+      - query_contains: [rpt_documents]
+        table_ref: public.rpt_documents
+        field_name: clinic_label

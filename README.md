@@ -348,7 +348,7 @@ Lookback при transform: extract использует окно по ширин
 | --------- | -------- |
 | Локализация и формат | `setup-dashboards.sh` → `ensure_localization_defaults`: `site-locale=ru`, `report-timezone=Europe/Moscow`, 24ч, ₽, кеш адаптивной TTL (`PUT /api/cache`) |
 | Публичная страница | `enable-public-sharing` + ссылка `${METABASE_URL}/public/dashboard/<uuid>`; флаг `METABASE_PUBLIC_CLIENT_DASHBOARD` (по умолчанию `true`) |
-| Фильтры на публичной ссылке | `JID Клиники` — через URL; `clinic_name` — только заголовок (`{{clinic_name}}`), не фильтрует данные; скрывается `#hide_parameters=clinic_name` |
+| Фильтры на публичной ссылке | `JID Клиники` и `Клиника` (`clinic_label`) — связанные field filters; `JID` также через URL; заголовок подставляет `{{clinic_label}}`; скрыть фильтр клиники: `#hide_parameters=clinic_label` |
 
 Metabase Models → витрины DWH:
 
