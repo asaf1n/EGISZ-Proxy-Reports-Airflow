@@ -9,41 +9,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from mb_api import DEFAULT_EMAIL, DEFAULT_PASSWORD, DEFAULT_URL, api_json, login
+
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARDS_DIR = ROOT / "metabase_dashboards"
 INTEGRATION_JSON = DASHBOARDS_DIR / "01_integration_egisz.json"
-DEFAULT_URL = "http://localhost:3000"
-DEFAULT_EMAIL = "admin@egisz.local"
-DEFAULT_PASSWORD = "egisz"
-
-
-def api_json(
-    url: str,
-    data: bytes | None = None,
-    headers: dict[str, str] | None = None,
-    method: str | None = None,
-) -> object:
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers=headers or {},
-        method=method or ("POST" if data else "GET"),
-    )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.load(response)
-
-
-def login(base_url: str, email: str, password: str) -> str:
-    body = json.dumps({"username": email, "password": password}).encode()
-    payload = api_json(
-        f"{base_url}/api/session",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    session_id = payload.get("id")
-    if not session_id:
-        raise RuntimeError(f"cannot login to Metabase as {email}")
-    return session_id
 
 
 def verify_dashboard_contracts(

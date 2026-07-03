@@ -25,15 +25,24 @@ APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
 DB_METADATA_FILE=""
 
-if [ -f "/app/include/mb_list.sh" ]; then
-  # shellcheck source=/app/include/mb_list.sh
-  source "/app/include/mb_list.sh"
-fi
+# Инклюды лежат рядом со скриптом (deploy-бандл) или в /app (контейнер, где это одно и то же).
+SETUP_DASHBOARDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _include in "${SETUP_DASHBOARDS_DIR}/include/mb_list.sh" "/app/include/mb_list.sh"; do
+  if [ -f "${_include}" ]; then
+    # shellcheck disable=SC1090
+    source "${_include}"
+    break
+  fi
+done
 
-if [ -f "/app/sync-models.sh" ]; then
-  # shellcheck source=/app/sync-models.sh
-  source "/app/sync-models.sh"
-fi
+for _include in "${SETUP_DASHBOARDS_DIR}/sync-models.sh" "/app/sync-models.sh"; do
+  if [ -f "${_include}" ]; then
+    # shellcheck disable=SC1090
+    source "${_include}"
+    break
+  fi
+done
+unset _include
 
 log_info() {
   echo "[dashboards] $*" >&2

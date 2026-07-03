@@ -14,13 +14,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
-MB_URL = os.environ.get("MB_URL", "http://127.0.0.1:3000")
-ADMIN_EMAIL = os.environ.get("METABASE_ADMIN_EMAIL", "admin@egisz.local")
-ADMIN_PASSWORD = os.environ.get("METABASE_ADMIN_PASSWORD", "egisz")
+from mb_api import api, login
+
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "metabase_dashboards"
 COLLECTION_NAME = os.environ.get("METABASE_COLLECTION_NAME", "Интеграция с ЕГИСЗ")
 
@@ -49,38 +46,6 @@ PARAM_KEYS = (
     "values_source_config",
     "filteringParameters",
 )
-
-
-def api(method: str, path: str, token: str, payload: dict | None = None) -> object:
-    data = None
-    headers = {"X-Metabase-Session": token}
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(f"{MB_URL}{path}", data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method} {path} -> HTTP {exc.code}: {body}") from exc
-    return json.loads(body) if body else None
-
-
-def login() -> str:
-    payload = json.dumps({"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD}).encode("utf-8")
-    req = urllib.request.Request(
-        f"{MB_URL}/api/session",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.loads(resp.read().decode("utf-8"))
-    token = body.get("id")
-    if not token:
-        raise RuntimeError(f"login failed: {body}")
-    return token
 
 
 def collection_dashboard_ids(token: str) -> dict[str, int]:

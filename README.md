@@ -382,6 +382,7 @@ Metabase Models → витрины DWH:
 .\up.ps1 -Action Metabase              # только Metabase
 .\up.ps1 -Action Metabase-Provisioning # переимпорт дашбордов и моделей Metabase
 python scripts/export_dashboard.py     # выгрузка дашбордов с живого Metabase в metabase_dashboards/
+.\scripts\build_external_bundle.ps1    # бандлы для переноса на внешний контур — см. deploy/README.md
 .\up.ps1 -Action Stop                  # удаление namespace egisz-bi
 .\up.ps1 -Action Stop-Airflow          # остановка Airflow (данные на PVC сохраняются)
 .\up.ps1 -Action Stop-Metabase         # остановка Metabase (данные на PVC сохраняются)

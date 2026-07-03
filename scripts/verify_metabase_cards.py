@@ -3,20 +3,20 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import sys
 import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
+import mb_api
+from mb_api import DEFAULT_EMAIL, DEFAULT_PASSWORD, DEFAULT_URL, login
+
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARDS_DIR = ROOT / "metabase_dashboards"
-DEFAULT_URL = "http://localhost:3000"
-DEFAULT_EMAIL = "admin@egisz.local"
-DEFAULT_PASSWORD = "egisz"
 QUERY_TIMEOUT_SECONDS = 45
 DEFAULT_WORKERS = 8
 CLIENT_DASHBOARD_NAMES = frozenset(
@@ -39,33 +39,8 @@ ERROR_TYPE_CLINIC_DASHBOARD_PARAMS = frozenset(
 TOP_ERROR_TYPE_CARD = "Топ по типу ошибки"
 
 
-def api_json(
-    url: str,
-    data: bytes | None = None,
-    headers: dict[str, str] | None = None,
-    method: str | None = None,
-) -> object:
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers=headers or {},
-        method=method or ("POST" if data else "GET"),
-    )
-    with urllib.request.urlopen(request, timeout=QUERY_TIMEOUT_SECONDS) as response:
-        return json.load(response)
-
-
-def login(base_url: str, email: str, password: str) -> str:
-    body = json.dumps({"username": email, "password": password}).encode()
-    payload = api_json(
-        f"{base_url}/api/session",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    session_id = payload.get("id")
-    if not session_id:
-        raise RuntimeError(f"cannot login to Metabase as {email}")
-    return session_id
+# Запросы карточек длиннее логина/метаданных — общий хелпер с локальным таймаутом.
+api_json = functools.partial(mb_api.api_json, timeout=QUERY_TIMEOUT_SECONDS)
 
 
 def native_sql(card: dict) -> str:
