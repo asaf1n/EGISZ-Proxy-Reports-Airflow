@@ -1924,132 +1924,6 @@
       }
     },
     {
-      "name": "Сбоев связи за период",
-      "description": "Уникальные документы с транспортной ошибкой (LOGSTATE=3) за период.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Сбоев связи\" FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f2041c02-01",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате создания документа",
-              "id": "f2041c01-00",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f2041c01-02",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.field": "Сбоев связи",
-        "column_settings": {
-          "[\"name\",\"Сбоев связи\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 4,
-      "sizeY": 3,
-      "row": 20,
-      "col": 0,
-      "tab": "service",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
-      "name": "Пик сбоев связи за день",
-      "description": "Максимум уникальных документов со сбоем транспорта за один календарный день в выбранном периоде.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT MAX(daily_cnt)::bigint AS \"Пик сбоев за день\" FROM ( SELECT date_trunc('day', ips_date)::date AS d, COUNT(DISTINCT dwh_id)::bigint AS daily_cnt FROM public.rpt_network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) q",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f2041c02-01",
-              "name": "jid",
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате создания документа",
-              "id": "f2041c01-00",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f2041c01-02",
-              "name": "semd_type",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.field": "Пик сбоев за день",
-        "column_settings": {
-          "[\"name\",\"Пик сбоев за день\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 4,
-      "sizeY": 3,
-      "row": 20,
-      "col": 4,
-      "tab": "service",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "clinic_label"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_network_errors",
-          "field_name": "semd_label"
-        }
-      }
-    },
-    {
       "name": "Тренд ошибок связи по дням",
       "description": "Календарная динамика транспортных сбоев; всплески выше типичного уровня — кандидаты на разбор.",
       "dataset_query": {
@@ -2101,10 +1975,10 @@
           "Документов с ошибкой связи"
         ]
       },
-      "sizeX": 16,
+      "sizeX": 24,
       "sizeY": 5,
       "row": 20,
-      "col": 8,
+      "col": 0,
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
@@ -3933,7 +3807,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(e.error_type), ''), 'Неизвестная ошибка') AS error_type, e.clinic_label AS clinic_label, e.clinic_jid::text AS clinic_jid, e.dwh_id FROM public.rpt_error_breakdown e INNER JOIN period_docs pd ON pd.dwh_id = e.dwh_id WHERE COALESCE(NULLIF(TRIM(e.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4408,8 +4282,8 @@
         }
       },
       "sizeX": 4,
-      "sizeY": 2,
-      "row": 0,
+      "sizeY": 3,
+      "row": 7,
       "col": 0,
       "tab": "archive",
       "metabase-field-filters": {
@@ -4528,8 +4402,8 @@
       },
       "sizeX": 4,
       "sizeY": 2,
-      "row": 0,
-      "col": 4,
+      "row": 10,
+      "col": 0,
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
@@ -4664,10 +4538,10 @@
         ],
         "stackable.stack_type": null
       },
-      "sizeX": 16,
-      "sizeY": 8,
-      "row": 0,
-      "col": 8,
+      "sizeX": 20,
+      "sizeY": 5,
+      "row": 7,
+      "col": 4,
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
@@ -4802,9 +4676,9 @@
           }
         }
       },
-      "sizeX": 8,
-      "sizeY": 6,
-      "row": 2,
+      "sizeX": 12,
+      "sizeY": 7,
+      "row": 0,
       "col": 0,
       "tab": "archive",
       "metabase-field-filters": {
@@ -4941,9 +4815,9 @@
         }
       },
       "sizeX": 12,
-      "sizeY": 6,
-      "row": 8,
-      "col": 0,
+      "sizeY": 7,
+      "row": 0,
+      "col": 12,
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
@@ -5125,7 +4999,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 14,
+      "row": 12,
       "col": 0,
       "tab": "archive",
       "query_tier": "query_builder",

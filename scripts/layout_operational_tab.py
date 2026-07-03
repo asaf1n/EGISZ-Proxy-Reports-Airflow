@@ -1,4 +1,4 @@
-"""Reorganize Metabase dashboards: compact 24-column grids, no operational scalar KPIs."""
+"""Reorganize Metabase dashboards: compact 24-column grids, no operational/service scalar KPIs."""
 from __future__ import annotations
 
 import json
@@ -24,6 +24,7 @@ def write_json_if_changed(path: Path, data: dict) -> bool:
     return True
 
 OPERATIONAL_SCALAR_NAMES = frozenset({"Всего документов", "Всего клиник", "В обработке"})
+SERVICE_SCALAR_NAMES = frozenset({"Сбоев связи за период", "Пик сбоев связи за день"})
 
 OPERATIONAL_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Последние операции": (0, 0, 24, 8),
@@ -38,12 +39,12 @@ OPERATIONAL_LAYOUT: dict[str, tuple[int, int, int, int]] = {
 }
 
 ARCHIVE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Всего документов": (0, 0, 4, 2),
-    "Всего клиник": (0, 4, 4, 2),
-    "Динамика документов по дням": (0, 8, 16, 8),
-    "Объём по клиникам": (2, 0, 8, 6),
-    "Топ типов СЭМД по документам": (8, 0, 12, 6),
-    "Архив СЭМД": (14, 0, 24, 10),
+    "Объём по клиникам": (0, 0, 12, 7),
+    "Топ типов СЭМД по документам": (0, 12, 12, 7),
+    "Всего документов": (7, 0, 4, 3),
+    "Динамика документов по дням": (7, 4, 20, 5),
+    "Всего клиник": (10, 0, 4, 2),
+    "Архив СЭМД": (12, 0, 24, 10),
 }
 
 SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -52,9 +53,7 @@ SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Детализация healthcheck": (6, 0, 14, 6),
     "Контроль качества данных": (6, 14, 10, 6),
     "Детализация контроля качества": (12, 0, 24, 8),
-    "Сбоев связи за период": (20, 0, 4, 3),
-    "Пик сбоев связи за день": (20, 4, 4, 3),
-    "Тренд ошибок связи по дням": (20, 8, 16, 5),
+    "Тренд ошибок связи по дням": (20, 0, 24, 5),
     "Топ клиник по сбоям транспорта": (25, 0, 12, 6),
     "Типы сетевых ошибок (за период)": (25, 12, 12, 6),
     "Последние сбои транспорта": (31, 0, 24, 5),
@@ -166,12 +165,15 @@ def _layout_named_cards(
 
 
 def _layout_integration(dashboard: dict) -> None:
+    removed_scalars = {
+        "operational": OPERATIONAL_SCALAR_NAMES,
+        "service": SERVICE_SCALAR_NAMES,
+    }
     dashboard["cards"] = [
         card
         for card in dashboard["cards"]
         if not (
-            card.get("tab") == "operational"
-            and card.get("name") in OPERATIONAL_SCALAR_NAMES
+            card.get("name") in removed_scalars.get(card.get("tab") or "", frozenset())
             and card.get("display") == "scalar"
         )
     ]

@@ -4,26 +4,15 @@ import json
 from pathlib import Path
 
 INTEGRATION_DASHBOARD = Path("metabase_dashboards/01_integration_egisz.json")
-TAB_BY_LEGACY = {
-    "01_operational.json": "operational",
-    "02_service.json": "service",
-    "03_documents_no_response.json": "queue",
-    "04_quality_and_errors.json": "errors",
-}
 
 
 def _archive_click_target(card: dict) -> dict:
     return card.get("click_behavior") or {}
 
 
-def _archive_tab_cards(dashboard: dict | None = None) -> list[dict]:
+def _tab_cards(tab: str, dashboard: dict | None = None) -> list[dict]:
     dash = dashboard or _integration_dashboard()
-    return [c for c in dash["cards"] if c.get("tab") == "archive" and c.get("display") != "text"]
-
-
-def _operational_tab_cards(dashboard: dict | None = None) -> list[dict]:
-    dash = dashboard or _integration_dashboard()
-    return [c for c in dash["cards"] if c.get("tab") == "operational" and c.get("display") != "text"]
+    return [c for c in dash["cards"] if c.get("tab") == tab and c.get("display") != "text"]
 
 
 def _assert_documents_drill_through(card: dict, expected_slugs: set[str] | None = None) -> None:
@@ -76,8 +65,7 @@ def _integration_dashboard() -> dict:
     return json.loads(INTEGRATION_DASHBOARD.read_text(encoding="utf-8"))
 
 
-def _legacy_dashboard(legacy_file: str) -> dict:
-    tab = TAB_BY_LEGACY[legacy_file]
+def _tab_dashboard(tab: str) -> dict:
     base = _integration_dashboard()
     return {
         **{key: value for key, value in base.items() if key != "cards"},
@@ -114,7 +102,7 @@ def test_all_dashboards_default_to_full_width() -> None:
 
 
 def test_service_network_top_groups_by_typed_label() -> None:
-    dashboard = _legacy_dashboard("02_service.json")
+    dashboard = _tab_dashboard("service")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Типы сетевых ошибок (за период)")
     query = card["dataset_query"]["native"]["query"]
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
@@ -127,7 +115,7 @@ def test_service_network_top_groups_by_typed_label() -> None:
 
 
 def test_quality_dashboard_has_no_transport_detail_block() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     names = {c.get("name") for c in dashboard["cards"]}
     param_slugs = {p["slug"] for p in dashboard["parameters"]}
     queries = _native_queries(dashboard)
@@ -148,7 +136,7 @@ def test_quality_dashboard_has_no_transport_detail_block() -> None:
 
 def test_operational_error_types_include_network_slice() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(card for card in dashboard["cards"] if card.get("name") == "Топ категорий и типов ошибки")
     query = card["dataset_query"]["native"]["query"]
 
@@ -212,7 +200,7 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
 
 
 def test_operational_latest_operations_table_matches_documents_view() -> None:
-    dashboard = _legacy_dashboard("01_operational.json")
+    dashboard = _tab_dashboard("operational")
     card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     # rpt_documents = SELECT * FROM rpt_document_versions WHERE is_current_version —
     # колоночный проекшн (с алиасами) живёт в базовой rpt_document_versions.
@@ -260,7 +248,7 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
 
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
-    dashboard = _legacy_dashboard("02_service.json")
+    dashboard = _tab_dashboard("service")
     card = next(
         c for c in dashboard["cards"]
         if c.get("name") == "Отказы по часам: связь и асинхронный ответ"
@@ -275,7 +263,7 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
 
 
 def test_service_healthcheck_table_scope() -> None:
-    dashboard = _legacy_dashboard("02_service.json")
+    dashboard = _tab_dashboard("service")
     by_name = {c.get("name"): c for c in dashboard["cards"]}
     table = by_name["Детализация healthcheck"]
     scope = "\"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h')"
@@ -296,20 +284,23 @@ def test_service_healthcheck_table_scope() -> None:
 
 
 def test_service_transport_block_layout() -> None:
-    dashboard = _legacy_dashboard("02_service.json")
+    dashboard = _tab_dashboard("service")
     by_name = {c.get("name"): c for c in dashboard["cards"]}
     hourly = by_name["Отказы по часам: связь и асинхронный ответ"]
     pie = by_name["РЭМД vs связь"]
+    trend = by_name["Тренд ошибок связи по дням"]
     assert hourly["row"] == 0
-    assert hourly["row"] < by_name["Тренд ошибок связи по дням"]["row"]
+    assert hourly["row"] < trend["row"]
     assert hourly["sizeX"] + pie["sizeX"] == 24
     assert hourly["row"] == pie["row"]
-    assert by_name["Сбоев связи за период"]["display"] == "scalar"
-    assert "rpt_network_errors" in by_name["Тренд ошибок связи по дням"]["dataset_query"]["native"]["query"]
+    assert "Сбоев связи за период" not in by_name
+    assert "Пик сбоев связи за день" not in by_name
+    assert trend["sizeX"] == 24
+    assert "rpt_network_errors" in trend["dataset_query"]["native"]["query"]
 
 
 def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
-    dashboard = _legacy_dashboard("01_operational.json")
+    dashboard = _tab_dashboard("operational")
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
     trend_card = next(card for card in dashboard["cards"] if card.get("name") == "Транзакции по дням и статусам")
@@ -418,7 +409,7 @@ def test_status_distribution_cards_exclude_waiting() -> None:
 
 
 def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     queries = _native_queries(dashboard)
     assert all("REMOVED_ENRICHED_UI" not in q for q in queries)
     assert all('"Статус" = \'error\'' not in q for q in queries)
@@ -448,7 +439,7 @@ def test_quality_success_slices_are_uncapped() -> None:
 
 
 def test_quality_error_rate_clinic_by_semd_card() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: клиника × тип СЭМД")
     query = card["dataset_query"]["native"]["query"]
 
@@ -472,7 +463,7 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
 
 
 def test_quality_error_rate_error_kind_by_semd_card() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: тип ошибки × тип СЭМД")
     query = card["dataset_query"]["native"]["query"]
 
@@ -613,7 +604,7 @@ def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
     assert "egisz_xml_text" not in transform_sql
     assert "pending_source AS" not in transform_sql
 
-    quality = _legacy_dashboard("04_quality_and_errors.json")
+    quality = _tab_dashboard("errors")
     quality_queries = _native_queries(quality)
     assert any(
         "status IN ('success', 'async_error', 'network_error')" in q
@@ -632,7 +623,7 @@ def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
 
 
 def test_error_analytics_use_raw_json_column_for_grouping() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     queries = _native_queries(dashboard)
 
     assert any("rpt_error_breakdown" in query for query in queries)
@@ -673,14 +664,14 @@ def test_quality_success_slices_sort_by_total_desc() -> None:
 
 
 def test_quality_dashboard_has_no_slice_section_headers() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     text_cards = [c.get("text", "") for c in dashboard["cards"] if c.get("display") == "text"]
     assert not any(t.startswith("## Успешность по срезам") for t in text_cards)
     assert not any(t.startswith("## Срезы ошибок по парам") for t in text_cards)
 
 
 def test_quality_error_structure_section_is_category_colored_row_card() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     names = {c.get("name") for c in dashboard["cards"]}
     assert "Ошибки по категории" not in names
     assert "Топ видов ошибок" not in names
@@ -708,7 +699,7 @@ def test_quality_error_structure_section_is_category_colored_row_card() -> None:
 
 
 def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Топ типов СЭМД по видам ошибки")
     query = card["dataset_query"]["native"]["query"]
 
@@ -728,7 +719,7 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
 
 
 def test_quality_percent_columns_use_comma_decimal_separator() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     percent_cols: list[str] = []
     for card in dashboard["cards"]:
         cs = (card.get("visualization_settings") or {}).get("column_settings") or {}
@@ -1089,7 +1080,7 @@ ERROR_PERIOD_CARD = "Ошибки: тип × клиника"
 
 def test_operational_error_period_card_uses_atomic_error_types() -> None:
     """Карточка error period — rpt_error_breakdown, без «Сводки ошибки»."""
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
@@ -1104,7 +1095,7 @@ def test_operational_error_period_card_uses_atomic_error_types() -> None:
 
 def test_error_period_card_groups_by_error_type_and_clinic() -> None:
     """По умолчанию — группировка тип ошибки × клиника, метрика distinct по документу."""
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     query = card["dataset_query"]["native"]["query"]
     assert "COUNT(DISTINCT dwh_id)" in query
@@ -1124,7 +1115,7 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
 
 def test_error_period_card_uses_breakdown_model() -> None:
     """Карточка читает rpt_error_breakdown через period_docs из rpt_documents."""
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
@@ -1138,7 +1129,7 @@ def test_error_period_card_uses_breakdown_model() -> None:
 
 def test_error_period_card_uses_canonical_filter_tags() -> None:
     """Карточка error period — field filters и drill в модель «Документы» (contains)."""
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     filters = card.get("metabase-field-filters") or {}
     assert filters["jid"]["field_name"] == "clinic_label"
@@ -1207,13 +1198,13 @@ def test_pie_charts_with_decimals_use_comma_separator() -> None:
 
 
 def test_error_types_pie_hides_misleading_total() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Топ категорий и типов ошибки")
     assert card["display"] == "row"
 
 
 def test_top_error_type_card_is_table_with_share() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Топ по типу ошибки")
     query = card["dataset_query"]["native"]["query"]
     viz = card["visualization_settings"]
@@ -1233,7 +1224,7 @@ def test_top_error_type_card_is_table_with_share() -> None:
 
 
 def test_top_semd_by_errors_uses_semd_label() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Топ типов СЭМД по ошибкам")
     query = card["dataset_query"]["native"]["query"]
     assert "semd_label" in query
@@ -1300,7 +1291,7 @@ def test_network_errors_view_exposes_canonical_local_uid() -> None:
 
 def test_no_response_view_exposes_wait_segments() -> None:
     sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    dashboard = _legacy_dashboard("03_documents_no_response.json")
+    dashboard = _tab_dashboard("queue")
 
     assert '>30 дней' in sql
     assert '>7 дней' in sql
@@ -1354,21 +1345,8 @@ def test_executive_mrr_queries_do_not_compare_jid_to_empty_string() -> None:
     ratio_fmt = ratio["visualization_settings"]["column_settings"]['["name","ЭМД/пациент"]']
     assert ratio_fmt["decimals"] == 1
 
-    names = {p.name for p in _dashboard_paths()}
-    # старые версии переименованных дашбордов должны быть удалены, иначе setup-dashboards.sh
-    # импортирует дубликаты в коллекцию.
-    assert "01_integration_egisz.json" in names
-    assert "01_operational.json" not in names
-    assert "02_service.json" not in names
-    assert "03_documents_no_response.json" not in names
-    assert "04_quality_and_errors.json" not in names
-    assert "05_executive.json" in names
-    assert "07_client_service.json" in names
-    assert "08_client_bianalytic.json" in names
-    assert "06_semd_archive.json" not in names
 
-
-def test_integration_dashboard_has_tabs_and_legacy_card_coverage() -> None:
+def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
     dashboard = _integration_dashboard()
     assert dashboard["name"] == "Интеграция с ЕГИСЗ"
     assert dashboard.get("width") == "full"
@@ -1387,7 +1365,7 @@ def test_integration_dashboard_has_tabs_and_legacy_card_coverage() -> None:
         assert tab, f"card {card.get('name', '?')} missing tab"
         by_tab[tab] = by_tab.get(tab, 0) + 1
     assert by_tab["operational"] == 9
-    assert by_tab["service"] == 11
+    assert by_tab["service"] == 9
     assert by_tab["queue"] == 8
     assert by_tab["errors"] == 7
     assert by_tab["archive"] == 6
@@ -1417,12 +1395,12 @@ def test_integration_dashboard_default_period_is_current_month() -> None:
 def test_archive_tab_layout_matches_grid() -> None:
     dashboard = _integration_dashboard()
     expected = {
-        "Всего документов": (8, 0, 4, 3),
-        "Всего клиник": (6, 0, 4, 2),
-        "Динамика документов по дням": (6, 4, 20, 5),
-        "Объём по клиникам": (0, 0, 11, 6),
-        "Топ типов СЭМД по документам": (0, 11, 13, 6),
-        "Архив СЭМД": (11, 0, 24, 10),
+        "Объём по клиникам": (0, 0, 12, 7),
+        "Топ типов СЭМД по документам": (0, 12, 12, 7),
+        "Всего документов": (7, 0, 4, 3),
+        "Динамика документов по дням": (7, 4, 20, 5),
+        "Всего клиник": (10, 0, 4, 2),
+        "Архив СЭМД": (12, 0, 24, 10),
     }
     for name, (row, col, size_x, size_y) in expected.items():
         card = next(
@@ -1451,11 +1429,11 @@ def test_archive_tab_uses_same_clinic_volume_card_as_operational() -> None:
     assert _card_query_fingerprint(operational) == _card_query_fingerprint(archive)
     assert 'AS "%"' in query
     assert "NULLIF((SELECT total FROM totals), 0)" in query
-    assert archive["row"] == 0 and archive["col"] == 0 and archive["sizeX"] == 11 and archive["sizeY"] == 6
+    assert archive["row"] == 0 and archive["col"] == 0 and archive["sizeX"] == 12 and archive["sizeY"] == 7
 
 
 def test_archive_tab_has_six_cards() -> None:
-    archive_names = {c["name"] for c in _archive_tab_cards()}
+    archive_names = {c["name"] for c in _tab_cards("archive")}
     assert archive_names == {
         "Всего документов",
         "Всего клиник",
@@ -1467,7 +1445,7 @@ def test_archive_tab_has_six_cards() -> None:
 
 
 def test_errors_tab_has_error_slice_cards() -> None:
-    dashboard = _legacy_dashboard("04_quality_and_errors.json")
+    dashboard = _tab_dashboard("errors")
     names = {c.get("name") for c in dashboard["cards"] if c.get("display") != "text"}
     for required in (
         "Топ по типу ошибки",
@@ -1541,7 +1519,7 @@ def test_retired_qb_support_views_removed_from_dwh_sql() -> None:
 
 
 def test_quality_qb_cards_use_models_and_archive_click() -> None:
-    dashboard = _legacy_dashboard("01_operational.json")
+    dashboard = _tab_dashboard("operational")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Объём по клиникам")
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
@@ -1550,7 +1528,7 @@ def test_quality_qb_cards_use_models_and_archive_click() -> None:
 
 
 def test_operational_volume_card_shows_share_of_total() -> None:
-    dashboard = _legacy_dashboard("01_operational.json")
+    dashboard = _tab_dashboard("operational")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Объём по клиникам")
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
@@ -1638,7 +1616,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
 
 
 def test_service_quality_detail_lists_all_rule_violations() -> None:
-    dashboard = _legacy_dashboard("02_service.json")
+    dashboard = _tab_dashboard("service")
     by_name = {c.get("name"): c for c in dashboard["cards"]}
     summary = by_name["Контроль качества данных"]
     detail = by_name["Детализация контроля качества"]
