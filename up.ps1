@@ -117,14 +117,16 @@ function Get-ReadyPodCount {
 
 function Clear-StuckTerminatingPods {
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$LabelSelector,
+        [string]$LabelSelector = "",
         [int]$GraceSeconds = 120
     )
 
-    $jsonOutput = Invoke-Kubectl -Arguments @(
-        'get', 'pods', '-n', $Namespace, '-l', $LabelSelector, '-o', 'json'
-    )
+    $getArgs = @('get', 'pods', '-n', $Namespace, '-o', 'json')
+    if (-not [string]::IsNullOrWhiteSpace($LabelSelector)) {
+        $getArgs += @('-l', $LabelSelector)
+    }
+
+    $jsonOutput = Invoke-Kubectl -Arguments $getArgs
     if ($LASTEXITCODE -ne 0) {
         return
     }
@@ -475,7 +477,8 @@ function Get-AirflowSchedulerPod {
 function Invoke-AirflowSchedulerCli {
     param(
         [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [switch]$AllowFailure
     )
 
     $schedulerPod = Get-AirflowSchedulerPod
@@ -485,7 +488,7 @@ function Invoke-AirflowSchedulerCli {
 
     $ErrorActionPreference = 'Continue'
     $output = & kubectl exec -n $Namespace --request-timeout=120s "pod/$schedulerPod" -c scheduler -- airflow @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
         throw "airflow $($Arguments -join ' ') failed with exit code $LASTEXITCODE`n$output"
     }
     return ,$output
@@ -503,6 +506,27 @@ function Initialize-AirflowDwhPool {
         throw "Airflow pool ${DwhPoolName} was not found after pools set."
     }
     Write-Host "Airflow pool ${DwhPoolName} is ready."
+}
+
+function Initialize-AirflowEgiszVariables {
+    $varsFile = Join-Path $PSScriptRoot "k8s\airflow\egisz-variables.json"
+    if (-not (Test-Path $varsFile)) {
+        throw "Airflow variables file not found: ${varsFile}"
+    }
+
+    Write-Host "Ensuring default EGISZ Airflow Variables (skip existing)..."
+    $defaults = Get-Content $varsFile -Raw | ConvertFrom-Json
+    foreach ($prop in $defaults.PSObject.Properties) {
+        $name = $prop.Name
+        $value = [string]$prop.Value
+        Invoke-AirflowSchedulerCli -Arguments @('variables', 'get', $name) -AllowFailure | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Invoke-Checked "Set Airflow variable ${name}" {
+                Invoke-AirflowSchedulerCli -Arguments @('variables', 'set', $name, $value)
+            }
+        }
+    }
+    Write-Host "EGISZ Airflow Variables are ready (Admin -> Variables in the UI)."
 }
 
 function Test-AirflowConnectionsFromSecret {
@@ -576,13 +600,15 @@ function Initialize-HelmAirflowRepo {
     }
 }
 
-function Sync-AirflowWorkerReplicas {
+function Ensure-AirflowStatefulSetReplicas {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
         [int]$Replicas = 1
     )
 
     $currentOutput = Invoke-Kubectl -Arguments @(
-        'get', 'statefulset', 'airflow-worker', '-n', $Namespace,
+        'get', 'statefulset', $Name, '-n', $Namespace,
         '-o', 'jsonpath={.spec.replicas}'
     )
     if ($LASTEXITCODE -ne 0) {
@@ -591,14 +617,34 @@ function Sync-AirflowWorkerReplicas {
 
     $current = 0
     [void][int]::TryParse(($currentOutput | Out-String).Trim(), [ref]$current)
-    if ($current -le $Replicas) {
+    if ($current -eq $Replicas) {
         return
     }
 
-    Write-Host "Scaling airflow-worker from ${current} to ${Replicas}..."
+    Write-Host "Scaling ${Name} from ${current} to ${Replicas}..."
     Invoke-Kubectl -Arguments @(
-        'scale', 'statefulset/airflow-worker', '-n', $Namespace, "--replicas=$Replicas"
+        'scale', "statefulset/${Name}", '-n', $Namespace, "--replicas=$Replicas"
     ) | Out-Null
+}
+
+function Restore-AirflowStatefulSetsAfterStop {
+    # Stop-Airflow scales StatefulSets to 0 via kubectl; Helm upgrade does not
+    # always restore .spec.replicas, leaving Redis/worker stuck at 0 until scaled up.
+    Ensure-AirflowStatefulSetReplicas -Name airflow-postgresql -Replicas 1
+    Ensure-AirflowStatefulSetReplicas -Name airflow-redis -Replicas 1
+    Ensure-AirflowStatefulSetReplicas -Name airflow-worker -Replicas 1
+    Ensure-AirflowStatefulSetReplicas -Name airflow-triggerer -Replicas 1
+}
+
+function Clear-AirflowStuckTerminatingPods {
+    param(
+        [int]$GraceSeconds = 30
+    )
+
+    Clear-StuckTerminatingPods -LabelSelector "app.kubernetes.io/name=postgresql,app.kubernetes.io/instance=airflow" -GraceSeconds $GraceSeconds
+    Clear-StuckTerminatingPods -LabelSelector "component=redis,release=airflow" -GraceSeconds $GraceSeconds
+    Clear-StuckTerminatingPods -LabelSelector "component=worker,release=airflow" -GraceSeconds $GraceSeconds
+    Clear-StuckTerminatingPods -LabelSelector "component=triggerer,release=airflow" -GraceSeconds $GraceSeconds
 }
 
 function Get-EltPackageHash {
@@ -655,7 +701,8 @@ function Install-Airflow {
             --set workers.celery.replicas=1
     }
 
-    Sync-AirflowWorkerReplicas -Replicas 1
+    Restore-AirflowStatefulSetsAfterStop
+    Clear-AirflowStuckTerminatingPods
 
     Wait-ComponentPodsReady -Description "Airflow PostgreSQL" `
         -LabelSelector "app.kubernetes.io/name=postgresql,app.kubernetes.io/instance=airflow" `
@@ -668,11 +715,11 @@ function Install-Airflow {
     Wait-ComponentPodsReady -Description "Airflow scheduler" `
         -LabelSelector "component=scheduler,release=airflow" `
         -TotalTimeoutSeconds 300
-    Clear-StuckTerminatingPods -LabelSelector "component=worker,release=airflow"
+    Clear-AirflowStuckTerminatingPods
     Wait-ComponentPodsReady -Description "Airflow worker" `
         -LabelSelector "component=worker,release=airflow" `
         -ExpectedPods 1 `
-        -TotalTimeoutSeconds 300
+        -TotalTimeoutSeconds 600
     Wait-ComponentPodsReady -Description "Airflow triggerer" `
         -LabelSelector "component=triggerer,release=airflow" `
         -TotalTimeoutSeconds 300
@@ -728,10 +775,11 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 
     Test-AirflowConnectionsFromSecret
     Initialize-AirflowDwhPool
+    Initialize-AirflowEgiszVariables
 
     Test-LoadBalancerEndpoint -Url 'http://localhost:8080/health' -Description 'Airflow webserver LoadBalancer'
 
-    Write-Host "Airflow is ready (pool ${DwhPoolName}; DAGs paused at creation). Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' if the DWH schema changed."
+    Write-Host "Airflow is ready (pool ${DwhPoolName}, Variables in UI; DAGs paused at creation). Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' if the DWH schema changed."
 }
 
 function Sync-MetabaseDashboardArtifacts {
@@ -1055,6 +1103,52 @@ function Invoke-ScaleIfExists {
     }
 }
 
+function Wait-ForNamespaceDeleted {
+    param(
+        [int]$TotalTimeoutSeconds = 600,
+        [int]$PollIntervalSeconds = 10,
+        [int]$StuckPodGraceSeconds = 60
+    )
+
+    Write-Host "Waiting for namespace $Namespace to be deleted..."
+    $deadline = (Get-Date).AddSeconds($TotalTimeoutSeconds)
+
+    while ((Get-Date) -lt $deadline) {
+        $ErrorActionPreference = 'Continue'
+        kubectl get namespace $Namespace -o name 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Namespace $Namespace deleted."
+            return $true
+        }
+
+        $phase = (kubectl get namespace $Namespace -o jsonpath='{.status.phase}' 2>$null | Out-String).Trim()
+        Clear-StuckTerminatingPods -GraceSeconds $StuckPodGraceSeconds
+
+        $remaining = [Math]::Max(0, [int]($deadline - (Get-Date)).TotalSeconds)
+        if ($phase -eq 'Terminating') {
+            Write-Host "Namespace $Namespace is Terminating (${remaining}s left)..."
+        } else {
+            Write-Host "Namespace $Namespace phase=${phase} (${remaining}s left)..."
+        }
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+
+    $ErrorActionPreference = 'Continue'
+    kubectl get namespace $Namespace -o name 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Namespace $Namespace deleted."
+        return $true
+    }
+
+    $phase = (kubectl get namespace $Namespace -o jsonpath='{.status.phase}' 2>$null | Out-String).Trim()
+    if ($phase -eq 'Terminating') {
+        Write-Host "Warning: namespace $Namespace is still Terminating after ${TotalTimeoutSeconds}s; deletion continues in the background."
+        return $true
+    }
+
+    throw "Namespace $Namespace deletion did not complete after ${TotalTimeoutSeconds}s (phase=${phase})."
+}
+
 function Stop-All {
     Test-KubernetesConnection
 
@@ -1063,6 +1157,18 @@ function Stop-All {
         $global:LASTEXITCODE = 0
         return $false
     }
+
+    Write-Host "Scaling down workloads before teardown..."
+    Invoke-ScaleIfExists -Description "Scale Metabase deployment to 0" -Kind deployment -Name metabase
+    Invoke-ScaleIfExists -Description "Scale Metabase PostgreSQL to 0" -Kind statefulset -Name metabase-postgres
+    Invoke-ScaleIfExists -Description "Scale Airflow webserver to 0" -Kind deployment -Name airflow-webserver
+    Invoke-ScaleIfExists -Description "Scale Airflow scheduler to 0" -Kind deployment -Name airflow-scheduler
+    Invoke-ScaleIfExists -Description "Scale Airflow statsd to 0" -Kind deployment -Name airflow-statsd
+    Invoke-ScaleIfExists -Description "Scale Airflow worker to 0" -Kind statefulset -Name airflow-worker
+    Invoke-ScaleIfExists -Description "Scale Airflow triggerer to 0" -Kind statefulset -Name airflow-triggerer
+    Invoke-ScaleIfExists -Description "Scale Airflow Redis to 0" -Kind statefulset -Name airflow-redis
+    Invoke-ScaleIfExists -Description "Scale Airflow PostgreSQL to 0" -Kind statefulset -Name airflow-postgresql
+    Clear-StuckTerminatingPods -GraceSeconds 60
 
     if (Get-Command helm -ErrorAction SilentlyContinue) {
         $helmReleases = @()
@@ -1079,15 +1185,17 @@ function Stop-All {
         if ($helmReleases -contains 'airflow') {
             Write-Host "Uninstalling Helm release airflow..."
             Invoke-Checked "Uninstall Airflow Helm release" {
-                helm uninstall airflow -n $Namespace --wait --timeout 5m
+                helm uninstall airflow -n $Namespace --wait --timeout 10m
             }
+            Clear-StuckTerminatingPods -GraceSeconds 60
         }
     }
 
     Write-Host "Deleting namespace $Namespace..."
     Invoke-Checked "Delete namespace $Namespace" {
-        kubectl delete namespace $Namespace --wait --timeout=300s
+        kubectl delete namespace $Namespace --wait=false
     }
+    Wait-ForNamespaceDeleted | Out-Null
     return $true
 }
 

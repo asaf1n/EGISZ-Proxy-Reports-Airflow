@@ -14,7 +14,6 @@
     "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
     "status_label": { "semantic_type": "type/Category", "display_name": "Статус" },
     "error_types": { "semantic_type": "type/Category", "display_name": "Типы ошибки" },
-    "error_summary": { "semantic_type": "type/Description", "display_name": "Сводка ошибки" },
     "error_text": { "semantic_type": "type/Description", "display_name": "Исходный текст ошибки" },
     "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
     "request_msgid": { "semantic_type": "type/Category", "display_name": "MSGID запроса" },

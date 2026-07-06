@@ -13,7 +13,6 @@ SELECT
     d.status,
     ds.label AS status_label,
     ds.sort_order AS status_sort,
-    d.error_summary,
     d.error_text,
     public.normalize_semd_code(d.semd_code) AS semd_code,
     st.name AS semd_name,
@@ -42,7 +41,7 @@ SELECT
     -- Транспорт СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
     -- relates_to_msgid (relatesToMessage ответа) = request_msgid у склеенных — ключ корреляции.
     public.clean_text_value(d.relates_to_msgid) AS relates_to_msgid,
-    -- LOGID состояния: исход если есть, иначе LOGID отправки — у «Отправлено» больше не пусто.
+    -- LOGID состояния: исход если есть, иначе LOGID отправки («Отправлено» несёт LOGID отправки).
     COALESCE(d.result_logid, d.request_logid)::text AS logid,
     d.request_logid::text AS request_logid,
     d.result_logid::text AS result_logid,
@@ -70,7 +69,7 @@ SELECT
     a.doctor_hash,
     d.registered_at,
     d.first_sent_at,
-    COALESCE(public.canonical_error_list(d.error_types), 'Неизвестная ошибка') AS error_types,
+    d.error_types,
     -- Слой версий (README §«Версии и идентичность документа»).
     d.document_group_id,
     COALESCE(d.is_current_version, true) AS is_current_version,
@@ -95,9 +94,7 @@ COMMENT ON VIEW public.rpt_document_versions IS
 'Все экземпляры/версии отправки СЭМД: одна строка на dwh_id (полный аудит, включая superseded).';
 
 -- Основная витрина — ТЕКУЩИЕ версии (один логический документ = одна строка). Все попытки
--- (включая superseded) — rpt_document_versions. Сегодня группы почти все singleton (нет
--- CDA setId / patient_hash), поэтому фильтр эквивалентен прежнему поведению и автоматически
--- схлопывает версии, как только появится стабильный ключ (см. §«Версии и идентичность»).
+-- (включая superseded) — rpt_document_versions.
 CREATE OR REPLACE VIEW public.rpt_documents AS
 SELECT * FROM public.rpt_document_versions
 WHERE is_current_version;
@@ -151,21 +148,25 @@ SELECT
     public.network_error_type(r.error_text) AS network_error_type,
     r.error_text,
     r.error_types,
-    r.semd_emdr_id
+    r.semd_emdr_id,
+    da.contour
 FROM public.rpt_documents r
+-- Контур зафиксирован на грейне документа (document_attributes): отчётный слой
+-- не читает message-грейн напрямую (контракт «rpt только поверх documents/dims»).
+LEFT JOIN public.document_attributes da ON da.dwh_id = r.dwh_id
 WHERE r.status = 'network_error';
 
 COMMENT ON VIEW public.rpt_network_errors IS
-'Ошибки связи proxy_egisz: document-grain (status=network_error).';
+'Ошибки связи proxy_egisz: document-grain (status=network_error). contour — контур обмена (РЭМД/ИЭМК, exchange_contour).';
 
--- МАТЕРИАЛИЗОВАННОЕ представление: грейн «тип×документ» агрегирует ~133k строк, и все
--- карточки вкладки «Анализ ошибок» читают его. Live-view давал ~3.6с/запрос; matview с
--- индексами — <1с. Обновляется в конце transform (extract/reconcile DAG) → свежесть та же,
--- что у фактов (documents и так обновляются раз в 5 мин). См. refresh_error_breakdown().
+-- МАТЕРИАЛИЗОВАННОЕ представление: грейн «тип×документ»; все карточки вкладки
+-- «Анализ ошибок» читают его. Обновляется в конце transform (extract/reconcile DAG) →
+-- свежесть та же, что у фактов. См. refresh_error_breakdown().
 -- Построение в два дешёвых шага:
---   1) atom_types — дедуп (dwh_id, канонический тип) на УЗКИХ данных прямо из documents
---      (нормализация IMMUTABLE + один LEFT JOIN к dim_error_type_group);
+--   1) atom_types — дедуп (dwh_id, тип) на УЗКИХ данных прямо из documents
+--      (один LEFT JOIN к dim_error_type_group);
 --   2) JOIN rpt_documents 1:1 по dwh_id — display-колонки добавляются ПОСЛЕ дедупа.
+-- CASE страхует атомы вне словаря (сводятся в «Неизвестная ошибка», кроме «Код: X»).
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
 WITH atom_types AS (
     SELECT DISTINCT
@@ -175,20 +176,18 @@ WITH atom_types AS (
             WHEN n.norm LIKE 'Код: %' THEN n.norm
             ELSE 'Неизвестная ошибка'
         END AS error_type,
-        COALESCE(g.error_category, 'Прочие') AS error_category
+        COALESCE(g.error_category, 'Прочие') AS error_category,
+        -- 'Код: %' и атомы вне словаря — зона/повторяемость неизвестны.
+        COALESCE(g.responsibility, 'смешанная') AS responsibility,
+        COALESCE(g.is_retryable, false) AS is_retryable
     FROM public.documents doc
     CROSS JOIN LATERAL unnest(
         string_to_array(
-            regexp_replace(
-                COALESCE(NULLIF(btrim(doc.error_types), ''), 'Неизвестная ошибка'),
-                ' - ',
-                ' · ',
-                'g'
-            ),
+            COALESCE(NULLIF(btrim(doc.error_types), ''), 'Неизвестная ошибка'),
             ' · '
         )
     ) AS atom
-    CROSS JOIN LATERAL (SELECT public.error_atom_normalize(trim(atom)) AS norm) n
+    CROSS JOIN LATERAL (SELECT NULLIF(btrim(atom), '') AS norm) n
     LEFT JOIN public.dim_error_type_group g ON g.error_type = n.norm
     WHERE doc.status IN ('async_error', 'network_error')
       AND doc.error_types IS NOT NULL
@@ -204,7 +203,9 @@ SELECT
     r.semd_code,
     r.semd_label,
     a.error_type,
-    a.error_category
+    a.error_category,
+    a.responsibility,
+    a.is_retryable
 FROM atom_types a
 INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
 WITH DATA;
@@ -217,9 +218,10 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_type ON public.rpt_error_breakdown (
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_category ON public.rpt_error_breakdown (error_category);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_clinic_jid ON public.rpt_error_breakdown (clinic_jid);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_semd_code ON public.rpt_error_breakdown (semd_code);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_responsibility ON public.rpt_error_breakdown (responsibility);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
-'Разбивка ошибок (matview): один ряд = один атомарный канонический вид на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform.';
+'Разбивка ошибок (matview): один ряд = один канонический тип на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT

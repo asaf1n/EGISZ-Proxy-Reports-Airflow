@@ -124,13 +124,44 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert 'f.clinic_jid AS "JID Клиники"' in sql
 
 
-def test_error_interpretation_matches_all_rules_independently() -> None:
+def test_error_matching_matches_all_rules_independently() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "40_functions_errors.sql").read_text(encoding="utf-8")
     assert "error_matching_rule_labels" in sql
     assert "ORDER BY r.rule_code" in sql
-    assert "ORDER BY r.priority" not in sql
-    matching_fn = sql.split("error_matching_rule_labels")[1].split("error_interpretation_item")[0]
+    matching_fn = sql.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
     assert "LIMIT 1" not in matching_fn
+
+
+def test_error_matching_is_tiered() -> None:
+    """Ярусный матчинг: победа первого яруса (min match_tier), внутри яруса — все
+    совпадения с дедупом интерпретаций."""
+    parts = DWH_INIT_SQL_PATH.parent / "parts"
+    rules = (parts / "30_error_rules.sql").read_text(encoding="utf-8")
+    assert "match_tier" in rules
+    assert "chk_dim_error_rules_match_tier" in rules
+    # таксономия: зона ответственности и повторяемость с CHECK-доменом
+    assert "responsibility" in rules
+    assert "is_retryable" in rules
+    assert "chk_dim_error_type_group_responsibility" in rules
+    fns = (parts / "40_functions_errors.sql").read_text(encoding="utf-8")
+    matching_fn = fns.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
+    assert "min(match_tier)" in matching_fn
+    # ИЭМК: RegistryError (атрибуты) парсится отдельной веткой build_errors_json
+    assert "CREATE OR REPLACE FUNCTION public.xml_registry_errors" in fns
+    build_fn = fns.split("CREATE OR REPLACE FUNCTION public.build_errors_json")[1].split("$$;")[0]
+    assert "xml_registry_errors" in build_fn
+    # faultcode: локальная часть в UPPERCASE, последним в COALESCE error_code
+    parsing = (parts / "20_functions_parsing.sql").read_text(encoding="utf-8")
+    assert "faultcode" in parsing
+    assert "COALESCE(v_error_code_xml, v_code_xml, v_faultcode)" in parsing
+
+
+def test_rpt_error_breakdown_exposes_responsibility() -> None:
+    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split(
+        "COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
+    assert "responsibility" in breakdown
+    assert "is_retryable" in breakdown
 
 
 def test_error_classify_uses_atomic_item_atoms() -> None:
@@ -148,8 +179,7 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split("COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
     assert "string_to_array" in breakdown
     assert "' · '" in breakdown
-    # Канонизация set-based: нормализация + LEFT JOIN к словарю (без построчных подзапросов).
-    assert "error_atom_normalize" in breakdown
+    # Канонизация set-based: LEFT JOIN к словарю (без построчных подзапросов).
     assert "dim_error_type_group" in breakdown
     assert "public.documents doc" in breakdown
     assert "btrim(doc.error_types)" in breakdown
@@ -160,21 +190,21 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     assert "DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE" in drops
 
 
-def test_rpt_documents_exposes_canonical_error_types_list_only() -> None:
-    """rpt_document_versions (база rpt_documents) отдаёт только полный канонизированный
-    список error_types (первый-атомный error_type удалён — отбор по типу идёт через
-    rpt_error_breakdown). rpt_documents = тот же проекшн, отфильтрованный по is_current_version."""
+def test_rpt_documents_exposes_error_types_list_only() -> None:
+    """rpt_document_versions (база rpt_documents) отдаёт полный список error_types
+    как есть из documents; отбор по типу идёт через rpt_error_breakdown.
+    rpt_documents = тот же проекшн, отфильтрованный по is_current_version."""
     sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
     rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_document_versions")[1].split("COMMENT ON VIEW public.rpt_document_versions")[0]
-    assert "canonical_error_list(d.error_types)" in rpt
-    assert "AS error_types" in rpt
+    assert "d.error_types" in rpt
+    assert "canonical_error_list" not in rpt
     assert "AS error_type," not in rpt
     assert "split_part(" not in rpt
 
 
 def test_document_version_layer_groups_by_doc_number() -> None:
     """Логический документ = (jid + semd_code + doc_number=PROTOCOLID); localUid — версия.
-    CDA setId источником не отдаётся ⇒ зарезервированная колонка снята, группируем по журналу."""
+    CDA setId источником не отдаётся — группируем по журналу."""
     parts = DWH_INIT_SQL_PATH.parent / "parts"
     tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
     transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
@@ -191,13 +221,11 @@ def test_document_version_layer_groups_by_doc_number() -> None:
         "is_current_version",
     ):
         assert f"ADD COLUMN IF NOT EXISTS {col}" in tables
-    assert "DROP COLUMN IF EXISTS semd_set_id" in tables
 
     assert "CREATE OR REPLACE FUNCTION public.recompute_document_versions" in transform
     assert "lower(btrim(d.doc_number))" in transform
     assert "'doc_number'" in transform
     assert "c_cap" in transform
-    assert "semd_set_id" not in transform
     assert "PERFORM public.recompute_document_versions" in transform
     assert "public.recompute_document_versions(NULL::text[])" in health
 
@@ -205,6 +233,59 @@ def test_document_version_layer_groups_by_doc_number() -> None:
     assert "CREATE OR REPLACE VIEW public.rpt_documents AS" in rpt
     assert "WHERE is_current_version" in rpt
     assert "rpt_health_versions" in health
+
+
+def test_gdf_chain_lookup_uses_persisted_jid() -> None:
+    """jid события getDocumentFile фиксируется при парсинге; gdf_ref ищет цепочку по
+    transactions.jid индексом. resolve_document_jid по payload внутри gdf_events при
+    полножурнальном lookback reconcile вырождался в O(батч × журнал × regex)."""
+    parts = DWH_INIT_SQL_PATH.parent / "parts"
+    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
+    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
+
+    assert "idx_transactions_gdf_jid_logid" in tables
+
+    gdf_events = transform.split("gdf_events AS (")[1].split("raw_parsed AS (")[0]
+    assert "tx.jid" in gdf_events
+    assert "LATERAL public.resolve_document_jid" not in gdf_events
+    assert "JOIN public.exchangelog_raw" not in gdf_events
+
+    # Бэкфилл архива: без него поздний callback не свяжется со старым запросом.
+    assert transform.count("AND t.jid IS NULL") == 1
+    # Агрегация document_attributes ограничена документами батча, не всем архивом.
+    assert "batch_document_ids" in transform
+
+
+def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
+    """Попытка парсинга фиксируется в exchangelog_parse_attempts. Строки без реквизитов
+    (нет msgid/localUid/emdrId/getDocumentFile) в transactions не вставляются, поэтому
+    анти-джойн по transactions.xml_parsed_at перепарсивал их каждым полножурнальным
+    lookback'ом reconcile (~65 тыс. строк ≈ 6,4 мин на окно)."""
+    parts = DWH_INIT_SQL_PATH.parent / "parts"
+    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
+    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS exchangelog_parse_attempts" in tables
+    # Бэкфилл маркера из уже распарсенных строк transactions: без него первый
+    # полножурнальный lookback перепарсил бы весь архив, а не только «мусор».
+    assert "INSERT INTO exchangelog_parse_attempts (logid)" in tables
+    assert "SELECT logid FROM transactions WHERE xml_parsed_at IS NOT NULL" in tables
+    assert "ANALYZE exchangelog_parse_attempts" in tables
+
+    # Обе ветки parse_targets отбирают кандидатов по маркеру, не по transactions.
+    parse_targets = transform.split("parse_targets AS (")[1].split("INSERT INTO public.transactions")[0]
+    assert parse_targets.count("public.exchangelog_parse_attempts") == 2
+    assert "xml_parsed_at" not in parse_targets
+
+    # Маркер пишется на весь просканированный диапазон после вставки (анти-джойн
+    # вставки должен видеть состояние маркера до батча).
+    marker = transform.split("INSERT INTO public.exchangelog_parse_attempts (logid)")
+    assert len(marker) == 2
+    assert "ON CONFLICT (logid) DO NOTHING" in marker[1]
+    parse_insert = transform.split("WITH candidate_log_ids AS (")[1]
+    assert parse_insert.index("INSERT INTO public.transactions") < parse_insert.index(
+        "INSERT INTO public.exchangelog_parse_attempts"
+    )
 
 
 def test_document_attributes_maintained_without_enriched_mart() -> None:
@@ -259,7 +340,6 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "clinic_jid_mismatch",
         "semd_emdr_id",
         "error_types",
-        "error_summary",
         "error_text",
     ):
         assert column in rpt_sql
@@ -361,7 +441,6 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
     assert "CREATE OR REPLACE FUNCTION public.network_error_type" in sql
     assert "dim_error_rules" in sql
-    assert "CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui" not in sql
     assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "error_messages_row" in sql
@@ -410,8 +489,7 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "EGISZ_MESSAGES" not in sql
     assert "status = 'waiting'" in sql
     assert "f.error_json_text" in sql
-    assert "error_summary_dict" in transform_sql
-    assert "error_interpretation_row" in transform_sql
+    assert "error_messages_row" in transform_sql
     assert "COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message)" not in transform_sql
     assert ", message, callback_url" in sql
     assert "error_message," not in transform_sql
@@ -433,12 +511,6 @@ def test_dwh_init_sql_does_not_keep_legacy_egisz_messages_staging() -> None:
     assert "INSERT INTO egisz_messages_raw" not in sql
     assert "DROP TABLE IF EXISTS public.egisz_messages_raw CASCADE" not in drop_sql
     assert "DROP TABLE IF EXISTS public.stg_egisz_messages CASCADE" not in drop_sql
-
-
-def test_drop_dependents_removes_legacy_semd_archive_before_documents_ui() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "60_drop_dependents.sql").read_text(encoding="utf-8")
-    assert "DROP VIEW IF EXISTS public.v_rpt_semd_archive_ui CASCADE;" in sql
-    assert sql.index("v_rpt_semd_archive_ui") < sql.index("DROP VIEW IF EXISTS public.rpt_documents CASCADE;")
 
 
 class FakeSyncCursor:
@@ -581,8 +653,42 @@ def test_get_all_raw_logids_returns_int_set_over_full_table() -> None:
 
     con = Connection()
     assert get_all_raw_logids(con) == {101, 102}
-    # Full-table scan: no banded LOGID window.
     assert con.cursor_instance.sql == "SELECT logid FROM exchangelog_raw"
+
+
+def test_get_all_raw_logids_filters_by_since() -> None:
+    from datetime import datetime, timezone
+
+    class Cursor:
+        def __init__(self) -> None:
+            self.sql = ""
+            self.params: tuple[object, ...] | None = None
+
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
+            self.sql = sql
+            self.params = params
+
+        def fetchall(self) -> list[tuple[int]]:
+            return [(101,)]
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_instance = Cursor()
+
+        def cursor(self) -> Cursor:
+            return self.cursor_instance
+
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    con = Connection()
+    assert get_all_raw_logids(con, since=since) == {101}
+    assert "COALESCE(createdate, logdate) >= %s" in con.cursor_instance.sql
+    assert con.cursor_instance.params == (since,)
 
 
 def test_coalesce_logid_windows_merges_runs_within_gap() -> None:

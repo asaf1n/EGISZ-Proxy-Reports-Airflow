@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS public.document_attributes (
 -- ответа) — штатный ключ корреляции запрос↔ответ (README §«Парсинг», офиц. request_id/response_to_request_id).
 ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS request_msgid text;
 
+-- contour — контур обмена документа (РЭМД/ИЭМК, transactions.contour из exchange_contour).
+-- Отчётный слой (rpt_network_errors) не читает message-грейн transactions напрямую,
+-- поэтому контур фиксируется здесь: последний непустой contour по строкам документа.
+ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS contour text;
+
 CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
 
@@ -64,6 +69,7 @@ BEGIN
         patient_hash,
         doctor_hash,
         request_msgid,
+        contour,
         updated_at
     )
     SELECT
@@ -86,6 +92,7 @@ BEGIN
         COALESCE(tx.patient_hash, d.patient_hash) AS patient_hash,
         COALESCE(tx.doctor_hash, d.doctor_hash) AS doctor_hash,
         req.request_msgid,
+        ctr.contour,
         now() AS updated_at
     FROM public.documents d
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
@@ -121,6 +128,14 @@ BEGIN
           AND t.source_message_id_norm IS NOT NULL
         LIMIT 1
     ) req ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT t.contour
+        FROM public.transactions t
+        WHERE t.dwh_id = d.dwh_id
+          AND t.contour IS NOT NULL
+        ORDER BY t.log_date DESC NULLS LAST, t.logid DESC
+        LIMIT 1
+    ) ctr ON TRUE
     WHERE d.dwh_id = ANY (p_dwh_ids)
     ON CONFLICT (dwh_id) DO UPDATE SET
         clinic_oid_xml = EXCLUDED.clinic_oid_xml,
@@ -136,6 +151,7 @@ BEGIN
         patient_hash = EXCLUDED.patient_hash,
         doctor_hash = EXCLUDED.doctor_hash,
         request_msgid = EXCLUDED.request_msgid,
+        contour = EXCLUDED.contour,
         updated_at = now()
     -- Change-guard: переписываем строку (и двигаем updated_at) только при реальном
     -- расхождении. Без него полный reconcile (в т.ч. на каждом dwh_init) переписывал
@@ -153,7 +169,8 @@ BEGIN
      OR public.document_attributes.doctor_name IS DISTINCT FROM EXCLUDED.doctor_name
      OR public.document_attributes.patient_hash IS DISTINCT FROM EXCLUDED.patient_hash
      OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash
-     OR public.document_attributes.request_msgid IS DISTINCT FROM EXCLUDED.request_msgid;
+     OR public.document_attributes.request_msgid IS DISTINCT FROM EXCLUDED.request_msgid
+     OR public.document_attributes.contour IS DISTINCT FROM EXCLUDED.contour;
 
     GET DIAGNOSTICS refreshed = ROW_COUNT;
     RETURN refreshed;

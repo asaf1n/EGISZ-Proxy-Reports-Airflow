@@ -199,7 +199,7 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "Наименование клиники"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
     {"enabled": True, "name": "localUid СЭМД"},
-    {"enabled": True, "name": "Сводка ошибки"},
+    {"enabled": True, "name": "Типы ошибки"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Связанное сообщение"},
     {"enabled": True, "name": "LOGID"},
@@ -218,7 +218,7 @@ LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "СЭМД"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
-    {"enabled": True, "name": "Сводка ошибки"},
+    {"enabled": True, "name": "Типы ошибки"},
 ]
 
 LATEST_OPERATIONS_QUERY_FIELDS = [
@@ -229,7 +229,7 @@ LATEST_OPERATIONS_QUERY_FIELDS = [
     ["field", "Документы:semd_label", None],
     ["field", "Документы:semd_local_uid", None],
     ["field", "Документы:semd_emdr_id", None],
-    ["field", "Документы:error_summary", None],
+    ["field", "Документы:error_types", None],
 ]
 
 LATEST_OPERATIONS_COLUMN_SETTINGS = {
@@ -242,7 +242,7 @@ LATEST_OPERATIONS_COLUMN_SETTINGS = {
     '["name","СЭМД"]': {"column_title": "СЭМД", "text_style": "wrap"},
     '["name","Клиника"]': {"column_title": "Клиника"},
     '["name","localUid СЭМД"]': {"column_title": "localUid"},
-    '["name","Сводка ошибки"]': {"column_title": "Сводка ошибки", "text_style": "wrap"},
+    '["name","Типы ошибки"]': {"column_title": "Типы ошибки", "text_style": "wrap"},
     '["name","Host Клиники (ГОСТ VPN)"]': {"column_title": "Host"},
 }
 
@@ -284,7 +284,7 @@ LATEST_OPERATIONS_QUERY = (
     "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", "
     "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
     "semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", "
-    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_summary AS \"Сводка ошибки\" "
+    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" "
     "FROM public.rpt_documents WHERE 1=1 "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] "
     "ORDER BY ips_date DESC LIMIT 50"
@@ -394,7 +394,7 @@ CLINIC_ERROR_VOLUME_QUERY = (
 )
 
 # «Паттерн ошибки» = match_code + match_pattern правила для канонического типа (interpretation).
-# При нескольких правилах на один тип берётся паттерн с наименьшим priority.
+# При нескольких правилах на один тип берётся паттерн самого точного яруса (match_tier).
 ERROR_TYPE_CLINIC_QUERY = (
     "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
     "FROM public.rpt_documents "
@@ -417,7 +417,7 @@ ERROR_TYPE_CLINIC_QUERY = (
     "clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs "
     "FROM period_docs GROUP BY clinic_jid ), "
     "rule_patterns AS ( SELECT interpretation AS error_type, "
-    "(array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern "
+    "(array_agg(COALESCE(match_code, '') || match_pattern ORDER BY match_tier, rule_code))[1] AS error_pattern "
     "FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) "
     'SELECT ec.error_type AS "Тип ошибки", ec.clinic_label AS "Клиника", '
     'COALESCE(rp.error_pattern, ec.error_type) AS "Паттерн ошибки", '
@@ -475,14 +475,19 @@ HEATMAP_VIZ = {
 TOP_ERROR_TYPE_QUERY = (
     "WITH base AS ( "
     'SELECT COALESCE(NULLIF(TRIM(error_category), \'\'), \'Прочие\') AS cat, '
-    'COALESCE(NULLIF(TRIM(error_type), \'\'), \'Неизвестная ошибка\') AS typ, dwh_id '
+    'COALESCE(NULLIF(TRIM(error_type), \'\'), \'Неизвестная ошибка\') AS typ, '
+    "COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, "
+    "is_retryable AS retryable, dwh_id "
     "FROM public.rpt_error_breakdown "
     "WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
     "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
     "totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), "
-    "per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt "
-    "FROM base GROUP BY 1, 2 ) "
-    'SELECT cat AS "Категория ошибки", typ AS "Тип ошибки", cnt AS "Документов", '
+    "per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt "
+    "FROM base GROUP BY 1, 2, 3, 4 ) "
+    'SELECT cat AS "Категория ошибки", typ AS "Тип ошибки", '
+    'resp AS "Зона ответственности", '
+    'CASE WHEN retryable THEN \'да\' ELSE \'нет\' END AS "Устраняется повтором", '
+    'cnt AS "Документов", '
     'ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS "%" '
     "FROM per_type ORDER BY cnt DESC"
 )
@@ -554,6 +559,8 @@ TOP_ERROR_TYPE_TABLE_COLUMNS = [
     {"enabled": True, "name": "Документов"},
     {"enabled": True, "name": "%"},
     {"enabled": True, "name": "Категория ошибки"},
+    {"enabled": True, "name": "Зона ответственности"},
+    {"enabled": True, "name": "Устраняется повтором"},
 ]
 TOP_ERROR_TYPE_COLUMN_FORMATTING = [
     {
@@ -1221,9 +1228,7 @@ def apply_latest_operations(card: dict) -> None:
     viz["table.columns"] = deepcopy(LATEST_OPERATIONS_TABLE_COLUMNS)
     viz["table.cell_column"] = "Клиника"
     viz["table.column_widths"] = [148, 108, 200, 240, 128, 128, 300]
-    cs = viz.setdefault("column_settings", {})
-    for key, value in LATEST_OPERATIONS_COLUMN_SETTINGS.items():
-        cs[key] = value
+    viz["column_settings"] = deepcopy(LATEST_OPERATIONS_COLUMN_SETTINGS)
     strip_chart_keys(viz, card.get("display", "table"))
 
 
@@ -1380,6 +1385,8 @@ def convert_archive_card(card: dict) -> None:
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(ARCHIVE_TABLE_COLUMNS)
     cs = viz.setdefault("column_settings", {})
+    cs.pop('["name","Сводка ошибки"]', None)
+    cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
     cs['["name","dwh_id"]'] = {"column_title": "dwh_id"}
 
 
@@ -1606,10 +1613,6 @@ def apply_01(dash: dict) -> None:
         if dq.get("type") == "native":
             if name != "Детализация контроля качества":
                 dq["native"]["query"] = fix_sql(dq["native"]["query"])
-        elif dq.get("type") == "query":
-            query = dq.get("query", {})
-            if name == "Ошибки: тип × клиника":
-                pass
 
         if name == "Топ типов СЭМД по видам ошибки":
             apply_top_semd_by_error_kind(card)
@@ -1704,16 +1707,13 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
             cs['["name","Клиника"]'] = {"column_title": "Клиника"}
         if card.get("name") == "Журнал документов с ошибками регистрации":
             cs = card.setdefault("visualization_settings", {}).setdefault("column_settings", {})
-            cs['["name","Сводка ошибки"]'] = {"column_title": "Сводка ошибки", "text_style": "wrap"}
+            cs.pop('["name","Сводка ошибки"]', None)
+            cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
             dq = card.get("dataset_query", {})
             if dq.get("type") == "native":
-                q = dq["native"]["query"]
-                q = q.replace("error_summary AS \"Сводка ошибки\"", 'error_summary AS "Сводка ошибки"')
-                if "error_summary" not in q:
-                    q = q.replace('error_type AS "Тип ошибки"', 'error_summary AS "Сводка ошибки"')
-                    q = q.replace("error_text AS error_text", 'error_summary AS "Сводка ошибки"')
-                    q = q.replace('error_text AS "Текст ошибки"', 'error_summary AS "Сводка ошибки"')
-                dq["native"]["query"] = q
+                dq["native"]["query"] = dq["native"]["query"].replace(
+                    'error_summary AS "Сводка ошибки"', 'error_types AS "Типы ошибки"'
+                )
     normalize_dashboard(dash)
     return write_json_if_changed(path, dash)
 

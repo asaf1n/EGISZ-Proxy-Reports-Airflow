@@ -6,8 +6,8 @@ from datetime import datetime
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowSkipException
 from airflow.hooks.base import BaseHook
-from airflow.models import Variable
 
+from egisz_elt.airflow_vars import get_int, get_str
 from egisz_elt.common import (
     DWH_CONN_ID,
     PIPELINE,
@@ -22,10 +22,8 @@ from egisz_elt.common import (
     run_analyze,
 )
 from egisz_elt.reconcile import (
-    count_exchangelog_rows,
     fetch_exchangelog_by_logids,
-    fetch_exchangelog_logids,
-    get_all_raw_logids,
+    fetch_reconcile_window_sets,
     transform_missing_windows,
 )
 
@@ -44,7 +42,7 @@ def _proxy_connection():
 
 @dag(
     dag_id="egisz_reconcile_dag",
-    schedule=Variable.get("reconcile_schedule", default_var="@daily"),
+    schedule=get_str("reconcile_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
@@ -53,8 +51,9 @@ def _proxy_connection():
 def egisz_reconcile_pipeline() -> None:
     @task(pool=DWH_POOL)
     def reconcile_proxy_raw() -> int:
-        """Full source↔raw constancy check: every EXCHANGELOG LOGID against exchangelog_raw."""
-        max_logids = int(Variable.get("reconcile_max_logids", default_var=20000000))
+        """Set-diff source↔raw for EXCHANGELOG LOGIDs within the configured lookback window."""
+        max_logids = get_int("reconcile_max_logids")
+        lookback_days = get_int("reconcile_lookback_days")
 
         pg_conn = _dwh_connection()
         try:
@@ -73,22 +72,24 @@ def egisz_reconcile_pipeline() -> None:
 
             fb_conn = _proxy_connection()
             try:
-                source_count = count_exchangelog_rows(fb_conn)
-                if source_count > max_logids:
-                    raise RuntimeError(
-                        f"Reconcile aborted: source has {source_count} LOGID(s) > guard "
-                        f"{max_logids}. Raise reconcile_max_logids or implement batched diff."
-                    )
-
-                source_logids = fetch_exchangelog_logids(fb_conn)
-                raw_logids = get_all_raw_logids(pg_conn)
+                since, source_logids, raw_logids, source_count = fetch_reconcile_window_sets(
+                    pg_conn,
+                    fb_conn,
+                    lookback_days=lookback_days,
+                    max_logids=max_logids,
+                )
                 missing = sorted(source_logids - raw_logids)
                 if not missing:
-                    log.info("Reconcile: all %s source LOGID(s) present in raw.", source_count)
+                    log.info(
+                        "Reconcile: all %s source LOGID(s) present in raw (%s-day window).",
+                        source_count,
+                        lookback_days,
+                    )
                     return 0
                 log.info(
-                    "Reconcile: %s row(s) missing from raw across full range, span %s..%s.",
+                    "Reconcile: %s row(s) missing from raw in %s-day window, span %s..%s.",
                     len(missing),
+                    lookback_days,
                     missing[0],
                     missing[-1],
                 )

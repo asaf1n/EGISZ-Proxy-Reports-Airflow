@@ -127,7 +127,18 @@ create_or_update_model() {
   model_name="$(jq -r '.name' "${model_file}")"
   table_ref="$(jq -r '.table_ref' "${model_file}")"
   description="$(jq -r '.description // ""' "${model_file}")"
-  table_id="$(table_id_for_ref "${table_ref}")"
+  # sync_schema асинхронный: на свежем Metabase снапшот метадаты может быть снят до того,
+  # как первый скан обнаружит таблицы DWH. Перечитываем с ресинком, как apply_field_metadata.
+  local table_attempt
+  for table_attempt in $(seq 1 10); do
+    table_id="$(table_id_for_ref "${table_ref}")"
+    [ -n "${table_id}" ] && break
+    if [ "${table_attempt}" -lt 10 ]; then
+      log_info "Table ${table_ref} not in Metabase metadata; resyncing schema (attempt ${table_attempt}/10)"
+      refresh_db_metadata
+      sleep 5
+    fi
+  done
   [ -n "${table_id}" ] || fail "Metabase table id not found for ${table_ref}"
 
   payload="$(jq -nc \

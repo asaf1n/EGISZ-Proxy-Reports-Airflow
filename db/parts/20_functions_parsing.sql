@@ -268,6 +268,25 @@ AS $$
     SELECT lower(NULLIF(btrim(public.clean_text_value(p_local_uid)), ''));
 $$;
 
+-- Контур обмена (направление интеграции с ЕГИСЗ) для строки журнала.
+-- Первичный признак — wsa:Action payload'а: ИЭМК ходит по IHE XDS.b (urn:ihe:*),
+-- всё остальное — РЭМД. Запасной признак — порт сервиса клиники в LOGTEXT:
+-- 9921 = ИЭМК, 9945 = РЭМД (конвенция настроек клиник; прочие порты контур
+-- не определяют). Порт — условный признак, приоритет всегда у action.
+CREATE OR REPLACE FUNCTION public.exchange_contour(p_action text, p_logtext text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN p_action ILIKE 'urn:ihe%' THEN 'ИЭМК'
+        WHEN NULLIF(btrim(COALESCE(p_action, '')), '') IS NOT NULL THEN 'РЭМД'
+        WHEN COALESCE(p_logtext, '') ~ ':9921(\D|$)' THEN 'ИЭМК'
+        WHEN COALESCE(p_logtext, '') ~ ':9945(\D|$)' THEN 'РЭМД'
+        ELSE NULL
+    END;
+$$;
+
 -- Разложение payload EXCHANGELOG: каждый XML-тег и regex-маркер статуса
 -- вычисляется ровно один раз; transform и связка документов читают transactions (xml_*).
 -- DROP перед CREATE: jid_from_payload integer→bigint меняет тип возврата (JID > int4).
@@ -320,6 +339,7 @@ DECLARE
     v_organization_oid text;
     v_error_code_xml text;
     v_code_xml text;
+    v_faultcode text;
     v_error_message text;
     v_message_xml text;
     v_faultstring text;
@@ -357,6 +377,9 @@ BEGIN
     v_organization_oid := public.xml_text(p_msgtext, 'organizationOid');
     v_error_code_xml := public.xml_text(p_msgtext, 'errorCode');
     v_code_xml := public.xml_text(p_msgtext, 'code');
+    -- SOAP-fault без <code>/<errorCode> нёс код только в <faultcode>; значение приходит
+    -- с namespace-префиксом ('soap:Server') — оставляем локальную часть в UPPERCASE.
+    v_faultcode := NULLIF(upper(regexp_replace(public.xml_text(p_msgtext, 'faultcode'), '^[^:]*:', '')), '');
     v_error_message := public.xml_text(p_msgtext, 'errorMessage');
     v_message_xml := public.xml_text(p_msgtext, 'message');
     v_faultstring := public.xml_text(p_msgtext, 'faultstring');
@@ -393,7 +416,7 @@ BEGIN
         v_kind_xml,
         public.clean_text_value(v_doc_number_xml),
         public.clean_text_value(COALESCE(v_organization, v_organization_oid)),
-        COALESCE(v_error_code_xml, v_code_xml),
+        COALESCE(v_error_code_xml, v_code_xml, v_faultcode),
         COALESCE(v_error_message, v_message_xml, v_faultstring),
         lower(COALESCE(v_status_xml, '')),
         v_document_status,

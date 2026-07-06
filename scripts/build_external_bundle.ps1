@@ -101,6 +101,8 @@ function Build-AirflowBundle {
     @($header) + (Get-ProjectDependencies) |
         Out-File -Encoding ascii (Join-Path $bundle "requirements.txt")
 
+    Copy-BundleItem (Join-Path $RepoRoot "k8s\airflow\egisz-variables.json") (Join-Path $bundle "egisz-variables.json")
+
     Complete-Bundle "airflow" $bundle "deploy\external-airflow\README.md"
 }
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
-from airflow.models import Variable
 
+from egisz_elt.airflow_vars import get_int, get_str
 from egisz_elt.common import (
     DWH_CONN_ID,
     PROXY_CONN_ID,
@@ -29,7 +29,7 @@ def _proxy_connection():
 
 @dag(
     dag_id="egisz_extract_dag",
-    schedule=Variable.get("extract_schedule", default_var="*/5 * * * *"),
+    schedule=get_str("extract_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
@@ -44,22 +44,26 @@ def egisz_extract_pipeline() -> None:
             return extract.extract_exchangelog(
                 pg_conn,
                 fb_conn,
-                raw_rows=int(Variable.get("extract_raw_rows", default_var=2000)),
-                raw_rounds=int(Variable.get("extract_raw_rounds", default_var=3)),
+                raw_rows=get_int("extract_raw_rows"),
+                raw_rounds=get_int("extract_raw_rounds"),
             )
         finally:
             fb_conn.close()
             pg_conn.close()
 
-    @task(pool=DWH_POOL)
+    # Ретраи гасят транзиентный DeadlockDetected: maintenance-прогоны схемы (полный
+    # reconcile_document_attributes / recompute в 90-й части) пересекаются с 5-минутным
+    # батчем по блокировкам documents/document_attributes; откат + повтор безопасны
+    # (transform идемпотентен, watermark двигается только после успеха).
+    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1))
     def transform_exchangelog(load_info: BatchMetadata) -> PipelineBatchInfo:
         pg_conn = _dwh_connection()
         try:
             return extract.transform_exchangelog(
                 pg_conn,
                 load_info,
-                transform_rows=int(Variable.get("transform_rows", default_var=5000)),
-                transform_rounds=int(Variable.get("transform_rounds", default_var=6)),
+                transform_rows=get_int("transform_rows"),
+                transform_rounds=get_int("transform_rounds"),
             )
         finally:
             pg_conn.close()

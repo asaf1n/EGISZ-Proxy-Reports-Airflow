@@ -15,9 +15,11 @@ airflow/                     # корень бандла (dist/external/airflow)
 │   ├── common.py            # подключения, watermark, raw-load, transform, mart-maintenance
 │   ├── extract.py           # выборка EXCHANGELOG (keyset по LOGID) + transform-циклы
 │   ├── dimensions.py        # справочники JPERSONS / EGISZ_LICENSES → dim_*
-│   └── reconcile.py         # полная сверка источник↔raw
+│   ├── reconcile.py         # полная сверка источник↔raw
+│   └── airflow_vars.py      # ключи и дефолты Airflow Variables
 ├── pyproject.toml           # для установки пакета через pip install .
 ├── requirements.txt         # рантайм-зависимости (сгенерирован из pyproject.toml)
+├── egisz-variables.json     # дефолты Airflow Variables (импорт в Admin → Variables)
 └── BUILD_INFO.txt           # git-коммит и дата сборки бандла
 ```
 
@@ -87,10 +89,15 @@ airflow connections add proxy_egisz_fb \
 airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched mart maintenance"
 ```
 
-## 4. Airflow Variables (необязательно — есть дефолты через `default_var`)
+## 4. Airflow Variables (редактируются в Admin → Variables)
 
-Задавать только если нужно отличное от дефолта. Расписания читаются на parse-time DAG
-(смена подхватится при следующем парсинге DAG-файлов).
+При первом `up.ps1 -Action Airflow` или вручную через импорт `egisz-variables.json`
+Variables создаются с дефолтами ниже. Уже существующие ключи **не перезаписываются**.
+DAG читает их через `egisz_elt.airflow_vars`; если Variable отсутствует — берётся
+тот же дефолт из кода.
+
+Расписания читаются на parse-time DAG (смена подхватится при следующем парсинге
+DAG-файлов).
 
 | Variable | Дефолт | Назначение |
 | --- | --- | --- |
@@ -101,12 +108,17 @@ airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched
 | `transform_rounds` | `6` | Максимум transform-циклов за один запуск |
 | `dimensions_schedule` | `@hourly` | Расписание dimensions-DAG |
 | `reconcile_schedule` | `@daily` | Расписание reconcile-DAG |
-| `reconcile_max_logids` | `20000000` | Порог memory-guard полной сверки (выше — hard-fail) |
+| `reconcile_lookback_days` | `30` | Глубина поиска записей при сверке (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
+| `reconcile_max_logids` | `20000000` | Порог memory-guard: макс. число LOGID **внутри окна** `reconcile_lookback_days` (выше — hard-fail) |
+
+Импорт на целевом контуре (UI: Admin → Variables → Import, или CLI):
 
 ```bash
-airflow variables set extract_schedule '*/5 * * * *'
-# … остальные по необходимости
+airflow variables import egisz-variables.json
 ```
+
+Файл `egisz-variables.json` лежит в бандле рядом с `requirements.txt`.
+При импорте через UI выберите **Skip if exists**, чтобы не затереть уже изменённые значения.
 
 ## 5. DAG, которые появятся
 
@@ -114,7 +126,7 @@ airflow variables set extract_schedule '*/5 * * * *'
 | --- | --- | --- |
 | `egisz_extract_dag` | `*/5` | `extract_exchangelog → transform_exchangelog` |
 | `egisz_dimensions_dag` | `@hourly` | `sync_dimensions` (+ обновление enriched-марта при изменениях) |
-| `egisz_reconcile_dag` | `@daily` | `reconcile_proxy_raw` (полная сверка источник↔raw, watermark не двигает) |
+| `egisz_reconcile_dag` | `@daily` | `reconcile_proxy_raw` (сверка источник↔raw за последние N дней, watermark не двигает) |
 
 Все три `max_active_runs=1`, `catchup=False`. Watermark `elt_state.last_logid` двигает только
 transform-шаг extract-DAG (через `GREATEST`, без отката). Новые DAG создаются на паузе —

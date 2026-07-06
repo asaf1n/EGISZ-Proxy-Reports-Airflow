@@ -192,22 +192,17 @@ $$;
 
 UPDATE public.documents d
 SET error_text = src.error_text,
-    error_summary = src.error_summary,
     updated_at = now()
 FROM (
     SELECT DISTINCT ON (f.dwh_id)
         f.dwh_id,
-        NULLIF(btrim(f.error_json_text), '') AS error_text,
-        NULLIF(btrim(f.error_summary), '') AS error_summary
+        NULLIF(btrim(f.error_json_text), '') AS error_text
     FROM public.transactions f
-    WHERE COALESCE(NULLIF(btrim(f.error_json_text), ''), NULLIF(btrim(f.error_summary), '')) IS NOT NULL
+    WHERE NULLIF(btrim(f.error_json_text), '') IS NOT NULL
     ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
 ) src
 WHERE d.dwh_id = src.dwh_id
-  AND (
-      d.error_text IS DISTINCT FROM src.error_text
-      OR d.error_summary IS DISTINCT FROM src.error_summary
-  );
+  AND d.error_text IS DISTINCT FROM src.error_text;
 
 -- Полная сборка атрибутов документов при init.
 SELECT public.reconcile_document_attributes(NULL::text[]);

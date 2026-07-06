@@ -5,8 +5,8 @@ from datetime import datetime
 
 from airflow.decorators import dag, task
 from airflow.hooks.base import BaseHook
-from airflow.models import Variable
 
+from egisz_elt.airflow_vars import get_str
 from egisz_elt.common import (
     DWH_CONN_ID,
     PROXY_CONN_ID,
@@ -33,7 +33,7 @@ def _proxy_connection():
 
 @dag(
     dag_id="egisz_dimensions_dag",
-    schedule=Variable.get("dimensions_schedule", default_var="@hourly"),
+    schedule=get_str("dimensions_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,

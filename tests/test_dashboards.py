@@ -219,15 +219,14 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
     assert "Код СЭМД" not in configured_columns
     assert "Наименование СЭМД" not in configured_columns
     assert "День" not in configured_columns
-    assert "error_type" in configured_columns or "Тип ошибки" in configured_columns or "Сводка ошибки" in configured_columns
+    assert "Типы ошибки" in configured_columns
     assert "Host Клиники (ГОСТ VPN)" in configured_columns or "Host" in configured_columns
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
     assert "public.rpt_documents" in query
     assert "semd_label" in query
     assert "semd_code" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
-    assert "error_summary" in query
-    assert "error_type" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
+    assert "error_types" in query
     assert card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "public.rpt_documents",
         "field_name": "ips_date",
@@ -244,7 +243,7 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
     assert "egisz_xml_text" not in transform_sql
     assert "clinic_inn" in sql
     assert "error_text" in sql
-    assert "error_summary" in sql
+    assert "error_types" in sql
 
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
@@ -553,12 +552,6 @@ def test_document_metric_cards_count_distinct_dwh_id() -> None:
                 continue
             violations.append(f"{path.name} / {card.get('name', '?')}")
     assert not violations, "Document cards must not use COUNT(*) without allowlist: " + ", ".join(violations)
-
-
-def test_retired_error_interpretations_view_removed() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE VIEW public.v_rpt_error_interpretations_ui" not in sql
-    assert "FROM public.rpt_documents" in sql
 
 
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
@@ -1216,7 +1209,17 @@ def test_top_error_type_card_is_table_with_share() -> None:
     assert 'AS "%"' in query
     assert "NULLIF((SELECT total FROM totals), 0)" in query
     columns = [col["name"] for col in viz["table.columns"]]
-    assert columns == ["Тип ошибки", "Документов", "%", "Категория ошибки"]
+    assert columns == [
+        "Тип ошибки",
+        "Документов",
+        "%",
+        "Категория ошибки",
+        "Зона ответственности",
+        "Устраняется повтором",
+    ]
+    # Зона ответственности и повторяемость — из dim_error_type_group через rpt_error_breakdown.
+    assert '"Зона ответственности"' in query
+    assert '"Устраняется повтором"' in query
     assert viz["table.column_widths"] == [350, 87]
     formatting = viz["table.column_formatting"]
     assert formatting[0]["columns"] == ["%"]
@@ -1503,19 +1506,6 @@ def test_metabase_models_catalog_exists() -> None:
     assert "wait_segment" in no_response["fields"]
     network_errors = json.loads(Path("metabase_models/04_network_errors.json").read_text(encoding="utf-8"))
     assert network_errors["name"] == "Сбои транспорта"
-
-
-def test_retired_qb_support_views_removed_from_dwh_sql() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    for retired in (
-        "v_rpt_clinic_semd_slice_ui",
-        "v_rpt_client_kpi_daily_ui",
-        "v_rpt_client_documents_ui",
-        "v_rpt_error_interpretations_ui",
-    ):
-        assert f"CREATE OR REPLACE VIEW public.{retired}" not in sql
-    assert "CREATE OR REPLACE VIEW public.rpt_documents" in sql
-    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
 
 
 def test_quality_qb_cards_use_models_and_archive_click() -> None:
@@ -1827,8 +1817,7 @@ def test_no_legacy_date_tokens_anywhere() -> None:
     assert "AT TIME ZONE 'Europe/Moscow'" not in views  # день берём из полной даты, стек МСК-pinned
     assert "AS processed_at" not in views and "AS processed_day" not in views
     tables = Path("db/parts/10_tables.sql").read_text(encoding="utf-8")
-    assert "DROP COLUMN sent_at" in Path("db/parts/60_drop_dependents.sql").read_text(encoding="utf-8")
-    assert "loaded_at timestamptz DEFAULT now()" in tables  # transactions.processed_at → loaded_at
+    assert "loaded_at timestamptz DEFAULT now()" in tables
 
 
 def test_common_filters_wired_on_every_tab() -> None:

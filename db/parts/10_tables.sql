@@ -13,8 +13,9 @@ CREATE TABLE IF NOT EXISTS elt_state (
 );
 
 -- Дата-отсечка источника снята: forward-выборка идёт только по LOGID-курсору, а
--- reconcile_proxy_raw (DAG egisz_reconcile_dag) делает полный set-diff константности
--- источник↔raw по всем LOGID (не полосу) без сдвига watermark —
+-- reconcile_proxy_raw (DAG egisz_reconcile_dag) делает set-diff константности
+-- источник↔raw по LOGID в окне lookback (reconcile_lookback_days) с memory-guard
+-- reconcile_max_logids на объём этого окна; watermark не двигает —
 -- см. README.md §«Полная сверка константности источник↔raw».
 ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
 
@@ -34,6 +35,15 @@ CREATE TABLE IF NOT EXISTS exchangelog_raw (
 );
 
 ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
+
+-- Маркер попытки парсинга (по LOGID). parse_targets в transform_raw_to_facts должен
+-- отличать «ещё не парсили» от «парсили, но payload без реквизитов»: строки без
+-- msgid/localUid/emdrId/getDocumentFile не проходят фильтр вставки в transactions,
+-- и анти-джойн по transactions.xml_parsed_at перепарсивал их каждым полножурнальным
+-- lookback'ом reconcile (~65 тыс. строк, ~5,9 мс/строка ≈ 6,4 мин на окно).
+CREATE TABLE IF NOT EXISTS exchangelog_parse_attempts (
+    logid bigint PRIMARY KEY
+);
 
 CREATE TABLE IF NOT EXISTS documents (
     dwh_id text PRIMARY KEY,
@@ -58,112 +68,6 @@ CREATE TABLE IF NOT EXISTS documents (
     updated_at timestamptz DEFAULT now()
 );
 
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'document_key'
-    ) THEN
-        ALTER TABLE public.documents RENAME COLUMN document_key TO dwh_id;
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'transactions' AND column_name = 'document_key'
-    ) THEN
-        ALTER TABLE public.transactions RENAME COLUMN document_key TO dwh_id;
-    END IF;
-END $$;
-
-DO $$
-BEGIN
-    IF to_regclass('public.fact_documents') IS NOT NULL
-       AND to_regclass('public.documents') IS NULL THEN
-        ALTER TABLE public.fact_documents RENAME TO documents;
-    END IF;
-    IF to_regclass('public.fact_transactions') IS NOT NULL
-       AND to_regclass('public.transactions') IS NULL THEN
-        ALTER TABLE public.fact_transactions RENAME TO transactions;
-    END IF;
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = 'transactions'
-          AND column_name = 'exchangelog_log_id'
-    ) THEN
-        ALTER TABLE public.transactions RENAME COLUMN exchangelog_log_id TO logid;
-    END IF;
-END $$;
-
-DO $$
-DECLARE
-    part record;
-BEGIN
-    FOR part IN
-        SELECT c.relname AS old_name,
-               replace(c.relname, 'fact_transactions_', 'transactions_') AS new_name
-        FROM pg_class c
-        JOIN pg_inherits i ON i.inhrelid = c.oid
-        JOIN pg_class p ON p.oid = i.inhparent
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND p.relname = 'transactions'
-          AND c.relname LIKE 'fact_transactions\_%' ESCAPE '\'
-          AND to_regclass(
-              'public.' || replace(c.relname, 'fact_transactions_', 'transactions_')
-          ) IS NULL
-    LOOP
-        EXECUTE format('ALTER TABLE public.%I RENAME TO %I', part.old_name, part.new_name);
-    END LOOP;
-END $$;
-
-DROP INDEX IF EXISTS idx_fact_document_key;
-DROP INDEX IF EXISTS idx_dim_exchangelog_refs_document_key;
-
--- documents.error_type всегда хранил ПОЛНЫЙ список канонических типов через ' · '
--- (один документ — один или несколько типов). Имя вводило в заблуждение и
--- конфликтовало с атомарным rpt_error_breakdown.error_type. Переименовываем в
--- error_types (множественное) как единый источник списка типов документа.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'error_type'
-    ) AND NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = 'error_types'
-    ) THEN
-        ALTER TABLE public.documents RENAME COLUMN error_type TO error_types;
-    END IF;
-END $$;
-
--- Единое именование транспорта СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
--- callback_log_id вводил в заблуждение (для network_error исход — сбой LOGSTATE=3, не callback),
--- message_id/relates_to_id на грейне документа — это MSGID/relatesTo ответа РЭМД. Переименование
--- идемпотентно: мигрирует только при наличии старого имени и отсутствии нового.
-DO $$
-DECLARE
-    rn record;
-BEGIN
-    FOR rn IN
-        SELECT * FROM (VALUES
-            ('source_logid',   'request_logid'),
-            ('callback_log_id','result_logid'),
-            ('message_id',     'result_msgid'),
-            ('relates_to_id',  'relates_to_msgid')
-        ) AS m(old_name, new_name)
-    LOOP
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = rn.old_name
-        ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'documents' AND column_name = rn.new_name
-        ) THEN
-            EXECUTE format('ALTER TABLE public.documents RENAME COLUMN %I TO %I', rn.old_name, rn.new_name);
-        END IF;
-    END LOOP;
-END $$;
-
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS local_uid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
@@ -177,7 +81,6 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_types text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_text text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS doctor_hash text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS request_logid bigint;
@@ -211,8 +114,6 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_version_number integer;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS superseded_by_dwh_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS supersedes_dwh_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_current_version boolean;
--- setId в журнале отсутствует и источник его не отдаёт — зарезервированную колонку убираем.
-ALTER TABLE documents DROP COLUMN IF EXISTS semd_set_id;
 
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid bigint PRIMARY KEY,
@@ -550,7 +451,6 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS dwh_id text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_type text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_json_text text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_summary text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_name_masked text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS snils_masked text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_name text;
@@ -572,6 +472,8 @@ BEGIN
 END $$;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_action text;
+-- Контур обмена ('РЭМД'|'ИЭМК'|NULL) — см. exchange_contour().
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS contour text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_dwh_id text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_local_uid text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_emdr_id text;
@@ -823,3 +725,19 @@ CREATE INDEX IF NOT EXISTS idx_transactions_xml_relates_to_id ON transactions (x
 CREATE INDEX IF NOT EXISTS idx_transactions_source_action_gdf
     ON transactions (source_action, logid DESC)
     WHERE source_action = 'getDocumentFile';
+-- gdf_ref (50_transform): последнее событие getDocumentFile клиники до logid колбэка.
+-- Поиск по (jid, logid DESC) держит цепочку O(log) на партицию вместо обратного обхода
+-- журнала с resolve_document_jid на чтении (вырождение при полножурнальном lookback).
+CREATE INDEX IF NOT EXISTS idx_transactions_gdf_jid_logid
+    ON transactions (jid, logid DESC)
+    WHERE source_action = 'getDocumentFile' AND jid IS NOT NULL;
+
+-- Разовый бэкфилл маркера попытки парсинга: всё, что легло в transactions с xml_parsed_at,
+-- уже парсилось. Строки без реквизитов доберутся первым transform-батчом, накрывающим их
+-- диапазон, и перестанут перепарсиваться. Идемпотентно: ON CONFLICT DO NOTHING.
+INSERT INTO exchangelog_parse_attempts (logid)
+SELECT logid FROM transactions WHERE xml_parsed_at IS NOT NULL
+ON CONFLICT (logid) DO NOTHING;
+
+-- Статистика нужна планировщику анти-джойна parse_targets сразу после массового бэкфилла.
+ANALYZE exchangelog_parse_attempts;

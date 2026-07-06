@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import psycopg2
@@ -10,32 +11,86 @@ from egisz_elt.common import serialize_exchangelog_row, transform_raw_to_facts
 log = logging.getLogger(__name__)
 
 
-def count_exchangelog_rows(con: Any) -> int:
-    """Count all EXCHANGELOG rows in the proxy journal.
+class ReconcileWindowVolumeError(RuntimeError):
+    """Source row count inside the lookback window exceeds reconcile_max_logids."""
 
-    Cheap COUNT used as a memory guard before the full LOGID set is pulled into the worker —
-    see README.md §«Полная сверка константности источник↔raw».
+
+def reconcile_window_since(
+    lookback_days: int,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    anchor = now or datetime.now(timezone.utc)
+    return anchor - timedelta(days=lookback_days)
+
+
+def fetch_reconcile_window_sets(
+    pg_conn: psycopg2.extensions.connection,
+    fb_conn: Any,
+    *,
+    lookback_days: int,
+    max_logids: int,
+    now: datetime | None = None,
+) -> tuple[datetime, set[int], set[int], int]:
+    """Set-diff source↔raw LOGIDs inside the lookback window.
+
+    Both ``reconcile_lookback_days`` and ``reconcile_max_logids`` apply together:
+    only rows with ``COALESCE(date) >= since`` are counted and diffed; if that
+    count exceeds ``max_logids``, raises ``ReconcileWindowVolumeError``.
+    """
+    since = reconcile_window_since(lookback_days, now=now)
+    source_count = count_exchangelog_rows(fb_conn, since=since)
+    if source_count > max_logids:
+        raise ReconcileWindowVolumeError(
+            f"Reconcile aborted: source has {source_count} LOGID(s) in the "
+            f"{lookback_days}-day window > guard {max_logids}. "
+            "Raise reconcile_max_logids, narrow reconcile_lookback_days, "
+            "or implement batched diff."
+        )
+
+    source_logids = fetch_exchangelog_logids(fb_conn, since=since)
+    raw_logids = get_all_raw_logids(pg_conn, since=since)
+    return since, source_logids, raw_logids, source_count
+
+
+def count_exchangelog_rows(con: Any, *, since: datetime | None = None) -> int:
+    """Count EXCHANGELOG rows in the proxy journal, optionally within a date window.
+
+    Cheap COUNT used as a memory guard before the LOGID set is pulled into the worker.
+    ``since`` filters on ``COALESCE(LOGDATE, CREATEDATE)``.
     """
     cur = con.cursor()
     try:
-        cur.execute("SELECT COUNT(*) FROM EXCHANGELOG")
+        if since is None:
+            cur.execute("SELECT COUNT(*) FROM EXCHANGELOG")
+        else:
+            cur.execute(
+                "SELECT COUNT(*) FROM EXCHANGELOG "
+                "WHERE COALESCE(LOGDATE, CREATEDATE) >= ?",
+                (since,),
+            )
         row = cur.fetchone()
         return int(row[0] or 0)
     finally:
         cur.close()
 
 
-def fetch_exchangelog_logids(con: Any) -> set[int]:
-    """Return the full set of EXCHANGELOG LOGIDs from the proxy journal.
+def fetch_exchangelog_logids(con: Any, *, since: datetime | None = None) -> set[int]:
+    """Return EXCHANGELOG LOGIDs from the proxy journal, optionally within a date window.
 
-    The whole journal is materialized as one set so reconcile can set-diff it against the whole
-    of ``exchangelog_raw`` — rows that landed out of LOGID order below the watermark are
-    invisible to the forward cursor (`LOGID > last_logid`) and only a full-range diff finds
-    them. See README.md §«Полная сверка константности источник↔raw».
+    Reconcile set-diffs this set against ``exchangelog_raw`` so rows that landed out of LOGID
+    order below the watermark are still found. ``since`` filters on ``COALESCE(LOGDATE, CREATEDATE)``.
     """
     cur = con.cursor()
     try:
-        cur.execute("SELECT LOGID FROM EXCHANGELOG")
+        if since is None:
+            cur.execute("SELECT LOGID FROM EXCHANGELOG")
+        else:
+            cur.execute(
+                "SELECT LOGID FROM EXCHANGELOG "
+                "WHERE COALESCE(LOGDATE, CREATEDATE) >= ?",
+                (since,),
+            )
         return {int(row[0]) for row in cur.fetchall()}
     finally:
         cur.close()
@@ -73,14 +128,24 @@ def fetch_exchangelog_by_logids(
         cur.close()
 
 
-def get_all_raw_logids(con: psycopg2.extensions.connection) -> set[int]:
-    """Return every LOGID present in exchangelog_raw.
+def get_all_raw_logids(
+    con: psycopg2.extensions.connection,
+    *,
+    since: datetime | None = None,
+) -> set[int]:
+    """Return LOGIDs present in exchangelog_raw, optionally within a date window.
 
-    The full raw set is the Postgres side of the constancy set-diff against the proxy journal —
-    see README.md §«Полная сверка константности источник↔raw».
+    Postgres side of the reconcile set-diff. ``since`` filters on ``COALESCE(createdate, logdate)``.
     """
     with con.cursor() as cur:
-        cur.execute("SELECT logid FROM exchangelog_raw")
+        if since is None:
+            cur.execute("SELECT logid FROM exchangelog_raw")
+        else:
+            cur.execute(
+                "SELECT logid FROM exchangelog_raw "
+                "WHERE COALESCE(createdate, logdate) >= %s",
+                (since,),
+            )
         return {int(row[0]) for row in cur.fetchall()}
 
 

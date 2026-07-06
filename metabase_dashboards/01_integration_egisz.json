@@ -83,7 +83,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_summary AS \"Сводка ошибки\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
+          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -162,63 +162,32 @@
           },
           {
             "enabled": true,
-            "name": "Сводка ошибки"
+            "name": "Типы ошибки"
           }
         ],
         "column_settings": {
-          "[\"name\",\"localUid СЭМД\"]": {
-            "column_title": "localUid"
-          },
-          "[\"name\",\"Статус\"]": {
-            "column_title": "Статус"
-          },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки",
-            "text_style": "wrap"
-          },
-          "[\"name\",\"OID Клиники\"]": {
-            "column_title": "OID Клиники"
-          },
           "[\"name\",\"Дата обработки\"]": {
             "column_title": "Обработано IPS",
             "date_abbreviate": true,
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
           },
-          "[\"name\",\"Host Клиники (ГОСТ VPN)\"]": {
-            "column_title": "Host"
-          },
-          "[\"name\",\"Наименование СЭМД\"]": {
-            "column_title": "Наименование СЭМД"
-          },
-          "[\"name\",\"ИНН Клиники\"]": {
-            "column_title": "ИНН Клиники"
-          },
-          "[\"name\",\"Код СЭМД\"]": {
-            "column_title": "Код СЭМД"
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД",
             "text_style": "wrap"
-          },
-          "[\"name\",\"СЭМД CreateDate\"]": {
-            "column_title": "СЭМД CreateDate"
-          },
-          "[\"name\",\"Наименование клиники\"]": {
-            "column_title": "Клиника"
           },
           "[\"name\",\"Клиника\"]": {
             "column_title": "Клиника"
           },
-          "[\"name\",\"Связанное сообщение\"]": {
-            "column_title": "relatesToMessage (коррелятор XML, не UID СЭМД)"
+          "[\"name\",\"localUid СЭМД\"]": {
+            "column_title": "localUid"
           },
-          "[\"name\",\"Исходный текст ошибки\"]": {
-            "column_title": "Исходный текст ошибки"
-          },
-          "[\"name\",\"СЭМД\"]": {
-            "column_title": "СЭМД",
+          "[\"name\",\"Типы ошибки\"]": {
+            "column_title": "Типы ошибки",
             "text_style": "wrap"
+          },
+          "[\"name\",\"Host Клиники (ГОСТ VPN)\"]": {
+            "column_title": "Host"
           }
         }
       },
@@ -565,7 +534,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, is_retryable AS retryable, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -634,6 +603,14 @@
           {
             "enabled": true,
             "name": "Категория ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Зона ответственности"
+          },
+          {
+            "enabled": true,
+            "name": "Устраняется повтором"
           }
         ],
         "version": 2,
@@ -3341,7 +3318,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, is_retryable AS retryable, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3410,6 +3387,14 @@
           {
             "enabled": true,
             "name": "Категория ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Зона ответственности"
+          },
+          {
+            "enabled": true,
+            "name": "Устраняется повтором"
           }
         ],
         "version": 2,
@@ -3547,93 +3532,6 @@
           "Некорректно заполнен телефон": {
             "color": "#B07AA1"
           },
-          "Ошибка XSD-валидации XML": {
-            "color": "#B07AA1"
-          },
-          "Документ уже зарегистрирован в РЭМД": {
-            "color": "#E15759"
-          },
-          "Данные пациента не соответствуют ГИП": {
-            "color": "#4E79A7"
-          },
-          "Должность врача не соответствует данным ФРМР": {
-            "color": "#59A14F"
-          },
-          "Медработник не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Данные медработника не соответствуют ФРМР": {
-            "color": "#59A14F"
-          },
-          "Подписант из сертификата не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Данные подписи не соответствуют данным документа": {
-            "color": "#F28E2B"
-          },
-          "Неактуальная версия справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Код отсутствует в справочнике НСИ": {
-            "color": "#EDC948"
-          },
-          "Наименование не соответствует справочнику НСИ": {
-            "color": "#EDC948"
-          },
-          "Ошибка справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС": {
-            "color": "#76B7B2"
-          },
-          "ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные": {
-            "color": "#76B7B2"
-          },
-          "Метаописание документа не соответствует зарегистрированному в РЭМД": {
-            "color": "#E15759"
-          },
-          "Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Запрашиваемая запись ЭМД не найдена в предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "ИС не передала файл ЭМД в ответе getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Не удалось получить файл ЭМД из предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "Недействительный сертификат подписи": {
-            "color": "#F28E2B"
-          },
-          "Сертификат подписи недействителен на дату создания документа": {
-            "color": "#F28E2B"
-          },
-          "Не удалось проверить электронную подпись": {
-            "color": "#F28E2B"
-          },
-          "СНИЛС не найден или не соответствует данным пациента/медработника": {
-            "color": "#4E79A7"
-          },
-          "Получатель из запроса не найден в СЭМД": {
-            "color": "#4E79A7"
-          },
-          "Вид документа не актуален на дату создания": {
-            "color": "#E15759"
-          },
-          "Подразделение или запись справочника не найдены на дату документа": {
-            "color": "#E15759"
-          },
-          "Отчество врача не соответствует данным СЭМД": {
-            "color": "#59A14F"
-          },
-          "РЭМД не смог обработать запрос": {
-            "color": "#9C755F"
-          },
-          "Техническая ошибка на стороне РЭМД": {
-            "color": "#9C755F"
-          },
           "Специальность врача не соответствует справочнику НСИ": {
             "color": "#59A14F"
           },
@@ -3664,6 +3562,75 @@
           "Данные организации автора документа не заполнены": {
             "color": "#59A14F"
           },
+          "Подписант из сертификата не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "РЭМД не смог обработать запрос": {
+            "color": "#9C755F"
+          },
+          "Документ уже зарегистрирован в РЭМД": {
+            "color": "#E15759"
+          },
+          "Данные пациента не соответствуют ГИП": {
+            "color": "#4E79A7"
+          },
+          "Должность врача не соответствует данным ФРМР": {
+            "color": "#59A14F"
+          },
+          "Медработник не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Данные медработника не соответствуют ФРМР": {
+            "color": "#59A14F"
+          },
+          "Данные подписи не соответствуют данным документа": {
+            "color": "#F28E2B"
+          },
+          "Неактуальная версия справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "Код отсутствует в справочнике НСИ": {
+            "color": "#EDC948"
+          },
+          "Наименование не соответствует справочнику НСИ": {
+            "color": "#EDC948"
+          },
+          "ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС": {
+            "color": "#76B7B2"
+          },
+          "ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные": {
+            "color": "#76B7B2"
+          },
+          "Метаописание документа не соответствует зарегистрированному в РЭМД": {
+            "color": "#E15759"
+          },
+          "Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile": {
+            "color": "#FF9DA7"
+          },
+          "Запрашиваемая запись ЭМД не найдена в предоставляющей ИС": {
+            "color": "#FF9DA7"
+          },
+          "ИС не передала файл ЭМД в ответе getDocumentFile": {
+            "color": "#FF9DA7"
+          },
+          "Не удалось получить файл ЭМД из предоставляющей ИС": {
+            "color": "#FF9DA7"
+          },
+          "Не удалось проверить электронную подпись": {
+            "color": "#F28E2B"
+          },
+          "Получатель из запроса не найден в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Вид документа не актуален на дату создания": {
+            "color": "#E15759"
+          },
+          "Подразделение или запись справочника не найдены на дату документа": {
+            "color": "#E15759"
+          },
+          "Отчество врача не соответствует данным СЭМД": {
+            "color": "#59A14F"
+          },
           "Документ не найден в РЭМД": {
             "color": "#E15759"
           },
@@ -3691,17 +3658,11 @@
           "Неверный формат или контрольная сумма СНИЛС": {
             "color": "#4E79A7"
           },
+          "СНИЛС пациента обязателен для данного вида документов": {
+            "color": "#4E79A7"
+          },
           "Организация не зарегистрирована в РЭМД": {
             "color": "#76B7B2"
-          },
-          "Сертификат ЭП истёк": {
-            "color": "#F28E2B"
-          },
-          "Сертификат ЭП отозван": {
-            "color": "#F28E2B"
-          },
-          "Недоступен сервис проверки статуса сертификата (CRL/OCSP)": {
-            "color": "#F28E2B"
           },
           "Таймаут асинхронной обработки на стороне РЭМД": {
             "color": "#9C755F"
@@ -3709,28 +3670,151 @@
           "Недоступен сервис проверки подписи (УЦ) на стороне РЭМД": {
             "color": "#9C755F"
           },
+          "Подпись роли не соответствует требованиям РЭМД": {
+            "color": "#F28E2B"
+          },
+          "Срок действия сертификата организации истек": {
+            "color": "#F28E2B"
+          },
+          "Ошибка XSD-валидации XML": {
+            "color": "#B07AA1"
+          },
+          "Для данного вида ЭМД запрещена регистрация новых версий": {
+            "color": "#E15759"
+          },
+          "Формат файла не соответствует требованиям вида документа": {
+            "color": "#B07AA1"
+          },
+          "Дополнительные атрибуты документа не прошли валидацию": {
+            "color": "#B07AA1"
+          },
+          "Электронная подпись отсутствует": {
+            "color": "#F28E2B"
+          },
+          "Дублирование подписи в документе": {
+            "color": "#F28E2B"
+          },
+          "Не удалось декодировать электронную подпись": {
+            "color": "#F28E2B"
+          },
+          "Подпись не соответствует содержимому документа": {
+            "color": "#F28E2B"
+          },
+          "Неподдерживаемый алгоритм электронной подписи": {
+            "color": "#F28E2B"
+          },
+          "Неподдерживаемый формат электронной подписи": {
+            "color": "#F28E2B"
+          },
+          "В подписи отсутствует сертификат подписанта": {
+            "color": "#F28E2B"
+          },
+          "Сертификат не предназначен для подписания документов": {
+            "color": "#F28E2B"
+          },
+          "Сертификат подписи недействителен на дату создания документа": {
+            "color": "#F28E2B"
+          },
+          "В контейнере подписи более одного подписанта": {
+            "color": "#F28E2B"
+          },
+          "Подпись организации не соответствует требованиям вида документа": {
+            "color": "#F28E2B"
+          },
+          "Роль подписанта не предусмотрена для вида документа на дату": {
+            "color": "#E15759"
+          },
+          "У подписанта не указана специальность": {
+            "color": "#59A14F"
+          },
+          "Должность подписанта не соответствует роли подписи": {
+            "color": "#59A14F"
+          },
+          "Карточка медработника не найдена в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Организация подписанта не соответствует организации документа": {
+            "color": "#59A14F"
+          },
+          "Имя врача не соответствует данным СЭМД": {
+            "color": "#59A14F"
+          },
+          "Сведения о пациенте отсутствуют или дублируются в документе": {
+            "color": "#4E79A7"
+          },
+          "Пациент не найден в ГИП": {
+            "color": "#4E79A7"
+          },
+          "Пациент уже зарегистрирован в ГИП": {
+            "color": "#4E79A7"
+          },
+          "Не удалось создать пациента в ГИП": {
+            "color": "#4E79A7"
+          },
+          "Требуются дополнительные сведения о пациенте (ГИП)": {
+            "color": "#4E79A7"
+          },
+          "Не указана серия документа, удостоверяющего личность": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента не найден в ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента не соответствует ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Организация не найдена в ФРМО": {
+            "color": "#76B7B2"
+          },
+          "Организация не действует в ФРМО на дату документа": {
+            "color": "#76B7B2"
+          },
+          "Подразделение организации не найдено в ФРМО": {
+            "color": "#76B7B2"
+          },
+          "Регион ИС не соответствует региону организации": {
+            "color": "#76B7B2"
+          },
+          "Дата создания документа позже даты регистрации": {
+            "color": "#E15759"
+          },
+          "Не удалось зарегистрировать новую версию документа": {
+            "color": "#E15759"
+          },
+          "Не удалось связать документ с записью РЭМД": {
+            "color": "#E15759"
+          },
+          "Регистрируемая связь документов уже существует": {
+            "color": "#E15759"
+          },
+          "Неверный идентификатор сообщения (messageId)": {
+            "color": "#E15759"
+          },
+          "Техническая ошибка на стороне РЭМД": {
+            "color": "#9C755F"
+          },
+          "Превышен лимит запросов к РЭМД": {
+            "color": "#9C755F"
+          },
+          "Сертификат ЭП истёк": {
+            "color": "#F28E2B"
+          },
+          "Сертификат ЭП отозван": {
+            "color": "#F28E2B"
+          },
+          "Недействительный сертификат подписи": {
+            "color": "#F28E2B"
+          },
           "Документ аннулирован": {
             "color": "#E15759"
           },
           "Ошибка разбора XML-структуры документа": {
             "color": "#B07AA1"
           },
-          "Сетевая ошибка": {
-            "color": "#499894"
-          },
-          "Подпись роли не соответствует требованиям РЭМД": {
-            "color": "#F28E2B"
-          },
           "Документ, удостоверяющий личность пациента: некорректные реквизиты": {
             "color": "#4E79A7"
           },
-          "Срок действия сертификата организации истек": {
-            "color": "#F28E2B"
-          },
           "Несоответствие данных организации в ФРМО": {
-            "color": "#76B7B2"
-          },
-          "Ошибки организации": {
             "color": "#76B7B2"
           },
           "ФИО пациента в ЭМД не соответствует данным ЕГИСЗ": {
@@ -3754,23 +3838,26 @@
           "Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию": {
             "color": "#E15759"
           },
-          "Для данного вида ЭМД запрещена регистрация новых версий": {
-            "color": "#E15759"
+          "СНИЛС не найден или не соответствует данным пациента/медработника": {
+            "color": "#4E79A7"
+          },
+          "Ошибка справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "Недоступен сервис проверки статуса сертификата (CRL/OCSP)": {
+            "color": "#F28E2B"
+          },
+          "Сетевая ошибка": {
+            "color": "#499894"
+          },
+          "Ошибки организации": {
+            "color": "#76B7B2"
           },
           "Неизвестная ошибка": {
             "color": "#BAB0AC"
           },
           "Ошибка Schematron-валидации": {
             "color": "#B07AA1"
-          },
-          "Техническая ошибка на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
-          },
-          "Недоступен сервис проверки подписи/УЦ на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
-          },
-          "Таймаут асинхронной обработки на стороне РЭМД: повторите отправку позже": {
-            "color": "#9C755F"
           }
         },
         "legend.is_reversed": false,
@@ -3807,7 +3894,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY priority))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY match_tier, rule_code))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4920,7 +5007,7 @@
           },
           {
             "enabled": true,
-            "name": "Сводка ошибки"
+            "name": "Типы ошибки"
           },
           {
             "enabled": true,
@@ -4962,9 +5049,6 @@
           "[\"name\",\"Статус\"]": {
             "column_title": "Статус"
           },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки"
-          },
           "[\"name\",\"Дата обработки\"]": {
             "column_title": "Дата обработки",
             "date_abbreviate": true,
@@ -4994,6 +5078,10 @@
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "Связанное сообщение"
+          },
+          "[\"name\",\"Типы ошибки\"]": {
+            "column_title": "Типы ошибки",
+            "text_style": "wrap"
           }
         }
       },

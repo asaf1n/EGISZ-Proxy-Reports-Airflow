@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
 DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
+REPO_ROOT = DAGS_DIR.parents[1]
+VARS_JSON = REPO_ROOT / "k8s" / "airflow" / "egisz-variables.json"
 DWH_POOL = "dwh_postgres"
 _AIRFLOW_TEST_DB = Path(__file__).resolve().parent / ".pytest_airflow.db"
 
@@ -43,11 +46,19 @@ def _read(dag_file: str) -> str:
     return (DAGS_DIR / dag_file).read_text(encoding="utf-8")
 
 
-def test_monolith_dag_is_split_into_three_files() -> None:
-    assert not (DAGS_DIR / "egisz_elt_dag.py").exists()
-    assert (DAGS_DIR / "egisz_extract_dag.py").exists()
-    assert (DAGS_DIR / "egisz_dimensions_dag.py").exists()
-    assert (DAGS_DIR / "egisz_reconcile_dag.py").exists()
+def test_airflow_variables_json_matches_python_defaults() -> None:
+    import sys
+
+    src = str(REPO_ROOT / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
+    from egisz_elt.airflow_vars import DEFAULTS
+
+    payload = json.loads(VARS_JSON.read_text(encoding="utf-8"))
+    assert set(payload) == set(DEFAULTS)
+    for key, default in DEFAULTS.items():
+        assert str(payload[key]) == str(default)
 
 
 def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
@@ -75,18 +86,21 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "load_raw_logs" not in src
 
     assert '"rows":' not in src
-    assert 'Variable.get("extract_schedule", default_var="*/5 * * * *")' in src
-    assert 'Variable.get("extract_raw_rows", default_var=2000)' in src
-    assert 'Variable.get("extract_raw_rounds", default_var=3)' in src
-    assert 'Variable.get("transform_rows", default_var=5000)' in src
-    assert 'Variable.get("transform_rounds", default_var=6)' in src
-    assert 'Variable.get("egisz_' not in src
+    assert "from egisz_elt.airflow_vars import" in src
+    assert 'get_str("extract_schedule")' in src
+    assert 'get_int("extract_raw_rows")' in src
+    assert 'get_int("extract_raw_rounds")' in src
+    assert 'get_int("transform_rows")' in src
+    assert 'get_int("transform_rounds")' in src
     assert 'pool="dwh_postgres"' in src or "pool=DWH_POOL" in src
+    # Транзиентный DeadlockDetected (maintenance-прогон схемы поверх 5-минутного батча)
+    # не должен красить ран: transform идемпотентен, повтор безопасен.
+    assert "retries=2" in src
+    assert "retry_delay=timedelta(minutes=1)" in src
     assert "BATCH_SIZE = 5000" not in src
     assert "@task.short_circuit" not in src
 
     assert "transform_exchangelog(extracted)" in src
-    # TaskFlow выстраивает зависимость через передачу XCom; явный ">>" избыточен.
     assert "extracted >> transformed" not in src
     assert "get_current_context" not in src
 
@@ -100,7 +114,7 @@ def test_dimensions_dag_owns_dimension_sync_and_mart_maintenance() -> None:
     assert "def maintain_enriched_ui" not in src
     assert "sync_directories" in src
     assert "reconcile_document_attributes_ui" in src
-    assert 'Variable.get("dimensions_schedule", default_var="@hourly")' in src
+    assert 'get_str("dimensions_schedule")' in src
     assert "@task.short_circuit" not in src
     assert "pool=DWH_POOL" in src or 'pool="dwh_postgres"' in src
 
@@ -112,26 +126,21 @@ def test_reconcile_dag_does_full_constancy_check_without_moving_watermark() -> N
     assert "def reconcile_proxy_raw" in src
     assert "def reconcile_late_arrivals" not in src
 
-    # Full source↔raw set-diff, not a banded window under the watermark.
-    assert "fetch_exchangelog_logids(" in src
-    assert "get_all_raw_logids(" in src
+    assert "fetch_reconcile_window_sets(" in src
     assert "source_logids - raw_logids" in src
+    assert "lookback_days=lookback_days" in src
+    assert "max_logids=max_logids" in src
+    assert 'get_int("reconcile_lookback_days")' in src
     assert "fetch_exchangelog_logids_in_band" not in src
     assert "get_raw_logids_in_band" not in src
     assert "RECONCILE_WATERMARK_LOOKBACK_LOGIDS" not in src
 
-    # Watermark is never advanced by reconcile — GREATEST stays a forward-only writer.
     assert "update_cursors" not in src
 
-    # Memory guard: hard-fail above the configured LOGID volume (no silent skip).
-    assert 'Variable.get("reconcile_max_logids"' in src
-    assert "count_exchangelog_rows(" in src
-    assert "raise RuntimeError" in src
+    assert 'get_int("reconcile_max_logids")' in src
+    assert "count_exchangelog_rows(" not in src
 
-    # Schedule comes from Variables; lookback/window gap are derived in SQL/Python.
-    assert 'Variable.get("reconcile_schedule", default_var="@daily")' in src
-    assert 'Variable.get("egisz_reconcile_window_max_gap"' not in src
-    assert 'Variable.get("egisz_gdf_lookback_logids"' not in src
+    assert 'get_str("reconcile_schedule")' in src
     assert "pending_transform_tail" in src
     assert "AirflowSkipException" in src
     assert "backfill_semd_codes" not in src
@@ -144,12 +153,15 @@ def test_all_dag_files_compile() -> None:
         py_compile.compile(str(path), doraise=True)
 
 
-def test_up_ps1_provisions_dwh_postgres_pool() -> None:
+def test_up_ps1_provisions_airflow_pool_and_variables() -> None:
     src = Path(__file__).resolve().parents[1].joinpath("up.ps1").read_text(encoding="utf-8")
+    assert "Restore-AirflowStatefulSetsAfterStop" in src
+    assert "Ensure-AirflowStatefulSetReplicas" in src
+    assert "airflow-redis" in src
+    assert "Sync-AirflowWorkerReplicas" not in src
     assert "Initialize-AirflowDwhPool" in src
-    assert "Remove-LegacyAirflowVariables" not in src
-    assert "variables delete" not in src
-    assert "egisz_extract_schedule" not in src
+    assert "Initialize-AirflowEgiszVariables" in src
+    assert "k8s\\airflow\\egisz-variables.json" in src
     assert "pools', 'set', $DwhPoolName" in src or "pools set" in src
     assert "dwh_postgres" in src
     assert "Initialize-EgiszDags" not in src

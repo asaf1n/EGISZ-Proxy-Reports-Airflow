@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from egisz_elt.dimensions import fetch_organizations
@@ -108,10 +109,29 @@ def test_fetch_exchangelog_logids_scans_full_range_without_band() -> None:
     result = fetch_exchangelog_logids(con)
 
     assert result == {101, 102}
-    # Full-range constancy check: no banded LOGID window in the query.
     assert "SELECT LOGID FROM EXCHANGELOG" in con.cursor_instance.executed_sql
     assert "WHERE" not in con.cursor_instance.executed_sql
     assert con.cursor_instance.params is None
+
+
+def test_fetch_exchangelog_logids_filters_by_since() -> None:
+    con = FakeConnection([(101,), (102,)])
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    result = fetch_exchangelog_logids(con, since=since)
+
+    assert result == {101, 102}
+    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (since,)
+
+
+def test_count_exchangelog_rows_filters_by_since() -> None:
+    con = FakeConnection([(42,)])
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    assert count_exchangelog_rows(con, since=since) == 42
+    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (since,)
 
 
 def test_fetch_exchangelog_by_logids_serializes_rows() -> None:

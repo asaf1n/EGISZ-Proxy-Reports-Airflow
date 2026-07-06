@@ -496,7 +496,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_label AS \"Тип СЭМД\", error_summary AS \"Сводка ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50",
+          "query": "SELECT ips_date AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_label AS \"Тип СЭМД\", error_types AS \"Типы ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -535,12 +535,12 @@
             "decimals": 0,
             "number_separators": ", "
           },
-          "[\"name\",\"Сводка ошибки\"]": {
-            "column_title": "Сводка ошибки",
-            "text_style": "wrap"
-          },
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Типы ошибки\"]": {
+            "column_title": "Типы ошибки",
             "text_style": "wrap"
           }
         }
