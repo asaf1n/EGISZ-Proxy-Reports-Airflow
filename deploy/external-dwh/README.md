@@ -27,6 +27,9 @@ CREATE DATABASE dwh_egisz OWNER postgres;
 Роль `egisz` — рабочая учётка конвейера и BI; пароль передать администраторам Airflow и
 Metabase (Connections/`APP_DB_*`), в файлы не записывать.
 
+> Если роль не создать заранее, `00_bootstrap.sql` создаст её сам — но с дефолтным
+> паролем `egisz`. В этом случае сразу после наката: `ALTER ROLE egisz PASSWORD '<пароль>';`.
+
 ## 2. Применение схемы
 
 **Строго из корня бандла** — `dwh_init.sql` подключает части относительными путями
@@ -50,7 +53,8 @@ CONFLICT`): повторный прогон обязан пройти чисто
 
 ```bash
 psql -h PG_HOST -U egisz -d dwh_egisz -c "\dt public.*"      # elt_state, exchangelog_raw, documents, transactions, dim_*
-psql -h PG_HOST -U egisz -d dwh_egisz -c "\dv public.rpt_*"  # rpt_documents, rpt_error_breakdown (matview), rpt_health_*
+psql -h PG_HOST -U egisz -d dwh_egisz -c "\dv public.rpt_*"  # вьюхи: rpt_documents, rpt_document_versions, rpt_health_*
+psql -h PG_HOST -U egisz -d dwh_egisz -c "\dm public.rpt_*"  # matview: rpt_error_breakdown
 psql -h PG_HOST -U egisz -d dwh_egisz -c "SHOW timezone"     # Europe/Moscow
 ```
 

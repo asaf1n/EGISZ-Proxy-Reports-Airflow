@@ -91,10 +91,10 @@ airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched
 
 ## 4. Airflow Variables (редактируются в Admin → Variables)
 
-При первом `up.ps1 -Action Airflow` или вручную через импорт `egisz-variables.json`
-Variables создаются с дефолтами ниже. Уже существующие ключи **не перезаписываются**.
-DAG читает их через `egisz_elt.airflow_vars`; если Variable отсутствует — берётся
-тот же дефолт из кода.
+Variables создаются импортом `egisz-variables.json` (лежит в корне бандла) с дефолтами
+ниже. Импорт опционален: DAG читает значения через `egisz_elt.airflow_vars`, и если
+Variable отсутствует — берётся тот же дефолт из кода. Variables нужны, чтобы менять
+параметры через UI без правки кода.
 
 Расписания читаются на parse-time DAG (смена подхватится при следующем парсинге
 DAG-файлов).
@@ -114,11 +114,12 @@ DAG-файлов).
 Импорт на целевом контуре (UI: Admin → Variables → Import, или CLI):
 
 ```bash
-airflow variables import egisz-variables.json
+airflow variables import --action-on-existing-key skip egisz-variables.json
 ```
 
-Файл `egisz-variables.json` лежит в бандле рядом с `requirements.txt`.
-При импорте через UI выберите **Skip if exists**, чтобы не затереть уже изменённые значения.
+> Дефолтное действие импорта — **overwrite** (и в CLI, и в UI): без
+> `--action-on-existing-key skip` (в UI — «Skip if exists») повторный импорт затрёт
+> уже изменённые значения.
 
 ## 5. DAG, которые появятся
 
@@ -129,7 +130,8 @@ airflow variables import egisz-variables.json
 | `egisz_reconcile_dag` | `@daily` | `reconcile_proxy_raw` (сверка источник↔raw за последние N дней, watermark не двигает) |
 
 Все три `max_active_runs=1`, `catchup=False`. Watermark `elt_state.last_logid` двигает только
-transform-шаг extract-DAG (через `GREATEST`, без отката). Новые DAG создаются на паузе —
+transform-шаг extract-DAG (через `GREATEST`, без отката). Новые DAG появятся на паузе
+(стандартный `dags_are_paused_at_creation=True`; в коде DAG флаг не переопределён) —
 снять после настройки Connections и пула (п. 6).
 
 ## 6. Проверка после загрузки

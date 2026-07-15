@@ -34,5 +34,5 @@ dist/external/
 | Бандл | Канонические исходники | Кому передавать |
 | --- | --- | --- |
 | `dwh` | `db/dwh_init.sql`, `db/parts/*.sql` | DBA целевого PostgreSQL |
-| `airflow` | `airflow/dags/*.py`, `src/egisz_elt/`, `pyproject.toml` | администратор Airflow |
+| `airflow` | `airflow/dags/*.py`, `src/egisz_elt/`, `pyproject.toml`, `k8s/airflow/egisz-variables.json` | администратор Airflow |
 | `metabase` | `metabase/setup-dashboards.sh`, `metabase/sync-models.sh`, `metabase/include/`, `metabase_dashboards/`, `metabase_models/` | администратор Metabase |
