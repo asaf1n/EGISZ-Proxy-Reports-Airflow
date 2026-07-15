@@ -331,11 +331,11 @@
     },
     {
       "name": "Динамика статусов по дням",
-      "description": "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / Ошибка связи по дням (текущий статус документа). «Отправлено» (без финального ответа) исключено — см. отдельную карточку «Отправленные — клиент».",
+      "description": "Доля документов с ошибкой асинхронного ответа РЭМД и ошибкой связи от общего числа документов с вердиктом РЭМД за день (левая ось, %); общий объём — пунктирная линия «Всего» (правая ось). «Отправлено» (без исхода) исключено — см. карточку «Отправленные — клиент».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -370,36 +370,53 @@
         },
         "database": 1
       },
-      "display": "bar",
+      "display": "line",
       "visualization_settings": {
-        "graph.dimensions": [
-          "Дата",
-          "Статус"
-        ],
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "Документов",
-        "series_settings": {
-          "Ошибка асинхронного ответа РЭМД": {
-            "color": "#A989C5"
-          },
-          "Ошибка связи": {
-            "color": "#F2994A"
-          },
-          "Успешно зарегистрирован": {
-            "color": "#84BB4C"
-          }
-        },
-        "stackable.stack_type": "stacked",
         "column_settings": {
-          "[\"name\",\"Документов\"]": {
+          "[\"name\",\"Async ошибки, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Сетевые ошибки, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Всего\"]": {
             "decimals": 0,
             "number_separators": ", "
           }
         },
+        "graph.dimensions": [
+          "Дата"
+        ],
         "graph.metrics": [
-          "Документов"
-        ]
+          "Async ошибки, %",
+          "Сетевые ошибки, %",
+          "Всего"
+        ],
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "% ошибок",
+        "graph.show_values": false,
+        "series_settings": {
+          "Async ошибки, %": {
+            "display": "line",
+            "axis": "left",
+            "color": "#A989C5"
+          },
+          "Сетевые ошибки, %": {
+            "display": "line",
+            "axis": "left",
+            "color": "#F2994A"
+          },
+          "Всего": {
+            "display": "line",
+            "line.style": "dashed",
+            "axis": "right",
+            "color": "#84BB4C"
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -776,11 +793,11 @@
     },
     {
       "name": "Топ типов ошибок — клиент",
-      "description": "Конкретные типы ошибок: количество документов и доля от всех ошибочных документов клиники.",
+      "description": "Конкретные типы ошибок: «% ошибок» — доля документов с типом от всех ошибочных документов клиники; «% обработанных» — доля от всех документов клиники с вердиктом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT dwh_id, error_category, error_type FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ) SELECT error_category AS \"Категория ошибки\", error_type AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM filtered GROUP BY error_category, error_type ORDER BY 3 DESC LIMIT 20",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{client_error_category}}]] ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM eb GROUP BY cat, typ ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -832,17 +849,37 @@
               "hsla(358, 71%, 62%, 1)"
             ],
             "columns": [
-              "%"
+              "% ошибок"
             ],
             "max_type": "custom",
             "max_value": 50,
             "min_type": null,
             "min_value": 0,
             "type": "range"
+          },
+          {
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "hsla(46, 81%, 52%, 1)",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "columns": [
+              "% обработанных"
+            ],
+            "max_type": "custom",
+            "max_value": 25,
+            "min_type": "custom",
+            "min_value": 0,
+            "type": "range"
           }
         ],
         "column_settings": {
-          "[\"name\",\"%\"]": {
+          "[\"name\",\"% ошибок\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"% обработанных\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -860,11 +897,11 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         },
         "client_error_category": {
@@ -872,7 +909,7 @@
           "field_name": "error_category"
         },
         "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }

@@ -530,11 +530,11 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, is_retryable AS retryable, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -569,7 +569,7 @@
         "table.column_formatting": [
           {
             "columns": [
-              "%"
+              "% ошибок"
             ],
             "type": "range",
             "colors": [
@@ -581,11 +581,28 @@
             "max_type": null,
             "min_value": -100,
             "max_value": 100
+          },
+          {
+            "columns": [
+              "% обработанных"
+            ],
+            "type": "range",
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "transparent",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "min_type": "custom",
+            "max_type": "custom",
+            "min_value": 0,
+            "max_value": 25
           }
         ],
         "table.column_widths": [
           350,
-          87
+          96,
+          96,
+          128
         ],
         "table.columns": [
           {
@@ -598,7 +615,11 @@
           },
           {
             "enabled": true,
-            "name": "%"
+            "name": "% ошибок"
+          },
+          {
+            "enabled": true,
+            "name": "% обработанных"
           },
           {
             "enabled": true,
@@ -629,6 +650,18 @@
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки",
             "text_style": "wrap"
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "column_title": "% ошибок",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"% обработанных\"]": {
+            "column_title": "% обработанных",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           }
         }
       },
@@ -638,16 +671,16 @@
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
         "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -3314,11 +3347,11 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. Колонка «%» — доля документов с этим типом от всех документов с ошибками.",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, is_retryable AS retryable, dwh_id FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM base GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3353,7 +3386,7 @@
         "table.column_formatting": [
           {
             "columns": [
-              "%"
+              "% ошибок"
             ],
             "type": "range",
             "colors": [
@@ -3365,11 +3398,28 @@
             "max_type": null,
             "min_value": -100,
             "max_value": 100
+          },
+          {
+            "columns": [
+              "% обработанных"
+            ],
+            "type": "range",
+            "colors": [
+              "hsla(89, 48%, 40%, 1)",
+              "transparent",
+              "hsla(358, 71%, 62%, 1)"
+            ],
+            "min_type": "custom",
+            "max_type": "custom",
+            "min_value": 0,
+            "max_value": 25
           }
         ],
         "table.column_widths": [
           350,
-          87
+          96,
+          96,
+          128
         ],
         "table.columns": [
           {
@@ -3382,7 +3432,11 @@
           },
           {
             "enabled": true,
-            "name": "%"
+            "name": "% ошибок"
+          },
+          {
+            "enabled": true,
+            "name": "% обработанных"
           },
           {
             "enabled": true,
@@ -3413,6 +3467,18 @@
           "[\"name\",\"Тип ошибки\"]": {
             "column_title": "Тип ошибки",
             "text_style": "wrap"
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "column_title": "% ошибок",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"% обработанных\"]": {
+            "column_title": "% обработанных",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           }
         }
       },
@@ -3422,16 +3488,16 @@
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        },
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
         "semd_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }

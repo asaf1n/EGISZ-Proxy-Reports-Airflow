@@ -193,7 +193,7 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 Lookback при transform: extract использует окно по ширине батча; reconcile передаёт prefix журнала, чтобы поздний callback связался с ранним `getDocumentFile`.
 
-`document_attributes` (1:1 к экземпляру): lineage OID, host, endpoint, `request_msgid` (MSGID отправки — на грейне документа `result_msgid` хранит MSGID ответа, поэтому MSGID запроса берётся из source-транзакции), BI-маски; обновляется после transform и `sync_dimensions`.
+`document_attributes` (1:1 к экземпляру): lineage OID, host, endpoint, `request_msgid` (MSGID отправки — на грейне документа `result_msgid` хранит MSGID ответа, поэтому MSGID запроса берётся из source-транзакции), `contour` (контур обмена, зафиксированный на грейне документа — последний непустой `transactions.contour` по строкам документа, чтобы отчётный слой не читал message-грейн), BI-маски; обновляется после transform и `sync_dimensions`.
 
 ### Учёт отправленных vs корпус результатов
 
@@ -240,7 +240,7 @@ Lookback при transform: extract использует окно по ширин
 
 Матчинг **ярусный** (`match_tier`): на каждый `<item>` правила проверяются по возрастанию яруса, и первый ярус, давший хотя бы одно совпадение, закрывает поиск — правила нижних ярусов для этого item не применяются. Семантика ярусов: **1** — код + специфичный текстовый паттерн; **2** — только код (`match_pattern = '(?is).*'`, пустой `message` допустим — item без текста классифицируется правилом, а не «Код: X»); **3** — специфичный текстовый паттерн без кода; **4** — широкие текстовые фолбэки. Несколько совпадений внутри выигравшего яруса легальны и дедуплицируются; мультитиповость документа возникает только из нескольких `<item>` или нескольких совпадений одного яруса. Если правила молчат — code-fallback (возвращает те же канонические типы, что и правила соответствующих кодов), единый тип «Ошибка Schematron-валидации», «Код: X» (только для кодов, не покрытых ни одним правилом), «Неизвестная ошибка». Канонический тип всегда из словаря; детальный текст ошибки (включая номера schematron-правил) остаётся в `error_text`. Все типы контура ИЭМК начинаются с префикса `ИЭМК: `.
 
-**Контур обмена** (`transactions.contour`: `РЭМД`/`ИЭМК`/NULL) — направление интеграции с ЕГИСЗ, вычисляется `exchange_contour()`: первично по `wsa:Action` payload'а (`urn:ihe:*` → ИЭМК, иной непустой → РЭМД), запасной признак — порт сервиса клиники в `LOGTEXT` (`:9921` → ИЭМК, `:9945` → РЭМД; конвенция настроек клиник, прочие порты контур не определяют). Приоритет всегда у action; порт — условный признак. Экспонируется в `rpt_network_errors.contour`.
+**Контур обмена** (`transactions.contour`: `РЭМД`/`ИЭМК`/NULL) — направление интеграции с ЕГИСЗ, вычисляется `exchange_contour()`: первично по `wsa:Action` payload'а (`urn:ihe:*` → ИЭМК, иной непустой → РЭМД), запасной признак — порт сервиса клиники в `LOGTEXT` (`:9921` → ИЭМК, `:9945` → РЭМД; конвенция настроек клиник, прочие порты контур не определяют). Приоритет всегда у action; порт — условный признак. На грейне сообщения хранится в `transactions.contour`; на грейне документа фиксируется в `document_attributes.contour` (последний непустой контур по строкам документа) и оттуда экспонируется в `rpt_network_errors.contour` — отчётный слой не читает message-грейн `transactions` напрямую.
 
 Связь **тип → группа** — единый справочник `dim_error_type_group` (тип PK → категория), единственный источник истины. Это исключает «один тип → две группы». Каждый тип дополнительно несёт `responsibility` (кто устраняет причину: клиника / МИС / интегратор / РЭМД / смешанная) и `is_retryable` (лечится ли повторной отправкой) — см. [приложение](#зона-ответственности-и-повторяемость).
 
@@ -267,7 +267,7 @@ Lookback при transform: extract использует окно по ширин
 | Raw | `exchangelog_raw` | Строка журнала как в источнике |
 | Транзакции | `transactions` | Строка журнала + `xml_*` (parse-once) + `error_type` на callback + `contour` (РЭМД/ИЭМК, `exchange_contour`); `loaded_at` — момент ELT-загрузки (не путать с `ips_date`) |
 | Факт | `documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
-| Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID |
+| Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID, `request_msgid`, `contour` (контур обмена на грейне документа) |
 | Справочники | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_document_status` | Клиники, лицензии, типы СЭМД, подписи статусов |
 | Правила | `dim_error_rules` | `match_tier` (ярус 1–4) + `match_code` + `match_pattern` → `interpretation` |
 | Тип→группа | `dim_error_type_group` | Канонический тип (PK) → категория + `responsibility` + `is_retryable` — единый источник истины |
@@ -279,7 +279,7 @@ Lookback при transform: extract использует окно по ширин
 | `rpt_documents` | `documents` + `document_attributes` + справочники; **текущие версии** (`is_current_version`) |
 | `rpt_document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
 | `rpt_documents_waiting` | `status = waiting` |
-| `rpt_network_errors` | `status = network_error`; + `contour` — контур обмена (РЭМД/ИЭМК) |
+| `rpt_network_errors` | `status = network_error`; + `contour` — контур обмена (РЭМД/ИЭМК) из `document_attributes` |
 | `rpt_error_breakdown` | Split `error_types` по `·` → атомарный канонический вид (`error_type` + `error_category` + `responsibility` + `is_retryable`) |
 | `rpt_document_lineage` | OID / host / endpoint по документу |
 | `rpt_health_*` | Свежесть и состояние контура (в т.ч. `rpt_health_versions` — наблюдаемость слоя версий) |

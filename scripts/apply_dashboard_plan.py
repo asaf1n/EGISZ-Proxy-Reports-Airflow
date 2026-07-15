@@ -271,13 +271,20 @@ TRANSACTIONS_BY_DAY_STATUS_QUERY = (
     "ORDER BY processed_day, status_sort"
 )
 
+# Ошибки — как доля от общего числа документов с вердиктом РЭМД за день (успех+ошибка),
+# общий объём — отдельной серией «Всего» (пунктирная линия на правой оси). «Отправлено»
+# (status='waiting', без исхода) исключено — см. README §«Учёт отправленных».
 CLIENT_STATUS_BY_DAY_QUERY = (
-    "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", "
-    "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
+    "SELECT ips_date::date AS \"Дата\", "
+    "COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" "
     "FROM public.rpt_documents "
     "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] "
     "AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] "
-    "GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort"
+    "GROUP BY ips_date::date ORDER BY ips_date::date"
 )
 
 LATEST_OPERATIONS_QUERY = (
@@ -472,23 +479,35 @@ HEATMAP_VIZ = {
 
 # «%» — доля документов с этим типом от всех документов с ошибками в срезе. Документ с
 # несколькими типами учитывается в каждой строке, поэтому сумма долей может быть >100%.
+# Два знаменателя на разных грейнах: «% ошибок» — доля среди ошибочных документов
+# (грейн rpt_error_breakdown), «% обработанных» — доля среди всех документов с вердиктом
+# РЭМД (успех+ошибка, грейн rpt_documents). Поэтому база — period_docs из rpt_documents,
+# к которой джойнится rpt_error_breakdown (без алиаса: field-фильтры разворачиваются в
+# полное имя таблицы, см. ERROR_TYPE_CLINIC_QUERY). Фильтры срез — на грейне документа.
 TOP_ERROR_TYPE_QUERY = (
-    "WITH base AS ( "
-    'SELECT COALESCE(NULLIF(TRIM(error_category), \'\'), \'Прочие\') AS cat, '
-    'COALESCE(NULLIF(TRIM(error_type), \'\'), \'Неизвестная ошибка\') AS typ, '
-    "COALESCE(NULLIF(TRIM(responsibility), ''), 'смешанная') AS resp, "
-    "is_retryable AS retryable, dwh_id "
+    "WITH period_docs AS ( "
+    "SELECT dwh_id FROM public.rpt_documents "
+    "WHERE status IN ('success', 'async_error', 'network_error') "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
+    "eb AS ( SELECT "
+    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, "
+    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, "
+    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, "
+    "rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id "
     "FROM public.rpt_error_breakdown "
-    "WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
-    "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
-    "totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM base ), "
+    "INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id "
+    "WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), "
+    "totals AS ( SELECT "
+    "(SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, "
+    "(SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), "
     "per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt "
-    "FROM base GROUP BY 1, 2, 3, 4 ) "
+    "FROM eb GROUP BY 1, 2, 3, 4 ) "
     'SELECT cat AS "Категория ошибки", typ AS "Тип ошибки", '
     'resp AS "Зона ответственности", '
     'CASE WHEN retryable THEN \'да\' ELSE \'нет\' END AS "Устраняется повтором", '
     'cnt AS "Документов", '
-    'ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS "%" '
+    'ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS "% ошибок", '
+    'ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS "% обработанных" '
     "FROM per_type ORDER BY cnt DESC"
 )
 
@@ -553,18 +572,19 @@ SUCCESS_CLINIC_COLUMN_WIDTHS = [88, 300, 88, 88]
 SUCCESS_SEMD_COLUMN_WIDTHS = [88, 120, 88, 88, 88]
 CLINIC_VOLUME_COLUMN_WIDTHS = [186]
 TOP_SEMD_BY_ERRORS_COLUMN_WIDTHS = [396, 86]
-TOP_ERROR_TYPE_COLUMN_WIDTHS = [350, 87]
+TOP_ERROR_TYPE_COLUMN_WIDTHS = [350, 96, 96, 128]
 TOP_ERROR_TYPE_TABLE_COLUMNS = [
     {"enabled": True, "name": "Тип ошибки"},
     {"enabled": True, "name": "Документов"},
-    {"enabled": True, "name": "%"},
+    {"enabled": True, "name": "% ошибок"},
+    {"enabled": True, "name": "% обработанных"},
     {"enabled": True, "name": "Категория ошибки"},
     {"enabled": True, "name": "Зона ответственности"},
     {"enabled": True, "name": "Устраняется повтором"},
 ]
 TOP_ERROR_TYPE_COLUMN_FORMATTING = [
     {
-        "columns": ["%"],
+        "columns": ["% ошибок"],
         "type": "range",
         "colors": [
             "hsla(89, 48%, 40%, 1)",
@@ -575,7 +595,22 @@ TOP_ERROR_TYPE_COLUMN_FORMATTING = [
         "max_type": None,
         "min_value": -100,
         "max_value": 100,
-    }
+    },
+    # Доля от всех обработанных обычно мала (0..~25 %): фиксированная шкала, чтобы
+    # заливка не «схлопывалась» в один тон на редких типах.
+    {
+        "columns": ["% обработанных"],
+        "type": "range",
+        "colors": [
+            "hsla(89, 48%, 40%, 1)",
+            "transparent",
+            "hsla(358, 71%, 62%, 1)",
+        ],
+        "min_type": "custom",
+        "max_type": "custom",
+        "min_value": 0,
+        "max_value": 25,
+    },
 ]
 
 ERROR_TYPE_CLINIC_TEMPLATE_TAGS = {
@@ -1099,9 +1134,17 @@ def apply_top_error_type_table(card: dict) -> None:
     card["display"] = "table"
     card["description"] = (
         "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. "
-        "Колонка «%» — доля документов с этим типом от всех документов с ошибками."
+        "«% ошибок» — доля документов с этим типом от всех документов с ошибками; "
+        "«% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка)."
     )
     card["dataset_query"]["native"]["query"] = TOP_ERROR_TYPE_QUERY
+    # Знаменатель «обработанных» живёт на грейне документа → фильтры среза привязаны к
+    # rpt_documents (не к rpt_error_breakdown), иначе предикат в period_docs не развернётся.
+    card["metabase-field-filters"] = {
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    }
     viz = card.setdefault("visualization_settings", {})
     for key in list(viz.keys()):
         if key.startswith("graph.") or key.startswith("pie."):
@@ -1115,12 +1158,13 @@ def apply_top_error_type_table(card: dict) -> None:
     viz["version"] = 2
     cs = deepcopy(COUNT_COLUMN_SETTINGS)
     cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
-    cs['["name","%"]'] = {
-        "column_title": "%",
-        "decimals": 1,
-        "number_separators": ", ",
-        "suffix": " %",
-    }
+    for col in ("% ошибок", "% обработанных"):
+        cs[f'["name","{col}"]'] = {
+            "column_title": col,
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %",
+        }
     viz["column_settings"] = cs
     strip_chart_keys(viz, "table")
 
@@ -1867,10 +1911,13 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
                 "name": "clinic_label",
                 "widget-type": "string/=",
             }
+        # Фильтр клиники — на грейне документа: если запрос смешивает обе таблицы
+        # (period_docs из rpt_documents + join rpt_error_breakdown), привязываем к
+        # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
         source = (
-            "public.rpt_error_breakdown"
-            if "public.rpt_error_breakdown" in native["query"]
-            else "public.rpt_documents"
+            "public.rpt_documents"
+            if "public.rpt_documents" in native["query"]
+            else "public.rpt_error_breakdown"
         )
         ff = dict(card.get("metabase-field-filters") or {})
         ff.pop("client_jid", None)
@@ -1917,10 +1964,48 @@ def apply_client_dashboards(path: Path) -> bool:
             }
             card["metabase-field-filters"] = ff
             card["description"] = (
-                "Stacked bar: Успешно зарегистрирован / Ошибка асинхронного ответа РЭМД / "
-                "Ошибка связи по дням (текущий статус документа). «Отправлено» (без финального "
-                "ответа) исключено — см. отдельную карточку «Отправленные — клиент»."
+                "Доля документов с ошибкой асинхронного ответа РЭМД и ошибкой связи от "
+                "общего числа документов с вердиктом РЭМД за день (левая ось, %); общий "
+                "объём — пунктирная линия «Всего» (правая ось). «Отправлено» (без исхода) "
+                "исключено — см. карточку «Отправленные — клиент»."
             )
+            card["display"] = "line"
+            viz = card.setdefault("visualization_settings", {})
+            for key in list(viz.keys()):
+                if (
+                    key.startswith("graph.")
+                    or key.startswith("pie.")
+                    or key in ("series_settings", "stackable.stack_type")
+                ):
+                    del viz[key]
+            viz["graph.dimensions"] = ["Дата"]
+            viz["graph.metrics"] = ["Async ошибки, %", "Сетевые ошибки, %", "Всего"]
+            viz["graph.x_axis.title_text"] = "День"
+            viz["graph.y_axis.title_text"] = "% ошибок"
+            viz["graph.show_values"] = False
+            viz["series_settings"] = {
+                "Async ошибки, %": {"display": "line", "axis": "left", "color": "#A989C5"},
+                "Сетевые ошибки, %": {"display": "line", "axis": "left", "color": "#F2994A"},
+                "Всего": {
+                    "display": "line",
+                    "line.style": "dashed",
+                    "axis": "right",
+                    "color": "#84BB4C",
+                },
+            }
+            viz["column_settings"] = {
+                '["name","Async ошибки, %"]': {
+                    "decimals": 1,
+                    "number_separators": ", ",
+                    "suffix": " %",
+                },
+                '["name","Сетевые ошибки, %"]': {
+                    "decimals": 1,
+                    "number_separators": ", ",
+                    "suffix": " %",
+                },
+                '["name","Всего"]': {"decimals": 0, "number_separators": ", "},
+            }
         dq = card.get("dataset_query", {})
         if dq.get("type") == "native":
             dq["native"]["query"] = fix_client_sql(fix_sql(dq["native"]["query"]))

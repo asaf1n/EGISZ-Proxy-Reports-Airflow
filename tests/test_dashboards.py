@@ -815,10 +815,13 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
             query = card["dataset_query"]["native"]["query"]
             if "client_jid" not in tags:
                 continue
+            # Фильтры среза биндятся к грейну документа: если карточка смешивает обе
+            # витрины (period_docs + join rpt_error_breakdown), клиника/период/тип идут
+            # на rpt_documents; чисто-ошибочные карточки — на rpt_error_breakdown.
             source_view = (
-                "public.rpt_error_breakdown"
-                if "public.rpt_error_breakdown" in query
-                else "public.rpt_documents"
+                "public.rpt_documents"
+                if "public.rpt_documents" in query
+                else "public.rpt_error_breakdown"
             )
             if path_name == "07_client_service.json":
                 assert tags["client_jid"]["type"] == "text"
@@ -874,6 +877,51 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
     ]
     assert error_cards, "вкладка ошибок должна читать rpt_error_breakdown"
     assert all(card.get("tab") == "errors" for card in error_cards)
+
+
+def test_client_service_status_by_day_is_error_rate_with_total_line() -> None:
+    """07: «Динамика статусов по дням» — доли async/сетевых ошибок от общего числа
+    документов за день (левая ось, %) + пунктирная линия объёма «Всего» (правая ось)."""
+    dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Динамика статусов по дням")
+    query = card["dataset_query"]["native"]["query"]
+    viz = card["visualization_settings"]
+
+    assert card["display"] == "line"
+    assert "FILTER (WHERE status = 'async_error')" in query
+    assert "FILTER (WHERE status = 'network_error')" in query
+    assert 'AS "Async ошибки, %"' in query
+    assert 'AS "Сетевые ошибки, %"' in query
+    assert 'AS "Всего"' in query
+    assert viz["graph.metrics"] == ["Async ошибки, %", "Сетевые ошибки, %", "Всего"]
+    ss = viz["series_settings"]
+    assert ss["Всего"]["line.style"] == "dashed"
+    assert ss["Всего"]["axis"] == "right"
+    assert ss["Async ошибки, %"]["axis"] == "left"
+    assert ss["Сетевые ошибки, %"]["axis"] == "left"
+    # Успешные как отдельная серия больше не рисуются; график перестал быть стэком.
+    assert "Успешно зарегистрирован" not in ss
+    assert viz.get("stackable.stack_type") is None
+
+
+def test_client_top_error_type_shows_processed_share() -> None:
+    """07: «Топ типов ошибок — клиент» — «% обработанных» (доля от успех+ошибка) рядом
+    с «% ошибок»; знаменатель считается по period_docs из rpt_documents."""
+    dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Топ типов ошибок — клиент")
+    query = card["dataset_query"]["native"]["query"]
+
+    assert 'AS "% ошибок"' in query
+    assert 'AS "% обработанных"' in query
+    assert "period_docs" in query
+    assert "public.rpt_documents" in query
+    assert "public.rpt_error_breakdown" in query
+    ff = card["metabase-field-filters"]
+    assert ff["ips_date"]["table_ref"] == "public.rpt_documents"
+    assert ff["client_document_type"]["table_ref"] == "public.rpt_documents"
+    assert ff["clinic_label"]["table_ref"] == "public.rpt_documents"
+    # Категория ошибки живёт только на грейне разбора ошибок.
+    assert ff["client_error_category"]["table_ref"] == "public.rpt_error_breakdown"
 
 
 def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:
@@ -1205,14 +1253,27 @@ def test_top_error_type_card_is_table_with_share() -> None:
     assert card["display"] == "table"
     assert "error_category" in query
     assert '"Тип ошибки"' in query
-    # «%» — доля документов с этим типом от всех документов с ошибками.
-    assert 'AS "%"' in query
-    assert "NULLIF((SELECT total FROM totals), 0)" in query
+    # «% ошибок» — доля среди документов с ошибками (грейн rpt_error_breakdown);
+    # «% обработанных» — доля среди всех документов с вердиктом РЭМД (грейн rpt_documents).
+    assert 'AS "% ошибок"' in query
+    assert 'AS "% обработанных"' in query
+    assert "NULLIF((SELECT total_err FROM totals), 0)" in query
+    assert "NULLIF((SELECT total_final FROM totals), 0)" in query
+    # База — period_docs из rpt_documents (успех+ошибка), к ней джойнится rpt_error_breakdown.
+    assert "period_docs" in query
+    assert "public.rpt_documents" in query
+    assert "public.rpt_error_breakdown" in query
+    # Фильтры среза привязаны к грейну документа, иначе знаменатель «обработанных» неверен.
+    ff = card["metabase-field-filters"]
+    assert ff["ips_date"]["table_ref"] == "public.rpt_documents"
+    assert ff["jid"]["table_ref"] == "public.rpt_documents"
+    assert ff["semd_type"]["table_ref"] == "public.rpt_documents"
     columns = [col["name"] for col in viz["table.columns"]]
     assert columns == [
         "Тип ошибки",
         "Документов",
-        "%",
+        "% ошибок",
+        "% обработанных",
         "Категория ошибки",
         "Зона ответственности",
         "Устраняется повтором",
@@ -1220,10 +1281,11 @@ def test_top_error_type_card_is_table_with_share() -> None:
     # Зона ответственности и повторяемость — из dim_error_type_group через rpt_error_breakdown.
     assert '"Зона ответственности"' in query
     assert '"Устраняется повтором"' in query
-    assert viz["table.column_widths"] == [350, 87]
+    assert viz["table.column_widths"] == [350, 96, 96, 128]
     formatting = viz["table.column_formatting"]
-    assert formatting[0]["columns"] == ["%"]
+    assert formatting[0]["columns"] == ["% ошибок"]
     assert formatting[0]["colors"][1] == "transparent"
+    assert formatting[1]["columns"] == ["% обработанных"]
 
 
 def test_top_semd_by_errors_uses_semd_label() -> None:
