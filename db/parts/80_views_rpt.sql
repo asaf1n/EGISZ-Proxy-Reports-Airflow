@@ -244,3 +244,40 @@ WHERE d.dwh_id IS NOT NULL;
 
 COMMENT ON VIEW public.rpt_document_lineage IS
 'Lineage документа: атомы идентификаторов клиники из XML, лицензий и журнала.';
+
+-- Доступные клинике типы СЭМД: одна запись EGISZ_LICENSES на пару JID+KIND.
+-- Маркер актуальности — MAX(modifydate) по записям пары; дата начала использования —
+-- MIN(bdate) (в источнике пока не заполняется, колонка экспонируется на будущее).
+-- clinic_label собирается идентично rpt_documents, чтобы общий дашборд-фильтр
+-- «Клиника» привязывался одним значением к обеим витринам.
+CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses AS
+SELECT
+    l.jid AS clinic_jid,
+    COALESCE(NULLIF(BTRIM(l.jid::text), ''), '—')
+        || ' · ' ||
+    COALESCE(NULLIF(BTRIM(o.name), ''), '—') AS clinic_label,
+    o.name AS clinic_name,
+    l.kind AS semd_code,
+    st.name AS semd_name,
+    CASE
+        WHEN st.name IS NOT NULL THEN l.kind || ' · ' || st.name
+        ELSE l.kind || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+    END AS semd_label,
+    l.license_modified_at,
+    l.license_started_at
+FROM (
+    SELECT
+        jid,
+        kind,
+        MAX(modifydate) AS license_modified_at,
+        MIN(bdate) AS license_started_at
+    FROM public.dim_licenses
+    WHERE jid IS NOT NULL
+      AND NULLIF(btrim(kind), '') IS NOT NULL
+    GROUP BY jid, kind
+) l
+LEFT JOIN public.dim_organizations o ON o.jid = l.jid
+LEFT JOIN public.dim_semd_types st ON st.code = l.kind;
+
+COMMENT ON VIEW public.rpt_clinic_semd_licenses IS
+'Доступные клинике типы СЭМД: грейн (clinic_jid, semd_code = EGISZ_LICENSES.KIND); наименование — dim_semd_types, актуальность — MAX(modifydate), начало использования — MIN(bdate).';

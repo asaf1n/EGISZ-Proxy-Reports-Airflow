@@ -1321,6 +1321,92 @@
           "field_name": "clinic_label"
         }
       }
+    },
+    {
+      "display": "text",
+      "text": "## Доступные типы СЭМД {{clinic_label}}\nПеречень типов СЭМД, доступных вашей клинике для регистрации в ЕГИСЗ по условиям подключения: одна строка — один тип. Наименования — по справочнику СЭМД (НСИ); «Дата начала использования» — дата начала действия записи о доступе; «Последнее обновление» — дата её последнего изменения.",
+      "sizeX": 24,
+      "sizeY": 1,
+      "row": 0,
+      "col": 0,
+      "tab": "licenses"
+    },
+    {
+      "name": "Доступные типы СЭМД — клиент",
+      "description": "Типы СЭМД, доступные клинике по лицензиям сервиса: одна строка — одна пара JID + KIND (EGISZ_LICENSES, витрина rpt_clinic_semd_licenses). Наименование — по справочнику типов СЭМД; «Дата начала использования» — BDATE записи (источником пока не заполняется); «Последнее обновление» — последняя правка записи.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT semd_code AS \"Код СЭМД\", COALESCE(semd_name, 'Наименование СЭМД отсутствует в справочнике СЭМД') AS \"Наименование СЭМД\", clinic_label AS \"Клиника\", license_started_at AS \"Дата начала использования\", license_modified_at AS \"Последнее обновление\" FROM public.rpt_clinic_semd_licenses WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] ORDER BY NULLIF(regexp_replace(semd_code, '\\D', '', 'g'), '')::bigint NULLS LAST, semd_code",
+          "template-tags": {
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c90000-0000-4000-8000-000000000005",
+              "name": "clinic_label",
+              "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07c90000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Код СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Клиника"
+          },
+          {
+            "enabled": true,
+            "name": "Дата начала использования"
+          },
+          {
+            "enabled": true,
+            "name": "Последнее обновление"
+          }
+        ],
+        "table.cell_column": "Код СЭМД",
+        "column_settings": {
+          "[\"name\",\"Наименование СЭМД\"]": {
+            "column_title": "Наименование СЭМД",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Дата начала использования\"]": {
+            "date_style": "D MMMM, YYYY"
+          },
+          "[\"name\",\"Последнее обновление\"]": {
+            "date_style": "D MMMM, YYYY"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 1,
+      "col": 0,
+      "tab": "licenses",
+      "metabase-field-filters": {
+        "clinic_label": {
+          "table_ref": "public.rpt_clinic_semd_licenses",
+          "field_name": "clinic_label"
+        }
+      }
     }
   ],
   "tabs": [
@@ -1338,6 +1424,11 @@
       "id": "documents",
       "name": "Документы",
       "position": 2
+    },
+    {
+      "id": "licenses",
+      "name": "Доступные типы СЭМД",
+      "position": 3
     }
   ]
 }

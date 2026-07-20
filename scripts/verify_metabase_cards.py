@@ -189,14 +189,23 @@ def top_error_type_table_issues(name: str, card: dict) -> list[str]:
     viz = card.get("visualization_settings") or {}
     issues: list[str] = []
     columns = {col.get("name") for col in viz.get("table.columns") or []}
-    for required in ("Категория ошибки", "Тип ошибки", "Документов", "%"):
+    # Контракт карточки: два знаменателя долей — «% ошибок» (от документов с ошибками)
+    # и «% обработанных» (от документов с вердиктом РЭМД), см. TOP_ERROR_TYPE_QUERY.
+    for required in (
+        "Категория ошибки",
+        "Тип ошибки",
+        "Документов",
+        "% ошибок",
+        "% обработанных",
+    ):
         if required not in columns:
             issues.append(f"{name}: table.columns must include «{required}»")
     query = native_sql(card)
     if "error_category" not in query or '"Тип ошибки"' not in query:
         issues.append(f"{name}: SQL must expose category and atomic error type")
-    if 'AS "%"' not in query:
-        issues.append(f"{name}: SQL must expose «%» share column")
+    for share_column in ('AS "% ошибок"', 'AS "% обработанных"'):
+        if share_column not in query:
+            issues.append(f"{name}: SQL must expose {share_column} share column")
     return issues
 
 

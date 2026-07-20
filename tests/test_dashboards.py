@@ -247,6 +247,8 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
 
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
+    """«Отказы по часам» — error-rate: доли отказов от документов с вердиктом РЭМД
+    за час (%). Счётной серии «Всего» нет: вторая ось визуально спорит с долями."""
     dashboard = _tab_dashboard("service")
     card = next(
         c for c in dashboard["cards"]
@@ -255,10 +257,21 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "date_trunc('hour', ips_date)" in query
     assert "[[AND {{ips_date}}]]" in query
-    assert card["visualization_settings"]["graph.dimensions"] == ["Час"]
-    metrics = card["visualization_settings"]["graph.metrics"]
-    assert "Ошибка связи" in metrics
-    assert "Ошибка асинхронного ответа РЭМД" in metrics
+    assert "status <> 'waiting'" in query
+    assert "NULLIF(COUNT(DISTINCT dwh_id), 0)" in query
+    assert 'AS "Ошибка связи, %"' in query
+    assert 'AS "Ошибка асинхронного ответа РЭМД, %"' in query
+    assert 'AS "Всего"' not in query
+    viz = card["visualization_settings"]
+    assert viz["graph.dimensions"] == ["Час"]
+    assert viz["graph.metrics"] == [
+        "Ошибка связи, %",
+        "Ошибка асинхронного ответа РЭМД, %",
+    ]
+    ss = viz["series_settings"]
+    assert "Всего" not in ss
+    assert ss["Ошибка связи, %"]["axis"] == "left"
+    assert ss["Ошибка асинхронного ответа РЭМД, %"]["axis"] == "left"
 
 
 def test_service_healthcheck_table_scope() -> None:
@@ -768,9 +781,12 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     assert any(p["name"] == "JID Клиники" for p in dashboard["parameters"])
     assert any(p["name"] == "Обработано IPS" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
-    # Обзор/Документы читают rpt_documents, вкладка ошибок — rpt_error_breakdown (модель ошибок).
+    # Обзор/Документы читают rpt_documents, вкладка ошибок — rpt_error_breakdown (модель
+    # ошибок), вкладка доступных типов СЭМД — rpt_clinic_semd_licenses.
     assert all(
-        "public.rpt_documents" in query or "public.rpt_error_breakdown" in query
+        "public.rpt_documents" in query
+        or "public.rpt_error_breakdown" in query
+        or "public.rpt_clinic_semd_licenses" in query
         for query in queries
     )
     assert all(
@@ -815,14 +831,16 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
             query = card["dataset_query"]["native"]["query"]
             if "client_jid" not in tags:
                 continue
-            # Фильтры среза биндятся к грейну документа: если карточка смешивает обе
-            # витрины (period_docs + join rpt_error_breakdown), клиника/период/тип идут
+            # Фильтры среза биндятся к грейну источника карточки: витрина лицензий несёт
+            # собственный clinic_label; если карточка смешивает обе документные витрины
+            # (period_docs + join rpt_error_breakdown), клиника/период/тип идут
             # на rpt_documents; чисто-ошибочные карточки — на rpt_error_breakdown.
-            source_view = (
-                "public.rpt_documents"
-                if "public.rpt_documents" in query
-                else "public.rpt_error_breakdown"
-            )
+            if "public.rpt_clinic_semd_licenses" in query:
+                source_view = "public.rpt_clinic_semd_licenses"
+            elif "public.rpt_documents" in query:
+                source_view = "public.rpt_documents"
+            else:
+                source_view = "public.rpt_error_breakdown"
             if path_name == "07_client_service.json":
                 assert tags["client_jid"]["type"] == "text"
                 assert tags["client_jid"]["required"] is False
@@ -853,10 +871,16 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
 
 
 def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
-    """07: три вкладки (Обзор/Ошибки регистрации ЭМД/Документы), аналитика ошибок и журнал."""
+    """07: четыре вкладки (Обзор/Ошибки регистрации ЭМД/Документы/Доступные типы СЭМД),
+    аналитика ошибок и журнал."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     tabs = dashboard.get("tabs") or []
-    assert [t["name"] for t in tabs] == ["Обзор", "Ошибки регистрации ЭМД", "Документы"]
+    assert [t["name"] for t in tabs] == [
+        "Обзор",
+        "Ошибки регистрации ЭМД",
+        "Документы",
+        "Доступные типы СЭМД",
+    ]
 
     names = {c.get("name") for c in dashboard["cards"]}
     # Мёртвая карточка среднего времени удалена: delivery_seconds почти всегда NULL.
@@ -922,6 +946,44 @@ def test_client_top_error_type_shows_processed_share() -> None:
     assert ff["clinic_label"]["table_ref"] == "public.rpt_documents"
     # Категория ошибки живёт только на грейне разбора ошибок.
     assert ff["client_error_category"]["table_ref"] == "public.rpt_error_breakdown"
+
+
+def test_client_service_licenses_tab_lists_available_semd_types() -> None:
+    """07: вкладка «Доступные типы СЭМД» — записи EGISZ_LICENSES на паре JID+KIND
+    (rpt_clinic_semd_licenses); наименование — dim_semd_types, фильтры клиники общие."""
+    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" in sql
+    assert "FROM public.dim_licenses" in sql
+    assert "GROUP BY jid, kind" in sql
+    assert "LEFT JOIN public.dim_semd_types st ON st.code = l.kind" in sql
+
+    dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Доступные типы СЭМД — клиент")
+    assert card["tab"] == "licenses"
+    assert card["display"] == "table"
+    query = card["dataset_query"]["native"]["query"]
+    assert "public.rpt_clinic_semd_licenses" in query
+    assert "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]]" in query
+    assert card["metabase-field-filters"]["clinic_label"] == {
+        "table_ref": "public.rpt_clinic_semd_licenses",
+        "field_name": "clinic_label",
+    }
+    columns = {c["name"] for c in card["visualization_settings"]["table.columns"]}
+    assert {
+        "Код СЭМД",
+        "Наименование СЭМД",
+        "Дата начала использования",
+        "Последнее обновление",
+    } <= columns
+    # «Дата начала использования» = BDATE записи лицензии (в источнике пока пусто).
+    assert 'license_started_at AS "Дата начала использования"' in query
+    assert "MIN(bdate) AS license_started_at" in sql
+
+    text_card = next(
+        c for c in dashboard["cards"]
+        if c.get("display") == "text" and c.get("tab") == "licenses"
+    )
+    assert "{{clinic_label}}" in text_card["text"]
 
 
 def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:

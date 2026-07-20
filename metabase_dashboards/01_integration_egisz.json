@@ -1386,11 +1386,11 @@
     },
     {
       "name": "Отказы по часам: связь и асинхронный ответ",
-      "description": "Почасовая динамика двух типов отказов на одном графике; ось — «Дата обработки» (`rpt_documents`). Период — фильтр «Обработано IPS».",
+      "description": "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов с вердиктом РЭМД за час (%). «Отправлено» (без исхода) исключено. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::bigint AS \"Ошибка связи\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" FROM public.rpt_documents WHERE status <> 'waiting' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1425,23 +1425,29 @@
         "graph.show_values": false,
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Час",
-        "graph.y_axis.title_text": "Документов",
+        "graph.y_axis.title_text": "% ошибок",
         "series_settings": {
-          "Ошибка асинхронного ответа РЭМД": {
-            "color": "#A989C5"
-          },
-          "Ошибка связи": {
+          "Ошибка связи, %": {
+            "display": "line",
+            "axis": "left",
             "color": "#F2994A"
+          },
+          "Ошибка асинхронного ответа РЭМД, %": {
+            "display": "line",
+            "axis": "left",
+            "color": "#A989C5"
           }
         },
         "column_settings": {
-          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
-            "decimals": 0,
-            "number_separators": ", "
+          "[\"name\",\"Ошибка связи, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           },
-          "[\"name\",\"Ошибка связи\"]": {
-            "decimals": 0,
-            "number_separators": ", "
+          "[\"name\",\"Ошибка асинхронного ответа РЭМД, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           },
           "[\"name\",\"Час\"]": {
             "date_style": "D MMMM, YYYY",
@@ -1449,8 +1455,8 @@
           }
         },
         "graph.metrics": [
-          "Ошибка связи",
-          "Ошибка асинхронного ответа РЭМД"
+          "Ошибка связи, %",
+          "Ошибка асинхронного ответа РЭМД, %"
         ]
       },
       "sizeX": 20,

@@ -287,6 +287,20 @@ CLIENT_STATUS_BY_DAY_QUERY = (
     "GROUP BY ips_date::date ORDER BY ips_date::date"
 )
 
+# Отказы по часам — как доля от документов с вердиктом РЭМД за час (успех+ошибка).
+# Серии объёма нет: счётный ряд на второй оси визуально спорит с процентными рядами.
+# «Отправлено» (status='waiting', без исхода) исключено — см. README §«Учёт отправленных».
+SERVICE_REFUSALS_BY_HOUR_QUERY = (
+    "SELECT date_trunc('hour', ips_date) AS \"Час\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" "
+    "FROM public.rpt_documents WHERE status <> 'waiting' "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "GROUP BY 1 ORDER BY 1"
+)
+
 LATEST_OPERATIONS_QUERY = (
     "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", "
     "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
@@ -1010,6 +1024,46 @@ def apply_transactions_trend(card: dict) -> None:
     }
 
 
+def apply_refusals_hourly(card: dict) -> None:
+    """«Отказы по часам» — error-rate: доли отказов связи и асинхронного ответа от
+    документов с вердиктом РЭМД за час; знаменатель одного грейна с сериями."""
+    card["display"] = "line"
+    card["description"] = (
+        "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов "
+        "с вердиктом РЭМД за час (%). «Отправлено» (без исхода) исключено. "
+        "Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS»."
+    )
+    card["dataset_query"]["native"]["query"] = SERVICE_REFUSALS_BY_HOUR_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    viz["graph.dimensions"] = ["Час"]
+    viz["graph.metrics"] = ["Ошибка связи, %", "Ошибка асинхронного ответа РЭМД, %"]
+    viz["graph.x_axis.scale"] = "timeseries"
+    viz["graph.x_axis.title_text"] = "Час"
+    viz["graph.y_axis.title_text"] = "% ошибок"
+    viz["graph.show_values"] = False
+    viz["series_settings"] = {
+        "Ошибка связи, %": {"display": "line", "axis": "left", "color": "#F2994A"},
+        "Ошибка асинхронного ответа РЭМД, %": {
+            "display": "line",
+            "axis": "left",
+            "color": "#A989C5",
+        },
+    }
+    viz["column_settings"] = {
+        '["name","Ошибка связи, %"]': {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %",
+        },
+        '["name","Ошибка асинхронного ответа РЭМД, %"]': {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %",
+        },
+        '["name","Час"]': {"date_style": "D MMMM, YYYY", "time_style": "HH:mm"},
+    }
+
+
 def apply_semd_volume_table(card: dict) -> None:
     """Таблица кодов СЭМД по числу документов в срезе (вкладка «Архив СЭМД»)."""
     card["name"] = "Топ типов СЭМД по документам"
@@ -1684,6 +1738,8 @@ def apply_01(dash: dict) -> None:
             apply_queue_table(card)
         elif name == "Транзакции по дням и статусам" and dq.get("type") == "native":
             apply_transactions_trend(card)
+        elif name == "Отказы по часам: связь и асинхронный ответ" and dq.get("type") == "native":
+            apply_refusals_hourly(card)
         elif name == "Динамика документов по дням" and dq.get("type") == "native":
             apply_document_volume_by_day(card)
         elif name == "Топ типов СЭМД по документам" and card.get("tab") == "archive":
@@ -1911,14 +1967,16 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
                 "name": "clinic_label",
                 "widget-type": "string/=",
             }
-        # Фильтр клиники — на грейне документа: если запрос смешивает обе таблицы
+        # Фильтр клиники — на грейне источника карточки: витрина лицензий несёт
+        # собственный clinic_label; если запрос смешивает обе документные таблицы
         # (period_docs из rpt_documents + join rpt_error_breakdown), привязываем к
         # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
-        source = (
-            "public.rpt_documents"
-            if "public.rpt_documents" in native["query"]
-            else "public.rpt_error_breakdown"
-        )
+        if "public.rpt_clinic_semd_licenses" in native["query"]:
+            source = "public.rpt_clinic_semd_licenses"
+        elif "public.rpt_documents" in native["query"]:
+            source = "public.rpt_documents"
+        else:
+            source = "public.rpt_error_breakdown"
         ff = dict(card.get("metabase-field-filters") or {})
         ff.pop("client_jid", None)
         ff["clinic_label"] = {"table_ref": source, "field_name": "clinic_label"}
