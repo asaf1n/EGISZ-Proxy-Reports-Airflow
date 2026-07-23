@@ -903,29 +903,27 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
     assert all(card.get("tab") == "errors" for card in error_cards)
 
 
-def test_client_service_status_by_day_is_error_rate_with_total_line() -> None:
-    """07: «Динамика статусов по дням» — доли async/сетевых ошибок от общего числа
-    документов за день (левая ось, %) + пунктирная линия объёма «Всего» (правая ось)."""
+def test_client_service_status_by_day_is_stacked_status_shares() -> None:
+    """07: «Динамика статусов по дням» — стэк долей исходов (успех/async/сетевые, % от
+    документов с вердиктом, сумма 100%); абсолютная серия «Всего» не смешивается с
+    процентной осью."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     card = next(c for c in dashboard["cards"] if c.get("name") == "Динамика статусов по дням")
     query = card["dataset_query"]["native"]["query"]
     viz = card["visualization_settings"]
 
-    assert card["display"] == "line"
+    assert card["display"] == "bar"
+    assert "FILTER (WHERE status = 'success')" in query
     assert "FILTER (WHERE status = 'async_error')" in query
     assert "FILTER (WHERE status = 'network_error')" in query
+    assert 'AS "Успешно, %"' in query
     assert 'AS "Async ошибки, %"' in query
     assert 'AS "Сетевые ошибки, %"' in query
-    assert 'AS "Всего"' in query
-    assert viz["graph.metrics"] == ["Async ошибки, %", "Сетевые ошибки, %", "Всего"]
-    ss = viz["series_settings"]
-    assert ss["Всего"]["line.style"] == "dashed"
-    assert ss["Всего"]["axis"] == "right"
-    assert ss["Async ошибки, %"]["axis"] == "left"
-    assert ss["Сетевые ошибки, %"]["axis"] == "left"
-    # Успешные как отдельная серия больше не рисуются; график перестал быть стэком.
-    assert "Успешно зарегистрирован" not in ss
-    assert viz.get("stackable.stack_type") is None
+    assert 'AS "Всего"' not in query
+    assert sorted(viz["graph.metrics"]) == ["Async ошибки, %", "Сетевые ошибки, %", "Успешно, %"]
+    assert "Всего" not in viz["series_settings"]
+    assert viz["stackable.stack_type"] == "stacked"
+    assert viz["graph.y_axis.title_text"] == "% документов"
 
 
 def test_client_top_error_type_shows_processed_share() -> None:

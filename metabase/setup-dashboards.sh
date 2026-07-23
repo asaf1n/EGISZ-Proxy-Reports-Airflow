@@ -4,6 +4,10 @@ set -euo pipefail
 METABASE_URL="${METABASE_URL:-${MB_URL:-http://localhost:3000}}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-${METABASE_ADMIN_EMAIL:-admin@egisz.local}}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-${METABASE_ADMIN_PASSWORD:-egisz}}"
+# Ключ API — для внешних инстансов без парольной учётки в переменных окружения;
+# при заданном ключе сессионный логин и ветка первичной инициализации не используются.
+METABASE_API_KEY="${METABASE_API_KEY:-}"
+SESSION_TOKEN=""
 DASHBOARDS_DIR="${METABASE_DASHBOARDS_DIR:-/app/metabase_dashboards}"
 MODELS_DIR="${METABASE_MODELS_DIR:-/app/metabase_models}"
 MODEL_REGISTRY_FILE="${METABASE_MODEL_REGISTRY_FILE:-/tmp/metabase-model-registry.json}"
@@ -81,16 +85,28 @@ write_dashboard_manifest() {
   current_dashboard_manifest > "${DASHBOARD_MANIFEST_FILE}"
 }
 
+mb_auth_header() {
+  if [ -n "${METABASE_API_KEY}" ]; then
+    echo "x-api-key: ${METABASE_API_KEY}"
+  else
+    echo "X-Metabase-Session: ${SESSION_TOKEN}"
+  fi
+}
+
+# Ретраи только фазы соединения (--retry-connrefused/timeout): запрос ещё не отправлен,
+# поэтому повтор безопасен и для POST; переживает кратковременные обрывы сети до инстанса.
 api_request() {
   local method="$1" path="$2" payload="${3:-}"
   local response code body
   if [ -z "${payload}" ]; then
-    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
-      -H "X-Metabase-Session: ${SESSION_TOKEN}")
+    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+      -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+      -H "$(mb_auth_header)")
   else
-    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+      -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "Content-Type: application/json" \
-      -H "X-Metabase-Session: ${SESSION_TOKEN}" \
+      -H "$(mb_auth_header)" \
       -d "${payload}")
   fi
   code=$(echo "${response}" | tail -n1)
@@ -104,12 +120,14 @@ api_request() {
 api_request_optional() {
   local method="$1" path="$2" payload="${3:-}" response code body
   if [ -z "${payload}" ]; then
-    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
-      -H "X-Metabase-Session: ${SESSION_TOKEN}")
+    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+      -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+      -H "$(mb_auth_header)")
   else
-    response=$(curl -sS -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
+    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+      -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "Content-Type: application/json" \
-      -H "X-Metabase-Session: ${SESSION_TOKEN}" \
+      -H "$(mb_auth_header)" \
       -d "${payload}")
   fi
   code=$(echo "${response}" | tail -n1)
@@ -123,6 +141,14 @@ api_request_optional() {
 
 login() {
   local body setup_token payload
+  if [ -n "${METABASE_API_KEY}" ]; then
+    # Импортёру нужны права администратора: без них PUT /api/field и архивация упадут позже
+    # с невнятными 403 — проверяем сразу.
+    body=$(api_request GET "/api/user/current")
+    [ "$(echo "${body}" | jq -r '.is_superuser // false')" = "true" ] ||
+      fail "METABASE_API_KEY не даёт прав администратора (см. /api/user/current)"
+    return
+  fi
   body=$(curl -sS -X POST "${METABASE_URL}/api/session" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")
@@ -415,7 +441,7 @@ wait_for_metabase_metadata() {
 existing_dashboard_id() {
   local dashboard_name="$1"
   if declare -F mb_all_dashboards_json >/dev/null; then
-    mb_all_dashboards_json "${METABASE_URL}" "${SESSION_TOKEN}" |
+    mb_all_dashboards_json "${METABASE_URL}" "$(mb_auth_header)" |
       jq -r --arg name "${dashboard_name}" --argjson col "${COL_ID}" '[.[]? | select(.collection_id == $col and .name == $name) | .id][0] // empty'
   else
     api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
@@ -974,6 +1000,7 @@ create_or_update_dashboard() {
   local file="$1"
   local payload dashboard_id saved_parameters cards num_cards i
   local dashboard_name tab_map_file ordered_tabs_json dashboard_slug
+  local existing_dashcards used_dashcard_ids existing_id
   dashboard_name="$(jq -r '.name' "${file}")"
   dashboard_slug="$(basename "${file}" .json)"
   tab_map_file="/tmp/metabase-tab-map-${dashboard_slug}.json"
@@ -1013,6 +1040,10 @@ create_or_update_dashboard() {
   saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
   existing_dashcards="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.dashcards // []')"
   cards="[]"
+  # Одна карточка размещается на нескольких вкладках: без учёта вкладки и уже
+  # занятых id одно и то же существующее id дашкарты попадает в payload дважды,
+  # и PUT /api/dashboard/{id}/cards отвечает 400 «id уникальны».
+  used_dashcard_ids="[]"
   num_cards="$(jq '.cards | length' "${file}")"
   if [ "${num_cards}" -gt 0 ]; then
     for i in $(seq 0 $((num_cards - 1))); do
@@ -1176,19 +1207,28 @@ create_or_update_dashboard() {
 
       dashcard_id=$((-(i + 1)))
       if [ "${card_id_json}" != "null" ]; then
-        existing_id="$(jq -r --argjson cid "${card_id_json}" '[.[] | select(.card_id == $cid) | .id][0] // empty' <<< "${existing_dashcards}")"
+        existing_id="$(jq -r \
+          --argjson cid "${card_id_json}" \
+          --argjson tabId "${dashboard_tab_id_json}" \
+          --argjson used "${used_dashcard_ids}" \
+          '[.[] | select(.card_id == $cid) | select(.id | IN($used[]) | not)] as $free
+           | (([$free[] | select((.dashboard_tab_id // null) == $tabId)] + $free) | .[0].id) // empty' \
+          <<< "${existing_dashcards}")"
         if [ -n "${existing_id}" ]; then
           dashcard_id="${existing_id}"
+          used_dashcard_ids="$(jq -c --argjson id "${existing_id}" '. + [$id]' <<< "${used_dashcard_ids}")"
         fi
       else
         existing_id="$(jq -r \
           --argjson row "${row}" \
           --argjson col "${col}" \
           --argjson tabId "${dashboard_tab_id_json}" \
-          '[.[] | select(.card_id == null and .row == $row and .col == $col and (.dashboard_tab_id // null) == ($tabId | if . == "null" then null else . end)) | .id][0] // empty' \
+          --argjson used "${used_dashcard_ids}" \
+          '[.[] | select(.card_id == null and .row == $row and .col == $col and (.dashboard_tab_id // null) == $tabId) | select(.id | IN($used[]) | not) | .id][0] // empty' \
           <<< "${existing_dashcards}")"
         if [ -n "${existing_id}" ]; then
           dashcard_id="${existing_id}"
+          used_dashcard_ids="$(jq -c --argjson id "${existing_id}" '. + [$id]' <<< "${used_dashcard_ids}")"
         fi
       fi
 

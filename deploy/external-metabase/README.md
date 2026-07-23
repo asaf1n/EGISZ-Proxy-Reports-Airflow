@@ -10,7 +10,7 @@ metabase/                    # корень бандла (dist/external/metabase
 ├── setup-dashboards.sh      # главный импортёр (запускать его)
 ├── sync-models.sh           # sync Metabase Models (подключается импортёром)
 ├── include/mb_list.sh       # общие функции (подключается импортёром)
-├── metabase_dashboards/     # 4 дашборда (*.json) + field_filter_defaults.yaml
+├── metabase_dashboards/     # 5 дашбордов (*.json) + field_filter_defaults.yaml
 ├── metabase_models/         # 4 модели (*.json)
 ├── README.md
 └── BUILD_INFO.txt
@@ -39,6 +39,7 @@ metabase/                    # корень бандла (dist/external/metabase
 | `METABASE_URL` (или `MB_URL`) | `http://localhost:3000` | адрес целевого Metabase |
 | `ADMIN_EMAIL` / `METABASE_ADMIN_EMAIL` | `admin@egisz.local` | логин администратора |
 | `ADMIN_PASSWORD` / `METABASE_ADMIN_PASSWORD` | `egisz` | пароль администратора |
+| `METABASE_API_KEY` | — | ключ API вместо логина/пароля (см. §2.1) |
 | `METABASE_DASHBOARDS_DIR` | `/app/metabase_dashboards` | путь к JSON дашбордов (в бандле — задать явно) |
 | `METABASE_MODELS_DIR` | `/app/metabase_models` | путь к JSON моделей (в бандле — задать явно) |
 | `APP_DB_HOST` / `APP_DB_PORT` | `host.docker.internal` / `5432` | хост/порт DWH |
@@ -48,7 +49,7 @@ metabase/                    # корень бандла (dist/external/metabase
 | `METABASE_COLLECTION_NAME` | `Интеграция с ЕГИСЗ` | коллекция для карточек/дашбордов |
 | `METABASE_SITE_NAME` | `Интеграция с ЕГИСЗ` | имя инстанса (site-name) |
 | `METABASE_FORCE_PROVISION` | `auto` | `always` — форсировать переимпорт при неизменных JSON |
-| `METABASE_PUBLIC_CLIENT_DASHBOARD` | `true` | публичная ссылка клиентского дашборда |
+| `METABASE_PUBLIC_CLIENT_DASHBOARD` | `true` | публичная ссылка клиентского дашборда; любое другое значение — public sharing не включается и ссылка не создаётся |
 | `METABASE_AUTO_APPLY_FILTERS` | `true` | auto-apply фильтров на дашбордах |
 
 ## 2. Запуск
@@ -65,10 +66,32 @@ APP_DB_USER=egisz APP_DB_PASSWORD='***' \
 ./setup-dashboards.sh
 ```
 
+### 2.1. Запуск с ключом API
+
+Если парольная учётка недоступна, вместо `ADMIN_EMAIL`/`ADMIN_PASSWORD` задаётся
+`METABASE_API_KEY` (Admin → Authentication → API keys; группа ключа — администраторы).
+Скрипт проверяет права ключа через `/api/user/current` и не выполняет сессионный логин.
+Ветка первичной инициализации `/api/setup` с ключом недоступна — инстанс должен быть
+уже инициализирован. Значение ключа передавать только через окружение запуска.
+
+```bash
+METABASE_URL=https://metabase.example.org \
+METABASE_API_KEY="$METABASE_API_KEY" \
+METABASE_DASHBOARDS_DIR="$PWD/metabase_dashboards" \
+METABASE_MODELS_DIR="$PWD/metabase_models" \
+APP_DB_HOST=pg.example.org APP_DB_NAME=dwh_egisz \
+APP_DB_USER=egisz APP_DB_PASSWORD='***' \
+./setup-dashboards.sh
+```
+
+Тот же механизм поддержан в скриптах сверки (`scripts/export_dashboard.py`,
+`scripts/verify_metabase_cards.py`): при заданном `METABASE_API_KEY` они работают
+по ключу без сессионного логина.
+
 ## 3. Что делает скрипт (идемпотентно, безопасно повторять)
 
 1. Ждёт `/api/health`; на неинициализированном Metabase создаёт администратора через
-   `/api/setup`, иначе логинится.
+   `/api/setup`, иначе логинится (с `METABASE_API_KEY` — проверка прав вместо логина).
 2. Регистрирует (или переиспользует) подключение к DWH; включает `report-timezone
    Europe/Moscow` глобально и на подключении.
 3. Локаль `ru`, формат времени `HH:mm`, валюта `RUB`, кеширование запросов (TTL-стратегия).

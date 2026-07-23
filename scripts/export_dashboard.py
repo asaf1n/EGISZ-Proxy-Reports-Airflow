@@ -76,6 +76,11 @@ def extract_query_and_tags(card: dict) -> tuple[str | dict, dict, str]:
         stage = dq["stages"][0]
         if stage.get("lib/type") == "mbql/query" or dq.get("type") == "query":
             return stage.get("query") or {}, {}, "query"
+        # pMBQL-этап (v0.61+): QB-запрос с instance-id (source-card, field id) —
+        # реверс в проектный вид без реестра моделей невозможен, запрос
+        # восстанавливает keep-prior ветка по репозиторному JSON.
+        if stage.get("lib/type") == "mbql.stage/mbql":
+            return {}, {}, "query"
         query = stage.get("native") or ""
         tags = stage.get("template-tags") or {}
         return query, clean_template_tags(tags), "native"
@@ -370,6 +375,13 @@ def export_dashboard(token: str, dash_id: int, keep_params_from: Path | None) ->
             card_obj["query_tier"] = prior["query_tier"]
             if "source_model" in prior:
                 card_obj["source_model"] = prior["source_model"]
+            card_obj["dataset_query"] = prior["dataset_query"]
+        elif (
+            prior
+            and prior.get("query_tier") == "query_builder"
+            and card_obj.get("dataset_query", {}).get("type") == "query"
+            and not card_obj["dataset_query"].get("query")
+        ):
             card_obj["dataset_query"] = prior["dataset_query"]
         cards.append(card_obj)
 

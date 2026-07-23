@@ -331,47 +331,55 @@
     },
     {
       "name": "Динамика статусов по дням",
-      "description": "Доля документов с ошибкой асинхронного ответа РЭМД и ошибкой связи от общего числа документов с вердиктом РЭМД за день (левая ось, %); общий объём — пунктирная линия «Всего» (правая ось). «Отправлено» (без исхода) исключено — см. карточку «Отправленные — клиент».",
+      "description": "Доли документов по исходам за день: успешно, ошибка асинхронного ответа РЭМД и ошибка связи — в процентах от документов с вердиктом РЭМД (сумма = 100%). «Отправлено» (без исхода) исключено — см. карточку «Отправленные — клиент».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
+          "query": "SELECT ips_date::date AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Успешно, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
           "template-tags": {
             "clinic_label": {
+              "name": "clinic_label",
+              "type": "dimension",
               "widget-type": "string/=",
               "display-name": "Клиника",
-              "id": "07c00010000-0000-4000-8000-000000000001",
-              "name": "clinic_label",
-              "type": "dimension"
+              "id": "07c00010000-0000-4000-8000-000000000001"
             },
             "client_document_type": {
+              "name": "client_document_type",
+              "type": "dimension",
               "widget-type": "string/=",
               "display-name": "Тип документа",
-              "id": "07c50000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
+              "id": "07c50000-0000-4000-8000-000000000002"
             },
             "client_jid": {
+              "name": "client_jid",
+              "required": false,
               "type": "text",
               "display-name": "JID Клиники",
               "id": "07c50000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": false,
               "widget-type": "string/="
             },
             "ips_date": {
+              "name": "ips_date",
+              "type": "dimension",
               "widget-type": "date/all-options",
               "display-name": "Период",
-              "id": "07c50000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
+              "id": "07c50000-0000-4000-8000-000000000001"
             }
           }
         },
         "database": 1
       },
-      "display": "line",
+      "display": "bar",
       "visualization_settings": {
+        "graph.y_axis.title_text": "% документов",
+        "graph.show_values": false,
+        "graph.x_axis.title_text": "День",
+        "graph.metrics": [
+          "Async ошибки, %",
+          "Сетевые ошибки, %",
+          "Успешно, %"
+        ],
         "column_settings": {
           "[\"name\",\"Async ошибки, %\"]": {
             "decimals": 1,
@@ -383,40 +391,30 @@
             "number_separators": ", ",
             "suffix": " %"
           },
-          "[\"name\",\"Всего\"]": {
-            "decimals": 0,
-            "number_separators": ", "
+          "[\"name\",\"Успешно, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           }
         },
-        "graph.dimensions": [
-          "Дата"
-        ],
-        "graph.metrics": [
-          "Async ошибки, %",
-          "Сетевые ошибки, %",
-          "Всего"
-        ],
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "% ошибок",
-        "graph.show_values": false,
         "series_settings": {
-          "Async ошибки, %": {
-            "display": "line",
-            "axis": "left",
-            "color": "#A989C5"
-          },
           "Сетевые ошибки, %": {
-            "display": "line",
             "axis": "left",
             "color": "#F2994A"
           },
-          "Всего": {
-            "display": "line",
-            "line.style": "dashed",
-            "axis": "right",
-            "color": "#84BB4C"
+          "Async ошибки, %": {
+            "axis": "left",
+            "color": "#A989C5"
+          },
+          "Успешно, %": {
+            "color": "#689636"
           }
-        }
+        },
+        "graph.x_axis.scale": "timeseries",
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
       "sizeY": 7,

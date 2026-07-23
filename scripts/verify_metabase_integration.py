@@ -9,7 +9,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from mb_api import DEFAULT_EMAIL, DEFAULT_PASSWORD, DEFAULT_URL, api_json, login
+from mb_api import DEFAULT_EMAIL, DEFAULT_PASSWORD, DEFAULT_URL, api_json, auth_headers, login
 
 ROOT = Path(__file__).resolve().parents[1]
 DASHBOARDS_DIR = ROOT / "metabase_dashboards"
@@ -29,7 +29,7 @@ def verify_dashboard_contracts(
         return [f"health check failed: {exc}"]
 
     session_id = login(base_url, email, password)
-    headers = {"X-Metabase-Session": session_id}
+    headers = auth_headers(session_id)
     search = api_json(f"{base_url}/api/search?models=dashboard", headers=headers)
     live_by_name = {item.get("name"): item for item in search.get("data", [])}
 

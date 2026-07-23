@@ -304,7 +304,7 @@ def verify_card_query(
 def verify_cards(base_url: str = DEFAULT_URL, workers: int = DEFAULT_WORKERS) -> list[str]:
     errors: list[str] = []
     session_id = login(base_url, DEFAULT_EMAIL, DEFAULT_PASSWORD)
-    headers = {"X-Metabase-Session": session_id, "Content-Type": "application/json"}
+    headers = {**mb_api.auth_headers(session_id), "Content-Type": "application/json"}
 
     search = api_json(f"{base_url}/api/search?models=dashboard", headers=headers)
     dashboards = {item["name"]: item["id"] for item in search.get("data", [])}
