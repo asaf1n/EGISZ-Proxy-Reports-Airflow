@@ -1,6 +1,5 @@
 -- ============================================================================
 -- 50_transform.sql — egisz_transform_raw_to_facts
--- Source: db/dwh_init.sql, lines [1055..1254).
 -- Loaded by db/dwh_init.sql via \i db/parts/50_transform.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.

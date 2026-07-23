@@ -17,7 +17,7 @@
 
 ```
 dist/external/
-├── airflow/    # DAG + пакет egisz_elt + requirements — см. external-airflow/README.md
+├── airflow/    # самодостаточные DAG-файлы + requirements — см. external-airflow/README.md
 ├── metabase/   # importer-скрипты + дашборды + модели   — см. external-metabase/README.md
 └── dwh/        # db/dwh_init.sql + db/parts/            — см. external-dwh/README.md
 ```
@@ -34,5 +34,5 @@ dist/external/
 | Бандл | Канонические исходники | Кому передавать |
 | --- | --- | --- |
 | `dwh` | `db/dwh_init.sql`, `db/parts/*.sql` | DBA целевого PostgreSQL |
-| `airflow` | `airflow/dags/*.py`, `src/egisz_elt/`, `pyproject.toml`, `k8s/airflow/egisz-variables.json` | администратор Airflow |
+| `airflow` | `airflow/dags/*.py` + `src/egisz_elt/` (склейка `scripts/build_standalone_dags.py`), `k8s/airflow/egisz-variables.json` | администратор Airflow |
 | `metabase` | `metabase/setup-dashboards.sh`, `metabase/sync-models.sh`, `metabase/include/`, `metabase_dashboards/`, `metabase_models/` | администратор Metabase |

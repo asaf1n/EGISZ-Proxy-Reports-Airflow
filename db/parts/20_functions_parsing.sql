@@ -1,6 +1,5 @@
 -- ============================================================================
 -- 20_functions_parsing.sql — Parsing helpers (xml_text, normalize_message_id, clean_host, ...)
--- Source: db/dwh_init.sql, lines [417..536).
 -- Loaded by db/dwh_init.sql via \i db/parts/20_functions_parsing.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.

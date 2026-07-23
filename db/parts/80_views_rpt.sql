@@ -182,10 +182,8 @@ WITH atom_types AS (
         COALESCE(g.is_retryable, false) AS is_retryable
     FROM public.documents doc
     CROSS JOIN LATERAL unnest(
-        string_to_array(
-            COALESCE(NULLIF(btrim(doc.error_types), ''), 'Неизвестная ошибка'),
-            ' · '
-        )
+        -- error_types гарантированно непустой ниже по WHERE, поэтому фолбэк не нужен.
+        string_to_array(btrim(doc.error_types), ' · ')
     ) AS atom
     CROSS JOIN LATERAL (SELECT NULLIF(btrim(atom), '') AS norm) n
     LEFT JOIN public.dim_error_type_group g ON g.error_type = n.norm

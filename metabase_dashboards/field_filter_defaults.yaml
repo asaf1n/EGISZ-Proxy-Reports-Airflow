@@ -61,8 +61,16 @@ tags:
         field_name: error_type
 
   # Поиск по клинике «код или наименование» → label-колонка.
+  # Weekly-правила стоят ВЫШЕ базовых: query_contains матчится подстрокой, и
+  # rpt_documents/rpt_error_breakdown перехватили бы недельные витрины.
   jid:
     rules:
+      - query_contains: [rpt_documents_weekly]
+        table_ref: public.rpt_documents_weekly
+        field_name: clinic_label
+      - query_contains: [rpt_error_breakdown_weekly]
+        table_ref: public.rpt_error_breakdown_weekly
+        field_name: clinic_label
       - query_contains: [rpt_error_breakdown]
         table_ref: public.rpt_error_breakdown
         field_name: clinic_label
@@ -99,6 +107,12 @@ tags:
   # день берётся из полной даты инлайн, отдельной day-колонки нет.
   ips_date:
     rules:
+      - query_contains: [rpt_documents_weekly]
+        table_ref: public.rpt_documents_weekly
+        field_name: week_start
+      - query_contains: [rpt_error_breakdown_weekly]
+        table_ref: public.rpt_error_breakdown_weekly
+        field_name: week_start
       - query_contains: [rpt_network_errors]
         table_ref: public.rpt_network_errors
         field_name: ips_date

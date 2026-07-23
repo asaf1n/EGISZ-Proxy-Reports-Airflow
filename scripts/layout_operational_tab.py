@@ -139,6 +139,14 @@ CLIENT_BI_TEXT_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Медицинские показатели (агрегаты по пациентам и врачам)": (24, 0, 24, 1),
 }
 
+WEEKLY_LAYOUT: dict[str, tuple[int, int, int, int]] = {
+    "Доля ошибок по неделям (SLI)": (1, 0, 12, 6),
+    "Объём документов по неделям": (1, 12, 12, 6),
+    "Контрольная p-карта: доля ошибок по неделям": (7, 0, 24, 6),
+    "Категории ошибок по неделям": (14, 0, 24, 6),
+    "Сводка по неделям": (20, 0, 24, 7),
+}
+
 
 def _apply_layout(card: dict, layout: tuple[int, int, int, int]) -> None:
     row, col, size_x, size_y = layout
@@ -206,6 +214,7 @@ def main() -> None:
     other = {
         ROOT / "metabase_dashboards" / "05_executive.json": EXECUTIVE_LAYOUT,
         ROOT / "metabase_dashboards" / "07_client_service.json": CLIENT_SERVICE_LAYOUT,
+        ROOT / "metabase_dashboards" / "09_weekly_dynamics.json": WEEKLY_LAYOUT,
     }
     for path, layout in other.items():
         dashboard = json.loads(path.read_text(encoding="utf-8"))

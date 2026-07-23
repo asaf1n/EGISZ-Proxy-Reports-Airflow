@@ -2000,3 +2000,77 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
         click = by_name[name].get("click_behavior") or {}
         assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
         assert "targetDashboard" not in click and click.get("tab") != "archive"
+
+
+# ---------------------------------------------------------------------------
+# Дашборд «Динамика по неделям» (09) и недельный слой DWH
+# ---------------------------------------------------------------------------
+
+_WEEKLY_TABLES = {"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"}
+
+
+def _weekly_dashboard() -> dict:
+    return json.loads(
+        Path("metabase_dashboards/09_weekly_dynamics.json").read_text(encoding="utf-8")
+    )
+
+
+def test_weekly_dashboard_wired() -> None:
+    """09: канонические слаги, биндинги только на недельные витрины, оба фильтра на всех карточках."""
+    dashboard = _weekly_dashboard()
+    assert dashboard["name"] == "Динамика по неделям"
+    assert {p["slug"] for p in dashboard["parameters"]} == {"ips_date_filter", "jid_filter"}
+
+    data_cards = [c for c in dashboard["cards"] if c.get("display") != "text"]
+    assert len(data_cards) == 5
+    for card in data_cards:
+        bindings = card.get("metabase-field-filters") or {}
+        assert set(bindings) == {"ips_date", "jid"}, card["name"]
+        for binding in bindings.values():
+            assert binding["table_ref"] in _WEEKLY_TABLES, card["name"]
+        assert bindings["ips_date"]["field_name"] == "week_start", card["name"]
+        assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
+
+
+def test_weekly_sql_layer_contract() -> None:
+    """Недельный слой: matview в 85, DROP в 60, REFRESH+ANALYZE в 90, include в init."""
+    weekly = Path("db/parts/85_views_weekly.sql").read_text(encoding="utf-8")
+    assert "CREATE MATERIALIZED VIEW public.rpt_documents_weekly" in weekly
+    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown_weekly" in weekly
+    assert "uq_rpt_documents_weekly" in weekly
+    assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
+    assert "uq_rpt_error_breakdown_weekly" in weekly
+    assert "FILTER (WHERE r.status <> 'waiting')" in weekly
+    assert "is_complete_week" in weekly
+
+    drops = Path("db/parts/60_drop_dependents.sql").read_text(encoding="utf-8")
+    assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;" in drops
+    assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;" in drops
+
+    finalize = Path("db/parts/90_views_health_and_finalize.sql").read_text(encoding="utf-8")
+    assert "REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;" in finalize
+    assert "REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;" in finalize
+    assert "ANALYZE public.rpt_documents_weekly;" in finalize
+    assert "ANALYZE public.rpt_error_breakdown_weekly;" in finalize
+
+    init = Path("db/dwh_init.sql").read_text(encoding="utf-8")
+    assert "\i db/parts/85_views_weekly.sql" in init
+
+
+def test_weekly_sli_is_ratio_of_sums() -> None:
+    """SLI считается отношением сумм за неделю, а не средним от долей; p-карта — окно 12 недель."""
+    dashboard = _weekly_dashboard()
+    by_name = {c.get("name"): c for c in dashboard["cards"] if c.get("display") != "text"}
+
+    sli_query = by_name["Доля ошибок по неделям (SLI)"]["dataset_query"]["native"]["query"]
+    assert "SUM(docs_error)" in sli_query
+    assert "NULLIF(SUM(docs_total)" in sli_query
+    assert "is_complete_week" in sli_query
+
+    control_query = by_name["Контрольная p-карта: доля ошибок по неделям"]["dataset_query"]["native"]["query"]
+    assert "ROWS BETWEEN 11 PRECEDING AND CURRENT ROW" in control_query
+    assert "sqrt(p_bar * (1.0 - p_bar)" in control_query
+    assert "is_complete_week" in control_query
+
+    summary_query = by_name["Сводка по неделям"]["dataset_query"]["native"]["query"]
+    assert "LAG(sli_pct) OVER (ORDER BY week_start)" in summary_query

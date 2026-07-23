@@ -1,6 +1,5 @@
 -- ============================================================================
 -- 30_error_rules.sql — dim_error_rules table + seed
--- Source: db/dwh_init.sql, lines [536..650).
 -- Loaded by db/dwh_init.sql via \i db/parts/30_error_rules.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.
@@ -200,7 +199,6 @@ VALUES
     -- Ядро XSD-диагностик. Граница слова в ARE — \y (\b в PostgreSQL — литеральный
     -- backspace); без границ слова «xsd» ловит подстроки в идентификаторах.
     ('xsd_validation', 3, NULL, '(?is)(\ycvc-|XML_VALIDATION_ERROR|\yxsd\y|Invalid content was found)', 'Ошибка XSD-валидации XML', 'Ошибки структуры и валидации'),
-    ('cvc_datatype_extended', 3, NULL, '(?is)cvc-datatype-valid|cvc-pattern-valid|cvc-type|cvc-complex-type|cvc-attribute|cvc-elt|cvc-identity-constraint|cvc-particle|cvc-enumeration-valid', 'Ошибка XSD-валидации XML', 'Ошибки структуры и валидации'),
     ('certificate_expired', 3, NULL, '(?is)(сертификат.*истёк|истекш.*сертификат|срок.*действи.*сертификат.*истёк|certificate.*expired)', 'Сертификат ЭП истёк', 'Ошибки ЭП и сертификатов'),
     ('certificate_revoked', 3, NULL, '(?is)(сертификат.*отозван|certificate.*revoked|revoked.*certificate)', 'Сертификат ЭП отозван', 'Ошибки ЭП и сертификатов'),
     ('signature_certificate_chain', 3, NULL, '(?is)(CANT_BUILD_CERT_CHAIN|цепочк.*сертификат|аккредитованн.*УЦ)', 'Недействительный сертификат подписи', 'Ошибки ЭП и сертификатов'),

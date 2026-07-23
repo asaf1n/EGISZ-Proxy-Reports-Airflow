@@ -1,6 +1,5 @@
 -- ============================================================================
 -- 00_bootstrap.sql — Header, role, grants
--- Source: db/dwh_init.sql, lines [1..27).
 -- Loaded by db/dwh_init.sql via \i db/parts/00_bootstrap.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.

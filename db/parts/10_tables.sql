@@ -1,6 +1,5 @@
 -- ============================================================================
 -- 10_tables.sql — Tables, dim_semd_types seed, fact + indexes
--- Source: db/dwh_init.sql, lines [27..417).
 -- Loaded by db/dwh_init.sql via \i db/parts/10_tables.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.

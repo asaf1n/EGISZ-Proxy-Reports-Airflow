@@ -7,7 +7,6 @@ from pathlib import Path
 from egisz_elt.common import (
     get_cursors,
     load_raw_logs,
-    normalize_message_id,
     transform_raw_to_facts,
     update_cursors,
 )
@@ -58,12 +57,6 @@ def test_load_raw_logs_rejects_missing_required_exchangelog_keys() -> None:
 
     with pytest.raises(ValueError, match="msgtext"):
         load_raw_logs(FakeConnection(), [row])
-
-
-def test_normalize_message_id_strips_urn_uuid_wrapper() -> None:
-    assert normalize_message_id("<urn:uuid:dd73fc79-e2e6-479c-a285-2a470fc4f04e>") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
-    assert normalize_message_id("urn:uuid:dd73fc79-e2e6-479c-a285-2a470fc4f04e") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
-    assert normalize_message_id("dd73fc79-e2e6-479c-a285-2a470fc4f04e") == "dd73fc79-e2e6-479c-a285-2a470fc4f04e"
 
 
 class FakeTransformCursor:

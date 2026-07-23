@@ -9,6 +9,11 @@ DROP VIEW IF EXISTS public.rpt_health_signals CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_proxy_db CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_versions CASCADE;
 DROP VIEW IF EXISTS public.rpt_network_errors CASCADE;
+-- Недельный слой (85_views_weekly) зависит от rpt_documents/rpt_error_breakdown —
+-- дропаем до них. Эти объекты никогда не существовали как plain VIEW, relkind-обход
+-- (как у rpt_error_breakdown ниже) не нужен.
+DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;
 -- rpt_error_breakdown — MATERIALIZED VIEW. DROP VIEW IF EXISTS / DROP MATERIALIZED VIEW
 -- IF EXISTS подавляют только отсутствие объекта, но НЕ несовпадение типа (VIEW vs MATVIEW),
 -- поэтому дропаем по фактическому relkind.

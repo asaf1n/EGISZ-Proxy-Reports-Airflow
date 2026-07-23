@@ -85,18 +85,6 @@ def serialize_exchangelog_row(
     }
 
 
-def normalize_message_id(value: Any) -> Any:
-    """Normalize EGISZ UUID wrappers while preserving empty/null values."""
-    if value is None:
-        return None
-    text = str(value).strip()
-    if text.startswith("<") and text.endswith(">"):
-        text = text[1:-1].strip()
-    if text.lower().startswith("urn:uuid:"):
-        text = text[len("urn:uuid:") :]
-    return text or None
-
-
 def pending_transform_tail(
     con: psycopg2.extensions.connection,
     last_logid: int,
@@ -245,8 +233,8 @@ def reconcile_document_attributes_ui(con: psycopg2.extensions.connection) -> int
     return refreshed
 
 
-def refresh_error_breakdown(con: psycopg2.extensions.connection) -> None:
-    """Refresh the rpt_error_breakdown materialized view after facts change.
+def _refresh_matview(con: psycopg2.extensions.connection, qualified_name: str) -> None:
+    """Refresh a materialized view after facts change.
 
     CONCURRENTLY (needs the unique index + a populated matview) keeps dashboard reads
     unblocked during the ~seconds-long rebuild; falls back to a plain refresh if the
@@ -259,12 +247,31 @@ def refresh_error_breakdown(con: psycopg2.extensions.connection) -> None:
     try:
         with con.cursor() as cur:
             try:
-                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY public.rpt_error_breakdown")
+                cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {qualified_name}")
             except psycopg2.Error as exc:
-                log.warning("CONCURRENTLY refresh failed (%s); falling back to plain refresh", exc)
-                cur.execute("REFRESH MATERIALIZED VIEW public.rpt_error_breakdown")
+                log.warning(
+                    "CONCURRENTLY refresh of %s failed (%s); falling back to plain refresh",
+                    qualified_name,
+                    exc,
+                )
+                cur.execute(f"REFRESH MATERIALIZED VIEW {qualified_name}")
     finally:
         con.set_session(autocommit=previous_autocommit)
+
+
+def refresh_error_breakdown(con: psycopg2.extensions.connection) -> None:
+    """Refresh the rpt_error_breakdown materialized view after facts change."""
+    _refresh_matview(con, "public.rpt_error_breakdown")
+
+
+def refresh_weekly_reports(con: psycopg2.extensions.connection) -> None:
+    """Refresh the weekly dynamics marts.
+
+    rpt_error_breakdown_weekly reads rpt_error_breakdown — call AFTER
+    refresh_error_breakdown().
+    """
+    _refresh_matview(con, "public.rpt_documents_weekly")
+    _refresh_matview(con, "public.rpt_error_breakdown_weekly")
 
 
 def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:

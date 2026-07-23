@@ -1,6 +1,6 @@
 # Сервис эксплуатационной аналитики обмена с ЕГИСЗ
 
-Эксплуатационная аналитика проксирующего шлюза между МИС клиник и РЭМД: журнал обмена → документная витрина в PostgreSQL → четыре дашборда Metabase.
+Эксплуатационная аналитика проксирующего шлюза между МИС клиник и РЭМД: журнал обмена → документная витрина в PostgreSQL → пять дашбордов Metabase.
 
 **Для кого:** дежурная поддержка, аналитики, руководство, клиенты-клиники.
 
@@ -47,6 +47,7 @@
 | Ошибки | Канонический `error_type`, разбивка по категориям | `rpt_error_breakdown`, `rpt_network_errors` |
 | Полнота | Атрибуты документа, `emdrId`, расхождения JID | `rpt_documents`, `document_attributes` |
 | Версии | Текущая версия vs полный аудит попыток, health группировки | `rpt_documents`, `rpt_document_versions`, `rpt_health_versions` |
+| Недельная динамика | SLI по неделям, контрольная p-карта, структура ошибок по категориям | `rpt_documents_weekly`, `rpt_error_breakdown_weekly` |
 | Контур загрузки | Курсор журнала, хвост raw, health-сигналы | `rpt_health_*`, `elt_state` |
 
 ---
@@ -74,7 +75,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | `proxy_egisz` (Firebird) | Журнал обмена и справочники — источник |
 | Airflow | Три DAG: документы, справочники, сверка |
 | `dwh_egisz` (PostgreSQL) | Raw, факты, справочники, правила ошибок, `rpt_*` |
-| Metabase | Четыре дашборда, четыре модели поверх `rpt_*` |
+| Metabase | Пять дашбордов, четыре модели поверх `rpt_*` |
 
 Служебные БД Airflow и Metabase отделены от `dwh_egisz`.
 
@@ -309,7 +310,7 @@ Lookback при transform: extract использует окно по ширин
 
 ## Дашборды Metabase
 
-Четыре JSON-дашборда в `metabase_dashboards/`
+Пять JSON-дашбордов в `metabase_dashboards/`
 Провижининг — `metabase/setup-dashboards.sh` 
 Модели — `metabase/sync-models.sh`
 

@@ -87,15 +87,14 @@ function Build-AirflowBundle {
     $bundle = Join-Path $DistRoot "airflow"
     New-CleanDirectory $bundle
 
-    New-Item -ItemType Directory -Force (Join-Path $bundle "dags") | Out-Null
-    Get-ChildItem (Join-Path $RepoRoot "airflow\dags") -Filter "*.py" -File |
-        ForEach-Object { Copy-Item $_.FullName (Join-Path $bundle "dags") }
+    # DAG-файлы самодостаточны: генератор встраивает пакет egisz_elt целиком
+    # в каждый файл, целевому Airflow не нужны ни PYTHONPATH, ни pip install пакета.
+    python (Join-Path $RepoRoot "scripts\build_standalone_dags.py") `
+        --output (Join-Path $bundle "dags")
+    if ($LASTEXITCODE -ne 0) {
+        throw "build_standalone_dags.py failed with exit code ${LASTEXITCODE}"
+    }
 
-    New-Item -ItemType Directory -Force (Join-Path $bundle "egisz_elt") | Out-Null
-    Get-ChildItem (Join-Path $RepoRoot "src\egisz_elt") -Filter "*.py" -File |
-        ForEach-Object { Copy-Item $_.FullName (Join-Path $bundle "egisz_elt") }
-
-    Copy-BundleItem (Join-Path $RepoRoot "pyproject.toml") (Join-Path $bundle "pyproject.toml")
     $header = "# DAG runtime dependencies, generated from pyproject.toml" +
         " (Apache Airflow 2.x / Python 3.11 provided by the target)."
     @($header) + (Get-ProjectDependencies) |

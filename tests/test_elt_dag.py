@@ -104,6 +104,11 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "extracted >> transformed" not in src
     assert "get_current_context" not in src
 
+    # Недельные витрины: отдельная задача после transform, гейт по метаданным батча.
+    assert "def refresh_weekly_reports" in src
+    assert "refresh_weekly_reports(transformed)" in src
+    assert "common.refresh_weekly_reports" in src
+
 
 def test_dimensions_dag_owns_dimension_sync_and_mart_maintenance() -> None:
     src = _read("egisz_dimensions_dag.py")
@@ -208,11 +213,15 @@ def test_dag_bag_loads_egisz_dags() -> None:
     assert {t.task_id for t in extract.tasks} == {
         "extract_exchangelog",
         "transform_exchangelog",
+        "refresh_weekly_reports",
     }
     assert {t.task_id for t in dimensions.tasks} == {"sync_dimensions"}
     assert {t.task_id for t in reconcile.tasks} == {"reconcile_proxy_raw"}
 
     assert extract.task_dict["extract_exchangelog"].downstream_task_ids == {
         "transform_exchangelog"
+    }
+    assert extract.task_dict["transform_exchangelog"].downstream_task_ids == {
+        "refresh_weekly_reports"
     }
     assert reconcile.task_dict["reconcile_proxy_raw"].downstream_task_ids == set()

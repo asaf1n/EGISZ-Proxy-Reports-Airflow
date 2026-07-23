@@ -1805,15 +1805,6 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
         if card.get("name") == "Очередь оттока: JID с нулём успехов":
             cs = card.setdefault("visualization_settings", {}).setdefault("column_settings", {})
             cs['["name","Клиника"]'] = {"column_title": "Клиника"}
-        if card.get("name") == "Журнал документов с ошибками регистрации":
-            cs = card.setdefault("visualization_settings", {}).setdefault("column_settings", {})
-            cs.pop('["name","Сводка ошибки"]', None)
-            cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
-            dq = card.get("dataset_query", {})
-            if dq.get("type") == "native":
-                dq["native"]["query"] = dq["native"]["query"].replace(
-                    'error_summary AS "Сводка ошибки"', 'error_types AS "Типы ошибки"'
-                )
     normalize_dashboard(dash)
     return write_json_if_changed(path, dash)
 

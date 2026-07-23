@@ -32,6 +32,7 @@ $$;
 \i db/parts/60_drop_dependents.sql
 \i db/parts/70_views_core.sql
 \i db/parts/80_views_rpt.sql
+\i db/parts/85_views_weekly.sql
 \i db/parts/90_views_health_and_finalize.sql
 
 \echo 'DWH init complete: dwh_egisz schema is up to date'

@@ -14,7 +14,7 @@ from egisz_elt.common import (
     connect_fb,
     connect_pg,
 )
-from egisz_elt import extract
+from egisz_elt import common, extract
 
 DWH_POOL = "dwh_postgres"
 
@@ -68,8 +68,22 @@ def egisz_extract_pipeline() -> None:
         finally:
             pg_conn.close()
 
+    # Недельные витрины отделены от transform: их refresh не должен ретраить
+    # парсинг батча, а гейт transformed > 0 повторяет условие inline-refresh
+    # rpt_error_breakdown (см. extract.transform_exchangelog).
+    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1))
+    def refresh_weekly_reports(batch: PipelineBatchInfo) -> None:
+        if int(batch.get("transformed", 0) or 0) <= 0:
+            return
+        pg_conn = _dwh_connection()
+        try:
+            common.refresh_weekly_reports(pg_conn)
+        finally:
+            pg_conn.close()
+
     extracted = extract_exchangelog()
-    transform_exchangelog(extracted)
+    transformed = transform_exchangelog(extracted)
+    refresh_weekly_reports(transformed)
 
 
 egisz_extract_pipeline()

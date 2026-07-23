@@ -1,23 +1,21 @@
 # Перенос EGISZ ELT DAG в сторонний Airflow
 
 Самодостаточный бандл для создания трёх DAG в **уже настроенном** Airflow (не в локальном
-тестовом контуре этого репозитория). Здесь нет Helm/up.ps1/Kubernetes — только DAG,
-Python-пакет `egisz_elt`, зависимости и то, что нужно настроить на целевой стороне.
+тестовом контуре этого репозитория). Здесь нет Helm/up.ps1/Kubernetes — только DAG-файлы,
+зависимости и то, что нужно настроить на целевой стороне.
+
+Каждый DAG-файл самодостаточен: пакет `egisz_elt` (подключения, watermark,
+transform-циклы, справочники, сверка) целиком встроен генератором
+`scripts/build_standalone_dags.py` прямо в файл. Отдельно разворачивать пакет
+(`PYTHONPATH` / `pip install`) не нужно. Файлы не редактировать на целевой стороне —
+правки вносятся в исходники репозитория с последующей пересборкой бандла.
 
 ```
 airflow/                     # корень бандла (dist/external/airflow)
 ├── dags/                    # положить в DAGs-папку целевого Airflow
-│   ├── egisz_extract_dag.py
-│   ├── egisz_dimensions_dag.py
-│   └── egisz_reconcile_dag.py
-├── egisz_elt/               # Python-пакет, импортируемый из DAG (нужен на PYTHONPATH)
-│   ├── __init__.py
-│   ├── common.py            # подключения, watermark, raw-load, transform, mart-maintenance
-│   ├── extract.py           # выборка EXCHANGELOG (keyset по LOGID) + transform-циклы
-│   ├── dimensions.py        # справочники JPERSONS / EGISZ_LICENSES → dim_*
-│   ├── reconcile.py         # полная сверка источник↔raw
-│   └── airflow_vars.py      # ключи и дефолты Airflow Variables
-├── pyproject.toml           # для установки пакета через pip install .
+│   ├── egisz_extract_dag.py     # выборка EXCHANGELOG (keyset по LOGID) + transform-циклы
+│   ├── egisz_dimensions_dag.py  # справочники JPERSONS / EGISZ_LICENSES → dim_*
+│   └── egisz_reconcile_dag.py   # полная сверка источник↔raw
 ├── requirements.txt         # рантайм-зависимости (сгенерирован из pyproject.toml)
 ├── egisz-variables.json     # дефолты Airflow Variables (импорт в Admin → Variables)
 └── BUILD_INFO.txt           # git-коммит и дата сборки бандла
@@ -36,19 +34,19 @@ airflow/                     # корень бандла (dist/external/airflow)
 
 ## 1. Что загрузить
 
-1. **Пакет `egisz_elt`** — должен быть импортируем интерпретатором Airflow. Любой вариант:
-   - положить папку `egisz_elt/` в каталог на `PYTHONPATH` (например `$AIRFLOW_HOME/plugins/`
-     или каталог из `AIRFLOW__CORE__PLUGINS_FOLDER`); либо
-   - `pip install .` в корне бандла (рядом лежит `pyproject.toml`) в окружение Airflow.
-2. **DAG-файлы** `dags/*.py` → в DAGs-папку целевого Airflow (`AIRFLOW__CORE__DAGS_FOLDER`).
-3. **Зависимости**: `pip install -r requirements.txt` в окружение Airflow (воркеры и scheduler).
+1. **DAG-файлы** `dags/*.py` → в DAGs-папку целевого Airflow (`AIRFLOW__CORE__DAGS_FOLDER`).
+2. **Зависимости**: `pip install -r requirements.txt` в окружение Airflow (воркеры и scheduler).
+
+> При обновлении с прежней раскладки бандла: удалить ранее развёрнутый пакет `egisz_elt`
+> (из `PYTHONPATH`/plugins или `pip uninstall egisz-elt`) — самодостаточные DAG-файлы
+> несут собственную копию кода, устаревший пакет рядом лишь маскирует её версию.
 
 > DAG используют **только Airflow Connections** (`BaseHook.get_connection`), без `os.getenv`.
 > Никаких `.env` на целевом контуре не требуется — все секреты через Connections (п. 2).
 
 ## 2. Airflow Connections (обязательно)
 
-Имена фиксированы в коде (`egisz_elt/common.py`): `proxy_egisz_fb` и `dwh_egisz_pg`.
+Имена фиксированы в коде (`src/egisz_elt/common.py`): `proxy_egisz_fb` и `dwh_egisz_pg`.
 **Важно:** поле **Schema** в Airflow Connection используется как **имя базы данных** для обоих.
 
 | Connection Id | Тип | Host | Port | Schema | Login / Password | Extra |
@@ -148,6 +146,7 @@ airflow dags unpause egisz_reconcile_dag
 Смоук: запустить `egisz_extract_dag` вручную и убедиться, что в DWH растут
 `exchangelog_raw` / `documents`, а `elt_state.last_logid` продвинулся.
 
-Если `dags list-import-errors` показывает `ModuleNotFoundError: egisz_elt` — пакет не на
-`PYTHONPATH` (п. 1). Если падает `firebird` — не установлена `libfbclient` на воркере (п. 0).
+Если `dags list-import-errors` показывает `ModuleNotFoundError: firebird` /
+`psycopg2` — не установлены зависимости из `requirements.txt` (п. 1). Если падает
+`firebird` при подключении — не установлена `libfbclient` на воркере (п. 0).
 Если задачи вечно в `scheduled` — не создан пул `dwh_postgres` (п. 3).
