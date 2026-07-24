@@ -17,7 +17,7 @@ import psycopg2
 # AirflowSkipException берём из airflow.exceptions: в airflow.sdk.exceptions он появился
 # только в task-sdk 1.2 (Airflow 3.2), а DAG должен грузиться на любом Airflow 3.x.
 from airflow.exceptions import AirflowSkipException
-from airflow.sdk import BaseHook, Variable, dag, task
+from airflow.sdk import Connection, Variable, dag, task
 from firebird.driver import connect
 from psycopg2.extras import execute_values
 
@@ -306,11 +306,11 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
 
 
 def _dwh_connection():
-    return connect_pg(BaseHook.get_connection(DWH_CONN_ID))
+    return connect_pg(Connection.get(DWH_CONN_ID))
 
 
 def _proxy_connection():
-    return connect_fb(BaseHook.get_connection(PROXY_CONN_ID))
+    return connect_fb(Connection.get(PROXY_CONN_ID))
 
 
 class ReconcileWindowVolumeError(RuntimeError):

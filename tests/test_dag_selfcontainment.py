@@ -30,6 +30,19 @@ ALLOWED_IMPORT_ROOTS = {
 }
 
 
+# Имена, экспортируемые airflow.sdk начиная с Airflow 3.0 (task-sdk 1.0.__all__).
+# Импорт имени вне набора (например BaseHook, добавленного позже) падает ImportError
+# на 3.0/3.1 — DAG не регистрируется, «Dag not found during start up».
+AIRFLOW_SDK_NAMES_SINCE_3_0 = {
+    "Asset", "AssetAlias", "AssetAll", "AssetAny", "AssetWatcher", "BaseNotifier",
+    "BaseOperator", "BaseOperatorLink", "BaseSensorOperator", "Connection", "Context",
+    "DAG", "EdgeModifier", "Label", "Metadata", "ObjectStoragePath", "Param",
+    "PokeReturnValue", "TaskGroup", "Variable", "XComArg", "asset", "chain",
+    "chain_linear", "cross_downstream", "dag", "get_current_context",
+    "get_parsing_context", "literal", "setup", "task", "task_group", "teardown",
+}
+
+
 def _module_ast(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -95,3 +108,28 @@ def test_dag_file_imports_only_runtime_dependencies(path: Path) -> None:
     assert "egisz_elt" not in roots
     unexpected = roots - ALLOWED_IMPORT_ROOTS
     assert not unexpected, f"{path.name}: неожиданные зависимости {sorted(unexpected)}"
+
+
+@pytest.mark.parametrize("path", DAG_FILES, ids=lambda path: path.name)
+def test_dag_file_uses_airflow_apis_available_since_3_0(path: Path) -> None:
+    """Импорты из airflow должны грузиться на Airflow 3.0/3.1, а не только на 3.2.
+
+    На прод-контуре (task-sdk < 1.2) `from airflow.sdk import BaseHook` и
+    `from airflow.sdk.exceptions import ...` дают ImportError — DAG не парсится.
+    Подключения берём через airflow.sdk.Connection.get, AirflowSkipException — из
+    стабильного airflow.exceptions.
+    """
+    for node in ast.walk(_module_ast(path)):
+        if not isinstance(node, ast.ImportFrom) or not node.module:
+            continue
+        names = [a.name for a in node.names]
+        if node.module == "airflow.sdk":
+            unstable = set(names) - AIRFLOW_SDK_NAMES_SINCE_3_0
+            assert not unstable, (
+                f"{path.name}: {sorted(unstable)} нет в airflow.sdk на Airflow 3.0/3.1 "
+                "(например BaseHook → используйте Connection.get)"
+            )
+        assert node.module != "airflow.sdk.exceptions", (
+            f"{path.name}: airflow.sdk.exceptions пуст до task-sdk 1.2; "
+            "AirflowSkipException импортировать из airflow.exceptions"
+        )
