@@ -123,13 +123,10 @@
       "visualization_settings": {
         "table.cell_column": "Клиника",
         "table.column_widths": [
-          148,
-          108,
-          200,
-          240,
-          128,
-          128,
-          300
+          null,
+          null,
+          220,
+          342
         ],
         "table.columns": [
           {
@@ -146,11 +143,11 @@
           },
           {
             "enabled": true,
-            "name": "Host Клиники (ГОСТ VPN)"
+            "name": "СЭМД"
           },
           {
             "enabled": true,
-            "name": "СЭМД"
+            "name": "Типы ошибки"
           },
           {
             "enabled": true,
@@ -162,7 +159,7 @@
           },
           {
             "enabled": true,
-            "name": "Типы ошибки"
+            "name": "Host Клиники (ГОСТ VPN)"
           }
         ],
         "column_settings": {

@@ -911,6 +911,10 @@ function Invoke-MetabaseDashboardProvision {
         'env',
         "METABASE_FORCE_PROVISION=$ForceProvision",
         "METABASE_SKIP_IMPORT_IF_PRESENT=$skipFlag",
+        # Локальный PoC-инстанс наш целиком: разрешаем глобальные настройки (МСК/ru/RUB,
+        # кеш, public-sharing). На общем проде флаг НЕ выставляется — глобальное состояние
+        # чужих сервисов не трогаем.
+        "METABASE_MANAGE_INSTANCE_SETTINGS=true",
         '/bin/bash', '/app/setup-dashboards.sh'
     )
     if ($LASTEXITCODE -ne 0) {

@@ -984,7 +984,7 @@
       "tab": "weekly"
     },
     {
-      "name": "Исходы регистрации по неделям, %",
+      "name": "Статусы по неделям",
       "description": "Состав исходов регистрации по неделям в долях от документов с вердиктом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые недели — при малом числе закрытых недель ряд короткий.",
       "dataset_query": {
         "type": "native",
@@ -1071,11 +1071,11 @@
     },
     {
       "name": "Объём документов по неделям",
-      "description": "Знаменатель для интерпретации SLI: объём документов по неделям в разрезе статусов, включая «Отправлено» (ожидают ответа). Текущая неделя неполная.",
+      "description": "Знаменатель для интерпретации доли ошибок: объём документов с вердиктом РЭМД по неделям в разрезе исхода (успех / с ошибкой). Статус «Отправлено» (ещё без результата) исключён — он не финализирован.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_waiting)::bigint AS \"Ожидают ответа\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1102,8 +1102,7 @@
         ],
         "graph.metrics": [
           "Успешно",
-          "С ошибкой",
-          "Ожидают ответа"
+          "С ошибкой"
         ],
         "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
@@ -1115,9 +1114,6 @@
           },
           "С ошибкой": {
             "color": "#E15759"
-          },
-          "Ожидают ответа": {
-            "color": "#F2C94C"
           }
         },
         "column_settings": {
@@ -1126,10 +1122,6 @@
             "number_separators": ", "
           },
           "[\"name\",\"С ошибкой\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Ожидают ответа\"]": {
             "decimals": 0,
             "number_separators": ", "
           }
@@ -1436,7 +1428,7 @@
       "tab": "monthly"
     },
     {
-      "name": "Исходы регистрации по месяцам, %",
+      "name": "Статусы по месяцам",
       "description": "Состав исходов регистрации по месяцам в долях от документов с вердиктом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые месяцы — при малом числе закрытых месяцев ряд короткий.",
       "dataset_query": {
         "type": "native",
@@ -1523,11 +1515,11 @@
     },
     {
       "name": "Объём документов по месяцам",
-      "description": "Знаменатель для интерпретации SLI: объём документов по месяцам в разрезе статусов, включая «Отправлено» (ожидают ответа). Текущий месяц неполный.",
+      "description": "Знаменатель для интерпретации доли ошибок: объём документов с вердиктом РЭМД по месяцам в разрезе исхода (успех / с ошибкой). Статус «Отправлено» (ещё без результата) исключён — он не финализирован.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_waiting)::bigint AS \"Ожидают ответа\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1554,8 +1546,7 @@
         ],
         "graph.metrics": [
           "Успешно",
-          "С ошибкой",
-          "Ожидают ответа"
+          "С ошибкой"
         ],
         "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
@@ -1567,9 +1558,6 @@
           },
           "С ошибкой": {
             "color": "#E15759"
-          },
-          "Ожидают ответа": {
-            "color": "#F2C94C"
           }
         },
         "column_settings": {
@@ -1578,10 +1566,6 @@
             "number_separators": ", "
           },
           "[\"name\",\"С ошибкой\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Ожидают ответа\"]": {
             "decimals": 0,
             "number_separators": ", "
           }

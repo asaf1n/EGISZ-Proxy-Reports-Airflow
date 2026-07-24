@@ -210,15 +210,17 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "День"},
 ]
 
+# Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Типы ошибки» подняты
+# к идентификаторам документа, «Host Клиники» уведён в конец.
 LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "Дата обработки"},
     {"enabled": True, "name": "Статус"},
     {"enabled": True, "name": "Клиника"},
-    {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
     {"enabled": True, "name": "СЭМД"},
+    {"enabled": True, "name": "Типы ошибки"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
-    {"enabled": True, "name": "Типы ошибки"},
+    {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
 ]
 
 LATEST_OPERATIONS_QUERY_FIELDS = [
@@ -1328,7 +1330,8 @@ def apply_latest_operations(card: dict) -> None:
     viz.pop("table", None)
     viz["table.columns"] = deepcopy(LATEST_OPERATIONS_TABLE_COLUMNS)
     viz["table.cell_column"] = "Клиника"
-    viz["table.column_widths"] = [148, 108, 200, 240, 128, 128, 300]
+    # Ширины с прода: первые две колонки авто (null), явные — только у «Клиника»/«СЭМД».
+    viz["table.column_widths"] = [None, None, 220, 342]
     viz["column_settings"] = deepcopy(LATEST_OPERATIONS_COLUMN_SETTINGS)
     strip_chart_keys(viz, card.get("display", "table"))
 

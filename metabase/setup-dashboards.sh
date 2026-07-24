@@ -14,6 +14,12 @@ MODEL_REGISTRY_FILE="${METABASE_MODEL_REGISTRY_FILE:-/tmp/metabase-model-registr
 METABASE_FORCE_PROVISION="${METABASE_FORCE_PROVISION:-auto}"
 METABASE_SKIP_IMPORT_IF_PRESENT="${METABASE_SKIP_IMPORT_IF_PRESENT:-false}"
 METABASE_AUTO_APPLY_FILTERS="${METABASE_AUTO_APPLY_FILTERS:-true}"
+# Управление НАСТРОЙКАМИ ВСЕГО ИНСТАНСА (глобальный часовой пояс, локаль, формат валюты/времени,
+# результат-кеш, включение public-sharing). На ОБЩЕМ Metabase они меняют поведение чужих
+# сервисов, поэтому по умолчанию выключено: импорт трогает только свою коллекцию и своё
+# подключение к БД (per-database report-timezone ставится всегда — он скоупится нашей БД).
+# Локальный PoC-инстанс наш целиком → up.ps1 включает флаг.
+METABASE_MANAGE_INSTANCE_SETTINGS="${METABASE_MANAGE_INSTANCE_SETTINGS:-false}"
 DASHBOARD_MANIFEST_FILE="${DASHBOARD_MANIFEST_FILE:-/tmp/metabase-dashboards.sha256}"
 COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}"
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
@@ -1354,7 +1360,12 @@ maybe_skip_dashboard_import() {
 ensure_public_client_dashboard() {
   [ "${METABASE_PUBLIC_CLIENT_DASHBOARD}" = "true" ] || return 0
   local dashboard_id public_uuid
-  api_request PUT "/api/setting/enable-public-sharing" '{"value":true}' >/dev/null || true
+  # enable-public-sharing — глобальный флаг инстанса. На общем Metabase не включаем сами:
+  # если он уже включён владельцем — публичная ссылка на наш дашборд всё равно создастся,
+  # иначе шаг деградирует до лога «не удалось получить ссылку».
+  if [ "${METABASE_MANAGE_INSTANCE_SETTINGS}" = "true" ]; then
+    api_request PUT "/api/setting/enable-public-sharing" '{"value":true}' >/dev/null || true
+  fi
   dashboard_id="$(existing_dashboard_id "${CLIENT_DASHBOARD_NAME}")"
   if [ -z "${dashboard_id}" ]; then
     log_info "Public sharing: client dashboard not provisioned yet; deferring public link."
@@ -1379,8 +1390,14 @@ done
 login
 resolve_or_create_app_database_id
 ensure_app_database_report_timezone
-ensure_global_report_timezone
-ensure_localization_defaults
+# Глобальные настройки инстанса — только при явном opt-in (см. METABASE_MANAGE_INSTANCE_SETTINGS):
+# на общем Metabase они бы переопределили часовой пояс/локаль/формат для чужих сервисов.
+if [ "${METABASE_MANAGE_INSTANCE_SETTINGS}" = "true" ]; then
+  ensure_global_report_timezone
+  ensure_localization_defaults
+else
+  log_info "METABASE_MANAGE_INSTANCE_SETTINGS=false: пропускаю глобальные настройки инстанса (общий Metabase)."
+fi
 ensure_collection
 # До любого fast-path/skip: если дашборд уже есть — обеспечиваем и логируем публичную ссылку.
 ensure_public_client_dashboard

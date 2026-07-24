@@ -2052,6 +2052,36 @@ def test_dashboard_json_matches_generators() -> None:
             )
 
 
+def test_metabase_import_is_safe_for_shared_instance() -> None:
+    """Импорт на общий Metabase не должен трогать чужие данные: архивирование —
+    только в своей коллекции; глобальные настройки инстанса — только при opt-in."""
+    sh = Path("metabase/setup-dashboards.sh").read_text(encoding="utf-8")
+
+    # Архивирование карточек/дашбордов скоупится нашей коллекцией (COL_ID), а не всем инстансом.
+    assert "/api/collection/${COL_ID}/items?models=card" in sh
+    assert "/api/collection/${COL_ID}/items?models=dashboard" in sh
+    assert ".collection_id == $col" in sh  # archive_cards_by_name
+
+    # Глобальные настройки инстанса — за флагом, по умолчанию выключены.
+    assert 'METABASE_MANAGE_INSTANCE_SETTINGS="${METABASE_MANAGE_INSTANCE_SETTINGS:-false}"' in sh
+    blocks = sh.split('if [ "${METABASE_MANAGE_INSTANCE_SETTINGS}" = "true" ]; then')[1:]
+    assert blocks, "нет блока под флагом METABASE_MANAGE_INSTANCE_SETTINGS"
+    global_block = next(
+        (b for b in blocks if "ensure_global_report_timezone" in b.split("fi")[0]), None
+    )
+    assert global_block is not None, "глобальные настройки не под флагом"
+    guard_head = global_block.split("fi")[0]
+    assert "ensure_global_report_timezone" in guard_head
+    assert "ensure_localization_defaults" in guard_head
+
+    # enable-public-sharing (глобальный флаг) — тоже только под opt-in: в функции
+    # ensure_public_client_dashboard PUT стоит после проверки флага.
+    fn = sh.split("ensure_public_client_dashboard()")[1].split("\n}")[0]
+    put_idx = fn.index('PUT "/api/setting/enable-public-sharing"')
+    guard_idx = fn.index('METABASE_MANAGE_INSTANCE_SETTINGS}" = "true"')
+    assert guard_idx < put_idx
+
+
 def test_standalone_weekly_dashboard_removed() -> None:
     """Недельная динамика живёт вкладкой управленческого дашборда, а не отдельным файлом."""
     assert not Path("metabase_dashboards/09_weekly_dynamics.json").exists()
@@ -2100,12 +2130,12 @@ def test_periodic_dynamics_tabs_bind_to_their_own_marts() -> None:
             assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
 
 
-def test_outcome_composition_dynamics_are_stacked_area() -> None:
-    """Динамика исходов — стек-площадь из трёх долей (успех/асинхр/сеть = 100 %)."""
+def test_status_dynamics_are_stacked_area() -> None:
+    """«Статусы по неделям/месяцам» — стек-площадь из трёх долей (успех/асинхр/сеть = 100 %)."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
     for name, table in (
-        ("Исходы регистрации по неделям, %", "public.rpt_documents_weekly"),
-        ("Исходы регистрации по месяцам, %", "public.rpt_documents_monthly"),
+        ("Статусы по неделям", "public.rpt_documents_weekly"),
+        ("Статусы по месяцам", "public.rpt_documents_monthly"),
     ):
         card = by_name[name]
         assert card["display"] == "area", name
@@ -2122,6 +2152,20 @@ def test_outcome_composition_dynamics_are_stacked_area() -> None:
         assert query.count("NULLIF(SUM(docs_total), 0)") == 3, name
         for col in ("docs_success", "docs_async_error", "docs_network_error"):
             assert f"SUM({col})" in query, (name, col)
+
+
+def test_volume_dynamics_exclude_sent_without_verdict() -> None:
+    """Объём по периодам — только исходы с вердиктом (успех/с ошибкой); «Отправлено»
+    (docs_waiting) не показываем: статус не финализирован (правило проекта)."""
+    by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
+    for name in ("Объём документов по неделям", "Объём документов по месяцам"):
+        card = by_name[name]
+        viz = card["visualization_settings"]
+        assert viz["graph.metrics"] == ["Успешно", "С ошибкой"], name
+        assert "Ожидают ответа" not in viz.get("series_settings", {}), name
+        query = card["dataset_query"]["native"]["query"]
+        assert "docs_waiting" not in query, name
+        assert "Ожидают ответа" not in query, name
 
 
 def test_weekly_sql_layer_contract() -> None:
