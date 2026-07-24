@@ -589,9 +589,26 @@ function Initialize-HelmAirflowRepo {
     }
 
     Write-Host "Updating Helm repo index..."
-    Invoke-Checked "Update Helm repos" {
-        helm repo update
+    $ErrorActionPreference = 'Continue'
+    helm repo update $repoName 2>&1 | ForEach-Object { "$_" }
+    $updateFailed = $LASTEXITCODE -ne 0
+    $ErrorActionPreference = 'Stop'
+
+    if (-not $updateFailed) {
+        return
     }
+
+    # Индекс чарта кешируется локально, а версия закреплена ($AirflowChartVersion),
+    # поэтому обрыв связи с airflow.apache.org не должен валить накат: он фатален
+    # только если нужной версии нет и в кеше.
+    Write-Host "Helm repo update failed; checking the local chart cache for ${repoName}/airflow ${AirflowChartVersion}..."
+    $ErrorActionPreference = 'Continue'
+    $cached = helm search repo "${repoName}/airflow" --version $AirflowChartVersion -o json 2>$null
+    $ErrorActionPreference = 'Stop'
+    if ([string]::IsNullOrWhiteSpace($cached) -or ($cached | Out-String).Trim() -eq '[]') {
+        throw "Cannot refresh the Helm repo index and chart ${repoName}/airflow ${AirflowChartVersion} is not cached locally. Check network access to ${repoUrl}."
+    }
+    Write-Host "Using cached chart index for ${repoName}/airflow ${AirflowChartVersion}."
 }
 
 function Ensure-AirflowStatefulSetReplicas {
