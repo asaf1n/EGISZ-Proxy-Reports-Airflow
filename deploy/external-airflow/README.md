@@ -16,7 +16,6 @@ airflow/                     # корень бандла (dist/external/airflow)
 │   ├── egisz_dimensions_dag.py  # справочники JPERSONS / EGISZ_LICENSES → dim_*
 │   └── egisz_reconcile_dag.py   # полная сверка источник↔raw
 ├── requirements.txt         # рантайм-зависимости (сгенерирован из pyproject.toml)
-├── egisz-variables.json     # дефолты Airflow Variables (импорт в Admin → Variables)
 └── BUILD_INFO.txt           # git-коммит и дата сборки бандла
 ```
 
@@ -48,8 +47,8 @@ airflow/                     # корень бандла (dist/external/airflow)
 > управленческого дашборда. Витрины создаются бандлом `dwh` — при отставшей схеме
 > задача упадёт на `REFRESH MATERIALIZED VIEW`.
 
-> DAG используют **только Airflow Connections** (`BaseHook.get_connection`), без `os.getenv`.
-> Никаких `.env` на целевом контуре не требуется — все секреты через Connections (п. 2).
+> Секреты подключений DAG берут **только из Airflow Connections** (`Connection.get`), не из
+> `os.getenv`. Переменные `EGISZ_*` (п. 4) несут лишь настройки поведения, не секреты.
 
 ## 2. Airflow Connections (обязательно)
 
@@ -96,52 +95,36 @@ airflow connections add proxy_egisz_fb \
 airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched mart maintenance"
 ```
 
-## 4. Настройки DAG
+## 4. Настройки DAG — переменные окружения
 
-Две категории с разным механизмом чтения.
-
-**Параметры выполнения — Airflow Variables** (Admin → Variables). Читаются внутри задач,
-где есть execution context. Если Variable отсутствует (или метабаза недоступна), берётся
-дефолт из словаря `DEFAULTS` в файле DAG. Создаются импортом `egisz-variables.json`.
-
-| Variable | Дефолт | Назначение |
-| --- | --- | --- |
-| `extract_raw_rows` | `1000` | Размер батча выборки EXCHANGELOG из Firebird |
-| `extract_raw_rounds` | `3` | Максимум extract-циклов за один запуск |
-| `transform_rows` | `3000` | Размер батча transform_raw_to_facts |
-| `transform_rounds` | `6` | Максимум transform-циклов за один запуск |
-| `reconcile_lookback_days` | `30` | Глубина поиска записей при сверке (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
-| `reconcile_max_logids` | `20000000` | Порог memory-guard: макс. число LOGID **внутри окна** `reconcile_lookback_days` (выше — hard-fail) |
-
-Импорт на целевом контуре (UI: Admin → Variables → Import, или CLI):
-
-```bash
-airflow variables import --action-on-existing-key skip egisz-variables.json
-```
-
-> Дефолтное действие импорта — **overwrite** (и в CLI, и в UI): без
-> `--action-on-existing-key skip` (в UI — «Skip if exists») повторный импорт затрёт
-> уже изменённые значения.
-
-**Расписания — переменные окружения** (или дефолт в коде), НЕ Variables. Расписание
-читается при каждом парсинге DAG-файла; на Airflow 3 top-level `Variable.get` уходит в
-supervisor RPC и при парсинге в воркере (перед запуском задачи) виснет на «Filling up the
-DagBag», подвешивая DAG. Поэтому расписание резолвится без обращения к метабазе — из
-переменной окружения `EGISZ_<KEY>` процессов Airflow, иначе из `DEFAULTS`.
+Все настройки (расписания и параметры выполнения) читаются из переменной окружения
+`EGISZ_<KEY>` процессов Airflow, иначе из словаря `DEFAULTS` в файле DAG. **Airflow
+Variables не используются**: их top-level чтение при парсинге DAG-файла в воркере на
+Airflow 3 уходит в supervisor RPC и виснет на «Filling up the DagBag», подвешивая DAG —
+поэтому все параметры резолвятся без обращения к метабазе.
 
 | Env-переменная | Дефолт | Назначение |
 | --- | --- | --- |
 | `EGISZ_EXTRACT_SCHEDULE` | `*/5 * * * *` | Расписание extract-DAG |
 | `EGISZ_DIMENSIONS_SCHEDULE` | `@hourly` | Расписание dimensions-DAG |
 | `EGISZ_RECONCILE_SCHEDULE` | `@hourly` | Расписание reconcile-DAG |
+| `EGISZ_EXTRACT_RAW_ROWS` | `1000` | Размер батча выборки EXCHANGELOG из Firebird |
+| `EGISZ_EXTRACT_RAW_ROUNDS` | `3` | Максимум extract-циклов за один запуск |
+| `EGISZ_TRANSFORM_ROWS` | `3000` | Размер батча transform_raw_to_facts |
+| `EGISZ_TRANSFORM_ROUNDS` | `6` | Максимум transform-циклов за один запуск |
+| `EGISZ_RECONCILE_LOOKBACK_DAYS` | `30` | Глубина сверки (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
+| `EGISZ_RECONCILE_MAX_LOGIDS` | `20000000` | Memory-guard: макс. LOGID **внутри окна** lookback (выше — hard-fail) |
 
-Задать на целевом контуре (пример для Helm-чарта Airflow — во все компоненты через
-`extraEnv`; смена подхватится при следующем парсинге DAG-файлов):
+Значения по умолчанию рабочие — переопределять не обязательно. Задать на целевом контуре
+(пример для Helm-чарта Airflow — во все компоненты через `extraEnv`; смена расписания
+подхватится при следующем парсинге, параметров выполнения — при следующем запуске задачи):
 
 ```yaml
 extraEnv: |
   - name: EGISZ_EXTRACT_SCHEDULE
     value: "*/5 * * * *"
+  - name: EGISZ_TRANSFORM_ROWS
+    value: "3000"
 ```
 
 ## 5. DAG, которые появятся

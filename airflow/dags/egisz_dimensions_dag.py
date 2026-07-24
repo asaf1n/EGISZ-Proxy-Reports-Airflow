@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg2
-from airflow.sdk import Connection, Variable, dag, task
+from airflow.sdk import Connection, dag, task
 from firebird.driver import connect
 from psycopg2.extras import execute_values
 
@@ -24,20 +24,19 @@ DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 DWH_POOL = "dwh_postgres"
 
-# Keep in sync with k8s/airflow/egisz-variables.json (UI import / up.ps1 provisioning).
+# Дефолты настроек DAG; переопределяются переменной окружения EGISZ_<KEY> (env, не Airflow Variables).
 DEFAULTS: dict[str, str | int] = {
     "dimensions_schedule": "@hourly",
 }
 
 
-def _schedule(key: str) -> str:
-    """DAG schedule, resolved at parse time WITHOUT touching the Airflow metadata DB.
+def _setting(key: str) -> str:
+    """Настройка DAG из переменной окружения EGISZ_<KEY>, иначе из DEFAULTS.
 
-    Расписание читается при каждом парсинге DAG-файла. top-level Variable.get в Airflow 3
-    уходит в supervisor RPC и на части контуров виснет при парсинге в воркере, подвешивая
-    задачу на «Filling up the DagBag». Значение берётся из переменной окружения EGISZ_<KEY>
-    или DEFAULTS; параметры, влияющие только на выполнение, читаются из Variable уже внутри
-    задач (get_int) — там execution context активен.
+    Читается и при парсинге (расписание), и внутри задач — без обращения к метабазе Airflow.
+    Значения фиксированы в DEFAULTS и переопределяются переменной окружения процессов Airflow
+    (см. deploy/external-airflow/README). Airflow Variables (метабаза) не используются —
+    на Airflow 3 их чтение при парсинге в воркере подвешивало DAG.
     """
     return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
 
@@ -284,7 +283,7 @@ def sync_directory(
 
 @dag(
     dag_id="egisz_dimensions_dag",
-    schedule=_schedule("dimensions_schedule"),
+    schedule=_setting("dimensions_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -8,7 +7,6 @@ from conftest import load_dag_module
 
 DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
 REPO_ROOT = DAGS_DIR.parents[1]
-VARS_JSON = REPO_ROOT / "k8s" / "airflow" / "egisz-variables.json"
 PARTS_DIR = REPO_ROOT / "db" / "parts"
 DWH_POOL = "dwh_postgres"
 
@@ -20,92 +18,41 @@ def _read(dag_file: str) -> str:
 DAG_STEMS = ("egisz_extract_dag", "egisz_dimensions_dag", "egisz_reconcile_dag")
 
 
-def test_airflow_variables_json_matches_python_defaults() -> None:
-    """Каждый DAG объявляет только свои настройки; egisz-variables.json — task-time часть.
-
-    Расписания (`*_schedule`) читаются из env/DEFAULTS, а не из Variables, поэтому в
-    egisz-variables.json их быть не должно (импорт создавал бы мёртвые записи).
-    """
-    per_dag = {stem: load_dag_module(stem).DEFAULTS for stem in DAG_STEMS}
-
+def test_dag_setting_keys_do_not_collide() -> None:
+    """Каждый DAG объявляет только свои настройки — ключи не пересекаются между файлами."""
     seen: dict[str, str] = {}
-    for stem, defaults in per_dag.items():
-        for key in defaults:
+    for stem in DAG_STEMS:
+        for key in load_dag_module(stem).DEFAULTS:
             assert key not in seen, f"настройка {key!r} объявлена и в {seen[key]}, и в {stem}"
             seen[key] = stem
 
-    task_defaults = {
-        key: value
-        for defaults in per_dag.values()
-        for key, value in defaults.items()
-        if not key.endswith("_schedule")
-    }
-    payload = json.loads(VARS_JSON.read_text(encoding="utf-8"))
-    assert set(payload) == set(task_defaults)
-    assert not any(key.endswith("_schedule") for key in payload)
-    for key, default in task_defaults.items():
-        assert str(payload[key]) == str(default)
 
+def test_settings_resolve_from_env_or_defaults_without_metabase() -> None:
+    """Все настройки (расписания и параметры задач) — из env EGISZ_<KEY> или DEFAULTS.
 
-def test_task_settings_read_airflow_variable_before_default() -> None:
-    """Параметр задачи из Admin → Variables должен побеждать; дефолт — при недоступности.
-
-    Task SDK принимает `Variable.get(key)` без `default_var`: неверный вызов уходил
-    в except и молча возвращал дефолт, игнорируя настройку из UI.
-    """
-    for stem in ("egisz_extract_dag", "egisz_reconcile_dag"):
-        module = load_dag_module(stem)
-        key = next(k for k in module.DEFAULTS if not k.endswith("_schedule"))
-        original = module.Variable
-
-        class StoredVariable:
-            @staticmethod
-            def get(name: str) -> str:
-                assert name == key
-                return "42"
-
-        class UnavailableVariable:
-            @staticmethod
-            def get(name: str) -> str:
-                raise RuntimeError("metadata DB unreachable")
-
-        try:
-            module.Variable = StoredVariable
-            assert module.get_int(key) == 42, stem
-            module.Variable = UnavailableVariable
-            assert module.get_int(key) == int(module.DEFAULTS[key]), stem
-        finally:
-            module.Variable = original
-
-
-def test_schedule_resolves_at_parse_time_without_touching_variables() -> None:
-    """Расписание берётся из env/DEFAULTS и НЕ читает Variable.
-
-    top-level Variable.get при парсинге DAG в воркере Airflow 3 уходит в supervisor RPC
-    и на части контуров виснет на «Filling up the DagBag» — расписание обязано резолвиться
+    Airflow Variables не используются: их top-level чтение при парсинге DAG в воркере
+    Airflow 3 уходило в supervisor RPC и подвешивало DAG. Значения обязаны резолвиться
     без обращения к метабазе.
     """
     import os
 
-    class ForbiddenVariable:
-        @staticmethod
-        def get(name: str) -> str:  # pragma: no cover - вызов = регрессия
-            raise AssertionError(f"_schedule не должен читать Variable ({name})")
-
     for stem in DAG_STEMS:
         module = load_dag_module(stem)
-        key = next(k for k in module.DEFAULTS if k.endswith("_schedule"))
-        original = module.Variable
-        try:
-            module.Variable = ForbiddenVariable
-            assert module._schedule(key) == str(module.DEFAULTS[key]), stem
-            os.environ[f"EGISZ_{key.upper()}"] = "*/7 * * * *"
+        assert not hasattr(module, "Variable"), f"{stem}: Variable не должен импортироваться"
+
+        for key in module.DEFAULTS:
+            assert module._setting(key) == str(module.DEFAULTS[key]), (stem, key)
+            env_name = f"EGISZ_{key.upper()}"
+            os.environ[env_name] = "override"
             try:
-                assert module._schedule(key) == "*/7 * * * *", stem
+                assert module._setting(key) == "override", (stem, key)
             finally:
-                del os.environ[f"EGISZ_{key.upper()}"]
-        finally:
-            module.Variable = original
+                del os.environ[env_name]
+
+        # get_int парсит целочисленные параметры задач поверх _setting.
+        if hasattr(module, "get_int"):
+            int_key = next(k for k in module.DEFAULTS if not k.endswith("_schedule"))
+            assert module.get_int(int_key) == int(module.DEFAULTS[int_key]), stem
 
 
 def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
@@ -130,7 +77,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "transform_exchangelog_batch(" in src
 
     assert '"rows":' not in src
-    assert '_schedule("extract_schedule")' in src
+    assert '_setting("extract_schedule")' in src
     assert 'get_int("extract_raw_rows")' in src
     assert 'get_int("extract_raw_rounds")' in src
     assert 'get_int("transform_rows")' in src
@@ -161,7 +108,7 @@ def test_dimensions_dag_owns_dimension_sync_and_mart_maintenance() -> None:
     assert "def maintain_enriched_ui" not in src
     assert "sync_directories" in src
     assert "reconcile_document_attributes_ui" in src
-    assert '_schedule("dimensions_schedule")' in src
+    assert '_setting("dimensions_schedule")' in src
     assert "@task.short_circuit" not in src
     assert "pool=DWH_POOL" in src or 'pool="dwh_postgres"' in src
     # Тот же риск DeadlockDetected, что у transform: reconcile идемпотентен.
@@ -190,7 +137,7 @@ def test_reconcile_dag_does_full_constancy_check_without_moving_watermark() -> N
 
     assert 'get_int("reconcile_max_logids")' in src
 
-    assert '_schedule("reconcile_schedule")' in src
+    assert '_setting("reconcile_schedule")' in src
     assert "pending_transform_tail" in src
     assert "AirflowSkipException" in src
     assert "backfill_semd_codes" not in src
@@ -204,7 +151,7 @@ def test_dag_files_are_self_contained_units() -> None:
         assert "egisz_elt" not in src, path.name
         assert "_install_embedded_egisz_elt" not in src, path.name
         # Настройки читаются при импорте — метабаза Airflow может быть недоступна.
-        assert "def _schedule" in src, path.name
+        assert "def _setting" in src, path.name
         # Airflow 3: Task SDK вместо снятых путей airflow.decorators / airflow.models.
         assert "from airflow.sdk import" in src, path.name
         assert "from airflow.decorators import" not in src, path.name
@@ -250,17 +197,18 @@ def test_all_dag_files_compile() -> None:
         py_compile.compile(str(path), doraise=True)
 
 
-def test_up_ps1_provisions_airflow_pool_variables_and_connections() -> None:
+def test_up_ps1_provisions_airflow_pool_and_connections() -> None:
     src = Path(__file__).resolve().parents[1].joinpath("up.ps1").read_text(encoding="utf-8")
     assert "Restore-AirflowStatefulSetsAfterStop" in src
     assert "Ensure-AirflowStatefulSetReplicas" in src
     assert "airflow-redis" in src
     assert "Sync-AirflowWorkerReplicas" not in src
     assert "Initialize-AirflowDwhPool" in src
-    assert "Initialize-AirflowEgiszVariables" in src
-    assert "k8s\\airflow\\egisz-variables.json" in src
     assert "pools', 'set', $DwhPoolName" in src or "pools set" in src
     assert "dwh_postgres" in src
+    # Airflow Variables больше не провижинятся: настройки читаются из env/DEFAULTS.
+    assert "Initialize-AirflowEgiszVariables" not in src
+    assert "egisz-variables" not in src
     # Подключения хранятся в метабазе Airflow, а не подмешиваются секретом в env.
     assert "Initialize-AirflowEgiszConnections" in src
     assert "k8s\\airflow\\egisz-connections.json" in src

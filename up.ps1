@@ -509,26 +509,6 @@ function Initialize-AirflowDwhPool {
     Write-Host "Airflow pool ${DwhPoolName} is ready."
 }
 
-function Initialize-AirflowEgiszVariables {
-    $varsFile = Join-Path $PSScriptRoot "k8s\airflow\egisz-variables.json"
-    if (-not (Test-Path $varsFile)) {
-        throw "Airflow variables file not found: ${varsFile}"
-    }
-
-    Write-Host "Ensuring default EGISZ Airflow Variables (skip existing)..."
-    $defaults = Get-Content $varsFile -Raw | ConvertFrom-Json
-    foreach ($prop in $defaults.PSObject.Properties) {
-        $name = $prop.Name
-        $value = [string]$prop.Value
-        Invoke-AirflowSchedulerCli -Arguments @('variables', 'get', $name) -AllowFailure | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Invoke-Checked "Set Airflow variable ${name}" {
-                Invoke-AirflowSchedulerCli -Arguments @('variables', 'set', $name, $value)
-            }
-        }
-    }
-    Write-Host "EGISZ Airflow Variables are ready (Admin -> Variables in the UI)."
-}
 
 function Initialize-AirflowEgiszConnections {
     # Подключения живут в метабазе Airflow (Admin -> Connections), как на внешнем
@@ -794,7 +774,6 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 
     Initialize-AirflowEgiszConnections
     Initialize-AirflowDwhPool
-    Initialize-AirflowEgiszVariables
 
     Test-LoadBalancerEndpoint -Url 'http://localhost:8080/api/v2/monitor/health' -Description 'Airflow API server LoadBalancer'
 

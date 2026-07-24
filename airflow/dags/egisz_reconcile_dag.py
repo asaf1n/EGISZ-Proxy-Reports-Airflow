@@ -17,7 +17,7 @@ import psycopg2
 # AirflowSkipException берём из airflow.exceptions: в airflow.sdk.exceptions он появился
 # только в task-sdk 1.2 (Airflow 3.2), а DAG должен грузиться на любом Airflow 3.x.
 from airflow.exceptions import AirflowSkipException
-from airflow.sdk import Connection, Variable, dag, task
+from airflow.sdk import Connection, dag, task
 from firebird.driver import connect
 from psycopg2.extras import execute_values
 
@@ -30,7 +30,7 @@ DWH_POOL = "dwh_postgres"
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext")
 
-# Keep in sync with k8s/airflow/egisz-variables.json (UI import / up.ps1 provisioning).
+# Дефолты настроек DAG; переопределяются переменной окружения EGISZ_<KEY> (env, не Airflow Variables).
 DEFAULTS: dict[str, str | int] = {
     "reconcile_schedule": "@hourly",
     "reconcile_lookback_days": 30,
@@ -38,33 +38,19 @@ DEFAULTS: dict[str, str | int] = {
 }
 
 
-def _schedule(key: str) -> str:
-    """DAG schedule, resolved at parse time WITHOUT touching the Airflow metadata DB.
+def _setting(key: str) -> str:
+    """Настройка DAG из переменной окружения EGISZ_<KEY>, иначе из DEFAULTS.
 
-    Расписание читается при каждом парсинге DAG-файла. top-level Variable.get в Airflow 3
-    уходит в supervisor RPC и на части контуров виснет при парсинге в воркере, подвешивая
-    задачу на «Filling up the DagBag». Значение берётся из переменной окружения EGISZ_<KEY>
-    или DEFAULTS; параметры, влияющие только на выполнение, читаются из Variable уже внутри
-    задач (get_int) — там execution context активен.
+    Читается и при парсинге (расписание), и внутри задач — без обращения к метабазе Airflow.
+    Значения фиксированы в DEFAULTS и переопределяются переменной окружения процессов Airflow
+    (см. deploy/external-airflow/README). Airflow Variables (метабаза) не используются —
+    на Airflow 3 их чтение при парсинге в воркере подвешивало DAG.
     """
     return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
 
 
-def _variable_or_default(key: str) -> str | int:
-    """Task-time setting from an Airflow Variable, falling back to DEFAULTS.
-
-    Вызывается внутри задач (execution context); при недоступной метабазе — дефолт.
-    """
-    default = DEFAULTS[key]
-    try:
-        return Variable.get(key)
-    except Exception:
-        log.warning("Airflow Variable %r unavailable; using default %r.", key, default)
-        return default
-
-
 def get_int(key: str) -> int:
-    return int(_variable_or_default(key))
+    return int(_setting(key))
 
 
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
@@ -497,7 +483,7 @@ def transform_missing_windows(
 
 @dag(
     dag_id="egisz_reconcile_dag",
-    schedule=_schedule("reconcile_schedule"),
+    schedule=_setting("reconcile_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,
