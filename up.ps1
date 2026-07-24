@@ -641,7 +641,7 @@ function Clear-AirflowStuckTerminatingPods {
     Clear-StuckTerminatingPods -LabelSelector "component=triggerer,release=airflow" -GraceSeconds $GraceSeconds
 }
 
-function Get-EltPackageHash {
+function Get-DagSourcesHash {
     # DAG-файлы самодостаточны: тег образа зависит только от них.
     $hash = python -c @"
 import hashlib
@@ -669,11 +669,11 @@ function Install-Airflow {
         'delete', 'secret', 'airflow-connections', '-n', $Namespace, '--ignore-not-found'
     ) | Out-Null
 
-    $eltHash = Get-EltPackageHash
-    $airflowTag = $eltHash.Substring(0, 12)
+    $dagHash = Get-DagSourcesHash
+    $airflowTag = $dagHash.Substring(0, 12)
     $script:AirflowImage = "egisz-airflow-worker:${airflowTag}"
 
-    Write-Host "Building Airflow image ${AirflowImage} (package ${eltHash})..."
+    Write-Host "Building Airflow image ${AirflowImage} (DAG sources ${dagHash})..."
     Invoke-Checked "Build Airflow image" {
         # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
         # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем

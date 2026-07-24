@@ -30,12 +30,12 @@ RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logte
 # Keep in sync with k8s/airflow/egisz-variables.json (UI import / up.ps1 provisioning).
 DEFAULTS: dict[str, str | int] = {
     "extract_schedule": "*/5 * * * *",
-    "extract_raw_rows": 2000,
+    "extract_raw_rows": 1000,
     "extract_raw_rounds": 3,
-    "transform_rows": 5000,
+    "transform_rows": 3000,
     "transform_rounds": 6,
     "dimensions_schedule": "@hourly",
-    "reconcile_schedule": "@daily",
+    "reconcile_schedule": "@hourly",
     "reconcile_lookback_days": 30,
     "reconcile_max_logids": 20000000,
 }
