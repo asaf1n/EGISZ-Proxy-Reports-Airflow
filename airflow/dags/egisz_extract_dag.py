@@ -9,6 +9,7 @@ tests/test_dag_selfcontainment.py — правки общих функций в�
 from __future__ import annotations
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, TypedDict
@@ -37,11 +38,22 @@ DEFAULTS: dict[str, str | int] = {
 }
 
 
-def _variable_or_default(key: str) -> str | int:
-    """Read an Airflow Variable, falling back to DEFAULTS when the metadata DB is unreachable.
+def _schedule(key: str) -> str:
+    """DAG schedule, resolved at parse time WITHOUT touching the Airflow metadata DB.
 
-    Настройки читаются при импорте DAG-файла (schedule), а файл импортируют и тесты,
-    и парсер вне кластера — импорт не должен требовать ни метабазы Airflow, ни Connections.
+    Расписание читается при каждом парсинге DAG-файла. top-level Variable.get в Airflow 3
+    уходит в supervisor RPC и на части контуров виснет при парсинге в воркере, подвешивая
+    задачу на «Filling up the DagBag». Значение берётся из переменной окружения EGISZ_<KEY>
+    или DEFAULTS; параметры, влияющие только на выполнение, читаются из Variable уже внутри
+    задач (get_int) — там execution context активен.
+    """
+    return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
+
+
+def _variable_or_default(key: str) -> str | int:
+    """Task-time setting from an Airflow Variable, falling back to DEFAULTS.
+
+    Вызывается внутри задач (execution context); при недоступной метабазе — дефолт.
     """
     default = DEFAULTS[key]
     try:
@@ -49,10 +61,6 @@ def _variable_or_default(key: str) -> str | int:
     except Exception:
         log.warning("Airflow Variable %r unavailable; using default %r.", key, default)
         return default
-
-
-def get_str(key: str) -> str:
-    return str(_variable_or_default(key))
 
 
 def get_int(key: str) -> int:
@@ -556,7 +564,7 @@ def transform_exchangelog_batch(
 
 @dag(
     dag_id="egisz_extract_dag",
-    schedule=get_str("extract_schedule"),
+    schedule=_schedule("extract_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
     max_active_runs=1,

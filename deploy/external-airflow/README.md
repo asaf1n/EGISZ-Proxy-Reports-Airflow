@@ -96,25 +96,20 @@ airflow connections add proxy_egisz_fb \
 airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched mart maintenance"
 ```
 
-## 4. Airflow Variables (редактируются в Admin → Variables)
+## 4. Настройки DAG
 
-Variables создаются импортом `egisz-variables.json` (лежит в корне бандла) с дефолтами
-ниже. Импорт опционален: если Variable отсутствует (или метабаза недоступна на
-parse-time), DAG берёт тот же дефолт из словаря `DEFAULTS` в своём файле. Variables
-нужны, чтобы менять параметры через UI без правки кода.
+Две категории с разным механизмом чтения.
 
-Расписания читаются на parse-time DAG (смена подхватится при следующем парсинге
-DAG-файлов).
+**Параметры выполнения — Airflow Variables** (Admin → Variables). Читаются внутри задач,
+где есть execution context. Если Variable отсутствует (или метабаза недоступна), берётся
+дефолт из словаря `DEFAULTS` в файле DAG. Создаются импортом `egisz-variables.json`.
 
 | Variable | Дефолт | Назначение |
 | --- | --- | --- |
-| `extract_schedule` | `*/5 * * * *` | Расписание extract-DAG |
-| `extract_raw_rows` | `2000` | Размер батча выборки EXCHANGELOG из Firebird |
+| `extract_raw_rows` | `1000` | Размер батча выборки EXCHANGELOG из Firebird |
 | `extract_raw_rounds` | `3` | Максимум extract-циклов за один запуск |
-| `transform_rows` | `5000` | Размер батча transform_raw_to_facts |
+| `transform_rows` | `3000` | Размер батча transform_raw_to_facts |
 | `transform_rounds` | `6` | Максимум transform-циклов за один запуск |
-| `dimensions_schedule` | `@hourly` | Расписание dimensions-DAG |
-| `reconcile_schedule` | `@daily` | Расписание reconcile-DAG |
 | `reconcile_lookback_days` | `30` | Глубина поиска записей при сверке (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
 | `reconcile_max_logids` | `20000000` | Порог memory-guard: макс. число LOGID **внутри окна** `reconcile_lookback_days` (выше — hard-fail) |
 
@@ -127,6 +122,27 @@ airflow variables import --action-on-existing-key skip egisz-variables.json
 > Дефолтное действие импорта — **overwrite** (и в CLI, и в UI): без
 > `--action-on-existing-key skip` (в UI — «Skip if exists») повторный импорт затрёт
 > уже изменённые значения.
+
+**Расписания — переменные окружения** (или дефолт в коде), НЕ Variables. Расписание
+читается при каждом парсинге DAG-файла; на Airflow 3 top-level `Variable.get` уходит в
+supervisor RPC и при парсинге в воркере (перед запуском задачи) виснет на «Filling up the
+DagBag», подвешивая DAG. Поэтому расписание резолвится без обращения к метабазе — из
+переменной окружения `EGISZ_<KEY>` процессов Airflow, иначе из `DEFAULTS`.
+
+| Env-переменная | Дефолт | Назначение |
+| --- | --- | --- |
+| `EGISZ_EXTRACT_SCHEDULE` | `*/5 * * * *` | Расписание extract-DAG |
+| `EGISZ_DIMENSIONS_SCHEDULE` | `@hourly` | Расписание dimensions-DAG |
+| `EGISZ_RECONCILE_SCHEDULE` | `@hourly` | Расписание reconcile-DAG |
+
+Задать на целевом контуре (пример для Helm-чарта Airflow — во все компоненты через
+`extraEnv`; смена подхватится при следующем парсинге DAG-файлов):
+
+```yaml
+extraEnv: |
+  - name: EGISZ_EXTRACT_SCHEDULE
+    value: "*/5 * * * *"
+```
 
 ## 5. DAG, которые появятся
 

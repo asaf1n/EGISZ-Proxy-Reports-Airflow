@@ -23,6 +23,7 @@ ALLOWED_IMPORT_ROOTS = {
     "psycopg2",
     "datetime",
     "logging",
+    "os",
     "time",
     "typing",
     "__future__",
