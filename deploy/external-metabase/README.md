@@ -10,7 +10,7 @@ metabase/                    # корень бандла (dist/external/metabase
 ├── setup-dashboards.sh      # главный импортёр (запускать его)
 ├── sync-models.sh           # sync Metabase Models (подключается импортёром)
 ├── include/mb_list.sh       # общие функции (подключается импортёром)
-├── metabase_dashboards/     # 5 дашбордов (*.json) + field_filter_defaults.yaml
+├── metabase_dashboards/     # 4 дашборда (*.json) + field_filter_defaults.yaml
 ├── metabase_models/         # 4 модели (*.json)
 ├── README.md
 └── BUILD_INFO.txt

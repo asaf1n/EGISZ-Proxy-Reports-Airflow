@@ -1,7 +1,7 @@
 .git
 .pytest_cache
 .venv
-__pycache__
+**/__pycache__
 *.pyc
 k8s/**/*secret*.yaml
 !k8s/**/*.example.yaml

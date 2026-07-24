@@ -4,24 +4,27 @@ import pytest
 
 from pathlib import Path
 
-from egisz_elt.common import (
-    connect_pg,
-    get_cursors,
-    load_raw_logs,
-    transform_raw_to_facts,
-    update_cursors,
-)
-from egisz_elt.dimensions import (
-    DIRECTORY_SYNC_LOCK_TIMEOUT,
-    DIRECTORY_SYNC_PAGE_SIZE,
-    DIRECTORY_SYNC_STATEMENT_TIMEOUT,
-    sync_directory,
-)
-from egisz_elt.reconcile import (
-    coalesce_logid_windows,
-    get_all_raw_logids,
-    transform_missing_windows,
-)
+from conftest import load_dag_module
+
+# Общие функции берём из extract-DAG: он канонический носитель общего блока,
+# идентичность копий в соседних DAG-файлах проверяет test_dag_selfcontainment.py.
+extract_dag = load_dag_module("egisz_extract_dag")
+connect_pg = extract_dag.connect_pg
+get_cursors = extract_dag.get_cursors
+load_raw_logs = extract_dag.load_raw_logs
+transform_raw_to_facts = extract_dag.transform_raw_to_facts
+update_cursors = extract_dag.update_cursors
+
+dimensions_dag = load_dag_module("egisz_dimensions_dag")
+DIRECTORY_SYNC_LOCK_TIMEOUT = dimensions_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
+DIRECTORY_SYNC_PAGE_SIZE = dimensions_dag.DIRECTORY_SYNC_PAGE_SIZE
+DIRECTORY_SYNC_STATEMENT_TIMEOUT = dimensions_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
+sync_directory = dimensions_dag.sync_directory
+
+reconcile_dag = load_dag_module("egisz_reconcile_dag")
+coalesce_logid_windows = reconcile_dag.coalesce_logid_windows
+get_all_raw_logids = reconcile_dag.get_all_raw_logids
+transform_missing_windows = reconcile_dag.transform_missing_windows
 
 DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
 
@@ -58,7 +61,7 @@ def test_connect_pg_recovers_cp1251_server_error_text(monkeypatch: pytest.Monkey
     def failing_connect(*_args: object, **_kwargs: object) -> None:
         raw.decode("utf-8")
 
-    monkeypatch.setattr("egisz_elt.common.psycopg2.connect", failing_connect)
+    monkeypatch.setattr("egisz_extract_dag.psycopg2.connect", failing_connect)
 
     with pytest.raises(psycopg2.OperationalError, match="проверку подлинности") as excinfo:
         connect_pg("postgresql://egisz:wrong@localhost:5432/dwh_egisz")
@@ -573,7 +576,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
         captured["fetch"] = fetch
         con.cursor_instance.rowcount = len(values)
 
-    monkeypatch.setattr("egisz_elt.dimensions.execute_values", fake_execute_values)
+    monkeypatch.setattr("egisz_dimensions_dag.execute_values", fake_execute_values)
 
     changed = sync_directory(con, "dim_organizations", [(1, "Clinic", "1234567890", "Address", "1.2.3")])
 
@@ -779,9 +782,7 @@ def test_dwh_init_sql_partitions_time_series_tables() -> None:
 def test_load_raw_logs_uses_partitioned_upsert_target() -> None:
     import inspect
 
-    from egisz_elt import common
-
-    source = inspect.getsource(common.load_raw_logs)
+    source = inspect.getsource(load_raw_logs)
     assert "ON CONFLICT (logid, createdate)" in source
 
 

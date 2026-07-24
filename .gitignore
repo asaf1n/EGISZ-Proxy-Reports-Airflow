@@ -22,9 +22,10 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Local secrets and k8s connection files (use *.example.yaml as template)
+# Local secrets and k8s connection files (use *.example.yaml / *.example.json as template)
 k8s/**/**secret*.yaml
 !k8s/**/**.example.yaml
+k8s/airflow/egisz-connections.json
 
 # Per-machine agent/IDE config
 .claude/

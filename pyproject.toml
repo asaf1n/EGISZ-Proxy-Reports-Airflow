@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "apache-airflow==2.11.2",
+  "apache-airflow==3.2.2",
   "pytest>=7.0",
 ]
 
@@ -27,8 +27,8 @@ addopts = "-q"
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
+# Пакет не собирается: DAG-файлы самодостаточны (airflow/dags/*.py — канонический
+# исходник); pyproject остаётся источником зависимостей для pip install -e .[dev],
+# Docker-образа Airflow и requirements.txt внешнего бандла.
 [tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+py-modules = []

@@ -139,12 +139,22 @@ CLIENT_BI_TEXT_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Медицинские показатели (агрегаты по пациентам и врачам)": (24, 0, 24, 1),
 }
 
+# Вкладки «Динамика по неделям» / «Динамика по месяцам» управленческого дашборда:
+# row/col отсчитываются внутри вкладки, поэтому сетки совпадают.
 WEEKLY_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Доля ошибок по неделям (SLI)": (1, 0, 12, 6),
     "Объём документов по неделям": (1, 12, 12, 6),
     "Контрольная p-карта: доля ошибок по неделям": (7, 0, 24, 6),
     "Категории ошибок по неделям": (14, 0, 24, 6),
     "Сводка по неделям": (20, 0, 24, 7),
+}
+
+MONTHLY_LAYOUT: dict[str, tuple[int, int, int, int]] = {
+    "Доля ошибок по месяцам (SLI)": (1, 0, 12, 6),
+    "Объём документов по месяцам": (1, 12, 12, 6),
+    "Контрольная p-карта: доля ошибок по месяцам": (7, 0, 24, 6),
+    "Категории ошибок по месяцам": (14, 0, 24, 6),
+    "Сводка по месяцам": (20, 0, 24, 7),
 }
 
 
@@ -212,9 +222,12 @@ def main() -> None:
     print(f"operational ({len(op)}):", ", ".join(op))
 
     other = {
-        ROOT / "metabase_dashboards" / "05_executive.json": EXECUTIVE_LAYOUT,
+        ROOT / "metabase_dashboards" / "05_executive.json": {
+            **EXECUTIVE_LAYOUT,
+            **WEEKLY_LAYOUT,
+            **MONTHLY_LAYOUT,
+        },
         ROOT / "metabase_dashboards" / "07_client_service.json": CLIENT_SERVICE_LAYOUT,
-        ROOT / "metabase_dashboards" / "09_weekly_dynamics.json": WEEKLY_LAYOUT,
     }
     for path, layout in other.items():
         dashboard = json.loads(path.read_text(encoding="utf-8"))

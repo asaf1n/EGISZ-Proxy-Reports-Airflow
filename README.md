@@ -1,6 +1,6 @@
 # Сервис эксплуатационной аналитики обмена с ЕГИСЗ
 
-Эксплуатационная аналитика проксирующего шлюза между МИС клиник и РЭМД: журнал обмена → документная витрина в PostgreSQL → пять дашбордов Metabase.
+Эксплуатационная аналитика проксирующего шлюза между МИС клиник и РЭМД: журнал обмена → документная витрина в PostgreSQL → четыре дашборда Metabase.
 
 **Для кого:** дежурная поддержка, аналитики, руководство, клиенты-клиники.
 
@@ -75,7 +75,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | `proxy_egisz` (Firebird) | Журнал обмена и справочники — источник |
 | Airflow | Три DAG: документы, справочники, сверка |
 | `dwh_egisz` (PostgreSQL) | Raw, факты, справочники, правила ошибок, `rpt_*` |
-| Metabase | Пять дашбордов, четыре модели поверх `rpt_*` |
+| Metabase | Четыре дашборда, четыре модели поверх `rpt_*` |
 
 Служебные БД Airflow и Metabase отделены от `dwh_egisz`.
 
@@ -102,13 +102,14 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 ### Основной поток документов
 
 ```
-extract_exchangelog ▸ transform_exchangelog
+extract_exchangelog ▸ transform_exchangelog ▸ refresh_report_marts
 ```
 
 | Задача | Действие |
 | ------ | -------- |
 | `extract_exchangelog` | Читает `elt_state.last_logid`. Пока в `exchangelog_raw` есть строки с `logid` выше watermark — источник не читается. Иначе fetch `EXCHANGELOG` → UPSERT в `exchangelog_raw`, `ANALYZE`. |
 | `transform_exchangelog` | Цикл: `transform_raw_to_facts(from, to)` — парсинг raw в `transactions`, сборка `documents`, сдвиг watermark через `GREATEST`. |
+| `refresh_report_marts` | При `transformed > 0` — `REFRESH MATERIALIZED VIEW CONCURRENTLY` витрин динамики (`rpt_documents_weekly` / `rpt_error_breakdown_weekly` / `rpt_documents_monthly` / `rpt_error_breakdown_monthly`). |
 
 При сбое watermark не откатывается: следующий прогон перечитывает тот же диапазон. Дублей документов нет (UPSERT по `dwh_id`).
 
@@ -310,7 +311,7 @@ Lookback при transform: extract использует окно по ширин
 
 ## Дашборды Metabase
 
-Пять JSON-дашбордов в `metabase_dashboards/`
+Четыре JSON-дашборда в `metabase_dashboards/`
 Провижининг — `metabase/setup-dashboards.sh` 
 Модели — `metabase/sync-models.sh`
 
@@ -318,7 +319,7 @@ Lookback при transform: extract использует окно по ширин
 | Файл | Имя в Metabase | Аудитория | Содержание |
 | ---- | -------------- | --------- | ---------- |
 | `01_integration_egisz.json` | Интеграция с ЕГИСЗ | Поддержка, аналитики | Оперативный мониторинг, healthcheck, очередь, ошибки, архив |
-| `05_executive.json` | Управленческий дашборд | Руководство | NSM, MRR/ARR, здоровье сервиса, выручка под риском (`rpt_documents`) |
+| `05_executive.json` | Управленческий дашборд | Руководство | Вкладки: «Обзор» (NSM, MRR/ARR, здоровье сервиса, выручка под риском по `rpt_documents`), «Динамика по неделям» и «Динамика по месяцам» (SLI, p-карта, структура ошибок по `rpt_*_weekly` / `rpt_*_monthly`) |
 | `07_client_service.json` | Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ | Клиника | Обзор, ошибки регистрации, журнал документов, доступные типы СЭМД |
 | `08_client_bianalytic.json` | Клиентский дашборд. BI-аналитика ЭМД | Клиника (BI) | Объёмы производства, доставка, пациенты/врачи |
 
@@ -376,6 +377,7 @@ Metabase Models → витрины DWH:
 | PostgreSQL | БД `dwh_egisz`, роль `egisz` |
 | Схема DWH | Идемпотентный прогон: `psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
 | Секреты k8s | `up.ps1` копирует `k8s/**/*.example.yaml` → `*secret*.yaml`, если целевых файлов ещё нет |
+| Подключения Airflow | `k8s/airflow/egisz-connections.json` (создаётся из `*.example.json`); `up.ps1` заносит их в Airflow как Connections `dwh_egisz_pg` / `proxy_egisz_fb` |
 
 ### Команды
 

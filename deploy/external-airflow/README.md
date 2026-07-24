@@ -4,11 +4,10 @@
 тестовом контуре этого репозитория). Здесь нет Helm/up.ps1/Kubernetes — только DAG-файлы,
 зависимости и то, что нужно настроить на целевой стороне.
 
-Каждый DAG-файл самодостаточен: пакет `egisz_elt` (подключения, watermark,
-transform-циклы, справочники, сверка) целиком встроен генератором
-`scripts/build_standalone_dags.py` прямо в файл. Отдельно разворачивать пакет
-(`PYTHONPATH` / `pip install`) не нужно. Файлы не редактировать на целевой стороне —
-правки вносятся в исходники репозитория с последующей пересборкой бандла.
+Каждый DAG-файл самодостаточен: подключения, watermark, transform-циклы, справочники и
+сверка лежат в самом файле. Отдельно разворачивать пакет (`PYTHONPATH` / `pip install`)
+не нужно. Файлы не редактировать на целевой стороне — правки вносятся в исходники
+репозитория (`airflow/dags/*.py`) с последующей пересборкой бандла.
 
 ```
 airflow/                     # корень бандла (dist/external/airflow)
@@ -23,9 +22,9 @@ airflow/                     # корень бандла (dist/external/airflow)
 
 ## 0. Предусловия на целевом контуре
 
-- **Apache Airflow 2.x или 3.x** (проверено на 2.11.2 и 3.x), **Python 3.11+**.
-  На Airflow 3.x импорты `airflow.decorators` / `BaseHook` дают в логах
-  `DeprecatedImportWarning` — на работу DAG не влияет.
+- **Apache Airflow 3.x** (проверено на 3.2.2), **Python 3.11+**. DAG написаны на
+  Task SDK (`airflow.sdk`), снятые в 3.x пути `airflow.decorators` / `airflow.models`
+  не используются; на Airflow 2.x файлы не загрузятся.
 - Сетевой доступ воркеров Airflow к **Firebird** (`proxy_egisz`, порт 3050) и
   **PostgreSQL DWH** (`dwh_egisz`, порт 5432).
 - На воркерах — **клиентская библиотека Firebird** (`libfbclient`), её требует
@@ -43,12 +42,18 @@ airflow/                     # корень бандла (dist/external/airflow)
 > (из `PYTHONPATH`/plugins или `pip uninstall egisz-elt`) — самодостаточные DAG-файлы
 > несут собственную копию кода, устаревший пакет рядом лишь маскирует её версию.
 
+> Задача `refresh_report_marts` обновляет витрины динамики (`rpt_documents_weekly` /
+> `rpt_error_breakdown_weekly` / `rpt_documents_monthly` / `rpt_error_breakdown_monthly`),
+> на которых построены вкладки «Динамика по неделям» и «Динамика по месяцам»
+> управленческого дашборда. Витрины создаются бандлом `dwh` — при отставшей схеме
+> задача упадёт на `REFRESH MATERIALIZED VIEW`.
+
 > DAG используют **только Airflow Connections** (`BaseHook.get_connection`), без `os.getenv`.
 > Никаких `.env` на целевом контуре не требуется — все секреты через Connections (п. 2).
 
 ## 2. Airflow Connections (обязательно)
 
-Имена фиксированы в коде (`src/egisz_elt/common.py`): `proxy_egisz_fb` и `dwh_egisz_pg`.
+Имена фиксированы в коде каждого DAG-файла: `proxy_egisz_fb` и `dwh_egisz_pg`.
 **Важно:** поле **Schema** в Airflow Connection используется как **имя базы данных** для обоих.
 
 | Connection Id | Тип | Host | Port | Schema | Login / Password | Extra |
@@ -94,9 +99,9 @@ airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched
 ## 4. Airflow Variables (редактируются в Admin → Variables)
 
 Variables создаются импортом `egisz-variables.json` (лежит в корне бандла) с дефолтами
-ниже. Импорт опционален: DAG читает значения через `egisz_elt.airflow_vars`, и если
-Variable отсутствует — берётся тот же дефолт из кода. Variables нужны, чтобы менять
-параметры через UI без правки кода.
+ниже. Импорт опционален: если Variable отсутствует (или метабаза недоступна на
+parse-time), DAG берёт тот же дефолт из словаря `DEFAULTS` в своём файле. Variables
+нужны, чтобы менять параметры через UI без правки кода.
 
 Расписания читаются на parse-time DAG (смена подхватится при следующем парсинге
 DAG-файлов).
@@ -127,7 +132,7 @@ airflow variables import --action-on-existing-key skip egisz-variables.json
 
 | dag_id | Расписание | Задачи |
 | --- | --- | --- |
-| `egisz_extract_dag` | `*/5` | `extract_exchangelog → transform_exchangelog` |
+| `egisz_extract_dag` | `*/5` | `extract_exchangelog → transform_exchangelog → refresh_report_marts` |
 | `egisz_dimensions_dag` | `@hourly` | `sync_dimensions` (+ обновление enriched-марта при изменениях) |
 | `egisz_reconcile_dag` | `@daily` | `reconcile_proxy_raw` (сверка источник↔raw за последние N дней, watermark не двигает) |
 

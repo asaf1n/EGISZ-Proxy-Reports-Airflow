@@ -5,11 +5,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from egisz_elt.reconcile import (
-    ReconcileWindowVolumeError,
-    fetch_reconcile_window_sets,
-    reconcile_window_since,
-)
+from conftest import load_dag_module
+
+reconcile_dag = load_dag_module("egisz_reconcile_dag")
+
+ReconcileWindowVolumeError = reconcile_dag.ReconcileWindowVolumeError
+fetch_reconcile_window_sets = reconcile_dag.fetch_reconcile_window_sets
+reconcile_window_since = reconcile_dag.reconcile_window_since
 
 
 def test_reconcile_window_since_uses_lookback_days() -> None:
@@ -28,13 +30,13 @@ def test_fetch_reconcile_window_sets_applies_max_logids_within_lookback_window()
     fb_conn = MagicMock()
 
     with (
-        patch("egisz_elt.reconcile.count_exchangelog_rows", return_value=50) as count_rows,
+        patch("egisz_reconcile_dag.count_exchangelog_rows", return_value=50) as count_rows,
         patch(
-            "egisz_elt.reconcile.fetch_exchangelog_logids",
+            "egisz_reconcile_dag.fetch_exchangelog_logids",
             return_value={101, 102},
         ) as fetch_source,
         patch(
-            "egisz_elt.reconcile.get_all_raw_logids",
+            "egisz_reconcile_dag.get_all_raw_logids",
             return_value={101},
         ) as fetch_raw,
     ):
@@ -61,9 +63,9 @@ def test_fetch_reconcile_window_sets_raises_when_window_exceeds_max_logids() -> 
     now = datetime(2026, 7, 4, tzinfo=timezone.utc)
 
     with (
-        patch("egisz_elt.reconcile.count_exchangelog_rows", return_value=150) as count_rows,
-        patch("egisz_elt.reconcile.fetch_exchangelog_logids") as fetch_source,
-        patch("egisz_elt.reconcile.get_all_raw_logids") as fetch_raw,
+        patch("egisz_reconcile_dag.count_exchangelog_rows", return_value=150) as count_rows,
+        patch("egisz_reconcile_dag.fetch_exchangelog_logids") as fetch_source,
+        patch("egisz_reconcile_dag.get_all_raw_logids") as fetch_raw,
     ):
         with pytest.raises(ReconcileWindowVolumeError, match="150 LOGID\\(s\\) in the 7-day window"):
             fetch_reconcile_window_sets(
@@ -85,9 +87,9 @@ def test_large_journal_outside_window_does_not_trigger_guard() -> None:
     fb_conn = MagicMock()
 
     with (
-        patch("egisz_elt.reconcile.count_exchangelog_rows", return_value=100) as count_rows,
-        patch("egisz_elt.reconcile.fetch_exchangelog_logids", return_value=set()) as fetch_source,
-        patch("egisz_elt.reconcile.get_all_raw_logids", return_value=set()) as fetch_raw,
+        patch("egisz_reconcile_dag.count_exchangelog_rows", return_value=100) as count_rows,
+        patch("egisz_reconcile_dag.fetch_exchangelog_logids", return_value=set()) as fetch_source,
+        patch("egisz_reconcile_dag.get_all_raw_logids", return_value=set()) as fetch_raw,
     ):
         _, source, raw, source_count = fetch_reconcile_window_sets(
             pg_conn,

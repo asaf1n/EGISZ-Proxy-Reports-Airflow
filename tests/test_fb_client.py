@@ -3,13 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from egisz_elt.dimensions import fetch_organizations
-from egisz_elt.extract import fetch_exchangelog_after_cursor
-from egisz_elt.reconcile import (
-    count_exchangelog_rows,
-    fetch_exchangelog_by_logids,
-    fetch_exchangelog_logids,
-)
+from conftest import load_dag_module
+
+fetch_organizations = load_dag_module("egisz_dimensions_dag").fetch_organizations
+fetch_exchangelog_after_cursor = load_dag_module("egisz_extract_dag").fetch_exchangelog_after_cursor
+
+_reconcile_dag = load_dag_module("egisz_reconcile_dag")
+count_exchangelog_rows = _reconcile_dag.count_exchangelog_rows
+fetch_exchangelog_by_logids = _reconcile_dag.fetch_exchangelog_by_logids
+fetch_exchangelog_logids = _reconcile_dag.fetch_exchangelog_logids
 
 
 class FakeCursor:

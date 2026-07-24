@@ -1,4 +1,4 @@
-FROM apache/airflow:2.11.2-python3.11
+FROM apache/airflow:3.2.2-python3.11
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1
 
@@ -8,12 +8,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends firebird3.0-common libfbclient2 curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md /opt/egisz-elt/
-COPY src /opt/egisz-elt/src
-
-RUN chown -R airflow:0 /opt/egisz-elt
+# DAG-файлы самодостаточны (пакет egisz_elt не устанавливается); pyproject.toml —
+# единственный источник версий runtime-зависимостей.
+COPY --chown=airflow:0 pyproject.toml /opt/egisz-elt/pyproject.toml
 
 USER airflow
-RUN pip install --no-cache-dir -e /opt/egisz-elt
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('/opt/egisz-elt/pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/egisz-requirements.txt \
+    && pip install --no-cache-dir -r /tmp/egisz-requirements.txt \
+    && rm /tmp/egisz-requirements.txt
 
 COPY --chown=airflow:0 airflow/dags /opt/airflow/dags

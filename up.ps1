@@ -10,6 +10,7 @@ $DwhPoolName = "dwh_postgres"
 $DwhPoolSlots = 1
 $DwhPoolDescription = "Exclusive DWH transform / reconcile / enriched mart maintenance"
 $AirflowImage = "egisz-airflow-worker:latest"
+$AirflowChartVersion = "1.22.0"
 $MetabaseImage = "egisz-metabase:latest"
 $MetabaseDeployStateFile = Join-Path $PSScriptRoot ".cache/metabase-deployed-manifest"
 
@@ -324,8 +325,8 @@ function Initialize-SecretFiles {
     Write-Host "Preparing Kubernetes secrets from examples..."
     $secretPairs = @(
         @{
-            Target = "k8s/airflow/airflow-connections-secret.yaml"
-            Example = "k8s/airflow/airflow-connections-secret.example.yaml"
+            Target = "k8s/airflow/egisz-connections.json"
+            Example = "k8s/airflow/egisz-connections.example.json"
         },
         @{
             Target = "k8s/metabase/metabase-connections-secret.yaml"
@@ -529,45 +530,38 @@ function Initialize-AirflowEgiszVariables {
     Write-Host "EGISZ Airflow Variables are ready (Admin -> Variables in the UI)."
 }
 
-function Test-AirflowConnectionsFromSecret {
-    Write-Host "Verifying Airflow connections from Kubernetes secret..."
-    $connectionEnvVars = @(
-        "AIRFLOW_CONN_DWH_EGISZ_PG",
-        "AIRFLOW_CONN_PROXY_EGISZ_FB"
-    )
-    $podsToCheck = @(
-        @{
-            Label = "scheduler"
-            Selector = "component=scheduler,release=airflow"
-            Container = "scheduler"
-        },
-        @{
-            Label = "worker"
-            Selector = "component=worker,release=airflow"
-            Container = "worker"
-        }
-    )
+function Initialize-AirflowEgiszConnections {
+    # Подключения живут в метабазе Airflow (Admin -> Connections), как на внешнем
+    # контуре: env-переменные из секрета перекрывали бы их и расходились с UI.
+    $connectionsFile = Join-Path $PSScriptRoot "k8s\airflow\egisz-connections.json"
+    if (-not (Test-Path $connectionsFile)) {
+        throw "Airflow connections file not found: ${connectionsFile}"
+    }
 
-    foreach ($podSpec in $podsToCheck) {
-        $podName = (
-            kubectl get pods -n $Namespace -l $podSpec.Selector `
-                --field-selector=status.phase=Running -o name 2>$null |
-            Select-Object -First 1
-        )
-        $podName = ($podName -replace '^pod/', '').Trim()
-        if ([string]::IsNullOrWhiteSpace($podName)) {
-            throw "Cannot find running Airflow $($podSpec.Label) pod in namespace '$Namespace' to verify connections."
+    Write-Host "Provisioning Airflow connections (Admin -> Connections)..."
+    $connections = Get-Content $connectionsFile -Raw | ConvertFrom-Json
+    foreach ($prop in $connections.PSObject.Properties) {
+        $connId = $prop.Name
+        $connUri = [string]$prop.Value
+        if ([string]::IsNullOrWhiteSpace($connUri)) {
+            throw "Connection URI for ${connId} is empty in ${connectionsFile}."
         }
-
-        foreach ($envVar in $connectionEnvVars) {
-            $value = kubectl exec -n $Namespace --request-timeout=30s pod/$podName -c $podSpec.Container -- printenv $envVar 2>$null
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($value)) {
-                throw "Airflow connection env $envVar is not set in $($podSpec.Label) pod '$podName'. Check k8s/airflow/airflow-connections-secret.yaml and Helm values extraEnvFrom."
-            }
+        # delete + add вместо `connections import --overwrite`: работает на всех 2.x
+        # и делает провижининг идемпотентным при смене URI.
+        Invoke-AirflowSchedulerCli -Arguments @('connections', 'delete', $connId) -AllowFailure | Out-Null
+        Invoke-Checked "Add Airflow connection ${connId}" {
+            Invoke-AirflowSchedulerCli -Arguments @('connections', 'add', $connId, '--conn-uri', $connUri)
         }
     }
 
-    Write-Host "Airflow connections dwh_egisz_pg and proxy_egisz_fb are available via airflow-connections secret."
+    foreach ($prop in $connections.PSObject.Properties) {
+        $stored = Invoke-AirflowSchedulerCli -Arguments @('connections', 'get', $prop.Name) -AllowFailure
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($stored | Out-String))) {
+            throw "Airflow connection $($prop.Name) is missing after provisioning. Check ${connectionsFile}."
+        }
+    }
+
+    Write-Host "Airflow connections dwh_egisz_pg and proxy_egisz_fb are stored in the Airflow metadata database."
 }
 
 function Initialize-HelmAirflowRepo {
@@ -648,18 +642,17 @@ function Clear-AirflowStuckTerminatingPods {
 }
 
 function Get-EltPackageHash {
+    # DAG-файлы самодостаточны: тег образа зависит только от них.
     $hash = python -c @"
 import hashlib
 from pathlib import Path
 h = hashlib.sha256()
-for path in sorted(Path('src').rglob('*.py')):
-    h.update(path.read_bytes())
 for path in sorted(Path('airflow/dags').glob('*.py')):
     h.update(path.read_bytes())
 print(h.hexdigest())
 "@
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hash)) {
-        throw "Cannot compute egisz_elt package hash."
+        throw "Cannot compute DAG sources hash."
     }
     return $hash.Trim()
 }
@@ -670,10 +663,11 @@ function Install-Airflow {
     Test-DockerConnection
     Initialize-EgiszEltNamespace
 
-    Write-Host "Applying Airflow connection secrets..."
-    Invoke-Checked "Apply Airflow connection secrets" {
-        kubectl apply -n $Namespace -f k8s/airflow/airflow-connections-secret.yaml
-    }
+    # Подключения переехали в метабазу Airflow (Initialize-AirflowEgiszConnections);
+    # оставшийся секрет подмешивал бы AIRFLOW_CONN_* и перекрывал записи из UI.
+    Invoke-Kubectl -Arguments @(
+        'delete', 'secret', 'airflow-connections', '-n', $Namespace, '--ignore-not-found'
+    ) | Out-Null
 
     $eltHash = Get-EltPackageHash
     $airflowTag = $eltHash.Substring(0, 12)
@@ -693,7 +687,10 @@ function Install-Airflow {
 
     Write-Host "Installing Airflow..."
     Invoke-Checked "Install Airflow Helm release" {
+        # Версия чарта закреплена: 1.22.0 несёт Airflow 3.2.2 (api-server + dag-processor),
+        # на который рассчитаны values.yaml и ожидания up.ps1.
         helm upgrade --install airflow apache-airflow/airflow -n $Namespace `
+            --version $AirflowChartVersion `
             -f k8s/airflow/values.yaml `
             --timeout 15m `
             --set images.airflow.tag=$airflowTag `
@@ -723,8 +720,13 @@ function Install-Airflow {
     Wait-ComponentPodsReady -Description "Airflow triggerer" `
         -LabelSelector "component=triggerer,release=airflow" `
         -TotalTimeoutSeconds 300
-    Wait-ComponentPodsReady -Description "Airflow webserver" `
-        -LabelSelector "component=webserver,release=airflow" `
+    # Airflow 3: DAG-и парсит выделенный dag-processor, UI и REST отдаёт api-server
+    # (компонента webserver в чарте больше нет).
+    Wait-ComponentPodsReady -Description "Airflow DAG processor" `
+        -LabelSelector "component=dag-processor,release=airflow" `
+        -TotalTimeoutSeconds 300
+    Wait-ComponentPodsReady -Description "Airflow API server" `
+        -LabelSelector "component=api-server,release=airflow" `
         -TotalTimeoutSeconds 600
 
     Write-Host "Waiting for Celery worker to connect to the Redis broker..."
@@ -773,11 +775,11 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 "@ | py -
     }
 
-    Test-AirflowConnectionsFromSecret
+    Initialize-AirflowEgiszConnections
     Initialize-AirflowDwhPool
     Initialize-AirflowEgiszVariables
 
-    Test-LoadBalancerEndpoint -Url 'http://localhost:8080/health' -Description 'Airflow webserver LoadBalancer'
+    Test-LoadBalancerEndpoint -Url 'http://localhost:8080/api/v2/monitor/health' -Description 'Airflow API server LoadBalancer'
 
     Write-Host "Airflow is ready (pool ${DwhPoolName}, Variables in UI; DAGs paused at creation). Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' if the DWH schema changed."
 }
@@ -1161,7 +1163,8 @@ function Stop-All {
     Write-Host "Scaling down workloads before teardown..."
     Invoke-ScaleIfExists -Description "Scale Metabase deployment to 0" -Kind deployment -Name metabase
     Invoke-ScaleIfExists -Description "Scale Metabase PostgreSQL to 0" -Kind statefulset -Name metabase-postgres
-    Invoke-ScaleIfExists -Description "Scale Airflow webserver to 0" -Kind deployment -Name airflow-webserver
+    Invoke-ScaleIfExists -Description "Scale Airflow API server to 0" -Kind deployment -Name airflow-api-server
+    Invoke-ScaleIfExists -Description "Scale Airflow DAG processor to 0" -Kind deployment -Name airflow-dag-processor
     Invoke-ScaleIfExists -Description "Scale Airflow scheduler to 0" -Kind deployment -Name airflow-scheduler
     Invoke-ScaleIfExists -Description "Scale Airflow statsd to 0" -Kind deployment -Name airflow-statsd
     Invoke-ScaleIfExists -Description "Scale Airflow worker to 0" -Kind statefulset -Name airflow-worker
@@ -1208,7 +1211,8 @@ function Stop-Airflow {
     }
 
     Write-Host "Scaling down Airflow components without deleting releases or PVCs..."
-    Invoke-ScaleIfExists -Description "Scale Airflow webserver to 0" -Kind deployment -Name airflow-webserver
+    Invoke-ScaleIfExists -Description "Scale Airflow API server to 0" -Kind deployment -Name airflow-api-server
+    Invoke-ScaleIfExists -Description "Scale Airflow DAG processor to 0" -Kind deployment -Name airflow-dag-processor
     Invoke-ScaleIfExists -Description "Scale Airflow scheduler to 0" -Kind deployment -Name airflow-scheduler
     Invoke-ScaleIfExists -Description "Scale Airflow statsd to 0" -Kind deployment -Name airflow-statsd
     Invoke-ScaleIfExists -Description "Scale Airflow worker to 0" -Kind statefulset -Name airflow-worker

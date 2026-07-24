@@ -2001,33 +2001,80 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Дашборд «Динамика по неделям» (09) и недельный слой DWH
+# Вкладки динамики управленческого дашборда (05) и периодические слои DWH
 # ---------------------------------------------------------------------------
 
-_WEEKLY_TABLES = {"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"}
+_PERIODIC_TABS = {
+    "weekly": (
+        {"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"},
+        "week_start",
+    ),
+    "monthly": (
+        {"public.rpt_documents_monthly", "public.rpt_error_breakdown_monthly"},
+        "month_start",
+    ),
+}
 
 
-def _weekly_dashboard() -> dict:
+def _executive_dashboard() -> dict:
     return json.loads(
-        Path("metabase_dashboards/09_weekly_dynamics.json").read_text(encoding="utf-8")
+        Path("metabase_dashboards/05_executive.json").read_text(encoding="utf-8")
     )
 
 
-def test_weekly_dashboard_wired() -> None:
-    """09: канонические слаги, биндинги только на недельные витрины, оба фильтра на всех карточках."""
-    dashboard = _weekly_dashboard()
-    assert dashboard["name"] == "Динамика по неделям"
+def test_standalone_weekly_dashboard_removed() -> None:
+    """Недельная динамика живёт вкладкой управленческого дашборда, а не отдельным файлом."""
+    assert not Path("metabase_dashboards/09_weekly_dynamics.json").exists()
+
+
+def test_executive_dashboard_has_overview_and_dynamics_tabs() -> None:
+    dashboard = _executive_dashboard()
+    tabs = dashboard["tabs"]
+    assert [t["name"] for t in tabs] == ["Обзор", "Динамика по неделям", "Динамика по месяцам"]
+    assert [t["position"] for t in tabs] == [0, 1, 2]
+
+    tab_ids = {t["id"] for t in tabs}
+    for card in dashboard["cards"]:
+        assert card.get("tab") in tab_ids, card.get("name", card.get("text", "")[:40])
+
+
+def test_executive_dashboard_filters_apply_to_every_tab() -> None:
+    """Оба фильтра шапки — общие для дашборда: срез по клинике есть и на «Обзоре»."""
+    dashboard = _executive_dashboard()
     assert {p["slug"] for p in dashboard["parameters"]} == {"ips_date_filter", "jid_filter"}
 
-    data_cards = [c for c in dashboard["cards"] if c.get("display") != "text"]
-    assert len(data_cards) == 5
-    for card in data_cards:
+    for card in dashboard["cards"]:
+        if card.get("display") == "text":
+            continue
+        query = card["dataset_query"]["native"]["query"]
+        tags = card["dataset_query"]["native"].get("template-tags") or {}
         bindings = card.get("metabase-field-filters") or {}
-        assert set(bindings) == {"ips_date", "jid"}, card["name"]
-        for binding in bindings.values():
-            assert binding["table_ref"] in _WEEKLY_TABLES, card["name"]
-        assert bindings["ips_date"]["field_name"] == "week_start", card["name"]
+        assert "{{jid}}" in query, card["name"]
+        assert tags["jid"]["type"] == "dimension", card["name"]
         assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
+
+
+def test_periodic_dynamics_tabs_bind_to_their_own_marts() -> None:
+    dashboard = _executive_dashboard()
+    for tab, (tables, date_field) in _PERIODIC_TABS.items():
+        data_cards = [
+            c for c in dashboard["cards"] if c.get("tab") == tab and c.get("display") != "text"
+        ]
+        assert len(data_cards) == 5, tab
+        for card in data_cards:
+            bindings = card.get("metabase-field-filters") or {}
+            assert set(bindings) == {"ips_date", "jid"}, card["name"]
+            for binding in bindings.values():
+                assert binding["table_ref"] in tables, card["name"]
+            assert bindings["ips_date"]["field_name"] == date_field, card["name"]
+            assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
+
+
+def test_error_rate_dynamics_use_area_display() -> None:
+    """Доля ошибок во времени — «площадь»: заливка читается как уровень отказов."""
+    by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
+    for name in ("Доля ошибок по неделям (SLI)", "Доля ошибок по месяцам (SLI)"):
+        assert by_name[name]["display"] == "area", name
 
 
 def test_weekly_sql_layer_contract() -> None:
@@ -2052,23 +2099,31 @@ def test_weekly_sql_layer_contract() -> None:
     assert "ANALYZE public.rpt_error_breakdown_weekly;" in finalize
 
     init = Path("db/dwh_init.sql").read_text(encoding="utf-8")
-    assert "\i db/parts/85_views_weekly.sql" in init
+    assert r"\i db/parts/85_views_weekly.sql" in init
 
 
-def test_weekly_sli_is_ratio_of_sums() -> None:
-    """SLI считается отношением сумм за неделю, а не средним от долей; p-карта — окно 12 недель."""
-    dashboard = _weekly_dashboard()
-    by_name = {c.get("name"): c for c in dashboard["cards"] if c.get("display") != "text"}
+def test_periodic_sli_is_ratio_of_sums() -> None:
+    """SLI — отношение сумм за период, а не среднее от долей; p-карта — окно 12 периодов."""
+    by_name = {
+        c.get("name"): c for c in _executive_dashboard()["cards"] if c.get("display") != "text"
+    }
+    periods = (
+        ("неделям", "week_start", "is_complete_week"),
+        ("месяцам", "month_start", "is_complete_month"),
+    )
 
-    sli_query = by_name["Доля ошибок по неделям (SLI)"]["dataset_query"]["native"]["query"]
-    assert "SUM(docs_error)" in sli_query
-    assert "NULLIF(SUM(docs_total)" in sli_query
-    assert "is_complete_week" in sli_query
+    for suffix, period_field, complete_flag in periods:
+        sli_query = by_name[f"Доля ошибок по {suffix} (SLI)"]["dataset_query"]["native"]["query"]
+        assert "SUM(docs_error)" in sli_query
+        assert "NULLIF(SUM(docs_total)" in sli_query
+        assert complete_flag in sli_query
 
-    control_query = by_name["Контрольная p-карта: доля ошибок по неделям"]["dataset_query"]["native"]["query"]
-    assert "ROWS BETWEEN 11 PRECEDING AND CURRENT ROW" in control_query
-    assert "sqrt(p_bar * (1.0 - p_bar)" in control_query
-    assert "is_complete_week" in control_query
+        control = by_name[f"Контрольная p-карта: доля ошибок по {suffix}"]
+        control_query = control["dataset_query"]["native"]["query"]
+        assert "ROWS BETWEEN 11 PRECEDING AND CURRENT ROW" in control_query
+        assert "sqrt(p_bar * (1.0 - p_bar)" in control_query
+        assert complete_flag in control_query
 
-    summary_query = by_name["Сводка по неделям"]["dataset_query"]["native"]["query"]
-    assert "LAG(sli_pct) OVER (ORDER BY week_start)" in summary_query
+        summary_name = "Сводка по неделям" if suffix == "неделям" else "Сводка по месяцам"
+        summary_query = by_name[summary_name]["dataset_query"]["native"]["query"]
+        assert f"LAG(sli_pct) OVER (ORDER BY {period_field})" in summary_query

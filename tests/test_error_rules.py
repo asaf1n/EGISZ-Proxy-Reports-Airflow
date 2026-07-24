@@ -9,16 +9,15 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
 psycopg2 = pytest.importorskip("psycopg2")
 
-from egisz_elt.common import connect_pg  # noqa: E402
+from conftest import load_dag_module  # noqa: E402
+
+connect_pg = load_dag_module("egisz_extract_dag").connect_pg
 
 DSN = os.environ.get("EGISZ_TEST_PG_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="EGISZ_TEST_PG_DSN not set; live-PG tests skipped")

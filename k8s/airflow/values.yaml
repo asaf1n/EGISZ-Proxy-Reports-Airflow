@@ -3,7 +3,7 @@
 # helm repo add apache-airflow https://airflow.apache.org/charts
 # helm upgrade --install airflow apache-airflow/airflow -f k8s/airflow/values.yaml --timeout 15m
 
-airflowVersion: "2.11.2"
+airflowVersion: "3.2.2"
 
 config:
   core:
@@ -13,7 +13,8 @@ config:
   celery:
     operation_timeout: "30.0"
     worker_concurrency: "2"
-  scheduler:
+  dag_processor:
+    # В Airflow 3 параметры парсинга DAG-файлов переехали из [scheduler] в [dag_processor].
     min_file_process_interval: "30"
 
 workers:
@@ -47,14 +48,16 @@ postgresql:
     postgresPassword: postgres
     database: airflow_db
 
-extraEnvFrom: |
-  - secretRef:
-      name: airflow-connections
-
+# Connections dwh_egisz_pg / proxy_egisz_fb are NOT injected as AIRFLOW_CONN_* env vars:
+# up.ps1 stores them in the Airflow metadata database after scheduler startup
+# (see Initialize-AirflowEgiszConnections), so Admin -> Connections is the single source.
+#
 # Pool dwh_postgres is NOT provisioned by the official apache-airflow Helm chart.
 # up.ps1 calls `airflow pools set` after scheduler startup (see Initialize-AirflowDwhPool).
 
-webserver:
+# Airflow 3: UI и REST API отдаёт api-server (компонента webserver снята),
+# DAG-файлы парсит выделенный dag-processor.
+apiServer:
   startupProbe:
     failureThreshold: 30
     periodSeconds: 10

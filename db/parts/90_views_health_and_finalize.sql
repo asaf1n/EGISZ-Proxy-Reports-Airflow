@@ -213,10 +213,12 @@ SELECT public.recompute_document_versions(NULL::text[]);
 -- обновляем, чтобы display-колонки (клиника/СЭМД) отражали финальное состояние.
 -- Идёт ПОСЛЕ recompute: rpt_documents (источник джойна matview) = текущие версии.
 REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
--- Недельный слой построен в 85 до reconcile/recompute; обновляем после
--- rpt_error_breakdown — rpt_error_breakdown_weekly читает его.
+-- Недельный (85) и месячный (86) слои построены до reconcile/recompute; обновляем
+-- после rpt_error_breakdown — витрины разбивки ошибок читают его.
 REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
 REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
+REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
+REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
 ANALYZE public.exchangelog_raw;
 ANALYZE public.documents;
 ANALYZE public.transactions;
@@ -224,5 +226,7 @@ ANALYZE public.document_attributes;
 ANALYZE public.rpt_error_breakdown;
 ANALYZE public.rpt_documents_weekly;
 ANALYZE public.rpt_error_breakdown_weekly;
+ANALYZE public.rpt_documents_monthly;
+ANALYZE public.rpt_error_breakdown_monthly;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

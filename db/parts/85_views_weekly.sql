@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_week ON public.rpt_documents_week
 CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_clinic_jid ON public.rpt_documents_weekly (clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_documents_weekly IS
-'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> waiting); docs_success + docs_error = docs_total. Обновляется refresh_weekly_reports() после transform.';
+'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> waiting); docs_success + docs_error = docs_total. Обновляется refresh_report_marts() после transform.';
 
 -- Недельная структура ошибок по категориям (уровень сообщений): документ с
 -- несколькими категориями учитывается в каждой — сумма долей категорий может
@@ -68,4 +68,4 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_weekly_week ON public.rpt_error_breakdown_
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_weekly_category ON public.rpt_error_breakdown_weekly (error_category);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_weekly IS
-'Недельная структура ошибок: грейн (week_start, клиника, error_category); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_weekly_reports() после rpt_error_breakdown.';
+'Недельная структура ошибок: грейн (week_start, клиника, error_category); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после rpt_error_breakdown.';
