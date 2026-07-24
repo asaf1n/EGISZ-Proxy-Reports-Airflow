@@ -984,12 +984,12 @@
       "tab": "weekly"
     },
     {
-      "name": "Доля ошибок по неделям (SLI)",
-      "description": "Доля документов с итоговой ошибкой от корпуса результатов по неделям (отношение сумм за неделю). Только закрытые недели; встроенная линия тренда.",
+      "name": "Исходы регистрации по неделям, %",
+      "description": "Состав исходов регистрации по неделям в долях от документов с вердиктом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые недели — при малом числе закрытых недель ряд короткий.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Доля ошибок (SLI), %\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка асинхронного ответа РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1015,23 +1015,38 @@
           "Неделя"
         ],
         "graph.metrics": [
-          "Доля ошибок (SLI), %"
+          "Успешно",
+          "Ошибка асинхронного ответа РЭМД",
+          "Ошибка связи"
         ],
+        "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Неделя",
-        "graph.y_axis.title_text": "Доля ошибок, %",
-        "graph.show_trendline": true,
+        "graph.y_axis.title_text": "Доля документов, %",
         "graph.show_values": false,
         "series_settings": {
-          "Доля ошибок (SLI), %": {
-            "color": "#E15759",
-            "line.interpolate": "linear",
-            "line.size": "M",
-            "line.style": "solid"
+          "Успешно": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
           }
         },
         "column_settings": {
-          "[\"name\",\"Доля ошибок (SLI), %\"]": {
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибка связи\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -1421,12 +1436,12 @@
       "tab": "monthly"
     },
     {
-      "name": "Доля ошибок по месяцам (SLI)",
-      "description": "Доля документов с итоговой ошибкой от корпуса результатов по месяцам (отношение сумм за месяц). Только закрытые месяцы; встроенная линия тренда.",
+      "name": "Исходы регистрации по месяцам, %",
+      "description": "Состав исходов регистрации по месяцам в долях от документов с вердиктом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые месяцы — при малом числе закрытых месяцев ряд короткий.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Доля ошибок (SLI), %\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка асинхронного ответа РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1452,23 +1467,38 @@
           "Месяц"
         ],
         "graph.metrics": [
-          "Доля ошибок (SLI), %"
+          "Успешно",
+          "Ошибка асинхронного ответа РЭМД",
+          "Ошибка связи"
         ],
+        "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Месяц",
-        "graph.y_axis.title_text": "Доля ошибок, %",
-        "graph.show_trendline": true,
+        "graph.y_axis.title_text": "Доля документов, %",
         "graph.show_values": false,
         "series_settings": {
-          "Доля ошибок (SLI), %": {
-            "color": "#E15759",
-            "line.interpolate": "linear",
-            "line.size": "M",
-            "line.style": "solid"
+          "Успешно": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
           }
         },
         "column_settings": {
-          "[\"name\",\"Доля ошибок (SLI), %\"]": {
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибка связи\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"

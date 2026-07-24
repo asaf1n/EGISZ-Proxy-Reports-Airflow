@@ -2100,11 +2100,28 @@ def test_periodic_dynamics_tabs_bind_to_their_own_marts() -> None:
             assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
 
 
-def test_error_rate_dynamics_use_area_display() -> None:
-    """Доля ошибок во времени — «площадь»: заливка читается как уровень отказов."""
+def test_outcome_composition_dynamics_are_stacked_area() -> None:
+    """Динамика исходов — стек-площадь из трёх долей (успех/асинхр/сеть = 100 %)."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
-    for name in ("Доля ошибок по неделям (SLI)", "Доля ошибок по месяцам (SLI)"):
-        assert by_name[name]["display"] == "area", name
+    for name, table in (
+        ("Исходы регистрации по неделям, %", "public.rpt_documents_weekly"),
+        ("Исходы регистрации по месяцам, %", "public.rpt_documents_monthly"),
+    ):
+        card = by_name[name]
+        assert card["display"] == "area", name
+        viz = card["visualization_settings"]
+        assert viz["stackable.stack_type"] == "stacked", name
+        assert viz["graph.metrics"] == [
+            "Успешно",
+            "Ошибка асинхронного ответа РЭМД",
+            "Ошибка связи",
+        ], name
+        query = card["dataset_query"]["native"]["query"]
+        assert table in query, name
+        # Доли от одного знаменателя (docs_total) → в сумме 100 %.
+        assert query.count("NULLIF(SUM(docs_total), 0)") == 3, name
+        for col in ("docs_success", "docs_async_error", "docs_network_error"):
+            assert f"SUM({col})" in query, (name, col)
 
 
 def test_weekly_sql_layer_contract() -> None:
@@ -2143,13 +2160,12 @@ def test_periodic_sli_is_ratio_of_sums() -> None:
     )
 
     for suffix, period_field, complete_flag in periods:
-        sli_query = by_name[f"Доля ошибок по {suffix} (SLI)"]["dataset_query"]["native"]["query"]
-        assert "SUM(docs_error)" in sli_query
-        assert "NULLIF(SUM(docs_total)" in sli_query
-        assert complete_flag in sli_query
-
+        # SLI (доля ошибок отношением сумм) живёт в p-карте и сводке — отдельной
+        # линии SLI больше нет, её слот занял стек-площадь исходов.
         control = by_name[f"Контрольная p-карта: доля ошибок по {suffix}"]
         control_query = control["dataset_query"]["native"]["query"]
+        assert "SUM(docs_error)" in control_query
+        assert "NULLIF(SUM(docs_total)" in control_query
         assert "ROWS BETWEEN 11 PRECEDING AND CURRENT ROW" in control_query
         assert "sqrt(p_bar * (1.0 - p_bar)" in control_query
         assert complete_flag in control_query
