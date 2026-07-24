@@ -798,7 +798,7 @@ raise SystemExit("Timed out waiting for Celery worker readiness marker in logs."
 
     Test-LoadBalancerEndpoint -Url 'http://localhost:8080/api/v2/monitor/health' -Description 'Airflow API server LoadBalancer'
 
-    Write-Host "Airflow is ready (pool ${DwhPoolName}, Variables in UI; DAGs paused at creation). Run 'psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' if the DWH schema changed."
+    Write-Host "Airflow is ready (pool ${DwhPoolName}, Variables in UI; DAGs paused at creation). Run 'psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql' if the DWH schema changed."
 }
 
 function Sync-MetabaseDashboardArtifacts {

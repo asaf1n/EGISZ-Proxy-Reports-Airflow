@@ -15,30 +15,32 @@ dwh/                         # корень бандла (dist/external/dwh)
 ## 0. Предусловия
 
 - PostgreSQL 14+ и клиент `psql`.
-- Роль с правом создавать роли/объекты в целевой БД (обычно `postgres`).
+- Роль `egisz` существует и **владеет** целевой БД (создаётся один раз администратором, п.1).
 
-## 1. Разовый bootstrap (однократно, из maintenance-БД `postgres`)
+## 1. Разовый bootstrap (однократно, администратором с правом `CREATE ROLE/DATABASE`)
 
 ```sql
 CREATE ROLE egisz LOGIN PASSWORD '<пароль>';
-CREATE DATABASE dwh_egisz OWNER postgres;
+CREATE DATABASE dwh_egisz OWNER egisz;   -- egisz как владелец получает и public-схему
 ```
 
 Роль `egisz` — рабочая учётка конвейера и BI; пароль передать администраторам Airflow и
-Metabase (Connections/`APP_DB_*`), в файлы не записывать.
+Metabase (Connections/`APP_DB_*`), в файлы не записывать. Дальше суперпользователь не нужен:
+весь `dwh_init.sql` (части 00–90) идёт под `egisz`.
 
-> Если роль не создать заранее, `00_bootstrap.sql` создаст её сам — но с дефолтным
-> паролем `egisz`. В этом случае сразу после наката: `ALTER ROLE egisz PASSWORD '<пароль>';`.
-
-## 2. Применение схемы
+## 2. Применение схемы (под ролью `egisz`)
 
 **Строго из корня бандла** — `dwh_init.sql` подключает части относительными путями
 (`\i db/parts/...`):
 
 ```bash
 cd <корень-бандла>
-psql -h PG_HOST -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+psql -h PG_HOST -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 ```
+
+`00_bootstrap.sql` больше не создаёт роль и не требует `postgres`: он пинит пояс роли
+(`ALTER ROLE egisz SET ...` — роль вправе для себя) и фиксирует гранты владельца. Часть 90
+переназначает владельца объектов на `egisz` (no-op, раз объекты создаёт сам `egisz`).
 
 Скрипт идемпотентен (`CREATE ... IF NOT EXISTS`, `CREATE OR REPLACE`, `INSERT ... ON
 CONFLICT`): повторный прогон обязан пройти чисто — так же накатываются и обновления схемы.

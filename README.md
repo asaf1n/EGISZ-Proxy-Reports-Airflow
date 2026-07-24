@@ -375,7 +375,7 @@ Metabase Models → витрины DWH:
 | --------- | ---------- |
 | Kubernetes | Кластер с `kubectl` и `helm` (локально — Docker Desktop, Kubernetes включён) |
 | PostgreSQL | БД `dwh_egisz`, роль `egisz` |
-| Схема DWH | Идемпотентный прогон: `psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
+| Схема DWH | Идемпотентный прогон: `psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
 | Секреты k8s | `up.ps1` копирует `k8s/**/*.example.yaml` → `*secret*.yaml`, если целевых файлов ещё нет |
 | Подключения Airflow | `k8s/airflow/egisz-connections.json` (создаётся из `*.example.json`); `up.ps1` заносит их в Airflow как Connections `dwh_egisz_pg` / `proxy_egisz_fb` |
 

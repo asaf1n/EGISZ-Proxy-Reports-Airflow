@@ -1,37 +1,28 @@
 -- ============================================================================
--- 00_bootstrap.sql — Header, role, grants
--- Loaded by db/dwh_init.sql via \i db/parts/00_bootstrap.sql.
--- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
+-- 00_bootstrap.sql — заголовок, пояс роли, гранты.
+-- Подключается из db/dwh_init.sql через \i db/parts/00_bootstrap.sql.
+-- Идемпотентно; выполняется под ролью egisz (владелец dwh_egisz).
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 \encoding UTF8
--- DWH initialization script for EGISZ proxy reports.
--- Run once (and re-run safely on updates) as PostgreSQL superuser against dwh_egisz.
+-- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_egisz;
+-- повторный прогон безопасен. Прежней ветки «под postgres» больше нет — весь dwh_init
+-- (части 00–90) идёт под egisz.
 --
--- Prerequisites — execute as superuser against the 'postgres' database:
---   CREATE ROLE egisz LOGIN PASSWORD 'egisz';
---   CREATE DATABASE dwh_egisz;
+-- Однократные предусловия (администратор БД, до первого прогона):
+--   CREATE ROLE egisz LOGIN PASSWORD '...';
+--   CREATE DATABASE dwh_egisz OWNER egisz;   -- egisz как владелец получает public-схему
 --
 -- Usage:
---   psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+--   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
-
--- Idempotent role creation
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'egisz') THEN
-        EXECUTE format('CREATE ROLE egisz LOGIN PASSWORD %L', 'egisz');
-    END IF;
-END;
-$$;
-
--- Все компоненты работают в МСК. Extract пишет наивное Firebird-время (EXCHANGELOG.CREATEDATE,
--- лицензии) как timestamptz: без фиксированного пояса сессии Postgres пометил бы его дефолтом
--- сервера (не МСК) и сдвинул бы момент. Пин роли на Europe/Moscow гарантирует, что и ingest,
--- и чтение раскладывают сутки по московской границе.
+-- Пин пояса роли на МСК: наивное Firebird-время (EXCHANGELOG.CREATEDATE, лицензии) пишется
+-- как timestamptz; без фиксированного пояса сессии сутки «уехали» бы на границе. Роль вправе
+-- менять собственные параметры сессии, поэтому egisz выполняет это сам.
 ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 
+-- egisz — владелец dwh_egisz и public (через pg_database_owner), права уже есть; GRANT
+-- идемпотентен и фиксирует контракт для среды, где владение выдано иначе.
 GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
 GRANT USAGE, CREATE ON SCHEMA public TO egisz;
-
