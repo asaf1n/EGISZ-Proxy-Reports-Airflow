@@ -2022,6 +2022,36 @@ def _executive_dashboard() -> dict:
     )
 
 
+def test_dashboard_json_matches_generators() -> None:
+    """JSON дашбордов = вывод генераторов.
+
+    Дашборды генерируются и запекаются в образ, поэтому расхождение файла с генератором
+    означает, что прогон up.ps1 молча перепишет карточку — так уже терялась карточка
+    «Динамика статусов по дням» после выгрузки из живого Metabase. Проверка read-only:
+    запись перехватывается, файлы не трогаются.
+    """
+    from conftest import load_script_module
+
+    for stem in ("apply_dashboard_plan", "layout_operational_tab"):
+        module = load_script_module(stem)
+        captured: dict[Path, dict] = {}
+        original = module.write_json_if_changed
+        module.write_json_if_changed = lambda path, data, _c=captured: (
+            _c.__setitem__(Path(path), data) or False
+        )
+        try:
+            module.main()
+        finally:
+            module.write_json_if_changed = original
+
+        for path, generated in captured.items():
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            assert on_disk == generated, (
+                f"{path.name} расходится с выводом {stem}.py — "
+                f"перегенерируйте файл (python scripts/{stem}.py) и закоммитьте"
+            )
+
+
 def test_standalone_weekly_dashboard_removed() -> None:
     """Недельная динамика живёт вкладкой управленческого дашборда, а не отдельным файлом."""
     assert not Path("metabase_dashboards/09_weekly_dynamics.json").exists()

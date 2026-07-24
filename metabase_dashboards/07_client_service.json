@@ -372,14 +372,6 @@
       },
       "display": "bar",
       "visualization_settings": {
-        "graph.y_axis.title_text": "% документов",
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "День",
-        "graph.metrics": [
-          "Async ошибки, %",
-          "Сетевые ошибки, %",
-          "Успешно, %"
-        ],
         "column_settings": {
           "[\"name\",\"Async ошибки, %\"]": {
             "decimals": 1,
@@ -397,24 +389,32 @@
             "suffix": " %"
           }
         },
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "graph.metrics": [
+          "Async ошибки, %",
+          "Сетевые ошибки, %",
+          "Успешно, %"
+        ],
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "День",
+        "graph.y_axis.title_text": "% документов",
+        "graph.show_values": false,
+        "stackable.stack_type": "stacked",
         "series_settings": {
-          "Сетевые ошибки, %": {
-            "axis": "left",
-            "color": "#F2994A"
-          },
           "Async ошибки, %": {
             "axis": "left",
             "color": "#A989C5"
           },
+          "Сетевые ошибки, %": {
+            "axis": "left",
+            "color": "#F2994A"
+          },
           "Успешно, %": {
             "color": "#689636"
           }
-        },
-        "graph.x_axis.scale": "timeseries",
-        "graph.dimensions": [
-          "Дата"
-        ],
-        "stackable.stack_type": "stacked"
+        }
       },
       "sizeX": 12,
       "sizeY": 7,

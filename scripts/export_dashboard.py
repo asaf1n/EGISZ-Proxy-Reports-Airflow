@@ -8,6 +8,12 @@ Usage:
 
   python scripts/export_dashboard.py <dashboard_id> <output_file>
       Export a single dashboard by Metabase id into the given path.
+
+Выгрузка перезаписывает файлы, которые собирают apply_dashboard_plan.py и
+layout_operational_tab.py: если живой Metabase отстал от генераторов, экспорт вернёт
+старую карточку, а следующий прогон генератора молча её перепишет. После экспорта
+прогонять генераторы и `pytest tests/test_dashboards.py`, а осознанные правки карточек
+переносить в генератор.
 """
 from __future__ import annotations
 

@@ -274,9 +274,12 @@ TRANSACTIONS_BY_DAY_STATUS_QUERY = (
 # Ошибки — как доля от общего числа документов с вердиктом РЭМД за день (успех+ошибка),
 # общий объём — отдельной серией «Всего» (пунктирная линия на правой оси). «Отправлено»
 # (status='waiting', без исхода) исключено — см. README §«Учёт отправленных».
+# Стэк долей исходов за день (сумма = 100%): счётный ряд «Всего» на второй оси
+# визуально спорит с процентными рядами, поэтому объём вынесен в отдельные карточки.
 CLIENT_STATUS_BY_DAY_QUERY = (
     "SELECT ips_date::date AS \"Дата\", "
-    "COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Успешно, %\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
     "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
@@ -2013,12 +2016,12 @@ def apply_client_dashboards(path: Path) -> bool:
             }
             card["metabase-field-filters"] = ff
             card["description"] = (
-                "Доля документов с ошибкой асинхронного ответа РЭМД и ошибкой связи от "
-                "общего числа документов с вердиктом РЭМД за день (левая ось, %); общий "
-                "объём — пунктирная линия «Всего» (правая ось). «Отправлено» (без исхода) "
-                "исключено — см. карточку «Отправленные — клиент»."
+                "Доли документов по исходам за день: успешно, ошибка асинхронного ответа "
+                "РЭМД и ошибка связи — в процентах от документов с вердиктом РЭМД "
+                "(сумма = 100%). «Отправлено» (без исхода) исключено — см. карточку "
+                "«Отправленные — клиент»."
             )
-            card["display"] = "line"
+            card["display"] = "bar"
             viz = card.setdefault("visualization_settings", {})
             for key in list(viz.keys()):
                 if (
@@ -2028,19 +2031,16 @@ def apply_client_dashboards(path: Path) -> bool:
                 ):
                     del viz[key]
             viz["graph.dimensions"] = ["Дата"]
-            viz["graph.metrics"] = ["Async ошибки, %", "Сетевые ошибки, %", "Всего"]
+            viz["graph.metrics"] = ["Async ошибки, %", "Сетевые ошибки, %", "Успешно, %"]
+            viz["graph.x_axis.scale"] = "timeseries"
             viz["graph.x_axis.title_text"] = "День"
-            viz["graph.y_axis.title_text"] = "% ошибок"
+            viz["graph.y_axis.title_text"] = "% документов"
             viz["graph.show_values"] = False
+            viz["stackable.stack_type"] = "stacked"
             viz["series_settings"] = {
-                "Async ошибки, %": {"display": "line", "axis": "left", "color": "#A989C5"},
-                "Сетевые ошибки, %": {"display": "line", "axis": "left", "color": "#F2994A"},
-                "Всего": {
-                    "display": "line",
-                    "line.style": "dashed",
-                    "axis": "right",
-                    "color": "#84BB4C",
-                },
+                "Async ошибки, %": {"axis": "left", "color": "#A989C5"},
+                "Сетевые ошибки, %": {"axis": "left", "color": "#F2994A"},
+                "Успешно, %": {"color": "#689636"},
             }
             viz["column_settings"] = {
                 '["name","Async ошибки, %"]': {
@@ -2053,7 +2053,11 @@ def apply_client_dashboards(path: Path) -> bool:
                     "number_separators": ", ",
                     "suffix": " %",
                 },
-                '["name","Всего"]': {"decimals": 0, "number_separators": ", "},
+                '["name","Успешно, %"]': {
+                    "decimals": 1,
+                    "number_separators": ", ",
+                    "suffix": " %",
+                },
             }
         dq = card.get("dataset_query", {})
         if dq.get("type") == "native":
