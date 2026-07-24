@@ -56,11 +56,15 @@ def test_dag_files_exist() -> None:
     }
 
 
+# DEFAULTS — настройки конкретного DAG (свои ключи в каждом файле), а не общий блок.
+PER_DAG_DEFINITIONS = {"DEFAULTS"}
+
+
 def test_shared_definitions_are_identical_across_dag_files() -> None:
     """Одноимённые определения в разных DAG-файлах обязаны совпадать до AST."""
     per_file = {path.name: _top_level_definitions(_module_ast(path)) for path in DAG_FILES}
 
-    names = [name for defs in per_file.values() for name in defs]
+    names = [name for defs in per_file.values() for name in defs if name not in PER_DAG_DEFINITIONS]
     shared = {name for name in names if sum(name in defs for defs in per_file.values()) > 1}
     assert shared, "общий блок пуст — проверьте, что файлы не разошлись структурно"
 

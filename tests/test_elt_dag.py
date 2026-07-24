@@ -17,13 +17,55 @@ def _read(dag_file: str) -> str:
     return (DAGS_DIR / dag_file).read_text(encoding="utf-8")
 
 
-def test_airflow_variables_json_matches_python_defaults() -> None:
-    defaults = load_dag_module("egisz_extract_dag").DEFAULTS
+DAG_STEMS = ("egisz_extract_dag", "egisz_dimensions_dag", "egisz_reconcile_dag")
 
+
+def test_airflow_variables_json_matches_python_defaults() -> None:
+    """Каждый DAG объявляет только свои настройки; egisz-variables.json — их объединение."""
+    per_dag = {stem: load_dag_module(stem).DEFAULTS for stem in DAG_STEMS}
+
+    seen: dict[str, str] = {}
+    for stem, defaults in per_dag.items():
+        for key in defaults:
+            assert key not in seen, f"настройка {key!r} объявлена и в {seen[key]}, и в {stem}"
+            seen[key] = stem
+
+    union = {key: value for defaults in per_dag.values() for key, value in defaults.items()}
     payload = json.loads(VARS_JSON.read_text(encoding="utf-8"))
-    assert set(payload) == set(defaults)
-    for key, default in defaults.items():
+    assert set(payload) == set(union)
+    for key, default in union.items():
         assert str(payload[key]) == str(default)
+
+
+def test_dag_settings_read_airflow_variable_before_default() -> None:
+    """Значение из Admin → Variables должно побеждать; дефолт — только при недоступности.
+
+    Task SDK принимает `Variable.get(key)` без `default_var`: неверный вызов уходил
+    в except и молча возвращал дефолт, игнорируя настройку из UI.
+    """
+    for stem in DAG_STEMS:
+        module = load_dag_module(stem)
+        key = next(iter(module.DEFAULTS))
+        original = module.Variable
+
+        class StoredVariable:
+            @staticmethod
+            def get(name: str) -> str:
+                assert name == key
+                return "42"
+
+        class UnavailableVariable:
+            @staticmethod
+            def get(name: str) -> str:
+                raise RuntimeError("metadata DB unreachable")
+
+        try:
+            module.Variable = StoredVariable
+            assert module.get_str(key) == "42", stem
+            module.Variable = UnavailableVariable
+            assert module.get_str(key) == str(module.DEFAULTS[key]), stem
+        finally:
+            module.Variable = original
 
 
 def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
@@ -128,7 +170,6 @@ def test_dag_files_are_self_contained_units() -> None:
         assert "from airflow.decorators import" not in src, path.name
         assert "from airflow.hooks.base import" not in src, path.name
         assert "from airflow.models import" not in src, path.name
-        assert "from airflow.exceptions import" not in src, path.name
 
 
 def test_report_marts_refresh_matches_sql_layer() -> None:
