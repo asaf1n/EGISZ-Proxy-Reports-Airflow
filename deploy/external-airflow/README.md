@@ -23,7 +23,9 @@ airflow/                     # корень бандла (dist/external/airflow)
 
 ## 0. Предусловия на целевом контуре
 
-- **Apache Airflow 2.x** (проверено на 2.11.2), **Python 3.11**.
+- **Apache Airflow 2.x или 3.x** (проверено на 2.11.2 и 3.x), **Python 3.11+**.
+  На Airflow 3.x импорты `airflow.decorators` / `BaseHook` дают в логах
+  `DeprecatedImportWarning` — на работу DAG не влияет.
 - Сетевой доступ воркеров Airflow к **Firebird** (`proxy_egisz`, порт 3050) и
   **PostgreSQL DWH** (`dwh_egisz`, порт 5432).
 - На воркерах — **клиентская библиотека Firebird** (`libfbclient`), её требует
@@ -51,10 +53,12 @@ airflow/                     # корень бандла (dist/external/airflow)
 
 | Connection Id | Тип | Host | Port | Schema | Login / Password | Extra |
 | --- | --- | --- | --- | --- | --- | --- |
-| `proxy_egisz_fb` | Generic | хост Firebird | `3050` | путь/алиас БД Firebird | пользователь / пароль | `{"charset":"UTF8"}` |
+| `proxy_egisz_fb` | Generic | хост Firebird | `3050` | путь/алиас БД Firebird | пользователь / пароль | `{"charset":"WIN1251"}` |
 | `dwh_egisz_pg` | Postgres | хост PostgreSQL | `5432` | `dwh_egisz` | пользователь / пароль | — |
 
 `connect_fb` строит DSN как `host/port:schema` (`schema` = путь к файлу БД или алиас Firebird).
+`charset` в Extra должен совпадать с кодировкой БД журнала прокси (в проверенных контурах —
+`WIN1251`; без Extra код подключается с `UTF8`, и чтение падает на транслитерации кириллицы).
 `connect_pg` берёт `schema` как имя БД, `login`/`password`/`host`/`port` — как обычно.
 
 > Подключение `dwh_egisz_pg` должно логиниться ролью **`egisz`** (или другой ролью с тем же
@@ -73,7 +77,7 @@ airflow connections add proxy_egisz_fb \
   --conn-host FB_HOST --conn-port 3050 \
   --conn-schema '/path/or/alias/proxy_egisz' \
   --conn-login USER --conn-password PASSWORD \
-  --conn-extra '{"charset":"UTF8"}'
+  --conn-extra '{"charset":"WIN1251"}'
 ```
 
 ## 3. Пул `dwh_postgres` (обязательно)

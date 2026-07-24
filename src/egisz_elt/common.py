@@ -26,15 +26,24 @@ class PipelineBatchInfo(BatchMetadata, total=False):
 
 
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
-    if isinstance(conn_params, str):
-        return psycopg2.connect(conn_params)
-    return psycopg2.connect(
-        host=conn_params.host,
-        port=conn_params.port,
-        user=conn_params.login,
-        password=conn_params.password,
-        database=conn_params.schema,
-    )
+    try:
+        if isinstance(conn_params, str):
+            return psycopg2.connect(conn_params)
+        return psycopg2.connect(
+            host=conn_params.host,
+            port=conn_params.port,
+            user=conn_params.login,
+            password=conn_params.password,
+            database=conn_params.schema,
+        )
+    except UnicodeDecodeError as exc:
+        # Русифицированный PostgreSQL на Windows отвечает на отказ подключения текстом
+        # в кодировке сервера (cp1251), а psycopg2 ждёт UTF-8 — реальная причина отказа
+        # (неверный пароль/база, правило pg_hba) прячется за UnicodeDecodeError.
+        detail = bytes(exc.object).decode("cp1251", errors="replace")
+        raise psycopg2.OperationalError(
+            f"PostgreSQL rejected the connection; server message: {detail}"
+        ) from exc
 
 
 def connect_fb(conn: Any):

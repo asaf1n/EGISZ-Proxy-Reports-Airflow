@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 
 from egisz_elt.common import (
+    connect_pg,
     get_cursors,
     load_raw_logs,
     transform_raw_to_facts,
@@ -43,6 +44,26 @@ class FakeConnection:
 
     def commit(self) -> None:  # pragma: no cover - must not be reached in this test
         raise AssertionError("load_raw_logs should fail before commit")
+
+
+def test_connect_pg_recovers_cp1251_server_error_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Русифицированный PostgreSQL отвечает на отказ подключения текстом в cp1251;
+    без восстановления реальная причина (пароль/база/pg_hba) прячется за
+    UnicodeDecodeError из psycopg2."""
+    import psycopg2
+
+    server_message = "ВАЖНО:  пользователь \"egisz\" не прошёл проверку подлинности"
+    raw = server_message.encode("cp1251")
+
+    def failing_connect(*_args: object, **_kwargs: object) -> None:
+        raw.decode("utf-8")
+
+    monkeypatch.setattr("egisz_elt.common.psycopg2.connect", failing_connect)
+
+    with pytest.raises(psycopg2.OperationalError, match="проверку подлинности") as excinfo:
+        connect_pg("postgresql://egisz:wrong@localhost:5432/dwh_egisz")
+
+    assert isinstance(excinfo.value.__cause__, UnicodeDecodeError)
 
 
 def test_load_raw_logs_rejects_missing_required_exchangelog_keys() -> None:

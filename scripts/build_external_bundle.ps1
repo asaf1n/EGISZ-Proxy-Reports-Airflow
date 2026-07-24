@@ -96,7 +96,7 @@ function Build-AirflowBundle {
     }
 
     $header = "# DAG runtime dependencies, generated from pyproject.toml" +
-        " (Apache Airflow 2.x / Python 3.11 provided by the target)."
+        " (Apache Airflow 2.x/3.x, Python 3.11+ provided by the target)."
     @($header) + (Get-ProjectDependencies) |
         Out-File -Encoding ascii (Join-Path $bundle "requirements.txt")
 
