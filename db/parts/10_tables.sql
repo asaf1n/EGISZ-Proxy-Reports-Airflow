@@ -5,22 +5,45 @@
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
+-- Курсоры приёма: last_logid — журнал EXCHANGELOG, last_egmid — реестр подач EGISZ_MESSAGES.
+-- Оба продвигает только egisz_etl_dag, через GREATEST.
 CREATE TABLE IF NOT EXISTS elt_state (
     pipeline text PRIMARY KEY,
     last_logid bigint DEFAULT 0,
     updated_at timestamptz DEFAULT now()
 );
 
--- Дата-отсечка источника снята: forward-выборка идёт только по LOGID-курсору, а
--- reconcile_proxy_raw (DAG egisz_reconcile_dag) делает set-diff константности
--- источник↔raw по LOGID в окне lookback (reconcile_lookback_days) с memory-guard
--- reconcile_max_logids на объём этого окна; watermark не двигает —
--- см. README.md §«Полная сверка константности источник↔raw».
 ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
+ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS last_egmid bigint DEFAULT 0;
 
 INSERT INTO elt_state (pipeline, last_logid)
 VALUES ('egisz', 0)
 ON CONFLICT (pipeline) DO NOTHING;
+
+-- Отметки последнего выполнения задач, чья каденция реже каденции DAG: справочники
+-- (раз в час) и витрины динамики. Гейт читает ran_at и пропускает задачу до истечения
+-- интервала — см. общий блок DAG, should_run_now().
+CREATE TABLE IF NOT EXISTS elt_job_runs (
+    job text PRIMARY KEY,
+    ran_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Реестр подач шлюза (источник — EGISZ_MESSAGES): идентификатор исходящего сообщения,
+-- которым МИС подаёт документ, и localUid этого документа. Асинхронный вердикт ЕГИСЗ
+-- (РЭМД sendRegisterDocumentResult, ИЭМК ProvideAndRegisterDocumentSet-bAsyncResponse)
+-- несёт только relatesToMessage, поэтому связывание вердикта с документом идёт через
+-- этот реестр. msgid → document_uid однозначно; на один документ приходится несколько
+-- msgid — по одному на попытку подачи.
+-- msgid хранится каноническим ключом (public.message_registry_key), document_uid — в
+-- нижнем регистре, то есть совпадает с documents.dwh_id без приведения на чтении.
+CREATE TABLE IF NOT EXISTS dim_message_document (
+    msgid text PRIMARY KEY,
+    document_uid text NOT NULL,
+    reply_to text,
+    source_egmid bigint,
+    created_at timestamptz,
+    loaded_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logid bigint PRIMARY KEY,
@@ -30,10 +53,13 @@ CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logstate integer,
     logtext text,
     msgtext text,
+    uri text,
     loaded_at timestamptz DEFAULT now()
 );
 
 ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
+-- URI вызова задаёт подсистему ЕГИСЗ: /emdr/callback — РЭМД, /ips/callback — ИЭМК.
+ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS uri text;
 
 -- Маркер попытки парсинга (по LOGID). parse_targets в transform_raw_to_facts должен
 -- отличать «ещё не парсили» от «парсили, но payload без реквизитов»: строки без
@@ -89,6 +115,9 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_oid text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid_resolve_method text;
+-- Число подач документа в ЕГИСЗ (строк реестра dim_message_document на этот localUid).
+-- Повторная подача не меняет localUid, поэтому счётчик живёт на экземпляре документа.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS attempt_count integer;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 -- status_category удалён: полностью выводится из status, downstream-потребителей нет.
 ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
@@ -437,10 +466,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     org_oid text,
     status text,
     message text,
-    callback_url text,
     jid bigint,
     semd_code text,
-    semd_name text,
     error_code text,
     creation_date timestamptz,
     loaded_at timestamptz DEFAULT now()
@@ -471,8 +498,31 @@ BEGIN
 END $$;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_action text;
--- Контур обмена ('РЭМД'|'ИЭМК'|NULL) — см. exchange_contour().
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS contour text;
+-- Подсистема ЕГИСЗ ('РЭМД'|'ИЭМК'|NULL) — см. egisz_subsystem().
+-- Переименование, а не пара «добавить + скопировать + удалить»: перенос значений
+-- переписал бы каждую строку партиционированной таблицы, RENAME меняет только каталог.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'transactions'
+                 AND column_name = 'contour')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = 'public' AND table_name = 'transactions'
+                         AND column_name = 'egisz_subsystem') THEN
+        ALTER TABLE public.transactions RENAME COLUMN contour TO egisz_subsystem;
+    END IF;
+END $$;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS egisz_subsystem text;
+ALTER TABLE transactions DROP COLUMN IF EXISTS contour;
+-- Правило, которым вердикт привязан к документу: payload_local_uid | message_registry
+-- | emdr_id | unlinked. Делает качество привязки измеримым — доля unlinked выведена
+-- в rpt_health_signals.
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS link_method text;
+-- Снятые реквизиты: callback_url дублировал LOGTEXT, semd_name всегда пуст
+-- (наименование берётся из dim_semd_types), xml_jid потребителей не имеет.
+ALTER TABLE transactions DROP COLUMN IF EXISTS callback_url;
+ALTER TABLE transactions DROP COLUMN IF EXISTS semd_name;
+ALTER TABLE transactions DROP COLUMN IF EXISTS xml_jid;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_dwh_id text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_local_uid text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_emdr_id text;
@@ -484,7 +534,6 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_error_code text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_message text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_raw_status text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_document_status text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_jid bigint;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_creation_date timestamptz;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_patient_name text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_snils text;
@@ -529,12 +578,13 @@ BEGIN
             logstate integer,
             logtext text,
             msgtext text,
+            uri text,
             loaded_at timestamptz DEFAULT now(),
             PRIMARY KEY (logid, createdate)
         ) PARTITION BY RANGE (createdate);
 
         INSERT INTO public.exchangelog_raw_partitioned (
-            logid, logdate, createdate, msgid, logstate, logtext, msgtext, loaded_at
+            logid, logdate, createdate, msgid, logstate, logtext, msgtext, uri, loaded_at
         )
         SELECT
             logid,
@@ -544,6 +594,7 @@ BEGIN
             logstate,
             logtext,
             msgtext,
+            uri,
             loaded_at
         FROM public.exchangelog_raw;
 
@@ -590,61 +641,145 @@ BEGIN
 END
 $$;
 
+-- Обслуживание месячных партиций. Партиции создаются на окно назад и вперёд от текущего
+-- месяца; DEFAULT-партиции нет намеренно: строка, осевшая в ней, запрещает последующее
+-- создание партиции своего месяца, и накат схемы падает. Вместо неё — расчёт границ по
+-- фактическому содержимому таблицы, чтобы окно всегда покрывало имеющиеся данные.
+-- Вызывается накатом схемы и суточной задачей maintain_partitions.
+CREATE OR REPLACE FUNCTION public.ensure_time_partitions(
+    p_months_back integer DEFAULT 12,
+    p_months_ahead integer DEFAULT 24
+)
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    spec record;
+    part_start timestamptz;
+    part_end timestamptz;
+    part_name text;
+    window_start timestamptz;
+    window_end timestamptz;
+    data_start timestamptz;
+    data_end timestamptz;
+    created integer := 0;
+BEGIN
+    FOR spec IN
+        SELECT * FROM (VALUES
+            ('exchangelog_raw', 'createdate'),
+            ('transactions', 'log_date')
+        ) AS t(table_name, key_column)
+    LOOP
+        CONTINUE WHEN NOT EXISTS (
+            SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname = spec.table_name
+              AND c.relkind = 'p'
+        );
+
+        window_start := date_trunc('month', timezone('UTC', now())) - (p_months_back || ' months')::interval;
+        window_end := date_trunc('month', timezone('UTC', now())) + (p_months_ahead || ' months')::interval;
+
+        -- Данные могут выходить за окно: без покрывающей партиции такая строка
+        -- не вставится вовсе, поэтому окно расширяется до фактического диапазона.
+        EXECUTE format(
+            'SELECT date_trunc(''month'', min(%I)), date_trunc(''month'', max(%I)) FROM public.%I',
+            spec.key_column, spec.key_column, spec.table_name
+        ) INTO data_start, data_end;
+
+        window_start := LEAST(window_start, COALESCE(data_start, window_start));
+        window_end := GREATEST(window_end, COALESCE(data_end, window_end));
+
+        part_start := window_start;
+        WHILE part_start <= window_end LOOP
+            part_end := part_start + INTERVAL '1 month';
+            part_name := format('%s_y%sm%s', spec.table_name,
+                                to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relname = part_name
+            ) THEN
+                EXECUTE format(
+                    'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
+                    part_name, spec.table_name, part_start, part_end
+                );
+                created := created + 1;
+            END IF;
+            part_start := part_end;
+        END LOOP;
+    END LOOP;
+
+    RETURN created;
+END;
+$$;
+
+-- Упразднение DEFAULT-партиций прежнего поколения: строки переносятся в партиции своих
+-- месяцев, после чего DEFAULT отцепляется и удаляется. Идемпотентно — при отсутствии
+-- таблицы блок не делает ничего.
 DO $$
 DECLARE
-    relkind "char";
-    month_offset integer;
+    spec record;
+    moved bigint;
+    data_start timestamptz;
+    data_end timestamptz;
     part_start timestamptz;
     part_end timestamptz;
     part_name text;
 BEGIN
-    SELECT c.relkind
-    INTO relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'exchangelog_raw';
+    FOR spec IN
+        SELECT * FROM (VALUES
+            ('exchangelog_raw', 'exchangelog_raw_default', 'createdate'),
+            ('transactions', 'transactions_default', 'log_date')
+        ) AS t(table_name, default_name, key_column)
+    LOOP
+        CONTINUE WHEN NOT EXISTS (
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = spec.default_name
+        );
 
-    IF relkind = 'p' THEN
-        EXECUTE 'CREATE TABLE IF NOT EXISTS public.exchangelog_raw_default PARTITION OF public.exchangelog_raw DEFAULT';
+        EXECUTE format(
+            'SELECT count(*), date_trunc(''month'', min(%I)), date_trunc(''month'', max(%I)) FROM public.%I',
+            spec.key_column, spec.key_column, spec.default_name
+        ) INTO moved, data_start, data_end;
 
-        FOR month_offset IN -12..24 LOOP
-            part_start := date_trunc('month', timezone('UTC', now())) + (month_offset || ' months')::interval;
-            part_end := part_start + INTERVAL '1 month';
-            part_name := format('exchangelog_raw_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
-            EXECUTE format(
-                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.exchangelog_raw FOR VALUES FROM (%L) TO (%L)',
-                part_name,
-                part_start,
-                part_end
-            );
-        END LOOP;
-    END IF;
+        EXECUTE format('ALTER TABLE public.%I DETACH PARTITION public.%I',
+                       spec.table_name, spec.default_name);
 
-    SELECT c.relkind
-    INTO relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'transactions';
+        IF moved > 0 AND data_start IS NOT NULL THEN
+            -- Диапазон берётся из самой отцепленной таблицы: после DETACH её строк
+            -- в родителе уже нет, и расчёт по родителю их не покроет.
+            part_start := data_start;
+            WHILE part_start <= data_end LOOP
+                part_end := part_start + INTERVAL '1 month';
+                part_name := format('%s_y%sm%s', spec.table_name,
+                                    to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relname = part_name
+                ) THEN
+                    EXECUTE format(
+                        'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
+                        part_name, spec.table_name, part_start, part_end
+                    );
+                END IF;
+                part_start := part_end;
+            END LOOP;
 
-    IF relkind = 'p' THEN
-        EXECUTE 'CREATE TABLE IF NOT EXISTS public.transactions_default PARTITION OF public.transactions DEFAULT';
+            EXECUTE format('INSERT INTO public.%I SELECT * FROM public.%I',
+                           spec.table_name, spec.default_name);
+        END IF;
 
-        FOR month_offset IN -12..24 LOOP
-            part_start := date_trunc('month', timezone('UTC', now())) + (month_offset || ' months')::interval;
-            part_end := part_start + INTERVAL '1 month';
-            part_name := format('transactions_y%sm%s', to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
-            EXECUTE format(
-                'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.transactions FOR VALUES FROM (%L) TO (%L)',
-                part_name,
-                part_start,
-                part_end
-            );
-        END LOOP;
-    END IF;
+        EXECUTE format('DROP TABLE public.%I', spec.default_name);
+    END LOOP;
 END
 $$;
+
+SELECT public.ensure_time_partitions(12, 24);
 
 -- msgid/logstate на raw не использовались ни одним запросом. createdate — ключ
 -- партиционирования; logid — ключ watermark/transform (батч и lookback идут по LOGID,
@@ -693,14 +828,25 @@ UPDATE documents SET
     is_current_version        = COALESCE(is_current_version, true)
 WHERE is_current_version IS NULL OR document_group_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
-CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id ON transactions (dwh_id);
+-- Составной ключ покрывает «последняя транзакция документа» (reconcile_document_attributes
+-- берёт её дважды на документ) и заменяет одиночный индекс по dwh_id.
+DROP INDEX IF EXISTS idx_transactions_dwh_id;
+CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_recent
+    ON transactions (dwh_id, log_date DESC, logid DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
 CREATE INDEX IF NOT EXISTS idx_transactions_jid ON transactions (jid);
-CREATE INDEX IF NOT EXISTS idx_transactions_message_id ON transactions (message_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_local_uid ON transactions (local_uid_semd);
-CREATE INDEX IF NOT EXISTS idx_transactions_local_uid_norm ON transactions (lower(NULLIF(btrim(local_uid_semd), '')));
-CREATE INDEX IF NOT EXISTS idx_transactions_emdr_id ON transactions (emdr_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_relates_to ON transactions (relates_to_id);
+-- Ненормализованные дубли нормализованных ключей и индексы под снятые правила привязки:
+-- связывание идёт через dim_message_document и documents.emdr_id, поиска по этим
+-- колонкам в transactions больше нет. На партиционированной таблице каждый такой индекс
+-- множится на число партиций и оплачивается при вставке.
+DROP INDEX IF EXISTS idx_transactions_message_id;
+DROP INDEX IF EXISTS idx_transactions_local_uid;
+DROP INDEX IF EXISTS idx_transactions_local_uid_norm;
+DROP INDEX IF EXISTS idx_transactions_emdr_id;
+DROP INDEX IF EXISTS idx_transactions_relates_to;
+DROP INDEX IF EXISTS idx_transactions_source_message_id_norm;
+DROP INDEX IF EXISTS idx_transactions_xml_local_uid_norm;
+DROP INDEX IF EXISTS idx_transactions_xml_emdr_id_norm;
 CREATE INDEX IF NOT EXISTS idx_transactions_error_type ON transactions (error_type);
 CREATE INDEX IF NOT EXISTS idx_transactions_patient_hash ON transactions (patient_hash);
 CREATE INDEX IF NOT EXISTS idx_transactions_doctor_hash ON transactions (doctor_hash);
@@ -710,26 +856,19 @@ CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_semd
     WHERE NULLIF(btrim(semd_code), '') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
-CREATE INDEX IF NOT EXISTS idx_transactions_source_message_id_norm
-    ON transactions (source_message_id_norm)
-    WHERE source_message_id_norm IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_xml_local_uid_norm
-    ON transactions (lower(NULLIF(btrim(xml_local_uid), '')));
-CREATE INDEX IF NOT EXISTS idx_transactions_xml_emdr_id_norm
-    ON transactions (lower(NULLIF(btrim(xml_emdr_id), '')));
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_xml_relates_to_id ON transactions (xml_relates_to_id)
-    WHERE xml_relates_to_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_transactions_source_action_gdf
-    ON transactions (source_action, logid DESC)
-    WHERE source_action = 'getDocumentFile';
--- gdf_ref (50_transform): последнее событие getDocumentFile клиники до logid колбэка.
--- Поиск по (jid, logid DESC) держит цепочку O(log) на партицию вместо обратного обхода
--- журнала с resolve_document_jid на чтении (вырождение при полножурнальном lookback).
-CREATE INDEX IF NOT EXISTS idx_transactions_gdf_jid_logid
-    ON transactions (jid, logid DESC)
-    WHERE source_action = 'getDocumentFile' AND jid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_link_method ON transactions (link_method)
+    WHERE link_method IS NOT NULL;
+-- Индексы прежнего правила «последний getDocumentFile той же клиники» больше не нужны:
+-- вердикт связывается с документом по реестру подач.
+DROP INDEX IF EXISTS idx_transactions_source_action_gdf;
+DROP INDEX IF EXISTS idx_transactions_gdf_jid_logid;
+
+-- Обратный ход реестра: число подач на документ (documents.attempt_count) и разбор
+-- «какие сообщения относятся к этому документу».
+CREATE INDEX IF NOT EXISTS idx_dim_message_document_uid ON dim_message_document (document_uid);
+CREATE INDEX IF NOT EXISTS idx_dim_message_document_egmid ON dim_message_document (source_egmid);
 
 -- Разовый бэкфилл маркера попытки парсинга: всё, что легло в transactions с xml_parsed_at,
 -- уже парсилось. Строки без реквизитов доберутся первым transform-батчом, накрывающим их

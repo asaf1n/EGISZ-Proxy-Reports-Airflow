@@ -5,13 +5,15 @@ from typing import Any
 
 from conftest import load_dag_module
 
-fetch_organizations = load_dag_module("egisz_dimensions_dag").fetch_organizations
-fetch_exchangelog_after_cursor = load_dag_module("egisz_extract_dag").fetch_exchangelog_after_cursor
+_etl_dag = load_dag_module("egisz_etl_dag")
+fetch_organizations = _etl_dag.fetch_organizations
+fetch_exchangelog_after_cursor = _etl_dag.fetch_exchangelog_after_cursor
+fetch_message_registry_after_cursor = _etl_dag.fetch_message_registry_after_cursor
 
-_reconcile_dag = load_dag_module("egisz_reconcile_dag")
-count_exchangelog_rows = _reconcile_dag.count_exchangelog_rows
-fetch_exchangelog_by_logids = _reconcile_dag.fetch_exchangelog_by_logids
-fetch_exchangelog_logids = _reconcile_dag.fetch_exchangelog_logids
+_maintenance_dag = load_dag_module("egisz_maintenance_dag")
+fetch_exchangelog_by_logids = _maintenance_dag.fetch_exchangelog_by_logids
+source_logid_bounds = _maintenance_dag.source_logid_bounds
+fetch_source_logids_range = _maintenance_dag.fetch_source_logids_range
 
 
 class FakeCursor:
@@ -70,7 +72,7 @@ def test_fetch_organizations_preserves_empty_legal_entity_values() -> None:
 
 def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytics() -> None:
     con = FakeConnection(
-        [(101, None, None, "msg-1", 1, "log", "<xml/>")],
+        [(101, None, None, "msg-1", 1, "log", "<xml/>", "/emdr/callback")],
     )
 
     rows = fetch_exchangelog_after_cursor(con, after_logid=100, limit=500)
@@ -84,9 +86,19 @@ def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytic
             "logstate": 1,
             "logtext": "log",
             "msgtext": "<xml/>",
+            "uri": "/emdr/callback",
         }
     ]
     assert con.cursor_instance.params == (100, 500)
+
+
+def test_fetch_exchangelog_after_cursor_reads_uri_for_subsystem() -> None:
+    """URI вызова задаёт подсистему ЕГИСЗ без разбора payload."""
+    con = FakeConnection([])
+
+    fetch_exchangelog_after_cursor(con, after_logid=0, limit=10)
+
+    assert "URI" in con.cursor_instance.executed_sql
 
 
 def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
@@ -98,46 +110,52 @@ def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
     assert con.cursor_instance.params == (100, 500)
 
 
-def test_count_exchangelog_rows_returns_int() -> None:
-    con = FakeConnection([(42,)])
+def test_fetch_message_registry_uses_keyset_pagination_by_egmid() -> None:
+    """Реестр подач читается тем же keyset-курсором, что и журнал."""
+    con = FakeConnection([(7, "MSG", "http://gost-1.lan:9945", "UID", None)])
 
-    assert count_exchangelog_rows(con) == 42
-    assert "SELECT COUNT(*) FROM EXCHANGELOG" in con.cursor_instance.executed_sql
+    rows = fetch_message_registry_after_cursor(con, after_egmid=5, limit=100)
+
+    assert rows == [(7, "MSG", "http://gost-1.lan:9945", "UID", None)]
+    assert "FROM EGISZ_MESSAGES" in con.cursor_instance.executed_sql
+    assert "WHERE EGMID > ?" in con.cursor_instance.executed_sql
+    assert "ROWS ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (5, 100)
 
 
-def test_fetch_exchangelog_logids_scans_full_range_without_band() -> None:
+def test_fetch_message_registry_empty_limit_skips_query() -> None:
+    con = FakeConnection([])
+
+    assert fetch_message_registry_after_cursor(con, after_egmid=0, limit=0) == []
+    assert con.executed_sql == []
+
+
+def test_source_logid_bounds_limits_scan_to_window() -> None:
+    con = FakeConnection([(100, 200)])
+    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    assert source_logid_bounds(con, since=since) == (100, 200)
+    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (since,)
+
+
+def test_source_logid_bounds_empty_window_returns_zeros() -> None:
+    con = FakeConnection([(None, None)])
+
+    assert source_logid_bounds(con, since=datetime(2026, 6, 1, tzinfo=timezone.utc)) == (0, 0)
+
+
+def test_fetch_source_logids_range_reads_one_chunk() -> None:
+    """Сверка идёт шагами по LOGID: окно целиком в память воркера не поднимается."""
     con = FakeConnection([(101,), (102,), (102,)])
 
-    result = fetch_exchangelog_logids(con)
-
-    assert result == {101, 102}
-    assert "SELECT LOGID FROM EXCHANGELOG" in con.cursor_instance.executed_sql
-    assert "WHERE" not in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params is None
-
-
-def test_fetch_exchangelog_logids_filters_by_since() -> None:
-    con = FakeConnection([(101,), (102,)])
-    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
-
-    result = fetch_exchangelog_logids(con, since=since)
-
-    assert result == {101, 102}
-    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (since,)
-
-
-def test_count_exchangelog_rows_filters_by_since() -> None:
-    con = FakeConnection([(42,)])
-    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
-
-    assert count_exchangelog_rows(con, since=since) == 42
-    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (since,)
+    assert fetch_source_logids_range(con, low=100, high=200) == {101, 102}
+    assert "LOGID >= ? AND LOGID <= ?" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (100, 200)
 
 
 def test_fetch_exchangelog_by_logids_serializes_rows() -> None:
-    con = FakeConnection([(101, None, None, "msg-1", 1, "log", "<xml/>")])
+    con = FakeConnection([(101, None, None, "msg-1", 1, "log", "<xml/>", "/ips/callback")])
 
     rows = fetch_exchangelog_by_logids(con, [101])
 
@@ -150,13 +168,14 @@ def test_fetch_exchangelog_by_logids_serializes_rows() -> None:
             "logstate": 1,
             "logtext": "log",
             "msgtext": "<xml/>",
+            "uri": "/ips/callback",
         }
     ]
     assert "WHERE LOGID IN (?)" in con.cursor_instance.executed_sql
 
 
 def test_fetch_exchangelog_by_logids_chunks_in_lists() -> None:
-    con = FakeConnection([(1, None, None, "m", 1, "l", "x")])
+    con = FakeConnection([(1, None, None, "m", 1, "l", "x", "/emdr/callback")])
 
     fetch_exchangelog_by_logids(con, [1, 2, 3], chunk_size=2)
 

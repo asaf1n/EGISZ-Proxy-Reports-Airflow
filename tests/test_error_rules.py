@@ -17,7 +17,7 @@ psycopg2 = pytest.importorskip("psycopg2")
 
 from conftest import load_dag_module  # noqa: E402
 
-connect_pg = load_dag_module("egisz_extract_dag").connect_pg
+connect_pg = load_dag_module("egisz_etl_dag").connect_pg
 
 DSN = os.environ.get("EGISZ_TEST_PG_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="EGISZ_TEST_PG_DSN not set; live-PG tests skipped")

@@ -70,6 +70,10 @@ SELECT
     d.registered_at,
     d.first_sent_at,
     d.error_types,
+    -- Число подач документа в ЕГИСЗ по реестру шлюза: повторная подача не меняет localUid,
+    -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
+    COALESCE(d.attempt_count, 1) AS attempt_count,
+    (COALESCE(d.attempt_count, 1) > 1) AS is_resubmitted,
     -- Слой версий (README §«Версии и идентичность документа»).
     d.document_group_id,
     COALESCE(d.is_current_version, true) AS is_current_version,
@@ -124,7 +128,9 @@ SELECT
     r.relates_to_msgid,
     r.request_msgid,
     r.result_msgid,
-    r.clinic_host
+    r.clinic_host,
+    r.attempt_count,
+    r.is_resubmitted
 FROM public.documents d
 INNER JOIN public.rpt_documents r ON r.dwh_id = d.dwh_id
 WHERE d.status = 'waiting';
@@ -149,15 +155,15 @@ SELECT
     r.error_text,
     r.error_types,
     r.semd_emdr_id,
-    da.contour
+    da.egisz_subsystem
 FROM public.rpt_documents r
--- Контур зафиксирован на грейне документа (document_attributes): отчётный слой
+-- Подсистема зафиксирована на грейне документа (document_attributes): отчётный слой
 -- не читает message-грейн напрямую (контракт «rpt только поверх documents/dims»).
 LEFT JOIN public.document_attributes da ON da.dwh_id = r.dwh_id
 WHERE r.status = 'network_error';
 
 COMMENT ON VIEW public.rpt_network_errors IS
-'Ошибки связи proxy_egisz: document-grain (status=network_error). contour — контур обмена (РЭМД/ИЭМК, exchange_contour).';
+'Ошибки связи proxy_egisz: document-grain (status=network_error). egisz_subsystem — подсистема ЕГИСЗ (РЭМД/ИЭМК).';
 
 -- МАТЕРИАЛИЗОВАННОЕ представление: грейн «тип×документ»; все карточки вкладки
 -- «Анализ ошибок» читают его. Обновляется в конце transform (extract/reconcile DAG) →

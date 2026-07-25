@@ -15,7 +15,7 @@ def _read(dag_file: str) -> str:
     return (DAGS_DIR / dag_file).read_text(encoding="utf-8")
 
 
-DAG_STEMS = ("egisz_extract_dag", "egisz_dimensions_dag", "egisz_reconcile_dag")
+DAG_STEMS = ("egisz_etl_dag", "egisz_marts_dag", "egisz_maintenance_dag")
 
 
 def test_dag_setting_keys_do_not_collide() -> None:
@@ -56,9 +56,9 @@ def test_settings_resolve_from_env_or_defaults_without_metabase() -> None:
 
 
 def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
-    src = _read("egisz_extract_dag.py")
+    src = _read("egisz_etl_dag.py")
 
-    assert 'dag_id="egisz_extract_dag"' in src
+    assert 'dag_id="egisz_etl_dag"' in src
     assert "def extract_exchangelog" in src
     assert "def transform_exchangelog" in src
     assert "def load_exchangelog_batch" not in src
@@ -77,13 +77,13 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "transform_exchangelog_batch(" in src
 
     assert '"rows":' not in src
-    assert '_setting("extract_schedule")' in src
+    assert '_setting("etl_schedule")' in src
     assert 'get_int("extract_raw_rows")' in src
     assert 'get_int("extract_raw_rounds")' in src
     assert 'get_int("transform_rows")' in src
     assert 'get_int("transform_rounds")' in src
     assert 'pool="dwh_postgres"' in src or "pool=DWH_POOL" in src
-    # Транзиентный DeadlockDetected (maintenance-прогон схемы поверх 5-минутного батча)
+    # Транзиентный DeadlockDetected (суточное обслуживание поверх 5-минутного батча)
     # не должен красить ран: transform идемпотентен, повтор безопасен.
     assert "retries=2" in src
     assert "retry_delay=timedelta(minutes=1)" in src
@@ -91,56 +91,78 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "@task.short_circuit" not in src
 
     assert "transform_exchangelog(extracted)" in src
-    assert "extracted >> transformed" not in src
     assert "get_current_context" not in src
 
-    # Витрины динамики: отдельная задача после transform, гейт по метаданным батча.
-    assert 'task_id="refresh_report_marts"' in src
-    assert "refresh_report_marts_task(transformed)" in src
+    # Реестр подач читается до transform: без него вердикт ЕГИСЗ не с чем связать.
+    assert "def extract_message_registry" in src
+    assert 'get_int("registry_rows")' in src
+    assert "extracted >> registry >> dictionaries >> transformed" in src
 
-
-def test_dimensions_dag_owns_dimension_sync_and_mart_maintenance() -> None:
-    src = _read("egisz_dimensions_dag.py")
-
-    assert 'dag_id="egisz_dimensions_dag"' in src
-    assert "def sync_dimensions" in src
-    assert "def dimensions_changed" not in src
-    assert "def maintain_enriched_ui" not in src
+    # Справочники живут здесь, но со своей каденцией; проход по архиву — в обслуживании.
+    assert "def sync_dictionaries" in src
     assert "sync_directories" in src
-    assert "reconcile_document_attributes_ui" in src
-    assert '_setting("dimensions_schedule")' in src
-    assert "@task.short_circuit" not in src
-    assert "pool=DWH_POOL" in src or 'pool="dwh_postgres"' in src
-    # Тот же риск DeadlockDetected, что у transform: reconcile идемпотентен.
-    assert "retries=2" in src
+    assert 'should_run_now(pg_conn, "sync_dictionaries"' in src
+    assert "reconcile_document_attributes_ui" not in src
+
+    # Отметка держится ниже хвоста журнала на защитный запас.
+    assert 'get_int("etl_lag_logids")' in src
+    assert "safe_transform_ceiling(" in src
+
+    # Витрины обновляет отдельный DAG-потребитель: здесь только публикация актива.
+    assert "outlets=[ASSET_FACTS]" in src
+    assert "REFRESH MATERIALIZED VIEW" not in src
+    assert "REPORT_MARTS" not in src
 
 
-def test_reconcile_dag_does_full_constancy_check_without_moving_watermark() -> None:
-    src = _read("egisz_reconcile_dag.py")
+def test_marts_dag_is_the_only_place_that_refreshes_matviews() -> None:
+    marts = _read("egisz_marts_dag.py")
+    etl = _read("egisz_etl_dag.py")
+    maintenance = _read("egisz_maintenance_dag.py")
 
-    assert 'dag_id="egisz_reconcile_dag"' in src
-    assert "def reconcile_proxy_raw" in src
-    assert "def reconcile_late_arrivals" not in src
+    assert 'dag_id="egisz_marts_dag"' in marts
+    # Запускается публикацией актива, а не расписанием: обновление витрин — следствие
+    # изменения фактов, а не того, кто именно их изменил.
+    assert "schedule=[ASSET_FACTS, ASSET_DICTIONARIES]" in marts
+    assert "def refresh_fact_marts" in marts
+    assert "def refresh_period_marts" in marts
+    assert "refresh_fact_marts() >> refresh_period_marts()" in marts
+    assert 'should_run_now(pg_conn, "refresh_period_marts"' in marts
 
-    assert "fetch_reconcile_window_sets(" in src
+    # Ни один другой DAG матвью не обновляет и не несёт их список.
+    for src in (etl, maintenance):
+        assert "refresh_report_marts" not in src
+        assert "_refresh_matview" not in src
+        assert "REFRESH MATERIALIZED VIEW" not in src
+
+
+def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
+    src = _read("egisz_maintenance_dag.py")
+
+    assert 'dag_id="egisz_maintenance_dag"' in src
+    assert "def reconcile_journal_tail" in src
+    assert "def reconcile_archive_attributes" in src
+    assert "def maintain_partitions" in src
+
+    # Сверка идёт шагами по LOGID: окно целиком в память воркера не поднимается.
+    assert "reconcile_journal_window(" in src
     assert "source_logids - raw_logids" in src
-    assert "lookback_days=lookback_days" in src
-    assert "max_logids=max_logids" in src
-    assert 'get_int("reconcile_lookback_days")' in src
+    assert 'get_int("reconcile_chunk_logids")' in src
+    # Штатное окно — узкое; широкое доступно ручным прогоном (params.deep).
+    module = load_dag_module("egisz_maintenance_dag")
+    assert module.DEFAULTS["reconcile_lookback_days"] < module.DEFAULTS["reconcile_deep_lookback_days"]
+    assert 'params={"deep": False}' in src
     assert "fetch_exchangelog_logids_in_band" not in src
-    assert "get_raw_logids_in_band" not in src
-    assert "RECONCILE_WATERMARK_LOOKBACK_LOGIDS" not in src
+    assert "ReconcileWindowVolumeError" not in src
 
-    # Watermark двигает только extract: reconcile не несёт update_cursors.
+    # Отметку двигает только приём: обслуживание её не трогает.
     assert "def update_cursors" not in src
     assert "update_cursors(" not in src
 
-    assert 'get_int("reconcile_max_logids")' in src
-
-    assert '_setting("reconcile_schedule")' in src
-    assert "pending_transform_tail" in src
-    assert "AirflowSkipException" in src
-    assert "backfill_semd_codes" not in src
+    assert '_setting("maintenance_schedule")' in src
+    assert "reconcile_document_attributes_ui" in src
+    assert "recompute_document_versions" in src
+    assert "repair_document_error_text" in src
+    assert "ensure_time_partitions" in src
     assert "retries=2" in src
 
 
@@ -170,10 +192,10 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
         )
     )
 
-    for stem in ("egisz_extract_dag", "egisz_dimensions_dag", "egisz_reconcile_dag"):
-        assert set(load_dag_module(stem).REPORT_MARTS) == declared, stem
+    # Список витрин живёт только в DAG, который их обновляет.
+    assert set(load_dag_module("egisz_marts_dag").REPORT_MARTS) == declared
 
-    # Идемпотентность каркаса: DROP в 60, REFRESH + ANALYZE в 90, подключение части в init.
+    # Идемпотентность каркаса: DROP в 60, первичное наполнение в 90, часть подключена в init.
     drops = (PARTS_DIR / "60_drop_dependents.sql").read_text(encoding="utf-8")
     finalize = (PARTS_DIR / "90_views_health_and_finalize.sql").read_text(encoding="utf-8")
     init = (PARTS_DIR.parent / "dwh_init.sql").read_text(encoding="utf-8")
@@ -183,6 +205,11 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
         assert f"DROP MATERIALIZED VIEW IF EXISTS {matview} CASCADE" in drops, matview
         assert f"REFRESH MATERIALIZED VIEW {matview}" in finalize, matview
         assert f"ANALYZE {matview}" in finalize, matview
+
+    # Пересчёты и обновление витрин выполняются накатом только при пустом отчётном слое:
+    # полные проходы в теле наката пересекались по блокировкам с приёмом фактов.
+    assert "IF EXISTS (SELECT 1 FROM public.documents)" in finalize
+    assert "AND NOT EXISTS (SELECT 1 FROM public.document_attributes)" in finalize
 
     # REFRESH CONCURRENTLY в DAG-ах требует уникального индекса на каждой витрине.
     for matview in declared:
@@ -266,40 +293,63 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
     Декоратор @dag возвращает готовый DAG, поэтому граф задач проверяется тем же
     вызовом, который выполняет сам файл при парсинге.
     """
-    extract = load_dag_module("egisz_extract_dag").egisz_extract_pipeline()
-    dimensions = load_dag_module("egisz_dimensions_dag").egisz_dimensions_pipeline()
-    reconcile = load_dag_module("egisz_reconcile_dag").egisz_reconcile_pipeline()
+    etl = load_dag_module("egisz_etl_dag").egisz_etl_pipeline()
+    marts = load_dag_module("egisz_marts_dag").egisz_marts_pipeline()
+    maintenance = load_dag_module("egisz_maintenance_dag").egisz_maintenance_pipeline()
 
-    assert extract.dag_id == "egisz_extract_dag"
-    assert dimensions.dag_id == "egisz_dimensions_dag"
-    assert reconcile.dag_id == "egisz_reconcile_dag"
+    assert etl.dag_id == "egisz_etl_dag"
+    assert marts.dag_id == "egisz_marts_dag"
+    assert maintenance.dag_id == "egisz_maintenance_dag"
 
     # Пул провижинится отдельно (up.ps1 / внешняя инструкция) — задачи обязаны его требовать.
     pooled = {
         task.task_id
-        for dag in (extract, dimensions, reconcile)
+        for dag in (etl, marts, maintenance)
         for task in dag.tasks
         if task.pool == DWH_POOL
     }
     assert pooled == {
+        "extract_message_registry",
+        "sync_dictionaries",
         "transform_exchangelog",
-        "refresh_report_marts",
-        "sync_dimensions",
-        "reconcile_proxy_raw",
+        "refresh_fact_marts",
+        "refresh_period_marts",
+        "reconcile_journal_tail",
+        "reconcile_archive_attributes",
+        "maintain_partitions",
     }
 
-    assert {t.task_id for t in extract.tasks} == {
+    assert {t.task_id for t in etl.tasks} == {
         "extract_exchangelog",
+        "extract_message_registry",
+        "sync_dictionaries",
         "transform_exchangelog",
-        "refresh_report_marts",
     }
-    assert {t.task_id for t in dimensions.tasks} == {"sync_dimensions"}
-    assert {t.task_id for t in reconcile.tasks} == {"reconcile_proxy_raw"}
+    assert {t.task_id for t in marts.tasks} == {"refresh_fact_marts", "refresh_period_marts"}
+    assert {t.task_id for t in maintenance.tasks} == {
+        "reconcile_journal_tail",
+        "reconcile_archive_attributes",
+        "maintain_partitions",
+    }
 
-    assert extract.task_dict["extract_exchangelog"].downstream_task_ids == {
-        "transform_exchangelog"
+    # Реестр подач наполняется до transform, иначе вердикт не с чем связать.
+    assert etl.task_dict["extract_exchangelog"].downstream_task_ids == {
+        "extract_message_registry",
+        "transform_exchangelog",
     }
-    assert extract.task_dict["transform_exchangelog"].downstream_task_ids == {
-        "refresh_report_marts"
+    assert etl.task_dict["extract_message_registry"].downstream_task_ids == {"sync_dictionaries"}
+    assert etl.task_dict["sync_dictionaries"].downstream_task_ids == {"transform_exchangelog"}
+    assert etl.task_dict["transform_exchangelog"].downstream_task_ids == set()
+
+    # Разбивка ошибок обновляется раньше периодических витрин, которые её читают.
+    assert marts.task_dict["refresh_fact_marts"].downstream_task_ids == {"refresh_period_marts"}
+
+    # Производители фактов публикуют активы, на которые подписан DAG витрин.
+    def _asset_names(task: object) -> set[str]:
+        return {asset.name for asset in (getattr(task, "outlets", None) or [])}
+
+    assert _asset_names(etl.task_dict["transform_exchangelog"]) == {"egisz://facts"}
+    assert _asset_names(maintenance.task_dict["reconcile_journal_tail"]) == {"egisz://facts"}
+    assert _asset_names(maintenance.task_dict["reconcile_archive_attributes"]) == {
+        "egisz://dictionaries"
     }
-    assert reconcile.task_dict["reconcile_proxy_raw"].downstream_task_ids == set()

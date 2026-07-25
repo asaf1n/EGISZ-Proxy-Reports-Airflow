@@ -527,7 +527,7 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -585,14 +585,14 @@
             ],
             "type": "range",
             "colors": [
-              "hsla(89, 48%, 40%, 1)",
-              "transparent",
-              "hsla(358, 71%, 62%, 1)"
+              "#84BB4C",
+              "#FBBF24",
+              "#DC2626"
             ],
             "min_type": "custom",
             "max_type": "custom",
             "min_value": 0,
-            "max_value": 25
+            "max_value": 15
           }
         ],
         "table.column_widths": [
@@ -655,7 +655,7 @@
             "suffix": " %"
           },
           "[\"name\",\"% обработанных\"]": {
-            "column_title": "% обработанных",
+            "column_title": "% всего",
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -684,11 +684,11 @@
     },
     {
       "name": "Успешность по типам СЭМД",
-      "description": "Доля успешных документов по **типу СЭМД** (код · НСИ). Метрика: COUNT(DISTINCT «ID») по статусу. Строки без кода/типа СЭМД отсекаются.",
+      "description": "Доля успешных документов по **типу СЭМД** (код · наименование). Метрика: COUNT(DISTINCT «ID») по статусу. Строки без типа СЭМД отсекаются.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -756,7 +756,7 @@
           },
           {
             "enabled": true,
-            "name": "Код СЭМД"
+            "name": "СЭМД"
           },
           {
             "enabled": true,
@@ -785,8 +785,8 @@
             "decimals": 0,
             "number_separators": ", "
           },
-          "[\"name\",\"Код СЭМД\"]": {
-            "column_title": "Код"
+          "[\"name\",\"СЭМД\"]": {
+            "column_title": "СЭМД"
           },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
@@ -827,15 +827,15 @@
         "linkType": "question",
         "targetModel": "Документы",
         "parameterMapping": {
-          "semd_code": {
+          "semd_label": {
             "source": {
               "type": "column",
-              "name": "Код СЭМД"
+              "name": "СЭМД"
             },
             "target": {
               "type": "dimension",
               "model_ref": "Документы",
-              "field_name": "semd_code"
+              "field_name": "semd_label"
             }
           }
         }
@@ -1343,10 +1343,8 @@
             "columns": [
               "Доля ошибок, %"
             ],
-            "max_type": "custom",
-            "max_value": 25,
-            "min_type": "custom",
-            "min_value": 0,
+            "max_type": null,
+            "min_type": null,
             "type": "range"
           }
         ],
@@ -2580,7 +2578,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", waiting_days AS \"Дней в ожидании\", wait_segment AS \"Сегмент ожидания\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", waiting_days AS \"Дней в ожидании\", attempt_count AS \"Подач в ЕГИСЗ\", wait_segment AS \"Сегмент ожидания\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -2671,6 +2669,10 @@
           },
           {
             "enabled": true,
+            "name": "Подач в ЕГИСЗ"
+          },
+          {
+            "enabled": true,
             "name": "Дата отправки"
           },
           {
@@ -2725,6 +2727,11 @@
           },
           "[\"name\",\"Сегмент ожидания\"]": {
             "column_title": "Сегмент"
+          },
+          "[\"name\",\"Подач в ЕГИСЗ\"]": {
+            "column_title": "Подач в ЕГИСЗ",
+            "decimals": 0,
+            "number_separators": ", "
           }
         }
       },
@@ -3350,7 +3357,7 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -3408,14 +3415,14 @@
             ],
             "type": "range",
             "colors": [
-              "hsla(89, 48%, 40%, 1)",
-              "transparent",
-              "hsla(358, 71%, 62%, 1)"
+              "#84BB4C",
+              "#FBBF24",
+              "#DC2626"
             ],
             "min_type": "custom",
             "max_type": "custom",
             "min_value": 0,
-            "max_value": 25
+            "max_value": 15
           }
         ],
         "table.column_widths": [
@@ -3478,7 +3485,7 @@
             "suffix": " %"
           },
           "[\"name\",\"% обработанных\"]": {
-            "column_title": "% обработанных",
+            "column_title": "% всего",
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"

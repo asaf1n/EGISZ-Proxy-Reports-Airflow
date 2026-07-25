@@ -1,5 +1,5 @@
 -- ============================================================================
--- 50_transform.sql — egisz_transform_raw_to_facts
+-- 50_transform.sql — transform_raw_to_facts
 -- Loaded by db/dwh_init.sql via \i db/parts/50_transform.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.
@@ -12,20 +12,19 @@
 -- затронутых батчем (p_dwh_ids); p_dwh_ids = NULL — полный пересчёт (обслуживание).
 --
 -- Ключ логического документа = (jid + semd_code + doc_number), где doc_number = PROTOCOLID
--- (номер протокола/ИБ в МИС). Проверено на базе: пара (jid, doc_number) всегда несёт ровно
--- ОДИН semd_code — это ключ ДОКУМЕНТА, а localUid меняется при каждой правке/ре-выгрузке
--- ⇒ несколько localUid на (jid, semd_code, doc_number) = версии одного документа.
--- Провенанс в document_group_confidence: 'doc_number' (сгруппировано) | 'singleton' (нет
--- doc_number / уникальный документ). Защитный c_cap: группы крупнее порога не считаем
--- версиями (страховка от клиник, переиспользующих счётчик протокола) — остаются singleton
--- и видны в rpt_health_versions.
+-- (номер протокола/ИБ в МИС). Пара (jid, doc_number) несёт ровно ОДИН semd_code — это ключ
+-- ДОКУМЕНТА, а localUid меняется при каждой правке/ре-выгрузке ⇒ несколько localUid на
+-- (jid, semd_code, doc_number) = версии одного документа. Провенанс в
+-- document_group_confidence: 'doc_number' (сгруппировано) | 'singleton'. Защитный c_cap:
+-- группы крупнее порога не считаем версиями (страховка от клиник, переиспользующих счётчик
+-- протокола) — остаются singleton и видны в rpt_health_versions.
 CREATE OR REPLACE FUNCTION public.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
     affected integer := 0;
-    c_cap constant integer := 50;  -- макс. версий в группе; max по базе = 7
+    c_cap constant integer := 50;  -- макс. версий в группе
 BEGIN
     -- Шаг 0: documents.doc_number наполняется из transactions (PROTOCOLID не хранится в
     -- documents при INSERT). Только затронутые dwh_id (или весь архив при p_dwh_ids=NULL).
@@ -47,7 +46,45 @@ BEGIN
       AND src.docnum IS NOT NULL
       AND d.doc_number IS DISTINCT FROM src.docnum;
 
-    WITH keyed AS (
+    WITH seed AS (
+        SELECT
+            d.dwh_id,
+            d.jid,
+            lower(btrim(d.semd_code)) AS semd_norm,
+            lower(btrim(d.doc_number)) AS docnum_norm,
+            d.document_group_id
+        FROM public.documents d
+        WHERE p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids)
+    ),
+    -- Пересчёт затрагивает не только переданные экземпляры, но и их соседей по группе:
+    -- по новому ключу (jid + код СЭМД + номер документа) и по ранее сохранённой группе,
+    -- из которой экземпляр мог уйти. При p_dwh_ids = NULL первая ветка уже даёт весь
+    -- архив, поэтому соседние ветки не выполняются.
+    member_ids AS (
+        SELECT s.dwh_id FROM seed s
+
+        UNION
+
+        SELECT d.dwh_id
+        FROM seed s
+        JOIN public.documents d
+          ON d.jid = s.jid
+         AND lower(btrim(d.semd_code)) = s.semd_norm
+         AND lower(btrim(d.doc_number)) = s.docnum_norm
+        WHERE p_dwh_ids IS NOT NULL
+          AND s.jid IS NOT NULL
+          AND s.semd_norm IS NOT NULL
+          AND s.docnum_norm IS NOT NULL
+
+        UNION
+
+        SELECT d.dwh_id
+        FROM seed s
+        JOIN public.documents d ON d.document_group_id = s.document_group_id
+        WHERE p_dwh_ids IS NOT NULL
+          AND s.document_group_id IS NOT NULL
+    ),
+    keyed AS (
         SELECT
             d.dwh_id,
             CASE
@@ -62,40 +99,29 @@ BEGIN
                      AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
                      AND NULLIF(btrim(d.doc_number), '') IS NOT NULL THEN 'doc_number'
                 ELSE 'singleton'
-            END AS conf
-        FROM public.documents d
-    ),
-    affected_keys AS (
-        SELECT DISTINCT k.grp_key
-        FROM keyed k
-        WHERE p_dwh_ids IS NULL OR k.dwh_id = ANY (p_dwh_ids)
-    ),
-    members AS (
-        SELECT
-            k.dwh_id, k.grp_key, k.conf,
+            END AS conf,
             d.status, d.registered_at, d.last_callback_at, d.first_sent_at, d.request_logid
-        FROM keyed k
-        JOIN affected_keys ak ON ak.grp_key = k.grp_key
-        JOIN public.documents d ON d.dwh_id = k.dwh_id
+        FROM public.documents d
+        JOIN member_ids m ON m.dwh_id = d.dwh_id
     ),
     ranked AS (
         SELECT
-            m.*,
-            count(*) OVER (PARTITION BY m.grp_key) AS grp_size,
+            k.*,
+            count(*) OVER (PARTITION BY k.grp_key) AS grp_size,
             -- Порядок версий: старейшая отправка = 1.
             row_number() OVER (
-                PARTITION BY m.grp_key
-                ORDER BY COALESCE(m.first_sent_at, '-infinity'::timestamptz), m.request_logid, m.dwh_id
+                PARTITION BY k.grp_key
+                ORDER BY COALESCE(k.first_sent_at, '-infinity'::timestamptz), k.request_logid, k.dwh_id
             ) AS vnum,
             -- Текущая версия: зарегистрированный success приоритетнее, иначе последнее событие.
             row_number() OVER (
-                PARTITION BY m.grp_key
+                PARTITION BY k.grp_key
                 ORDER BY
-                    (CASE WHEN m.status = 'success' THEN 1 ELSE 0 END) DESC,
-                    COALESCE(m.last_callback_at, m.registered_at, m.first_sent_at, '-infinity'::timestamptz) DESC,
-                    m.request_logid DESC, m.dwh_id DESC
+                    (CASE WHEN k.status = 'success' THEN 1 ELSE 0 END) DESC,
+                    COALESCE(k.last_callback_at, k.registered_at, k.first_sent_at, '-infinity'::timestamptz) DESC,
+                    k.request_logid DESC, k.dwh_id DESC
             ) AS cur_rank
-        FROM members m
+        FROM keyed k
     ),
     final AS (
         SELECT
@@ -129,35 +155,43 @@ BEGIN
 END;
 $$;
 
+-- Разбор окна журнала (from_logid, to_logid] в факты.
+--
+-- Классы сообщений и правила привязки к документу (README §«Связывание сообщений»):
+--   getDocumentFile          — localUid лежит в самом payload;
+--   вердикт РЭМД/ИЭМК        — localUid в ответе нет, есть relatesToMessage; документ
+--                              находится через реестр подач dim_message_document;
+--   повторный вердикт        — подтверждающий путь по emdrId уже собранных документов.
+-- Применённое правило пишется в transactions.link_method, непривязанные вердикты
+-- помечаются 'unlinked' и попадают в сигналы здоровья, а не теряются молча.
+--
+-- Окно строго ограничено (from_logid, to_logid]: связывание не зависит от префикса
+-- журнала, поэтому отсечение партиций по createdate работает на каждом батче.
+DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint, bigint);
+DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint);
 CREATE OR REPLACE FUNCTION public.transform_raw_to_facts(
     from_logid bigint,
-    to_logid bigint,
-    p_lookback_logids bigint DEFAULT 0
+    to_logid bigint
 )
-RETURNS integer
+RETURNS jsonb
 LANGUAGE plpgsql
 AS $$
 DECLARE
     affected integer := 0;
     inserted_rows integer := 0;
+    unlinked_rows integer := 0;
+    skipped_no_clinic integer := 0;
     raw_cd_min timestamptz;
     raw_cd_max timestamptz;
-    -- 0 = auto: look back across the LOGID span being transformed (forward extract).
-    -- Reconcile passes explicit lookback (window low LOGID) to link late callbacks
-    -- with earlier getDocumentFile rows anywhere in the journal prefix.
-    lookback_logids bigint := GREATEST(
-        COALESCE(NULLIF(p_lookback_logids, 0), to_logid - from_logid),
-        1
-    );
 BEGIN
     -- exchangelog_raw партиционирована по createdate; transform фильтрует по logid.
-    -- Узкий диапазон createdate по батчу включает partition pruning (см. idx_exchangelog_raw_logid).
+    -- Узкий диапазон createdate по батчу включает partition pruning.
     SELECT
-        MIN(r.createdate) - interval '7 days',
+        MIN(r.createdate) - interval '1 day',
         MAX(r.createdate) + interval '1 day'
     INTO raw_cd_min, raw_cd_max
     FROM exchangelog_raw r
-    WHERE r.logid > GREATEST(from_logid - lookback_logids, 0)
+    WHERE r.logid > from_logid
       AND r.logid <= to_logid;
 
     raw_cd_min := COALESCE(raw_cd_min, '-infinity'::timestamptz);
@@ -165,41 +199,13 @@ BEGIN
 
     -- Разложение payload: каждый LOGID парсится один раз, результат — в transactions (xml_*).
     -- Анти-джойн идёт по exchangelog_parse_attempts, а не по transactions.xml_parsed_at:
-    -- строки без реквизитов (нет msgid/localUid/emdrId/getDocumentFile) не проходят фильтр
-    -- вставки, и маркер только на вставленных строках перепарсивал их каждым
-    -- полножурнальным lookback'ом reconcile.
-    WITH candidate_log_ids AS (
-        SELECT r.logid
+    -- строки без реквизитов не проходят фильтр вставки, и маркер только на вставленных
+    -- строках заставлял перепарсивать их при каждом повторном проходе окна.
+    WITH parse_targets AS (
+        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext, r.uri
         FROM exchangelog_raw r
         WHERE r.logid > from_logid
           AND r.logid <= to_logid
-          AND r.createdate >= raw_cd_min
-          AND r.createdate < raw_cd_max
-    ),
-    batch_min AS (
-        SELECT COALESCE(MIN(c.logid), from_logid) AS min_logid
-        FROM candidate_log_ids c
-    ),
-    parse_targets AS (
-        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext
-        FROM exchangelog_raw r
-        WHERE r.logid > from_logid
-          AND r.logid <= to_logid
-          AND r.createdate >= raw_cd_min
-          AND r.createdate < raw_cd_max
-          AND NOT EXISTS (
-              SELECT 1
-              FROM public.exchangelog_parse_attempts pa
-              WHERE pa.logid = r.logid
-          )
-
-        UNION
-
-        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext
-        FROM exchangelog_raw r
-        CROSS JOIN batch_min bm
-        WHERE r.logid >= GREATEST(bm.min_logid - lookback_logids, 0)
-          AND r.logid <= from_logid
           AND r.createdate >= raw_cd_min
           AND r.createdate < raw_cd_max
           AND NOT EXISTS (
@@ -212,9 +218,9 @@ BEGIN
         logid, log_date,
         source_msgid, source_message_id_norm,
         xml_dwh_id, xml_local_uid, xml_emdr_id,
-        source_action, contour, jid, xml_relates_to_id, xml_semd_code, xml_doc_number, xml_org_oid,
+        source_action, egisz_subsystem, jid, xml_relates_to_id, xml_semd_code, xml_doc_number, xml_org_oid,
         xml_error_code, xml_message, xml_raw_status, xml_document_status,
-        xml_jid, xml_creation_date,
+        xml_creation_date,
         xml_patient_name, xml_snils, xml_doctor_name,
         xml_has_fault_marker, xml_has_register_response, xml_has_register_result,
         xml_has_processing_marker, xml_has_error_ilike,
@@ -229,7 +235,7 @@ BEGIN
         p.local_uid,
         p.emdr_id,
         p.action,
-        public.exchange_contour(p.action, t.logtext),
+        public.egisz_subsystem(t.uri, p.action, t.logtext),
         rj.jid,
         p.relates_to_id,
         p.kind_xml,
@@ -239,7 +245,6 @@ BEGIN
         p.xml_message,
         p.raw_status,
         p.document_status,
-        p.jid_from_payload,
         p.creation_date,
         p.raw_patient_name,
         p.raw_snils,
@@ -253,10 +258,8 @@ BEGIN
         now()
     FROM parse_targets t
     CROSS JOIN LATERAL public.parse_exchangelog_row(t.msgtext, t.msgid, t.logtext) p
-    -- jid запроса getDocumentFile фиксируется при парсинге (один resolve на строку за всю
-    -- жизнь строки). gdf_ref и последующие чтения ищут цепочку по transactions.jid через
-    -- индекс; resolve_document_jid по payload на чтении при полном lookback (reconcile)
-    -- вырождался в O(батч × журнал × regex) — 17ч CPU на окно.
+    -- jid запроса getDocumentFile фиксируется при парсинге: один resolve на строку за всю
+    -- её жизнь вместо повторного разбора payload регулярным выражением на чтении.
     LEFT JOIN LATERAL (
         SELECT res.jid
         FROM public.resolve_document_jid(
@@ -279,7 +282,7 @@ BEGIN
         xml_local_uid = COALESCE(EXCLUDED.xml_local_uid, public.transactions.xml_local_uid),
         xml_emdr_id = COALESCE(EXCLUDED.xml_emdr_id, public.transactions.xml_emdr_id),
         source_action = COALESCE(EXCLUDED.source_action, public.transactions.source_action),
-        contour = COALESCE(EXCLUDED.contour, public.transactions.contour),
+        egisz_subsystem = COALESCE(EXCLUDED.egisz_subsystem, public.transactions.egisz_subsystem),
         jid = COALESCE(public.transactions.jid, EXCLUDED.jid),
         xml_relates_to_id = COALESCE(EXCLUDED.xml_relates_to_id, public.transactions.xml_relates_to_id),
         xml_semd_code = COALESCE(EXCLUDED.xml_semd_code, public.transactions.xml_semd_code),
@@ -289,7 +292,6 @@ BEGIN
         xml_message = COALESCE(EXCLUDED.xml_message, public.transactions.xml_message),
         xml_raw_status = COALESCE(EXCLUDED.xml_raw_status, public.transactions.xml_raw_status),
         xml_document_status = COALESCE(EXCLUDED.xml_document_status, public.transactions.xml_document_status),
-        xml_jid = COALESCE(EXCLUDED.xml_jid, public.transactions.xml_jid),
         xml_creation_date = COALESCE(EXCLUDED.xml_creation_date, public.transactions.xml_creation_date),
         xml_patient_name = COALESCE(EXCLUDED.xml_patient_name, public.transactions.xml_patient_name),
         xml_snils = COALESCE(EXCLUDED.xml_snils, public.transactions.xml_snils),
@@ -302,24 +304,14 @@ BEGIN
         xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, public.transactions.xml_parsed_at),
         loaded_at = now();
 
-    -- Фиксация попытки парсинга по всему просканированному диапазону (обе ветки
-    -- parse_targets), независимо от того, прошла ли строка фильтр вставки. Строго после
-    -- INSERT выше: его анти-джойн должен видеть состояние маркера до этого батча.
+    -- Фиксация попытки парсинга по всему просканированному диапазону, независимо от того,
+    -- прошла ли строка фильтр вставки. Строго после INSERT выше: его анти-джойн должен
+    -- видеть состояние маркера до этого батча.
     INSERT INTO public.exchangelog_parse_attempts (logid)
     SELECT r.logid
     FROM exchangelog_raw r
-    CROSS JOIN (
-        SELECT COALESCE(MIN(x.logid), from_logid) AS min_logid
-        FROM exchangelog_raw x
-        WHERE x.logid > from_logid
-          AND x.logid <= to_logid
-          AND x.createdate >= raw_cd_min
-          AND x.createdate < raw_cd_max
-    ) bm
-    WHERE (
-            (r.logid > from_logid AND r.logid <= to_logid)
-         OR (r.logid >= GREATEST(bm.min_logid - lookback_logids, 0) AND r.logid <= from_logid)
-          )
+    WHERE r.logid > from_logid
+      AND r.logid <= to_logid
       AND r.createdate >= raw_cd_min
       AND r.createdate < raw_cd_max
       AND NOT EXISTS (
@@ -329,18 +321,12 @@ BEGIN
       )
     ON CONFLICT (logid) DO NOTHING;
 
-    WITH document_source_rows AS (
-        SELECT tx.logid
-        FROM public.transactions tx
-        WHERE COALESCE(tx.source_action, '') = 'getDocumentFile'
-          AND tx.logid > from_logid
-          AND tx.logid <= to_logid
-          AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
-    ),
-    -- Агрегация реквизитов только для документов, затронутых батчем: HAVING по max(logid)
-    -- не сужает скан, и при полном lookback (reconcile) агрегация payload шла по всему
-    -- архиву документов ради нескольких групп.
-    batch_document_ids AS (
+    -- ------------------------------------------------------------------
+    -- Ветка запроса: getDocumentFile создаёт экземпляр документа.
+    -- localUid лежит в payload, клиника — из OID организации, gost-endpoint запроса
+    -- или, если то и другое не разрешилось, из reply_to реестра подач.
+    -- ------------------------------------------------------------------
+    WITH batch_document_ids AS (
         SELECT DISTINCT tx.xml_dwh_id
         FROM public.transactions tx
         WHERE tx.source_action = 'getDocumentFile'
@@ -349,10 +335,9 @@ BEGIN
           AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
           AND tx.xml_dwh_id IS NOT NULL
     ),
-    -- Минимальный набор реквизитов ЭМД (localUid + JID + KIND) может приходить
-    -- разными getDocumentFile-сообщениями одного документа. Собираем реквизиты по
-    -- dwh_id из окна батча и небольшого lookback назад, чтобы недостающие поля
-    -- дозагружались по мере поступления, а запись об ЭМД появлялась при их полном наборе.
+    -- Минимальный набор реквизитов (localUid + JID + KIND) может приходить разными
+    -- сообщениями одного документа: недостающие поля дозагружаются последующими
+    -- батчами через COALESCE в ON CONFLICT.
     document_attributes AS (
         SELECT
             tx.xml_dwh_id AS dwh_id,
@@ -383,14 +368,10 @@ BEGIN
             AND gr.createdate >= raw_cd_min
             AND gr.createdate < raw_cd_max
         WHERE COALESCE(tx.source_action, '') = 'getDocumentFile'
+          AND gr.logid > from_logid
           AND gr.logid <= to_logid
-          AND gr.logid >= GREATEST(
-                (SELECT COALESCE(MIN(logid), from_logid) FROM document_source_rows) - lookback_logids,
-                0
-              )
           AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
         GROUP BY tx.xml_dwh_id
-        HAVING max(gr.logid) > from_logid
     ),
     document_resolved AS (
         SELECT
@@ -398,7 +379,19 @@ BEGIN
             r.jid AS resolved_jid,
             r.resolve_method
         FROM document_attributes a
-        LEFT JOIN LATERAL public.resolve_document_jid(a.org_oid, a.endpoint_text) r ON TRUE
+        -- reply_to реестра подач содержит endpoint клиники (gost-<jid>) и остаётся
+        -- единственным источником клиники, когда в payload нет ни OID, ни адреса.
+        LEFT JOIN LATERAL (
+            SELECT m.reply_to
+            FROM public.dim_message_document m
+            WHERE m.document_uid = a.dwh_id
+            ORDER BY m.source_egmid DESC
+            LIMIT 1
+        ) reg ON TRUE
+        LEFT JOIN LATERAL public.resolve_document_jid(
+            a.org_oid,
+            COALESCE(a.endpoint_text, '') || ' ' || COALESCE(reg.reply_to, '')
+        ) r ON TRUE
     )
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
@@ -425,10 +418,9 @@ BEGIN
     FROM document_resolved a
     WHERE a.dwh_id IS NOT NULL
       AND a.local_uid IS NOT NULL
-      AND (
-          a.has_network_error
-          OR (a.resolved_jid IS NOT NULL AND a.semd_code IS NOT NULL)
-      )
+      -- Код СЭМД не требуется: он дозагружается ниже из соседних сообщений документа.
+      -- Клиника обязательна — без неё экземпляр не отображается ни в одном срезе.
+      AND (a.has_network_error OR a.resolved_jid IS NOT NULL)
     ON CONFLICT (dwh_id) DO UPDATE SET
         local_uid = COALESCE(EXCLUDED.local_uid, public.documents.local_uid),
         semd_code = COALESCE(EXCLUDED.semd_code, public.documents.semd_code),
@@ -452,11 +444,27 @@ BEGIN
         END,
         error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
-        request_logid = GREATEST(public.documents.request_logid, EXCLUDED.request_logid),
-        updated_at = now()
-    WHERE public.documents.request_logid IS NULL
-       OR public.documents.request_logid <= EXCLUDED.request_logid;
+        -- request_logid — LOGID отправки; наибольший из известных. Ветка вердикта эту
+        -- колонку не трогает, поэтому пара request_msgid ↔ relates_to_msgid остаётся целой.
+        request_logid = GREATEST(
+            COALESCE(public.documents.request_logid, 0),
+            COALESCE(EXCLUDED.request_logid, 0)
+        ),
+        updated_at = now();
 
+    -- Отправки, по которым клиника не разрешилась ни payload'ом, ни реестром: в documents
+    -- они не попадают (нечем атрибутировать), но их число возвращается вызывающему.
+    SELECT count(*) INTO skipped_no_clinic
+    FROM public.transactions tx
+    WHERE tx.source_action = 'getDocumentFile'
+      AND tx.logid > from_logid
+      AND tx.logid <= to_logid
+      AND tx.xml_dwh_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM public.documents d WHERE d.dwh_id = tx.xml_dwh_id);
+
+    -- ------------------------------------------------------------------
+    -- Ветка вердикта: классификация ответа и привязка к документу.
+    -- ------------------------------------------------------------------
     WITH candidate_log_ids AS (
         SELECT r.logid
         FROM exchangelog_raw r
@@ -464,28 +472,6 @@ BEGIN
           AND r.logid <= to_logid
           AND r.createdate >= raw_cd_min
           AND r.createdate < raw_cd_max
-    ),
-    gdf_events AS (
-        -- jid события зафиксирован при парсинге (parse_targets; бэкфилл архива — в конце
-        -- файла), поэтому цепочка ищется по idx_transactions_gdf_jid_logid. Прежний
-        -- resolve_document_jid по payload внутри lateral при полном lookback заставлял
-        -- executor обходить журнал с regex на каждую строку батча (17ч CPU на окно).
-        -- Плата за фиксацию: jid не перерезолвится при пополнении dim_licenses —
-        -- строки с jid IS NULL добираются бэкфиллом при накате схемы.
-        SELECT
-            tx.logid,
-            tx.jid,
-            tx.xml_dwh_id AS dwh_id,
-            tx.xml_local_uid AS local_uid
-        FROM public.transactions tx
-        WHERE tx.source_action = 'getDocumentFile'
-          AND tx.jid IS NOT NULL
-          AND tx.logid <= to_logid
-          AND tx.logid >= GREATEST(
-                (SELECT COALESCE(MIN(c.logid), from_logid) FROM candidate_log_ids c) - lookback_logids,
-                0
-              )
-          AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
     ),
     raw_parsed AS (
         SELECT
@@ -507,7 +493,6 @@ BEGIN
             tx.xml_error_code AS error_code,
             tx.xml_message,
             tx.xml_raw_status AS raw_status,
-            tx.xml_jid AS jid_from_payload,
             tx.xml_creation_date AS creation_date,
             tx.xml_patient_name AS raw_patient_name,
             tx.xml_snils AS raw_snils,
@@ -524,6 +509,8 @@ BEGIN
         WHERE r.createdate >= raw_cd_min
           AND r.createdate < raw_cd_max
           AND tx.xml_parsed_at IS NOT NULL
+          -- getDocumentFile — это отправка, её обрабатывает ветка выше; сюда она попадает
+          -- только сбоем связи (LOGSTATE=3), который является исходом отправки.
           AND (
               COALESCE(tx.source_action, '') <> 'getDocumentFile'
               OR r.logstate = 3
@@ -554,23 +541,27 @@ BEGIN
             r.relates_to_id,
             COALESCE(
                 r.dwh_id_xml,
-                exch_ref.dwh_id,
-                emdr_ref.dwh_id,
-                gdf_ref.dwh_id
+                msg_ref.dwh_id,
+                emdr_ref.dwh_id
             ) AS dwh_id,
-            COALESCE(r.local_uid_xml, exch_ref.local_uid, gdf_ref.local_uid) AS local_uid_semd,
+            CASE
+                WHEN r.dwh_id_xml IS NOT NULL THEN 'payload_local_uid'
+                WHEN msg_ref.dwh_id IS NOT NULL THEN 'message_registry'
+                WHEN emdr_ref.dwh_id IS NOT NULL THEN 'emdr_id'
+                ELSE 'unlinked'
+            END AS link_method,
+            COALESCE(r.local_uid_xml, msg_ref.local_uid) AS local_uid_semd,
+            msg_ref.reply_to AS registry_reply_to,
             r.emdr_id,
             r.doc_number,
             r.org_oid,
             public.normalize_semd_code(r.kind_xml) AS semd_code,
-            NULL::text AS semd_name,
             CASE
                 WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3'
                 ELSE r.error_code
             END AS error_code,
             r.xml_message,
             r.raw_status,
-            r.jid_from_payload,
             r.creation_date,
             r.raw_patient_name,
             r.raw_snils,
@@ -583,35 +574,18 @@ BEGIN
             r.has_error_ilike,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
+        -- Штатный ключ: relatesToMessage вердикта → идентификатор подачи → localUid.
         LEFT JOIN LATERAL (
-            SELECT c.dwh_id, c.local_uid
-            FROM (
-                SELECT
-                    0 AS priority,
-                    link_tx.xml_dwh_id AS dwh_id,
-                    link_tx.xml_local_uid AS local_uid
-                FROM public.transactions link_tx
-                WHERE r.relates_to_id IS NOT NULL
-                  AND link_tx.source_message_id_norm = r.relates_to_id
-                  AND link_tx.xml_dwh_id IS NOT NULL
-
-                UNION ALL
-
-                SELECT
-                    1,
-                    link_tx.xml_dwh_id,
-                    link_tx.xml_local_uid
-                FROM public.transactions link_tx
-                WHERE r.emdr_id IS NOT NULL
-                  AND lower(NULLIF(btrim(link_tx.xml_emdr_id), '')) = lower(NULLIF(btrim(r.emdr_id), ''))
-                  AND NULLIF(btrim(link_tx.xml_local_uid), '') IS NOT NULL
-                  AND link_tx.xml_dwh_id IS NOT NULL
-
-            ) c
-            WHERE c.dwh_id IS NOT NULL
-            ORDER BY c.priority, c.dwh_id
+            SELECT
+                public.dwh_id(m.document_uid) AS dwh_id,
+                m.document_uid AS local_uid,
+                m.reply_to
+            FROM public.dim_message_document m
+            WHERE r.relates_to_id IS NOT NULL
+              AND m.msgid = public.message_registry_key(r.relates_to_id)
             LIMIT 1
-        ) exch_ref ON TRUE
+        ) msg_ref ON TRUE
+        -- Подтверждающий путь: повторный или поздний вердикт по уже известному emdrId.
         LEFT JOIN LATERAL (
             SELECT fd.dwh_id
             FROM public.documents fd
@@ -620,26 +594,8 @@ BEGIN
             ORDER BY fd.last_callback_at DESC NULLS LAST, fd.request_logid DESC NULLS LAST
             LIMIT 1
         ) emdr_ref ON TRUE
-        LEFT JOIN LATERAL (
-            SELECT g.dwh_id, g.local_uid
-            FROM gdf_events g
-            LEFT JOIN LATERAL public.resolve_document_jid(
-                r.org_oid,
-                COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, '')
-            ) cb_jid ON TRUE
-            WHERE cb_jid.jid IS NOT NULL
-              AND g.jid = cb_jid.jid
-              AND g.logid < r.logid
-            ORDER BY g.logid DESC
-            LIMIT 1
-        ) gdf_ref ON TRUE
         LEFT JOIN public.documents src_doc
-          ON src_doc.dwh_id = COALESCE(
-                r.dwh_id_xml,
-                exch_ref.dwh_id,
-                emdr_ref.dwh_id,
-                gdf_ref.dwh_id
-            )
+          ON src_doc.dwh_id = COALESCE(r.dwh_id_xml, msg_ref.dwh_id, emdr_ref.dwh_id)
     ),
     enriched AS (
         SELECT
@@ -667,14 +623,14 @@ BEGIN
         FROM parsed p
         LEFT JOIN LATERAL public.resolve_document_jid(
             p.org_oid,
-            COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '')
+            COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '') || ' ' || COALESCE(p.registry_reply_to, '')
         ) res ON TRUE
     ),
     with_errors AS (
         SELECT
             e.*,
             -- errors_json нужен только для error-строк; для success/pending это всегда '[]',
-            -- поэтому не гоняем egisz_xml_error_items по payload'у успешных ответов.
+            -- поэтому не гоняем разбор по payload'у успешных ответов.
             CASE
                 WHEN e.final_status = 'error'
                 THEN public.build_errors_json(e.final_status, e.error_code, e.event_message, e.msgtext)
@@ -682,10 +638,9 @@ BEGIN
             END AS built_errors_json
         FROM enriched e
     ),
-    -- Классификация отказа РЭМД дорогая: на каждый <item> идёт регекс-скан правил
+    -- Классификация отказа дорогая: на каждый <item> идёт регекс-скан правил
     -- dim_error_rules, и эта работа повторяется для одинаковых payload'ов внутри батча.
-    -- Считаем классификацию один раз на уникальный errors_json и приклеиваем обратно
-    -- по равенству jsonb.
+    -- Считаем классификацию один раз на уникальный errors_json и приклеиваем обратно.
     error_dict AS (
         SELECT DISTINCT built_errors_json
         FROM with_errors
@@ -711,16 +666,16 @@ BEGIN
     )
     INSERT INTO transactions (
         logid, dwh_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
-        doc_number, org_oid, status, message, callback_url, jid, jid_resolve_method, semd_code,
-        semd_name, error_code, creation_date, loaded_at,
+        doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
+        error_code, creation_date, loaded_at, link_method,
         error_type, error_json_text,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
     SELECT
         e.logid, e.dwh_id, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
-        e.doc_number, e.org_oid, e.final_status, e.event_message, e.logtext,
-        e.resolved_jid, e.resolved_method, e.resolved_semd_code, e.semd_name, e.error_code,
-        e.creation_date, now(),
+        e.doc_number, e.org_oid, e.final_status, e.event_message,
+        e.resolved_jid, e.resolved_method, e.resolved_semd_code, e.error_code,
+        e.creation_date, now(), e.link_method,
         CASE
             WHEN e.final_status = 'error' AND e.logstate = 3 THEN 'Сетевая ошибка'
             WHEN e.final_status = 'error'   THEN e.error_type_dict
@@ -762,14 +717,13 @@ BEGIN
         org_oid = EXCLUDED.org_oid,
         status = EXCLUDED.status,
         message = EXCLUDED.message,
-        callback_url = EXCLUDED.callback_url,
         jid = EXCLUDED.jid,
         jid_resolve_method = EXCLUDED.jid_resolve_method,
         semd_code = EXCLUDED.semd_code,
-        semd_name = EXCLUDED.semd_name,
         error_code = EXCLUDED.error_code,
         creation_date = EXCLUDED.creation_date,
         loaded_at = now(),
+        link_method = EXCLUDED.link_method,
         error_type = EXCLUDED.error_type,
         error_json_text = EXCLUDED.error_json_text,
         patient_name_masked = EXCLUDED.patient_name_masked,
@@ -780,10 +734,26 @@ BEGIN
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
+    -- Вердикты, не связавшиеся ни одним правилом, помечаются явно: без метки они
+    -- неотличимы от неразобранных строк и деградация привязки остаётся незаметной.
+    UPDATE public.transactions tx
+    SET link_method = 'unlinked'
+    WHERE tx.logid > from_logid
+      AND tx.logid <= to_logid
+      AND tx.dwh_id IS NULL
+      AND tx.xml_relates_to_id IS NOT NULL
+      AND tx.link_method IS DISTINCT FROM 'unlinked';
+    GET DIAGNOSTICS unlinked_rows = ROW_COUNT;
+
+    -- ------------------------------------------------------------------
+    -- Перенос исхода на грейн документа. Ветка создаёт запись, если отправки в журнале
+    -- не было: ЕГИСЗ отклоняет часть документов до запроса файла, и единственный след
+    -- такого документа — сам вердикт.
+    -- ------------------------------------------------------------------
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
         status, result_msgid, relates_to_msgid,
-        result_logid, request_logid, document_created_at, registered_at,
+        result_logid, document_created_at, registered_at,
         last_callback_at, last_status, jid, org_oid, jid_resolve_method,
         error_types, error_text,
         patient_hash, doctor_hash, updated_at
@@ -801,7 +771,6 @@ BEGIN
         END,
         public.clean_text_value(f.message_id),
         public.clean_text_value(f.relates_to_id),
-        f.logid,
         f.logid,
         f.creation_date,
         CASE WHEN f.status = 'success' THEN f.log_date ELSE NULL::timestamptz END,
@@ -840,10 +809,9 @@ BEGIN
         END,
         document_created_at = COALESCE(EXCLUDED.document_created_at, public.documents.document_created_at),
         registered_at = COALESCE(EXCLUDED.registered_at, public.documents.registered_at),
-        request_logid = GREATEST(COALESCE(public.documents.request_logid, 0), COALESCE(EXCLUDED.request_logid, 0)),
         last_callback_at = GREATEST(COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
         last_status = COALESCE(EXCLUDED.last_status, public.documents.last_status),
-        jid = COALESCE(EXCLUDED.jid, public.documents.jid),
+        jid = COALESCE(public.documents.jid, EXCLUDED.jid),
         org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
         jid_resolve_method = CASE
             WHEN public.documents.jid_resolve_method = 'mo_uid'
@@ -866,7 +834,7 @@ BEGIN
         doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.documents.doctor_hash),
         updated_at = now();
 
-    -- Колбэк может прийти без KIND в XML, а тип СЭМД уже известен из getDocumentFile (gdf).
+    -- Вердикт может прийти без KIND, а тип СЭМД уже известен из отправки.
     -- Только документы, затронутые в этой транзакции: O(батч), не O(архив).
     WITH batch_docs AS (
         SELECT d.dwh_id
@@ -889,6 +857,24 @@ BEGIN
     ) src
     WHERE d.dwh_id = src.dwh_id;
 
+    -- Число подач документа в ЕГИСЗ по реестру: повторная подача не меняет localUid,
+    -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
+    UPDATE public.documents d
+    SET attempt_count = src.attempts,
+        updated_at = now()
+    FROM (
+        SELECT m.document_uid AS dwh_id, count(*)::integer AS attempts
+        FROM public.dim_message_document m
+        WHERE EXISTS (
+            SELECT 1 FROM public.documents b
+            WHERE b.dwh_id = m.document_uid
+              AND b.updated_at = transaction_timestamp()
+        )
+        GROUP BY m.document_uid
+    ) src
+    WHERE d.dwh_id = src.dwh_id
+      AND d.attempt_count IS DISTINCT FROM src.attempts;
+
     -- Инкрементальное сопровождение document_attributes по dwh_id из батча.
     PERFORM public.reconcile_document_attributes(
         ARRAY(
@@ -898,8 +884,7 @@ BEGIN
         )
     );
 
-    -- Пересбор слоя версий (document_group_id / is_current_version / цепочка) для групп,
-    -- затронутых батчем. Детерминирован и идемпотентен (пишет только при изменении).
+    -- Пересбор слоя версий для групп, затронутых батчем.
     PERFORM public.recompute_document_versions(
         ARRAY(
             SELECT d.dwh_id::text
@@ -908,30 +893,10 @@ BEGIN
         )
     );
 
-    RETURN affected;
+    RETURN jsonb_build_object(
+        'transformed', affected,
+        'unlinked', unlinked_rows,
+        'sends_without_clinic', skipped_no_clinic
+    );
 END;
 $$;
-
--- Бэкфилл jid для getDocumentFile-строк, распарсенных до фиксации jid в parse_targets:
--- gdf_ref ищет цепочку по transactions.jid, без бэкфилла поздний callback не свяжется
--- со старым запросом. Идемпотентно: только jid IS NULL; нерезолвящиеся строки
--- перепроверяются при каждом накате (dim_licenses могли пополниться).
-UPDATE public.transactions tx
-SET jid = src.jid
-FROM (
-    SELECT t.logid, t.log_date, rj.jid
-    FROM public.transactions t
-    JOIN public.exchangelog_raw gr ON gr.logid = t.logid
-    CROSS JOIN LATERAL public.resolve_document_jid(
-        t.xml_org_oid,
-        COALESCE(gr.logtext, '') || ' ' || COALESCE(gr.msgtext, '')
-    ) rj
-    WHERE t.source_action = 'getDocumentFile'
-      AND t.jid IS NULL
-      AND rj.jid IS NOT NULL
-) src
-WHERE tx.logid = src.logid
-  AND tx.log_date = src.log_date;
-
--- Статистика по transactions.jid нужна планировщику сразу после массового бэкфилла.
-ANALYZE public.transactions;

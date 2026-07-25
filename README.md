@@ -87,53 +87,67 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 | Таблица | Grain | Поля |
 | ------- | ----- | ---- |
-| `EXCHANGELOG` | 1 строка = 1 SOAP-сообщение | `LOGID`, `LOGDATE`, `CREATEDATE`, `MSGID`, `LOGSTATE`, `LOGTEXT`, `MSGTEXT` |
+| `EXCHANGELOG` | 1 строка = 1 SOAP-сообщение | `LOGID`, `LOGDATE`, `CREATEDATE`, `MSGID`, `LOGSTATE`, `LOGTEXT`, `MSGTEXT`, `URI` |
+| `EGISZ_MESSAGES` | 1 строка = 1 подача документа | `EGMID`, `MSGID`, `REPLYTO`, `DOCUMENTID`, `CREATEDATE` |
 | `JPERSONS` | Организация | `JID` (`bigint`), `JNAME`, `JINN`, `FIR_OID` |
 | `EGISZ_LICENSES` | Лицензия МО | `mo_uid`, `JID` |
 
-`MSGTEXT` — полный SOAP/XML (BLOB в источнике, `text` в DWH). Бизнес-поля извлекаются при transform; исходный журнал не меняется. `LOGDATE` — служебная метка строки журнала; дата документа — из payload (`creationDateTime`).
+`MSGTEXT` — полный SOAP/XML (BLOB в источнике, `text` в DWH). Бизнес-поля извлекаются при transform; исходный журнал не меняется. `LOGDATE` — служебная метка строки журнала; дата документа — из payload (`creationDateTime`). `URI` — адрес вызова, по которому определяется подсистема ЕГИСЗ: `/emdr/callback` — РЭМД, `/ips/callback` — ИЭМК.
+
+`EGISZ_MESSAGES` — реестр подач шлюза: `MSGID` исходящего сообщения → `DOCUMENTID` (localUid документа) и `REPLYTO` (endpoint клиники `gost-<jid>`). Журнал содержит только входящие вызовы ЕГИСЗ→шлюз, исходящая подача в него не попадает, поэтому реестр — единственный источник связи вердикта с документом (см. §«Связывание сообщений»). Выборка обеих таблиц — keyset-курсором: `EXCHANGELOG` по `LOGID`, `EGISZ_MESSAGES` по `EGMID`.
 
 ---
 
 ## ELT-конвейер
 
-Три независимых DAG; у каждого `max_active_runs = 1`.
+Три DAG, разграниченных по зоне ответственности: приём фактов, обновление витрин, обслуживание. У каждого `max_active_runs = 1`.
 
-### Основной поток документов
+### Приём фактов — `egisz_etl_dag`
 
 ```
-extract_exchangelog ▸ transform_exchangelog ▸ refresh_report_marts
+extract_exchangelog ▸ extract_message_registry ▸ sync_dictionaries ▸ transform_exchangelog
 ```
 
 | Задача | Действие |
 | ------ | -------- |
-| `extract_exchangelog` | Читает `elt_state.last_logid`. Пока в `exchangelog_raw` есть строки с `logid` выше watermark — источник не читается. Иначе fetch `EXCHANGELOG` → UPSERT в `exchangelog_raw`, `ANALYZE`. |
-| `transform_exchangelog` | Цикл: `transform_raw_to_facts(from, to)` — парсинг raw в `transactions`, сборка `documents`, сдвиг watermark через `GREATEST`. |
-| `refresh_report_marts` | При `transformed > 0` — `REFRESH MATERIALIZED VIEW CONCURRENTLY` витрин динамики (`rpt_documents_weekly` / `rpt_error_breakdown_weekly` / `rpt_documents_monthly` / `rpt_error_breakdown_monthly`). |
+| `extract_exchangelog` | Читает `elt_state.last_logid`. Пока в `exchangelog_raw` есть строки с `logid` выше отметки — источник не читается. Иначе fetch `EXCHANGELOG` → UPSERT в `exchangelog_raw`, `ANALYZE`. |
+| `extract_message_registry` | `EGISZ_MESSAGES` → `dim_message_document` по курсору `elt_state.last_egmid`. Выполняется до transform: без реестра вердикт ЕГИСЗ не с чем связать. |
+| `sync_dictionaries` | UPSERT `dim_organizations` ← `JPERSONS`, `dim_licenses` ← `EGISZ_LICENSES`. Гейт `elt_job_runs`: не чаще раза в час. |
+| `transform_exchangelog` | Цикл `transform_raw_to_facts(from, to)`: разбор raw в `transactions`, сборка `documents`, сдвиг отметки через `GREATEST`. Публикует актив `egisz://facts`. |
 
-При сбое watermark не откатывается: следующий прогон перечитывает тот же диапазон. Дублей документов нет (UPSERT по `dwh_id`).
+**Защитное отставание отметки.** Шлюз наполняет `EXCHANGELOG` не строго по возрастанию `LOGID`. Отметка не поднимается выше `max(logid) − EGISZ_ETL_LAG_LOGIDS`, поэтому строка, опоздавшая в пределах запаса, попадает в обычный прямой ход, а не требует сверки.
 
-### Справочники
+При сбое отметка не откатывается: следующий прогон перечитывает тот же диапазон. Дублей документов нет (UPSERT по `dwh_id`).
+
+### Обновление витрин — `egisz_marts_dag`
+
+Запускается публикацией активов `egisz://facts` и `egisz://dictionaries`, а не расписанием: обновление витрин — следствие того, что изменились факты, а не того, кто именно их изменил. Это единственное место, где выполняется `REFRESH MATERIALIZED VIEW`.
 
 | Задача | Действие |
 | ------ | -------- |
-| `sync_dimensions` | UPSERT `dim_organizations` ← `JPERSONS`, `dim_licenses` ← `EGISZ_LICENSES`. При изменениях — `reconcile_document_attributes_ui()` (имена клиник, JID в `document_attributes`). |
+| `refresh_fact_marts` | `REFRESH ... CONCURRENTLY public.rpt_error_breakdown` — свежесть та же, что у фактов. |
+| `refresh_period_marts` | Витрины динамики (`rpt_documents_weekly` / `rpt_error_breakdown_weekly` / `rpt_documents_monthly` / `rpt_error_breakdown_monthly`). Полный агрегат по архиву, поэтому со своим гейтом каденции. |
 
-### Сверка полноты журнала
+Порядок обязателен: витрины динамики читают `rpt_error_breakdown`.
+
+### Обслуживание — `egisz_maintenance_dag`
 
 | Задача | Действие |
 | ------ | -------- |
-| `reconcile_proxy_raw` | Set-diff `LOGID` источника и `exchangelog_raw` за окно lookback (дефолт 30 дней); догрузка missing → transform с prefix-lookback. Watermark не меняет. Skip при raw-хвосте extract. |
+| `reconcile_journal_tail` | Сверка `LOGID` источника и `exchangelog_raw` шагами по `reconcile_chunk_logids`: окно целиком в память воркера не поднимается. Догрузка недостающего → transform по плотным диапазонам. Отметку не двигает. Публикует `egisz://facts`. |
+| `reconcile_archive_attributes` | Пересчёт по архиву: `reconcile_document_attributes_ui()`, `recompute_document_versions(NULL)`, `repair_document_error_text()`. Публикует `egisz://dictionaries`. |
+| `maintain_partitions` | `ensure_time_partitions(12, 24)` — создание месячных партиций на предстоящий период. |
 
-Callback'и и backfill шлюза могут появиться с `LOGID` ниже watermark. Основной поток их не видит (`LOGID > last_logid`); сверка закрывает пропуски.
+Штатное окно сверки узкое (`reconcile_lookback_days`); широкое доступно ручным прогоном с параметром `deep`.
 
 ### Периодичность
 
 | Поток | Интервал |
 | ----- | -------- |
-| Документы | каждые 5 мин |
-| Справочники | каждый час |
-| Сверка | раз в сутки |
+| Приём фактов | каждые 5 мин |
+| Справочники | раз в час (гейт внутри приёма) |
+| Витрины | по активу; витрины динамики — не чаще `period_marts_interval_minutes` |
+| Обслуживание | раз в сутки |
 
 ---
 
@@ -147,7 +161,9 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 | ------- | ---------- |
 | `xml_text` | Текст тега XML без привязки к namespace |
 | `normalize_message_id` | `urn:uuid:` → единый формат |
+| `message_registry_key` | Канонический ключ реестра подач: без дефисов, без префикса, в верхнем регистре |
 | `dwh_id` | Ключ **экземпляра/версии** документа: `lower(localUid)` (см. §«Версии и идентичность документа») |
+| `egisz_subsystem` | Подсистема ЕГИСЗ (РЭМД/ИЭМК) по `URI` вызова |
 | `resolve_document_jid` | JID: `mo_uid` из XML → fallback по host/gost-endpoint |
 | `normalize_semd_code` | Код СЭМД из payload |
 | `classify_async_status` | Статус сообщения до уровня документа |
@@ -179,7 +195,38 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 Транспорт СЭМД именуется по записям журнала: **отправка** (`getDocumentFile`) = `request_*`, **исход** (ответ РЭМД или сбой связи) = `result_*`. В витрине `logid = COALESCE(result_logid, request_logid)` («Отправлено» несёт LOGID отправки).
 
-**JID:** `resolve_document_jid(org_oid, endpoint)`. Флаг `clinic_jid_mismatch` — расхождение OID из XML, `JPERSONS.fir_oid`, `EGISZ_LICENSES.mo_uid`.
+**JID:** `resolve_document_jid(org_oid, endpoint)`. Источники адреса — payload запроса и `reply_to` реестра подач. Флаг `clinic_jid_mismatch` — расхождение OID из XML, `JPERSONS.fir_oid`, `EGISZ_LICENSES.mo_uid`.
+
+---
+
+## Связывание сообщений
+
+Журнал шлюза содержит только входящие вызовы ЕГИСЗ→шлюз. Исходящее сообщение, которым МИС подаёт документ (`registerDocument` в РЭМД, `ProvideAndRegisterDocumentSet-b` в ИЭМК), в `EXCHANGELOG` не попадает. Асинхронный вердикт не несёт `localUid` — он несёт `relatesToMessage`, ссылающийся на подачу. Поэтому вердикт связывается с документом через реестр подач `dim_message_document`.
+
+| Уровень | Ключ | Источник |
+| ------- | ---- | -------- |
+| Сообщение журнала | `logid` | `EXCHANGELOG` |
+| Подача документа (попытка) | `msgid` | `EGISZ_MESSAGES` → `dim_message_document` |
+| Экземпляр документа | `dwh_id` = `lower(localUid)` | `DOCUMENTID` реестра либо payload запроса |
+| Логический документ | `document_group_id` | `jid` + `semd_code` + `doc_number` |
+
+`msgid → document_uid` однозначен; на один документ приходится несколько `msgid` — по одному на попытку подачи. Число подач хранится в `documents.attempt_count` и выводится на вкладке «Отправленные».
+
+Правила привязки по классам сообщений:
+
+| Класс сообщения | Ключ привязки |
+| --------------- | ------------- |
+| `getDocumentFile`, `LOGSTATE = 0` | `localUid` из payload |
+| `getDocumentFile`, `LOGSTATE = 3` (сбой связи) | `localUid` из конверта |
+| Вердикт РЭМД (`sendRegisterDocumentResult`) | `relatesToMessage` → `message_registry_key` → `dim_message_document.document_uid` |
+| Вердикт ИЭМК (`ProvideAndRegisterDocumentSet-bAsyncResponse`) | то же правило |
+| Повторный или поздний вердикт | `emdrId` → `documents.emdr_id` (подтверждающий путь) |
+
+Применённое правило пишется в `transactions.link_method` (`payload_local_uid` / `message_registry` / `emdr_id` / `unlinked`). Вердикты, не связавшиеся ни одним правилом, помечаются `unlinked`, их доля выведена в `rpt_health_signals` — без метки деградация привязки остаётся незаметной.
+
+Вердикт заводит запись в `documents`, если отправки в журнале не было: ЕГИСЗ отклоняет часть документов до запроса файла, и единственный след такого документа — сам вердикт.
+
+Окно разбора строго `(from_logid, to_logid]`: связывание не зависит от префикса журнала, поэтому отсечение партиций по `createdate` работает на каждом батче.
 
 ---
 
@@ -187,26 +234,28 @@ Callback'и и backfill шлюза могут появиться с `LOGID` ни
 
 Два слоя:
 
-1. **Сообщение** — `transform_raw_to_facts` парсит новые строки `exchangelog_raw` в `transactions` (поля `xml_*`, классификация callback на уровне строки). Повторный парсинг той же строки пропускается по маркеру `exchangelog_parse_attempts` (пишется на весь просканированный диапазон, включая строки, не прошедшие фильтр вставки). Для строк `getDocumentFile` при парсинге фиксируется `jid` (`resolve_document_jid` вызывается один раз на строку); связывание позднего callback с запросом (`gdf_ref`) идёт по `transactions.jid` через индекс `idx_transactions_gdf_jid_logid`, а не регексом по payload на чтении — иначе полножурнальный lookback reconcile вырождается в O(батч × журнал × regex).
+1. **Сообщение** — `transform_raw_to_facts` разбирает новые строки `exchangelog_raw` в `transactions` (поля `xml_*`, классификация вердикта на уровне строки). Повторный разбор той же строки пропускается по маркеру `exchangelog_parse_attempts` (пишется на весь просканированный диапазон, включая строки, не прошедшие фильтр вставки). Для строк `getDocumentFile` при разборе фиксируется `jid`: один вызов `resolve_document_jid` на строку за всю её жизнь вместо повторного разбора payload регулярным выражением на чтении.
 
-2. **Экземпляр документа** — UPSERT в `documents` (PK `dwh_id` = `lower(localUid)`). Несколько строк журнала одной отправки сходятся в одну запись: callback привязывается по `relatesTo` / `emdrId` (`normalize_message_id`). Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, итоговый `status`, `error_types`, `jid`. Грейн записи — **версия отправки**, а не «вечный» документ: правка СЭМД меняет `localUid` ⇒ новый экземпляр (см. §«Версии и идентичность документа»).
+2. **Экземпляр документа** — UPSERT в `documents` (PK `dwh_id` = `lower(localUid)`). Строки журнала одной отправки сходятся в одну запись по правилам из §«Связывание сообщений». Накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, `attempt_count`, итоговый `status`, `error_types`, `jid`. Грейн записи — **версия отправки**, а не «вечный» документ: правка СЭМД меняет `localUid` ⇒ новый экземпляр (см. §«Версии и идентичность документа»).
 
-3. **Группы версий** — `recompute_document_versions(dwh_ids)` пересчитывает `document_group_id`, цепочку `supersedes_*` и `is_current_version` для затронутого батча; вызывается в конце `transform_raw_to_facts` и при полной инициализации DWH.
+3. **Группы версий** — `recompute_document_versions(dwh_ids)` пересчитывает `document_group_id`, цепочку `supersedes_*` и `is_current_version` для затронутого батча и его соседей по группе; вызывается в конце `transform_raw_to_facts`, полный пересчёт — в суточном обслуживании.
 
-Lookback при transform: extract использует окно по ширине батча; reconcile передаёт prefix журнала, чтобы поздний callback связался с ранним `getDocumentFile`.
+Разделение LOGID документа: `request_logid` — отправка (`getDocumentFile`), `result_logid` — исход (вердикт или сбой связи). Ветка вердикта `request_logid` не трогает, поэтому пара `request_msgid` ↔ `relates_to_msgid` остаётся целой.
 
-`document_attributes` (1:1 к экземпляру): lineage OID, host, endpoint, `request_msgid` (MSGID отправки — на грейне документа `result_msgid` хранит MSGID ответа, поэтому MSGID запроса берётся из source-транзакции), `contour` (контур обмена, зафиксированный на грейне документа — последний непустой `transactions.contour` по строкам документа, чтобы отчётный слой не читал message-грейн), BI-маски; обновляется после transform и `sync_dimensions`.
+`document_attributes` (1:1 к экземпляру): lineage OID, host, endpoint, `request_msgid` (MSGID отправки — на грейне документа `result_msgid` хранит MSGID ответа, поэтому MSGID запроса берётся из source-транзакции), `egisz_subsystem` (подсистема ЕГИСЗ на грейне документа — последнее непустое значение по строкам документа, чтобы отчётный слой не читал message-грейн), BI-маски; обновляется после transform и в суточном обслуживании.
 
 ### Учёт отправленных vs корпус результатов
 
-«Отправлено» (`status='waiting'`) — отправка без финального вердикта РЭМД. Учёт раздельный, грейн — `is_current_version`:
+«Отправлено» (`status='waiting'`) — отправка без финального вердикта ЕГИСЗ. Учёт раздельный, грейн — `is_current_version`:
 
 | Срез | Условие | Где используется |
 | ---- | ------- | ---------------- |
-| **Отправлено** | `status = 'waiting'` | Счётчик объёма/очереди; возрастные сегменты `rpt_documents_waiting.wait_segment`; вкладка «Отправленные» |
+| **Отправлено** | `status = 'waiting'` | Счётчик объёма/очереди; возрастные сегменты `rpt_documents_waiting.wait_segment`; число подач `attempt_count`; вкладка «Отправленные» |
 | **Корпус результатов** | `status <> 'waiting'` | KPI, доли успеха/ошибок, время доставки, здоровье клиник, error-топы |
 
 Доля успеха = `success / (success + async_error + network_error)`. Отдельного флага «финальный» нет — корпус определяется полем `status`.
+
+В корпус входят и документы, отклонённые ЕГИСЗ до запроса файла: `getDocumentFile` по ним не приходил, и единственный их след — вердикт, который и заводит запись (см. §«Связывание сообщений»).
 
 ---
 
@@ -242,7 +291,7 @@ Lookback при transform: extract использует окно по ширин
 
 Матчинг **ярусный** (`match_tier`): на каждый `<item>` правила проверяются по возрастанию яруса, и первый ярус, давший хотя бы одно совпадение, закрывает поиск — правила нижних ярусов для этого item не применяются. Семантика ярусов: **1** — код + специфичный текстовый паттерн; **2** — только код (`match_pattern = '(?is).*'`, пустой `message` допустим — item без текста классифицируется правилом, а не «Код: X»); **3** — специфичный текстовый паттерн без кода; **4** — широкие текстовые фолбэки. Несколько совпадений внутри выигравшего яруса легальны и дедуплицируются; мультитиповость документа возникает только из нескольких `<item>` или нескольких совпадений одного яруса. Если правила молчат — code-fallback (возвращает те же канонические типы, что и правила соответствующих кодов), единый тип «Ошибка Schematron-валидации», «Код: X» (только для кодов, не покрытых ни одним правилом), «Неизвестная ошибка». Канонический тип всегда из словаря; детальный текст ошибки (включая номера schematron-правил) остаётся в `error_text`. Все типы контура ИЭМК начинаются с префикса `ИЭМК: `.
 
-**Контур обмена** (`transactions.contour`: `РЭМД`/`ИЭМК`/NULL) — направление интеграции с ЕГИСЗ, вычисляется `exchange_contour()`: первично по `wsa:Action` payload'а (`urn:ihe:*` → ИЭМК, иной непустой → РЭМД), запасной признак — порт сервиса клиники в `LOGTEXT` (`:9921` → ИЭМК, `:9945` → РЭМД; конвенция настроек клиник, прочие порты контур не определяют). Приоритет всегда у action; порт — условный признак. На грейне сообщения хранится в `transactions.contour`; на грейне документа фиксируется в `document_attributes.contour` (последний непустой контур по строкам документа) и оттуда экспонируется в `rpt_network_errors.contour` — отчётный слой не читает message-грейн `transactions` напрямую.
+**Подсистема ЕГИСЗ** (`transactions.egisz_subsystem`: `РЭМД`/`ИЭМК`/NULL) вычисляется `egisz_subsystem()` первично по `URI` вызова (`/emdr/callback` → РЭМД, `/ips/callback` → ИЭМК). Это реквизит транспорта: он не зависит от разбора payload и заполнен во всех строках, включая сбои связи без тела ответа. Запасные признаки для строк без `URI` — `wsa:Action` (`urn:ihe:*` → ИЭМК, иной непустой → РЭМД) и порт сервиса клиники в `LOGTEXT` (`:9921` → ИЭМК, `:9945` → РЭМД). На грейне документа значение фиксируется в `document_attributes.egisz_subsystem` (последнее непустое по строкам документа) и оттуда экспонируется в `rpt_network_errors.egisz_subsystem` — отчётный слой не читает message-грейн `transactions` напрямую.
 
 Связь **тип → группа** — единый справочник `dim_error_type_group` (тип PK → категория), единственный источник истины. Это исключает «один тип → две группы». Каждый тип дополнительно несёт `responsibility` (кто устраняет причину: клиника / МИС / интегратор / РЭМД / смешанная) и `is_retryable` (лечится ли повторной отправкой) — см. [приложение](#зона-ответственности-и-повторяемость).
 
@@ -265,11 +314,13 @@ Lookback при transform: extract использует окно по ширин
 
 | Слой | Объект | Grain / назначение |
 | ---- | ------ | ------------------ |
-| Состояние | `elt_state` | `last_logid` — курсор инкрементальной обработки |
+| Состояние | `elt_state` | `last_logid` — курсор журнала, `last_egmid` — курсор реестра подач |
+| Состояние | `elt_job_runs` | Отметки задач с каденцией реже, чем у своего DAG |
+| Реестр подач | `dim_message_document` | `msgid` подачи → `document_uid` (localUid) + `reply_to`; ключ связывания вердикта с документом |
 | Raw | `exchangelog_raw` | Строка журнала как в источнике |
-| Транзакции | `transactions` | Строка журнала + `xml_*` (parse-once) + `error_type` на callback + `contour` (РЭМД/ИЭМК, `exchange_contour`); `loaded_at` — момент ELT-загрузки (не путать с `ips_date`) |
+| Транзакции | `transactions` | Строка журнала + `xml_*` (разбор один раз) + `error_type` на вердикте + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки (не путать с `ips_date`) |
 | Факт | `documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
-| Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID, `request_msgid`, `contour` (контур обмена на грейне документа) |
+| Атрибуты | `document_attributes` | Lineage клиники, host, mismatch JID, `request_msgid`, `egisz_subsystem` (подсистема на грейне документа) |
 | Справочники | `dim_organizations`, `dim_licenses`, `dim_semd_types`, `dim_document_status` | Клиники, лицензии, типы СЭМД, подписи статусов |
 | Правила | `dim_error_rules` | `match_tier` (ярус 1–4) + `match_code` + `match_pattern` → `interpretation` |
 | Тип→группа | `dim_error_type_group` | Канонический тип (PK) → категория + `responsibility` + `is_retryable` — единый источник истины |
@@ -281,7 +332,7 @@ Lookback при transform: extract использует окно по ширин
 | `rpt_documents` | `documents` + `document_attributes` + справочники; **текущие версии** (`is_current_version`) |
 | `rpt_document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
 | `rpt_documents_waiting` | `status = waiting` |
-| `rpt_network_errors` | `status = network_error`; + `contour` — контур обмена (РЭМД/ИЭМК) из `document_attributes` |
+| `rpt_network_errors` | `status = network_error`; + `egisz_subsystem` — подсистема ЕГИСЗ (РЭМД/ИЭМК) из `document_attributes` |
 | `rpt_error_breakdown` | Split `error_types` по `·` → атомарный канонический вид (`error_type` + `error_category` + `responsibility` + `is_retryable`) |
 | `rpt_document_lineage` | OID / host / endpoint по документу |
 | `rpt_clinic_semd_licenses` | Доступные клинике типы СЭМД: грейн (`clinic_jid`, `semd_code` = `EGISZ_LICENSES.KIND`), наименование из `dim_semd_types`, актуальность `MAX(modifydate)`, начало использования `MIN(bdate)` (источником пока не заполняется) |
@@ -295,6 +346,7 @@ Lookback при transform: extract использует окно по ширин
 | `clinic_*` | `clinic_jid` (`bigint`), `clinic_name`, `clinic_jid_mismatch` |
 | транспорт | `request_logid`, `result_logid`, `request_msgid`, `result_msgid`, `relates_to_msgid`, `logid` (= `COALESCE(result_logid, request_logid)`) |
 | версии | `document_group_id`, `is_current_version`, `semd_version_number`, `supersedes_dwh_id` |
+| подачи | `attempt_count` (число подач документа в ЕГИСЗ), `is_resubmitted` |
 | без префикса | `status`, `status_label`, `error_types`, `error_type`, `error_category`, `error_text`, `ips_date`, `first_sent_at`, `delivery_seconds` |
 
 Временные поля витрин:

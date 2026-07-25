@@ -6,25 +6,25 @@ from pathlib import Path
 
 from conftest import load_dag_module
 
-# Общие функции берём из extract-DAG: он канонический носитель общего блока,
+# Общие функции берём из ETL-DAG: он канонический носитель общего блока,
 # идентичность копий в соседних DAG-файлах проверяет test_dag_selfcontainment.py.
-extract_dag = load_dag_module("egisz_extract_dag")
+extract_dag = load_dag_module("egisz_etl_dag")
 connect_pg = extract_dag.connect_pg
 get_cursors = extract_dag.get_cursors
 load_raw_logs = extract_dag.load_raw_logs
 transform_raw_to_facts = extract_dag.transform_raw_to_facts
 update_cursors = extract_dag.update_cursors
 
-dimensions_dag = load_dag_module("egisz_dimensions_dag")
-DIRECTORY_SYNC_LOCK_TIMEOUT = dimensions_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
-DIRECTORY_SYNC_PAGE_SIZE = dimensions_dag.DIRECTORY_SYNC_PAGE_SIZE
-DIRECTORY_SYNC_STATEMENT_TIMEOUT = dimensions_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
-sync_directory = dimensions_dag.sync_directory
+etl_dag = extract_dag
+DIRECTORY_SYNC_LOCK_TIMEOUT = etl_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
+DIRECTORY_SYNC_PAGE_SIZE = etl_dag.DIRECTORY_SYNC_PAGE_SIZE
+DIRECTORY_SYNC_STATEMENT_TIMEOUT = etl_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
+sync_directory = etl_dag.sync_directory
 
-reconcile_dag = load_dag_module("egisz_reconcile_dag")
-coalesce_logid_windows = reconcile_dag.coalesce_logid_windows
-get_all_raw_logids = reconcile_dag.get_all_raw_logids
-transform_missing_windows = reconcile_dag.transform_missing_windows
+maintenance_dag = load_dag_module("egisz_maintenance_dag")
+coalesce_logid_windows = maintenance_dag.coalesce_logid_windows
+fetch_raw_logids_range = maintenance_dag.fetch_raw_logids_range
+transform_missing_windows = maintenance_dag.transform_missing_windows
 
 DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
 
@@ -61,7 +61,7 @@ def test_connect_pg_recovers_cp1251_server_error_text(monkeypatch: pytest.Monkey
     def failing_connect(*_args: object, **_kwargs: object) -> None:
         raw.decode("utf-8")
 
-    monkeypatch.setattr("egisz_extract_dag.psycopg2.connect", failing_connect)
+    monkeypatch.setattr("egisz_etl_dag.psycopg2.connect", failing_connect)
 
     with pytest.raises(psycopg2.OperationalError, match="проверку подлинности") as excinfo:
         connect_pg("postgresql://egisz:wrong@localhost:5432/dwh_egisz")
@@ -86,7 +86,7 @@ def test_load_raw_logs_rejects_missing_required_exchangelog_keys() -> None:
 class FakeTransformCursor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[object, ...] | None]] = []
-        self.result: tuple[int] = (3,)
+        self.result: tuple[object] = ({"transformed": 3},)
 
     def __enter__(self) -> "FakeTransformCursor":
         return self
@@ -97,7 +97,7 @@ class FakeTransformCursor:
     def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
         self.calls.append((sql, params))
 
-    def fetchone(self) -> tuple[int]:
+    def fetchone(self) -> tuple[object]:
         return self.result
 
     def fetchall(self) -> list[tuple[str, str]]:
@@ -121,10 +121,10 @@ def test_transform_raw_to_facts_passes_logid_bounds() -> None:
 
     transformed = transform_raw_to_facts(con, from_logid=10, to_logid=20)
 
-    assert transformed == 3
+    assert transformed == {"transformed": 3}
     assert con.cursor_instance.calls[0] == (
-        "SELECT public.transform_raw_to_facts(%s, %s, %s)",
-        (10, 20, 0),
+        "SELECT public.transform_raw_to_facts(%s, %s)",
+        (10, 20),
     )
     assert con.committed is True
 
@@ -252,24 +252,30 @@ def test_document_version_layer_groups_by_doc_number() -> None:
     assert "rpt_health_versions" in health
 
 
-def test_gdf_chain_lookup_uses_persisted_jid() -> None:
-    """jid события getDocumentFile фиксируется при парсинге; gdf_ref ищет цепочку по
-    transactions.jid индексом. resolve_document_jid по payload внутри gdf_events при
-    полножурнальном lookback reconcile вырождался в O(батч × журнал × regex)."""
+def test_verdict_links_to_document_through_message_registry() -> None:
+    """Вердикт ЕГИСЗ не несёт localUid: документ находится по relatesToMessage через
+    реестр подач dim_message_document. Ключ приводится к каноническому виду одной
+    функцией на обеих сторонах — при загрузке реестра и при поиске."""
     parts = DWH_INIT_SQL_PATH.parent / "parts"
     tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
+    parsing = (parts / "20_functions_parsing.sql").read_text(encoding="utf-8")
     transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
 
-    assert "idx_transactions_gdf_jid_logid" in tables
+    assert "CREATE TABLE IF NOT EXISTS dim_message_document" in tables
+    assert "CREATE OR REPLACE FUNCTION public.message_registry_key" in parsing
 
-    gdf_events = transform.split("gdf_events AS (")[1].split("raw_parsed AS (")[0]
-    assert "tx.jid" in gdf_events
-    assert "LATERAL public.resolve_document_jid" not in gdf_events
-    assert "JOIN public.exchangelog_raw" not in gdf_events
+    msg_ref = transform.split("        ) msg_ref ON TRUE")[0].rsplit("LEFT JOIN LATERAL (", 1)[1]
+    assert "FROM public.dim_message_document m" in msg_ref
+    assert "m.msgid = public.message_registry_key(r.relates_to_id)" in msg_ref
 
-    # Бэкфилл архива: без него поздний callback не свяжется со старым запросом.
-    assert transform.count("AND t.jid IS NULL") == 1
-    # Агрегация document_attributes ограничена документами батча, не всем архивом.
+    # Правило привязки фиксируется на строке — иначе деградация остаётся незаметной.
+    assert "AS link_method" in transform
+    assert "'message_registry'" in transform
+    assert "'unlinked'" in transform
+    # Индексы и бэкфилл прежнего правила сняты вместе с ним.
+    assert "DROP INDEX IF EXISTS idx_transactions_gdf_jid_logid" in tables
+    assert "AND t.jid IS NULL" not in transform
+    # Агрегация реквизитов ограничена документами батча, не всем архивом.
     assert "batch_document_ids" in transform
 
 
@@ -291,7 +297,7 @@ def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
 
     # Обе ветки parse_targets отбирают кандидатов по маркеру, не по transactions.
     parse_targets = transform.split("parse_targets AS (")[1].split("INSERT INTO public.transactions")[0]
-    assert parse_targets.count("public.exchangelog_parse_attempts") == 2
+    assert parse_targets.count("public.exchangelog_parse_attempts") == 1
     assert "xml_parsed_at" not in parse_targets
 
     # Маркер пишется на весь просканированный диапазон после вставки (анти-джойн
@@ -299,7 +305,7 @@ def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
     marker = transform.split("INSERT INTO public.exchangelog_parse_attempts (logid)")
     assert len(marker) == 2
     assert "ON CONFLICT (logid) DO NOTHING" in marker[1]
-    parse_insert = transform.split("WITH candidate_log_ids AS (")[1]
+    parse_insert = transform.split("WITH parse_targets AS (")[1]
     assert parse_insert.index("INSERT INTO public.transactions") < parse_insert.index(
         "INSERT INTO public.exchangelog_parse_attempts"
     )
@@ -388,9 +394,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_semd" in sql
     # Функциональные XML-индексы по msgtext не используются transform (parse-once в transactions).
     assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm" in sql
-    # DOCUMENTID-парсинг снят вместе с EGISZ_MESSAGES: индекс и реквизит должны быть удалены.
     assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm" in sql
-    assert "DOCUMENTID" not in sql
     assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_message_id_norm" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml" not in sql
     assert "candidate_log_ids AS" in sql
@@ -399,7 +403,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "tx.xml_semd_code AS kind_xml" in transform_sql
     assert "tx.xml_local_uid AS local_uid_xml" in transform_sql
     assert "tx.xml_dwh_id AS dwh_id_xml" in transform_sql
-    assert "COALESCE(r.local_uid_xml, exch_ref.local_uid, gdf_ref.local_uid) AS local_uid_semd" in transform_sql
+    assert "COALESCE(r.local_uid_xml, msg_ref.local_uid) AS local_uid_semd" in transform_sql
     assert "public.clean_text_value(d.local_uid)" in sql
     # status_category удалён как выводимый из status; transform им больше не управляет,
     # а развёрнутые БД чистятся идемпотентным DROP COLUMN.
@@ -409,7 +413,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "document_attributes AS" in transform_sql
     assert "document_resolved AS" in transform_sql
     assert "resolve_document_jid" in transform_sql
-    assert "OR (a.resolved_jid IS NOT NULL AND a.semd_code IS NOT NULL)" in transform_sql
+    assert "AND (a.has_network_error OR a.resolved_jid IS NOT NULL)" in transform_sql
     assert "SELECT DISTINCT ON (f.dwh_id)" in sql
     assert "public.normalize_semd_code(r.kind_xml) AS semd_code" in sql
     assert "src_doc.semd_code AS source_document_semd_code" in sql
@@ -494,21 +498,23 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "CREATE OR REPLACE FUNCTION public.document_source_mismatch" in parsing_sql
     assert "egisz_xml_text" not in transform_sql
     assert "outbound_ref.dwh_id" not in sql
-    assert "exch_ref.dwh_id" in sql
-    assert "gdf_events AS" in transform_sql
-    assert "gdf_ref.dwh_id" in transform_sql
+    # Вердикт связывается с документом по реестру подач; самосоединение по journal-MSGID
+    # и позиционная догадка «последний getDocumentFile клиники» сняты.
+    assert "msg_ref.dwh_id" in transform_sql
+    assert "exch_ref" not in transform_sql
+    assert "gdf_events AS" not in transform_sql
+    assert "gdf_ref" not in transform_sql
     assert "exchangelog_raw er" not in transform_sql
     assert "CREATE TABLE IF NOT EXISTS dim_exchangelog_refs" not in sql
     assert "INSERT INTO public.dim_exchangelog_refs" not in transform_sql
     assert "xml_parsed_at" in sql
     assert "CREATE TABLE IF NOT EXISTS dim_egisz_message_refs" not in sql
     assert "DROP TABLE IF EXISTS public.dim_egisz_message_refs" not in drop_sql
-    assert "EGISZ_MESSAGES" not in sql
     assert "status = 'waiting'" in sql
     assert "f.error_json_text" in sql
     assert "error_messages_row" in transform_sql
     assert "COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message)" not in transform_sql
-    assert ", message, callback_url" in sql
+    assert ", message, jid, jid_resolve_method, semd_code" in sql
     assert "error_message," not in transform_sql
     assert "error_message =" not in transform_sql
     rpt_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
@@ -576,7 +582,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
         captured["fetch"] = fetch
         con.cursor_instance.rowcount = len(values)
 
-    monkeypatch.setattr("egisz_dimensions_dag.execute_values", fake_execute_values)
+    monkeypatch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
 
     changed = sync_directory(con, "dim_organizations", [(1, "Clinic", "1234567890", "Address", "1.2.3")])
 
@@ -608,8 +614,8 @@ def test_get_cursors_reads_last_logid_only() -> None:
         def execute(self, sql: str, _params: tuple[object, ...]) -> None:
             self.sql = sql
 
-        def fetchone(self) -> tuple[int]:
-            return (123,)
+        def fetchone(self) -> tuple[int, int]:
+            return (123, 45)
 
     class Connection:
         def __init__(self) -> None:
@@ -619,7 +625,7 @@ def test_get_cursors_reads_last_logid_only() -> None:
             return self.cursor_instance
 
     con = Connection()
-    assert get_cursors(con, "egisz") == {"last_logid": 123}
+    assert get_cursors(con, "egisz") == {"last_logid": 123, "last_egmid": 45}
     assert "source_min_created_at" not in con.cursor_instance.sql
 
 
@@ -641,40 +647,11 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {"last_logid": 0}
+    assert get_cursors(Connection(), "egisz") == {"last_logid": 0, "last_egmid": 0}
 
 
-def test_get_all_raw_logids_returns_int_set_over_full_table() -> None:
-    class Cursor:
-        def __init__(self) -> None:
-            self.sql = ""
-
-        def __enter__(self) -> "Cursor":
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
-            self.sql = sql
-
-        def fetchall(self) -> list[tuple[int]]:
-            return [(101,), (102,), (102,)]
-
-    class Connection:
-        def __init__(self) -> None:
-            self.cursor_instance = Cursor()
-
-        def cursor(self) -> Cursor:
-            return self.cursor_instance
-
-    con = Connection()
-    assert get_all_raw_logids(con) == {101, 102}
-    assert con.cursor_instance.sql == "SELECT logid FROM exchangelog_raw"
-
-
-def test_get_all_raw_logids_filters_by_since() -> None:
-    from datetime import datetime, timezone
+def test_fetch_raw_logids_range_reads_one_chunk() -> None:
+    """Сверка сравнивает множества шагами по LOGID, а не всей таблицей."""
 
     class Cursor:
         def __init__(self) -> None:
@@ -692,7 +669,7 @@ def test_get_all_raw_logids_filters_by_since() -> None:
             self.params = params
 
         def fetchall(self) -> list[tuple[int]]:
-            return [(101,)]
+            return [(101,), (102,), (102,)]
 
     class Connection:
         def __init__(self) -> None:
@@ -701,11 +678,10 @@ def test_get_all_raw_logids_filters_by_since() -> None:
         def cursor(self) -> Cursor:
             return self.cursor_instance
 
-    since = datetime(2026, 6, 1, tzinfo=timezone.utc)
     con = Connection()
-    assert get_all_raw_logids(con, since=since) == {101}
-    assert "COALESCE(createdate, logdate) >= %s" in con.cursor_instance.sql
-    assert con.cursor_instance.params == (since,)
+    assert fetch_raw_logids_range(con, low=100, high=200) == {101, 102}
+    assert "logid >= %s AND logid <= %s" in con.cursor_instance.sql
+    assert con.cursor_instance.params == (100, 200)
 
 
 def test_coalesce_logid_windows_merges_runs_within_gap() -> None:
@@ -725,7 +701,7 @@ def test_coalesce_logid_windows_empty() -> None:
 
 
 def test_transform_missing_windows_calls_transform_per_window() -> None:
-    calls: list[tuple[int, int, int]] = []
+    calls: list[tuple[int, int]] = []
 
     class FakeCursor:
         def __enter__(self) -> "FakeCursor":
@@ -734,11 +710,11 @@ def test_transform_missing_windows_calls_transform_per_window() -> None:
         def __exit__(self, *_args: object) -> None:
             return None
 
-        def execute(self, _sql: str, params: tuple[int, int, int]) -> None:
+        def execute(self, _sql: str, params: tuple[int, int]) -> None:
             calls.append(params)
 
-        def fetchone(self) -> tuple[int]:
-            return (2,)
+        def fetchone(self) -> tuple[dict[str, int]]:
+            return ({"transformed": 2, "unlinked": 0, "sends_without_clinic": 0},)
 
     class FakeConnection:
         def cursor(self) -> FakeCursor:
@@ -749,8 +725,8 @@ def test_transform_missing_windows_calls_transform_per_window() -> None:
 
     total = transform_missing_windows(FakeConnection(), [100, 101, 5000])
 
-    assert total == 4
-    assert calls == [(99, 101, 100), (4999, 5000, 5000)]
+    assert total["transformed"] == 4
+    assert calls == [(99, 101), (4999, 5000)]
 
 
 def test_dwh_init_sql_drops_source_min_created_at_from_elt_state() -> None:
@@ -772,8 +748,9 @@ def test_dwh_init_sql_partitions_time_series_tables() -> None:
     assert "PARTITION BY RANGE (log_date)" in sql
     assert "PRIMARY KEY (logid, createdate)" in sql
     assert "PRIMARY KEY (logid, log_date)" in sql
-    assert "exchangelog_raw_default PARTITION OF public.exchangelog_raw DEFAULT" in sql
-    assert "transactions_default PARTITION OF public.transactions DEFAULT" in sql
+    assert "PARTITION OF public.exchangelog_raw DEFAULT" not in sql
+    assert "PARTITION OF public.transactions DEFAULT" not in sql
+    assert "CREATE OR REPLACE FUNCTION public.ensure_time_partitions" in sql
     assert "relkind <> 'p'" in sql
     assert "ON CONFLICT (logid, log_date) DO UPDATE SET" in transform_sql
     assert "ON CONFLICT (logid, log_date)" in transform_sql
@@ -816,6 +793,6 @@ def test_update_cursors_upserts_last_logid() -> None:
 
     assert con.committed is True
     sql, params = con.cursor_instance.calls[0]
-    assert "INSERT INTO elt_state (pipeline, last_logid)" in sql
+    assert "INSERT INTO elt_state (pipeline, last_logid, last_egmid)" in sql
     assert "last_logid = GREATEST(elt_state.last_logid, EXCLUDED.last_logid)" in sql
-    assert params == ("egisz", 11)
+    assert params == ("egisz", 11, 0)

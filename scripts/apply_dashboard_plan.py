@@ -127,7 +127,7 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
     "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
     "Топ типов СЭМД по документам": [("semd_label", "СЭМД")],
-    "Успешность по типам СЭМД": [("semd_code", "Код СЭМД")],
+    "Успешность по типам СЭМД": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
     "Топ клиник в очереди по документам": [("clinic_jid", "JID Клиники")],
@@ -475,14 +475,14 @@ HEATMAP_VIZ = {
     "table.pivot_column": "День",
     "table.pivot_row": "Клиника",
     "table.cell_column": "Доля ошибок, %",
+    # Плоский градиент от минимума к максимуму столбца: min_type/max_type = null →
+    # шкала растягивается по фактическому диапазону данных, а не по фиксированным 0..25.
     "table.column_formatting": [
         {
             "colors": ["#10B981", "#F59E0B", "#EF4444"],
             "columns": ["Доля ошибок, %"],
-            "max_type": "custom",
-            "max_value": 25,
-            "min_type": "custom",
-            "min_value": 0,
+            "max_type": None,
+            "min_type": None,
             "type": "range",
         }
     ],
@@ -615,20 +615,16 @@ TOP_ERROR_TYPE_COLUMN_FORMATTING = [
         "min_value": -100,
         "max_value": 100,
     },
-    # Доля от всех обработанных обычно мала (0..~25 %): фиксированная шкала, чтобы
-    # заливка не «схлопывалась» в один тон на редких типах.
+    # Доля от всех обработанных обычно мала (0..~15 %): сплошной градиент зелёный→красный
+    # на фиксированной шкале 0..15, чтобы заливка не «схлопывалась» в один тон на редких типах.
     {
         "columns": ["% обработанных"],
         "type": "range",
-        "colors": [
-            "hsla(89, 48%, 40%, 1)",
-            "transparent",
-            "hsla(358, 71%, 62%, 1)",
-        ],
+        "colors": ["#84BB4C", "#FBBF24", "#DC2626"],
         "min_type": "custom",
         "max_type": "custom",
         "min_value": 0,
-        "max_value": 25,
+        "max_value": 15,
     },
 ]
 
@@ -666,6 +662,7 @@ ERROR_TYPE_CLINIC_TEMPLATE_TAGS = {
 QUEUE_TABLE_COLUMNS = [
     {"enabled": True, "name": "Сегмент ожидания"},
     {"enabled": True, "name": "Дней в ожидании"},
+    {"enabled": True, "name": "Подач в ЕГИСЗ"},
     {"enabled": True, "name": "Дата отправки"},
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "Код СЭМД"},
@@ -673,6 +670,21 @@ QUEUE_TABLE_COLUMNS = [
     {"enabled": False, "name": "JID Клиники"},
     {"enabled": True, "name": "localUid СЭМД"},
 ]
+
+# Число подач берётся из реестра шлюза: повторная отправка не меняет localUid, поэтому
+# счётчик показывает, сколько раз документ уже отправляли, пока он ждёт вердикта.
+# Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "public"."rpt_documents_waiting".<col>.
+QUEUE_TABLE_QUERY = (
+    'SELECT semd_local_uid AS "localUid СЭМД", semd_code AS "Код СЭМД", '
+    'semd_name AS "Наименование СЭМД", clinic_jid::text AS "JID Клиники", '
+    'clinic_label AS "Клиника", first_sent_at AS "Дата отправки", '
+    'waiting_days AS "Дней в ожидании", attempt_count AS "Подач в ЕГИСЗ", '
+    'wait_segment AS "Сегмент ожидания" '
+    "FROM public.rpt_documents_waiting "
+    "WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "[[AND {{local_uid}}]] [[AND {{wait_segment}}]] "
+    "ORDER BY first_sent_at ASC NULLS LAST LIMIT 200"
+)
 
 COUNT_COLUMN_SETTINGS = {
     '["name","Документов"]': {
@@ -1194,7 +1206,7 @@ def apply_top_error_type_table(card: dict) -> None:
     card["description"] = (
         "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. "
         "«% ошибок» — доля документов с этим типом от всех документов с ошибками; "
-        "«% обработанных» — доля от всех документов с вердиктом РЭМД (успех + ошибка)."
+        "«% всего» — доля от всех документов с вердиктом РЭМД (успех + ошибка)."
     )
     card["dataset_query"]["native"]["query"] = TOP_ERROR_TYPE_QUERY
     # Знаменатель «обработанных» живёт на грейне документа → фильтры среза привязаны к
@@ -1217,9 +1229,10 @@ def apply_top_error_type_table(card: dict) -> None:
     viz["version"] = 2
     cs = deepcopy(COUNT_COLUMN_SETTINGS)
     cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
-    for col in ("% ошибок", "% обработанных"):
+    # SQL-алиас столбца — «% обработанных», но в шапке показываем короткое «% всего».
+    for col, title in (("% ошибок", "% ошибок"), ("% обработанных", "% всего")):
         cs[f'["name","{col}"]'] = {
-            "column_title": col,
+            "column_title": title,
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %",
@@ -1304,9 +1317,16 @@ def apply_success_slice_tables(card: dict) -> None:
 
 
 def apply_queue_table(card: dict) -> None:
+    native = card.setdefault("dataset_query", {}).setdefault("native", {})
+    native["query"] = QUEUE_TABLE_QUERY
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(QUEUE_TABLE_COLUMNS)
     viz["table.cell_column"] = "Сегмент ожидания"
+    viz.setdefault("column_settings", {})['["name","Подач в ЕГИСЗ"]'] = {
+        "column_title": "Подач в ЕГИСЗ",
+        "decimals": 0,
+        "number_separators": ", ",
+    }
 
 
 def apply_latest_operations(card: dict) -> None:

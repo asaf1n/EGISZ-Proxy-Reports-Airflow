@@ -21,16 +21,27 @@ CREATE TABLE IF NOT EXISTS public.document_attributes (
     updated_at timestamptz DEFAULT now()
 );
 
--- request_msgid — MSGID исходящего запроса (getDocumentFile), нормализованный source MSGID строки
--- request_logid. На грейне документа его нет (documents.result_msgid — это MSGID ответа РЭМД), а
--- для «Отправлено» нужен именно MSGID запроса: пара request_msgid ↔ relates_to_msgid (relatesTo
--- ответа) — штатный ключ корреляции запрос↔ответ (README §«Парсинг», офиц. request_id/response_to_request_id).
+-- request_msgid — MSGID строки getDocumentFile (request_logid), нормализованный source MSGID.
+-- На грейне документа его нет: documents.result_msgid — это MSGID ответа ЕГИСЗ, а для
+-- «Отправлено» нужен идентификатор запроса файла.
 ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS request_msgid text;
 
--- contour — контур обмена документа (РЭМД/ИЭМК, transactions.contour из exchange_contour).
+-- egisz_subsystem — подсистема ЕГИСЗ документа (РЭМД/ИЭМК, transactions.egisz_subsystem).
 -- Отчётный слой (rpt_network_errors) не читает message-грейн transactions напрямую,
--- поэтому контур фиксируется здесь: последний непустой contour по строкам документа.
-ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS contour text;
+-- поэтому подсистема фиксируется здесь: последнее непустое значение по строкам документа.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'document_attributes'
+                 AND column_name = 'contour')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = 'public' AND table_name = 'document_attributes'
+                         AND column_name = 'egisz_subsystem') THEN
+        ALTER TABLE public.document_attributes RENAME COLUMN contour TO egisz_subsystem;
+    END IF;
+END $$;
+ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS egisz_subsystem text;
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS contour;
 
 CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
@@ -69,7 +80,7 @@ BEGIN
         patient_hash,
         doctor_hash,
         request_msgid,
-        contour,
+        egisz_subsystem,
         updated_at
     )
     SELECT
@@ -92,7 +103,7 @@ BEGIN
         COALESCE(tx.patient_hash, d.patient_hash) AS patient_hash,
         COALESCE(tx.doctor_hash, d.doctor_hash) AS doctor_hash,
         req.request_msgid,
-        ctr.contour,
+        sub.egisz_subsystem,
         now() AS updated_at
     FROM public.documents d
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
@@ -129,13 +140,13 @@ BEGIN
         LIMIT 1
     ) req ON TRUE
     LEFT JOIN LATERAL (
-        SELECT t.contour
+        SELECT t.egisz_subsystem
         FROM public.transactions t
         WHERE t.dwh_id = d.dwh_id
-          AND t.contour IS NOT NULL
+          AND t.egisz_subsystem IS NOT NULL
         ORDER BY t.log_date DESC NULLS LAST, t.logid DESC
         LIMIT 1
-    ) ctr ON TRUE
+    ) sub ON TRUE
     WHERE d.dwh_id = ANY (p_dwh_ids)
     ON CONFLICT (dwh_id) DO UPDATE SET
         clinic_oid_xml = EXCLUDED.clinic_oid_xml,
@@ -151,7 +162,7 @@ BEGIN
         patient_hash = EXCLUDED.patient_hash,
         doctor_hash = EXCLUDED.doctor_hash,
         request_msgid = EXCLUDED.request_msgid,
-        contour = EXCLUDED.contour,
+        egisz_subsystem = EXCLUDED.egisz_subsystem,
         updated_at = now()
     -- Change-guard: переписываем строку (и двигаем updated_at) только при реальном
     -- расхождении. Без него полный reconcile (в т.ч. на каждом dwh_init) переписывал
@@ -170,7 +181,7 @@ BEGIN
      OR public.document_attributes.patient_hash IS DISTINCT FROM EXCLUDED.patient_hash
      OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash
      OR public.document_attributes.request_msgid IS DISTINCT FROM EXCLUDED.request_msgid
-     OR public.document_attributes.contour IS DISTINCT FROM EXCLUDED.contour;
+     OR public.document_attributes.egisz_subsystem IS DISTINCT FROM EXCLUDED.egisz_subsystem;
 
     GET DIAGNOSTICS refreshed = ROW_COUNT;
     RETURN refreshed;
@@ -182,4 +193,34 @@ RETURNS bigint
 LANGUAGE sql
 AS $$
     SELECT public.reconcile_document_attributes(NULL::text[]);
+$$;
+
+-- Сопровождение архива: сверка текста ошибки на грейне документа с последним сообщением.
+-- Текущий поток проставляет error_text в самом transform; функция закрывает расхождения,
+-- накопленные до изменения правил классификации. Полный проход — задача суточного DAG
+-- обслуживания, в накат схемы и в пятиминутный приём не входит.
+CREATE OR REPLACE FUNCTION public.repair_document_error_text()
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    repaired bigint := 0;
+BEGIN
+    UPDATE public.documents d
+    SET error_text = src.error_text,
+        updated_at = now()
+    FROM (
+        SELECT DISTINCT ON (f.dwh_id)
+            f.dwh_id,
+            NULLIF(btrim(f.error_json_text), '') AS error_text
+        FROM public.transactions f
+        WHERE NULLIF(btrim(f.error_json_text), '') IS NOT NULL
+        ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
+    ) src
+    WHERE d.dwh_id = src.dwh_id
+      AND d.error_text IS DISTINCT FROM src.error_text;
+
+    GET DIAGNOSTICS repaired = ROW_COUNT;
+    RETURN repaired;
+END;
 $$;

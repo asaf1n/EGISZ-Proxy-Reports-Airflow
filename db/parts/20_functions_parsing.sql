@@ -59,10 +59,23 @@ DROP INDEX IF EXISTS idx_exchangelog_raw_xml_relates_to_norm;
 DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm;
 DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm;
 
+-- Нормализованные идентификаторы сообщений в transactions не служат ключом поиска:
+-- вердикт связывается с документом через dim_message_document, а не обратным ходом
+-- по журналу.
 DROP INDEX IF EXISTS idx_transactions_message_id_norm;
 DROP INDEX IF EXISTS idx_transactions_relates_to_norm;
-CREATE INDEX IF NOT EXISTS idx_transactions_message_id_norm ON transactions (public.normalize_message_id(message_id));
-CREATE INDEX IF NOT EXISTS idx_transactions_relates_to_norm ON transactions (public.normalize_message_id(relates_to_id));
+
+-- Канонический ключ реестра подач. Применяется симметрично: при загрузке
+-- EGISZ_MESSAGES.MSGID в dim_message_document и при поиске по relatesToMessage вердикта.
+-- Шлюз и ЕГИСЗ передают идентификатор в разных написаниях (с дефисами и без,
+-- с префиксом urn:uuid:, в разном регистре), поэтому ключ приводится к одному виду.
+CREATE OR REPLACE FUNCTION public.message_registry_key(p_value text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT NULLIF(upper(replace(public.normalize_message_id(p_value), '-', '')), '');
+$$;
 
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
 RETURNS timestamptz
@@ -267,17 +280,25 @@ AS $$
     SELECT lower(NULLIF(btrim(public.clean_text_value(p_local_uid)), ''));
 $$;
 
--- Контур обмена (направление интеграции с ЕГИСЗ) для строки журнала.
--- Первичный признак — wsa:Action payload'а: ИЭМК ходит по IHE XDS.b (urn:ihe:*),
--- всё остальное — РЭМД. Запасной признак — порт сервиса клиники в LOGTEXT:
--- 9921 = ИЭМК, 9945 = РЭМД (конвенция настроек клиник; прочие порты контур
--- не определяют). Порт — условный признак, приоритет всегда у action.
-CREATE OR REPLACE FUNCTION public.exchange_contour(p_action text, p_logtext text)
+-- Подсистема ЕГИСЗ, к которой относится строка журнала.
+-- Первичный признак — URI вызова, который шлюз пишет в саму запись журнала:
+-- /emdr/callback — РЭМД, /ips/callback — ИЭМК. Это реквизит транспорта, он не зависит
+-- от разбора payload и заполнен во всех строках, включая сбои связи без тела ответа.
+-- Запасные признаки для строк без URI — wsa:Action (ИЭМК ходит по IHE XDS.b, urn:ihe:*)
+-- и порт сервиса клиники в LOGTEXT: 9921 — ИЭМК, 9945 — РЭМД.
+DROP FUNCTION IF EXISTS public.exchange_contour(text, text);
+CREATE OR REPLACE FUNCTION public.egisz_subsystem(
+    p_uri text,
+    p_action text,
+    p_logtext text
+)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
     SELECT CASE
+        WHEN COALESCE(p_uri, '') ILIKE '%/emdr/%' THEN 'РЭМД'
+        WHEN COALESCE(p_uri, '') ILIKE '%/ips/%' THEN 'ИЭМК'
         WHEN p_action ILIKE 'urn:ihe%' THEN 'ИЭМК'
         WHEN NULLIF(btrim(COALESCE(p_action, '')), '') IS NOT NULL THEN 'РЭМД'
         WHEN COALESCE(p_logtext, '') ~ ':9921(\D|$)' THEN 'ИЭМК'

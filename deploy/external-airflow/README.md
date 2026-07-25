@@ -12,9 +12,9 @@
 ```
 airflow/                     # корень бандла (dist/external/airflow)
 ├── dags/                    # положить в DAGs-папку целевого Airflow
-│   ├── egisz_extract_dag.py     # выборка EXCHANGELOG (keyset по LOGID) + transform-циклы
-│   ├── egisz_dimensions_dag.py  # справочники JPERSONS / EGISZ_LICENSES → dim_*
-│   └── egisz_reconcile_dag.py   # полная сверка источник↔raw
+│   ├── egisz_etl_dag.py         # журнал и реестр подач → факты DWH
+│   ├── egisz_marts_dag.py       # обновление материализованных витрин по активам
+│   └── egisz_maintenance_dag.py # сверка журнала, пересчёт архива, партиции
 ├── requirements.txt         # рантайм-зависимости (сгенерирован из pyproject.toml)
 └── BUILD_INFO.txt           # git-коммит и дата сборки бандла
 ```
@@ -92,7 +92,7 @@ airflow connections add proxy_egisz_fb \
 в логе scheduler'а, а task instances вечно висят в `scheduled`.
 
 ```bash
-airflow pools set dwh_postgres 1 "Exclusive DWH transform / reconcile / enriched mart maintenance"
+airflow pools set dwh_postgres 1 "Exclusive DWH transform / marts / maintenance"
 ```
 
 ## 4. Настройки DAG — переменные окружения
@@ -105,15 +105,20 @@ Airflow 3 уходит в supervisor RPC и виснет на «Filling up the D
 
 | Env-переменная | Дефолт | Назначение |
 | --- | --- | --- |
-| `EGISZ_EXTRACT_SCHEDULE` | `*/5 * * * *` | Расписание extract-DAG |
-| `EGISZ_DIMENSIONS_SCHEDULE` | `@hourly` | Расписание dimensions-DAG |
-| `EGISZ_RECONCILE_SCHEDULE` | `@hourly` | Расписание reconcile-DAG |
+| `EGISZ_ETL_SCHEDULE` | `*/5 * * * *` | Расписание DAG приёма фактов |
+| `EGISZ_MAINTENANCE_SCHEDULE` | `@daily` | Расписание DAG обслуживания |
 | `EGISZ_EXTRACT_RAW_ROWS` | `1000` | Размер батча выборки EXCHANGELOG из Firebird |
-| `EGISZ_EXTRACT_RAW_ROUNDS` | `3` | Максимум extract-циклов за один запуск |
+| `EGISZ_EXTRACT_RAW_ROUNDS` | `3` | Максимум циклов выборки за один запуск |
+| `EGISZ_REGISTRY_ROWS` | `5000` | Размер батча выборки EGISZ_MESSAGES |
+| `EGISZ_REGISTRY_ROUNDS` | `3` | Максимум циклов выборки реестра за один запуск |
 | `EGISZ_TRANSFORM_ROWS` | `3000` | Размер батча transform_raw_to_facts |
 | `EGISZ_TRANSFORM_ROUNDS` | `6` | Максимум transform-циклов за один запуск |
-| `EGISZ_RECONCILE_LOOKBACK_DAYS` | `30` | Глубина сверки (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
-| `EGISZ_RECONCILE_MAX_LOGIDS` | `20000000` | Memory-guard: макс. LOGID **внутри окна** lookback (выше — hard-fail) |
+| `EGISZ_ETL_LAG_LOGIDS` | `1000` | Защитное отставание отметки от хвоста журнала |
+| `EGISZ_DICTIONARIES_INTERVAL_MINUTES` | `60` | Минимальный интервал синхронизации справочников |
+| `EGISZ_PERIOD_MARTS_INTERVAL_MINUTES` | `60` | Минимальный интервал обновления витрин динамики |
+| `EGISZ_RECONCILE_LOOKBACK_DAYS` | `2` | Штатное окно сверки (дней по `COALESCE(LOGDATE, CREATEDATE)`) |
+| `EGISZ_RECONCILE_DEEP_LOOKBACK_DAYS` | `30` | Окно сверки при ручном прогоне с параметром `deep` |
+| `EGISZ_RECONCILE_CHUNK_LOGIDS` | `200000` | Ширина шага сверки по LOGID |
 
 Значения по умолчанию рабочие — переопределять не обязательно. Задать на целевом контуре
 (пример для Helm-чарта Airflow — во все компоненты через `extraEnv`; смена расписания
@@ -121,7 +126,7 @@ Airflow 3 уходит в supervisor RPC и виснет на «Filling up the D
 
 ```yaml
 extraEnv: |
-  - name: EGISZ_EXTRACT_SCHEDULE
+  - name: EGISZ_ETL_SCHEDULE
     value: "*/5 * * * *"
   - name: EGISZ_TRANSFORM_ROWS
     value: "3000"
@@ -131,12 +136,14 @@ extraEnv: |
 
 | dag_id | Расписание | Задачи |
 | --- | --- | --- |
-| `egisz_extract_dag` | `*/5` | `extract_exchangelog → transform_exchangelog → refresh_report_marts` |
-| `egisz_dimensions_dag` | `@hourly` | `sync_dimensions` (+ обновление enriched-марта при изменениях) |
-| `egisz_reconcile_dag` | `@daily` | `reconcile_proxy_raw` (сверка источник↔raw за последние N дней, watermark не двигает) |
+| `egisz_etl_dag` | `*/5` | `extract_exchangelog → extract_message_registry → sync_dictionaries → transform_exchangelog` |
+| `egisz_marts_dag` | по активам | `refresh_fact_marts → refresh_period_marts` — единственное место `REFRESH MATERIALIZED VIEW` |
+| `egisz_maintenance_dag` | `@daily` | `reconcile_journal_tail → reconcile_archive_attributes → maintain_partitions` |
 
-Все три `max_active_runs=1`, `catchup=False`. Watermark `elt_state.last_logid` двигает только
-transform-шаг extract-DAG (через `GREATEST`, без отката). Новые DAG появятся на паузе
+Все три `max_active_runs=1`, `catchup=False`. Курсоры `elt_state.last_logid` и
+`elt_state.last_egmid` двигает только DAG приёма (через `GREATEST`, без отката).
+`egisz_marts_dag` расписания не имеет: он запускается публикацией активов
+`egisz://facts` и `egisz://dictionaries` — их публикуют приём и обслуживание. Новые DAG появятся на паузе
 (стандартный `dags_are_paused_at_creation=True`; в коде DAG флаг не переопределён) —
 снять после настройки Connections и пула (п. 6).
 
@@ -146,13 +153,14 @@ transform-шаг extract-DAG (через `GREATEST`, без отката). Но�
 airflow dags list-import-errors          # ожидаемо пусто
 airflow dags list | grep egisz           # три DAG в списке
 # при готовности снять с паузы:
-airflow dags unpause egisz_extract_dag
-airflow dags unpause egisz_dimensions_dag
-airflow dags unpause egisz_reconcile_dag
+airflow dags unpause egisz_etl_dag
+airflow dags unpause egisz_marts_dag
+airflow dags unpause egisz_maintenance_dag
 ```
 
-Смоук: запустить `egisz_extract_dag` вручную и убедиться, что в DWH растут
-`exchangelog_raw` / `documents`, а `elt_state.last_logid` продвинулся.
+Смоук: запустить `egisz_etl_dag` вручную и убедиться, что в DWH растут
+`exchangelog_raw` / `documents` / `dim_message_document`, курсоры `elt_state`
+продвинулись, а `egisz_marts_dag` запустился следом сам — по активу.
 
 Если `dags list-import-errors` показывает `ModuleNotFoundError: firebird` /
 `psycopg2` — не установлены зависимости из `requirements.txt` (п. 1). Если падает

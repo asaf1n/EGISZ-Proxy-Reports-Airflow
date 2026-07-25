@@ -60,16 +60,19 @@ WITH anchor AS (
     SELECT MAX(COALESCE(last_callback_at, first_sent_at, document_created_at)) AS last_fact_ts
     FROM public.documents
 ),
--- Доля сообщений, которые classify_async_status не распознал (status='unknown'),
--- за 24ч. Растёт, если РЭМД присылает новый шаблон ответа — сигнал чинить регэкспы.
-unknown_24h AS (
+-- Доля вердиктов ЕГИСЗ, которые не удалось связать с документом, за 24ч.
+-- Вердикт несёт relatesToMessage; документ находится по реестру подач. Рост доли означает,
+-- что реестр отстал от журнала или подача в него не попала, — исход отправки при этом
+-- теряется, а документ остаётся в статусе «Отправлено».
+unlinked_24h AS (
     SELECT ROUND(
-        100.0 * COUNT(*) FILTER (WHERE status = 'unknown')
+        100.0 * COUNT(*) FILTER (WHERE link_method = 'unlinked')
         / NULLIF(COUNT(*), 0),
         1
     ) AS pct
     FROM public.transactions
     WHERE log_date >= now() - INTERVAL '24 hours'
+      AND xml_relates_to_id IS NOT NULL
 )
 SELECT * FROM (
     VALUES
@@ -88,17 +91,17 @@ SELECT * FROM (
          'документов > 7 дн.',
          'rpt_documents_waiting (Сегмент ожидания)',
          'Проверить транспорт клиник в дашборде 03; до 3 дн. — норма, >7 дн. — эскалация'),
-        ('unknown_high',
-         'Доля «Нераспознан» (status=unknown)',
+        ('unlinked_verdicts',
+         'Доля несвязанных вердиктов ЕГИСЗ',
          CASE
-             WHEN COALESCE((SELECT pct FROM unknown_24h), 0) >= 5 THEN 'red'
-             WHEN COALESCE((SELECT pct FROM unknown_24h), 0) >= 1 THEN 'yellow'
+             WHEN COALESCE((SELECT pct FROM unlinked_24h), 0) >= 5 THEN 'red'
+             WHEN COALESCE((SELECT pct FROM unlinked_24h), 0) >= 1 THEN 'yellow'
              ELSE 'green'
          END,
-         COALESCE((SELECT pct FROM unknown_24h), 0)::numeric,
+         COALESCE((SELECT pct FROM unlinked_24h), 0)::numeric,
          '% (за 24ч)',
-         'transactions.status=unknown за 24ч',
-         'Проверить regex classify_async_status, если появится новый шаблон ответа РЭМД'),
+         'transactions.link_method=unlinked за 24ч',
+         'Проверить наполнение dim_message_document: подача документа не попала в реестр шлюза'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
          CASE
@@ -190,35 +193,29 @@ BEGIN
 END;
 $$;
 
-UPDATE public.documents d
-SET error_text = src.error_text,
-    updated_at = now()
-FROM (
-    SELECT DISTINCT ON (f.dwh_id)
-        f.dwh_id,
-        NULLIF(btrim(f.error_json_text), '') AS error_text
-    FROM public.transactions f
-    WHERE NULLIF(btrim(f.error_json_text), '') IS NOT NULL
-    ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
-) src
-WHERE d.dwh_id = src.dwh_id
-  AND d.error_text IS DISTINCT FROM src.error_text;
+-- Первичное наполнение отчётного слоя: выполняется, только когда в схеме уже есть
+-- документы, а производные слои ещё пусты (развёртывание на существующий архив).
+-- Сопровождение архива — пересчёт атрибутов, слоя версий и текстов ошибок — ведёт
+-- суточный DAG обслуживания, обновление витрин — DAG витрин. Полные проходы в теле
+-- наката пересекались по блокировкам с пятиминутным приёмом и давали взаимоблокировки.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.documents)
+       AND NOT EXISTS (SELECT 1 FROM public.document_attributes) THEN
+        PERFORM public.reconcile_document_attributes(NULL::text[]);
+        PERFORM public.recompute_document_versions(NULL::text[]);
+        -- Матпредставления созданы в 80/85/86 с данными; пересобираем после сборки
+        -- атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
+        -- Порядок обязателен: разбивка ошибок раньше периодических витрин.
+        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
+        REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
+        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
+        REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
+        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
+    END IF;
+END
+$$;
 
--- Полная сборка атрибутов документов при init.
-SELECT public.reconcile_document_attributes(NULL::text[]);
--- Полный пересчёт слоя версий при init: уточняет document_group_id / is_current_version /
--- цепочку по всему архиву (бэкфилл singleton в 10_tables — лишь стартовое состояние).
-SELECT public.recompute_document_versions(NULL::text[]);
--- rpt_error_breakdown (matview) создан в 80 с данными, но после reconcile атрибутов
--- обновляем, чтобы display-колонки (клиника/СЭМД) отражали финальное состояние.
--- Идёт ПОСЛЕ recompute: rpt_documents (источник джойна matview) = текущие версии.
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
--- Недельный (85) и месячный (86) слои построены до reconcile/recompute; обновляем
--- после rpt_error_breakdown — витрины разбивки ошибок читают его.
-REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
-REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
 ANALYZE public.exchangelog_raw;
 ANALYZE public.documents;
 ANALYZE public.transactions;

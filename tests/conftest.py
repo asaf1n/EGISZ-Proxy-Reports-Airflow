@@ -41,7 +41,7 @@ def load_dag_module(stem: str) -> ModuleType:
     """Import ``airflow/dags/<stem>.py`` under its own name (cached in sys.modules).
 
     Имя модуля совпадает с именем файла, поэтому patch-цели в тестах пишутся как
-    ``egisz_extract_dag.<функция>``.
+    ``egisz_etl_dag.<функция>``.
     """
     cached = sys.modules.get(stem)
     if cached is not None:
