@@ -1785,9 +1785,9 @@ def test_integration_native_sql_uses_real_column_names() -> None:
         "Без ответа",
         "Доля без ответа, %",
         "Отправленные документы",
-        "Топ клиник среди отправленных",
+        "Топ клиник по документам в обработке > 1 суток",
         "Ступени обработки",
-        "Топ типов СЭМД среди отправленных",
+        "Топ типов СЭМД по документам в обработке > 1 суток",
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
         assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
@@ -2064,7 +2064,11 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
     """Дрилл из агрегатов идёт в модель (linkType=question), а не на вкладку «Архив»."""
     dash = _integration_dashboard()
     by_name = {c.get("name"): c for c in dash["cards"]}
-    for name in ("Объём по клиникам", "Топ типов СЭМД по ошибкам", "Топ клиник среди отправленных"):
+    for name in (
+        "Объём по клиникам",
+        "Топ типов СЭМД по ошибкам",
+        "Топ клиник по документам в обработке > 1 суток",
+    ):
         click = by_name[name].get("click_behavior") or {}
         assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
         assert "targetDashboard" not in click and click.get("tab") != "archive"

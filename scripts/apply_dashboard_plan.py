@@ -100,6 +100,12 @@ ARCHIVE_FROM_OPERATIONAL = frozenset({"Динамика документов п�
 
 DEFAULT_DWH_PERIOD = "thismonth"
 
+# Топ-срезы вкладки «Отправленные» отбирают не весь корпус без вердикта, а только
+# состояние «В обработке» старше суток: срез поддержки — документы, которые ещё ждут
+# вердикта, но уже выбились из нормального времени ответа.
+SENT_STUCK_TOP_CLINICS_NAME = "Топ клиник по документам в обработке > 1 суток"
+SENT_STUCK_TOP_SEMD_NAME = "Топ типов СЭМД по документам в обработке > 1 суток"
+
 RENAME_01 = {
     "Ошибки по типу": "Топ по типу ошибки",
     "Ошибок по СЭМД": "Топ типов СЭМД по ошибкам",
@@ -108,12 +114,14 @@ RENAME_01 = {
     "Виды ошибок по категориям": "Топ категорий и типов ошибки",
     "Виды ошибок по типам СЭМД": "Топ типов СЭМД по видам ошибки",
     "Документы по дням": "Динамика документов по дням",
-    "Топ клиник в очереди": "Топ клиник среди отправленных",
-    "Топ клиник в очереди по документам": "Топ клиник среди отправленных",
+    "Топ клиник в очереди": SENT_STUCK_TOP_CLINICS_NAME,
+    "Топ клиник в очереди по документам": SENT_STUCK_TOP_CLINICS_NAME,
+    "Топ клиник среди отправленных": SENT_STUCK_TOP_CLINICS_NAME,
     "Очередь без ответа": "Отправленные документы",
     "В очереди (всего)": "Отправлено без вердикта",
-    "Очередь по типам СЭМД": "Топ типов СЭМД среди отправленных",
-    "Топ типов СЭМД в очереди": "Топ типов СЭМД среди отправленных",
+    "Очередь по типам СЭМД": SENT_STUCK_TOP_SEMD_NAME,
+    "Топ типов СЭМД в очереди": SENT_STUCK_TOP_SEMD_NAME,
+    "Топ типов СЭМД среди отправленных": SENT_STUCK_TOP_SEMD_NAME,
     "Сегменты ожидания": "Ступени обработки",
     # Пороговые плитки заменены состояниями: порог живёт в dim_pending_segments.
     "Зависших >3 дней": "В обработке",
@@ -176,8 +184,8 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Успешность по типам СЭМД": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
-    "Топ клиник среди отправленных": [("clinic_jid", "JID Клиники")],
-    "Топ типов СЭМД среди отправленных": [("semd_code", "Код СЭМД")],
+    SENT_STUCK_TOP_CLINICS_NAME: [("clinic_jid", "JID Клиники")],
+    SENT_STUCK_TOP_SEMD_NAME: [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
         ("error_types", "Тип ошибки", "contains"),
         ("clinic_jid", "JID Клиники"),
@@ -188,8 +196,8 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
 MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {
     "Топ типов СЭМД по ошибкам": ERROR_BREAKDOWN_MODEL_REF,
     "Топ типов СЭМД по видам ошибки": ERROR_BREAKDOWN_MODEL_REF,
-    "Топ клиник среди отправленных": SENT_MODEL_REF,
-    "Топ типов СЭМД среди отправленных": SENT_MODEL_REF,
+    SENT_STUCK_TOP_CLINICS_NAME: SENT_MODEL_REF,
+    SENT_STUCK_TOP_SEMD_NAME: SENT_MODEL_REF,
 }
 
 # Активные фильтры дашборда, переносимые в модель (без измерения-грейна самой строки).
@@ -205,8 +213,8 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
     "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
     "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
-    "Топ клиник среди отправленных": ["ips_date", "semd_type", "pending_segment"],
-    "Топ типов СЭМД среди отправленных": ["ips_date", "jid", "pending_segment"],
+    SENT_STUCK_TOP_CLINICS_NAME: ["ips_date", "semd_type", "pending_segment"],
+    SENT_STUCK_TOP_SEMD_NAME: ["ips_date", "jid", "pending_segment"],
     "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid", "status"],
 }
 
@@ -817,11 +825,17 @@ SENT_NO_RESPONSE_SHARE_QUERY = (
     f"WHERE 1=1 {SENT_FILTERS}"
 )
 
-SENT_TOP_CLINICS_QUERY = (
+# Состояние «В обработке» (dim_sent_state) отсекает терминальную ступень: документы,
+# по которым ответ уже не ожидается, разбираются как «Без ответа» и в топ не попадают.
+# Порог в 1 сутки — контракт самих карточек, объявленный в их названии, а не граница
+# лестницы ступеней: он не зависит от правки dim_pending_segments.
+SENT_STUCK_WHERE = "sent_state = 'pending' AND pending_hours > 24"
+
+SENT_STUCK_TOP_CLINICS_QUERY = (
     'SELECT clinic_jid::text AS "JID Клиники", clinic_label AS "Клиника", '
     'COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
     "FROM public.rpt_documents_sent "
-    f"WHERE 1=1 {SENT_FILTERS} "
+    f"WHERE {SENT_STUCK_WHERE} {SENT_FILTERS} "
     "GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15"
 )
 
@@ -836,11 +850,11 @@ SENT_SEGMENTS_QUERY = (
     "ORDER BY pending_segment_sort"
 )
 
-SENT_TOP_SEMD_QUERY = (
+SENT_STUCK_TOP_SEMD_QUERY = (
     "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", "
     'COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
     "FROM public.rpt_documents_sent "
-    f"WHERE 1=1 {SENT_FILTERS} "
+    f"WHERE {SENT_STUCK_WHERE} {SENT_FILTERS} "
     "GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
 )
 
@@ -850,9 +864,9 @@ SENT_TAB_QUERIES: dict[str, str] = {
     "Без ответа": SENT_NO_RESPONSE_QUERY,
     "Доля без ответа, %": SENT_NO_RESPONSE_SHARE_QUERY,
     "Отправленные документы": SENT_TABLE_QUERY,
-    "Топ клиник среди отправленных": SENT_TOP_CLINICS_QUERY,
+    SENT_STUCK_TOP_CLINICS_NAME: SENT_STUCK_TOP_CLINICS_QUERY,
     "Ступени обработки": SENT_SEGMENTS_QUERY,
-    "Топ типов СЭМД среди отправленных": SENT_TOP_SEMD_QUERY,
+    SENT_STUCK_TOP_SEMD_NAME: SENT_STUCK_TOP_SEMD_QUERY,
 }
 
 SENT_TAB_DESCRIPTIONS: dict[str, str] = {
@@ -861,9 +875,9 @@ SENT_TAB_DESCRIPTIONS: dict[str, str] = {
     "Без ответа": "Отправленные, по которым ожидаемое время ответа истекло: вердикт уже не ожидается.",
     "Доля без ответа, %": "Доля документов без ответа от всех отправленных без вердикта.",
     "Отправленные документы": "Построчный список отправленных без вердикта: состояние отправки, ступень обработки, число подач.",
-    "Топ клиник среди отправленных": "Клиники с наибольшим числом отправленных без вердикта.",
+    SENT_STUCK_TOP_CLINICS_NAME: "Клиники с наибольшим числом документов в состоянии «В обработке» дольше 1 суток; документы «Без ответа» не учитываются.",
     "Ступени обработки": "Распределение отправленных по ступеням возраста обработки; порядок — по лестнице справочника.",
-    "Топ типов СЭМД среди отправленных": "Типы СЭМД с наибольшим числом отправленных без вердикта.",
+    SENT_STUCK_TOP_SEMD_NAME: "Типы СЭМД с наибольшим числом документов в состоянии «В обработке» дольше 1 суток; документы «Без ответа» не учитываются.",
 }
 
 # «Всего» — весь срез клиники, включая отправленные без вердикта; «% успеха» считается
