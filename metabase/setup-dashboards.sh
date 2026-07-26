@@ -25,7 +25,7 @@ COLLECTION_NAME="${METABASE_COLLECTION_NAME:-Интеграция с ЕГИСЗ}
 METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
 # Публичная страница без авторизации для клиентского дашборда (личный кабинет клиники).
 CLIENT_DASHBOARD_NAME="${METABASE_CLIENT_DASHBOARD_NAME:-Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ}"
-METABASE_PUBLIC_CLIENT_DASHBOARD="${METABASE_PUBLIC_CLIENT_DASHBOARD:-true}"
+METABASE_PUBLIC_CLIENT_DASHBOARD="${METABASE_PUBLIC_CLIENT_DASHBOARD:-false}"
 
 APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
@@ -63,10 +63,7 @@ fail() {
   exit 1
 }
 
-# Сериализация: entrypoint запускает provision.sh в фоне, а up.ps1 параллельно
-# дёргает этот же скрипт через kubectl exec. Без блокировки два параллельных
-# прогона гонятся за archive_stale_collection_cards / create_or_update_card и
-# второй падает на 409/конфликте имени карточки.
+# Сериализация
 SETUP_DASHBOARDS_LOCK="${SETUP_DASHBOARDS_LOCK:-/tmp/setup-dashboards.lock}"
 if [ "${SETUP_DASHBOARDS_LOCKED:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
   export SETUP_DASHBOARDS_LOCKED=1
@@ -499,45 +496,59 @@ expected_card_names() {
   jq -r '.cards[]? | select((.display // "") != "text" and .name != null) | .name' "${DASHBOARDS_DIR}"/*.json | sort -u
 }
 
+# Переименование объекта в JSON оставляет прежний в коллекции дублем: импорт находит объект
+# по имени и заводит новый. Архивировать «всё, чего нет в наших JSON» нельзя — коллекция живёт
+# на ОБЩЕМ Metabase, и под такое правило попал бы любой чужой объект, положенный в неё.
+# Поэтому архивируется только то, что мы сами вывели из обращения: список прежних имён
+# собирает генератор дашбордов (scripts/apply_dashboard_plan.py) в retired-objects.json.
+RETIRED_OBJECTS_FILE="${METABASE_RETIRED_OBJECTS_FILE:-${SETUP_DASHBOARDS_DIR}/retired-objects.json}"
+
+retired_names() {
+  local kind="$1"
+  [ -f "${RETIRED_OBJECTS_FILE}" ] || return 0
+  jq -r --arg kind "${kind}" '.[$kind][]?' "${RETIRED_OBJECTS_FILE}"
+}
+
+# Архивирует объекты коллекции, чьё имя числится в списке выведенных из обращения.
+# Чужие объекты не затрагиваются: имя обязано присутствовать в списке.
+archive_retired_collection_items() {
+  local kind="$1" model_filter="$2" api_path="$3"
+  local retired_file item_id item_name expected_file
+  retired_file="/tmp/metabase-retired-${kind}.txt"
+  expected_file="/tmp/metabase-expected-${kind}.txt"
+  retired_names "${kind}" | sort -u > "${retired_file}"
+  if [ ! -s "${retired_file}" ]; then
+    rm -f "${retired_file}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  # Страховка от гонки списка и JSON: имя, вернувшееся в работу, не архивируем.
+  case "${kind}" in
+    cards) expected_card_names | sort -u > "${expected_file}" ;;
+    dashboards) jq -r '.name' "${DASHBOARDS_DIR}"/*.json | sort -u > "${expected_file}" ;;
+    models) jq -r '.name' "${MODELS_DIR}"/*.json | sort -u > "${expected_file}" ;;
+  esac
+  while IFS=$'\t' read -r item_id item_name; do
+    [ -n "${item_id}" ] || continue
+    grep -Fxq "${item_name}" "${retired_file}" || continue
+    grep -Fxq "${item_name}" "${expected_file}" && continue
+    log_info "Archiving retired ${kind%s} ${item_id}: ${item_name}"
+    api_request PUT "${api_path}/${item_id}" '{"archived":true}' >/dev/null
+  done < <(
+    api_request GET "/api/collection/${COL_ID}/items?models=${model_filter}&limit=1000" |
+      jq -r --arg m "${model_filter}" '.data[]? | select(.model == $m) | [.id, .name] | @tsv'
+  )
+  rm -f "${retired_file}" "${expected_file}" >/dev/null 2>&1 || true
+}
+
 archive_stale_collection_cards() {
-  local expected_file card_id card_name
-  expected_file="/tmp/metabase-expected-card-names.txt"
-  expected_card_names > "${expected_file}"
-  while IFS=$'\t' read -r card_id card_name; do
-    [ -n "${card_id}" ] || continue
-    if ! grep -Fxq "${card_name}" "${expected_file}"; then
-      log_info "Archiving stale card ${card_id}: ${card_name}"
-      api_request PUT "/api/card/${card_id}" '{"archived":true}' >/dev/null
-    fi
-  done < <(
-    api_request GET "/api/collection/${COL_ID}/items?models=card&limit=1000" |
-      jq -r '.data[]? | select(.model == "card") | [.id, .name] | @tsv'
-  )
-  rm -f "${expected_file}" >/dev/null 2>&1 || true
+  archive_retired_collection_items cards card "/api/card"
+  # Модели приходят в коллекции как dataset, а не card: без отдельного прохода
+  # переименованная модель остаётся активной и ссылается на снесённый объект DWH.
+  archive_retired_collection_items models dataset "/api/card"
 }
 
-expected_dashboard_names() {
-  jq -r '.name' "${DASHBOARDS_DIR}"/*.json | sort -u
-}
-
-# Импорт матчит дашборды по имени и обновляет на месте, но при переименовании дашборда в JSON
-# старый (со старым именем) остаётся в коллекции дублем. Архивируем дашборды коллекции, чьих
-# имён больше нет в JSON — зеркало archive_stale_collection_cards для дашбордов.
 archive_stale_collection_dashboards() {
-  local expected_file dashboard_id dashboard_name
-  expected_file="/tmp/metabase-expected-dashboard-names.txt"
-  expected_dashboard_names > "${expected_file}"
-  while IFS=$'\t' read -r dashboard_id dashboard_name; do
-    [ -n "${dashboard_id}" ] || continue
-    if ! grep -Fxq "${dashboard_name}" "${expected_file}"; then
-      log_info "Archiving stale dashboard ${dashboard_id}: ${dashboard_name}"
-      api_request PUT "/api/dashboard/${dashboard_id}" '{"archived":true}' >/dev/null
-    fi
-  done < <(
-    api_request GET "/api/collection/${COL_ID}/items?models=dashboard&limit=1000" |
-      jq -r '.data[]? | select(.model == "dashboard") | [.id, .name] | @tsv'
-  )
-  rm -f "${expected_file}" >/dev/null 2>&1 || true
+  archive_retired_collection_items dashboards dashboard "/api/dashboard"
 }
 
 dashboard_payload() {

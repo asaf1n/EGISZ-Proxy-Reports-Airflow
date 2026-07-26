@@ -55,7 +55,7 @@ def _setting(key: str) -> str:
 
     Читается и при парсинге (расписание), и внутри задач — без обращения к метабазе Airflow.
     Значения фиксированы в DEFAULTS и переопределяются переменной окружения процессов Airflow
-    (см. deploy/external-airflow/README). Airflow Variables (метабаза) не используются —
+    (см. deploy/README.md). Airflow Variables (метабаза) не используются —
     на Airflow 3 их чтение при парсинге в воркере подвешивало DAG.
     """
     return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
@@ -138,7 +138,7 @@ def serialize_exchangelog_row(
 
 def pending_transform_tail(
     con: psycopg2.extensions.connection,
-    last_logid: int,
+    logid_cursor: int,
 ) -> tuple[int, int]:
     """Return (row_count, max_logid) of raw rows above the extract watermark."""
     with con.cursor() as cur:
@@ -148,23 +148,23 @@ def pending_transform_tail(
             FROM public.exchangelog_raw
             WHERE logid > %s
             """,
-            (last_logid, last_logid),
+            (logid_cursor, logid_cursor),
         )
         pending_rows, pending_max = cur.fetchone()
-    return int(pending_rows or 0), int(pending_max or last_logid)
+    return int(pending_rows or 0), int(pending_max or logid_cursor)
 
 
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
     """Read pipeline cursors: journal LOGID and message-registry EGMID."""
     with con.cursor() as cur:
         cur.execute(
-            "SELECT last_logid, last_egmid FROM elt_state WHERE pipeline = %s",
+            "SELECT logid_cursor, egmid_cursor FROM etl_state WHERE pipeline = %s",
             (pipeline,),
         )
         row = cur.fetchone()
     if row is None:
-        return {"last_logid": 0, "last_egmid": 0}
-    return {"last_logid": int(row[0] or 0), "last_egmid": int(row[1] or 0)}
+        return {"logid_cursor": 0, "egmid_cursor": 0}
+    return {"logid_cursor": int(row[0] or 0), "egmid_cursor": int(row[1] or 0)}
 
 
 def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:
@@ -214,7 +214,7 @@ def transform_raw_to_facts(
 ) -> dict[str, int]:
     """Run the database-side ELT transform for the requested LOGID window.
 
-    Возвращает счётчики батча: перенесённые строки, несвязанные вердикты и отправки,
+    Возвращает счётчики батча: перенесённые строки, несвязанные ответы и отправки,
     которым не удалось определить клинику.
     """
     with con.cursor() as cur:
@@ -439,7 +439,7 @@ def reconcile_archive(pg_conn: psycopg2.extensions.connection) -> dict[str, int]
 
 
 @dag(
-    dag_id="egisz_maintenance_dag",
+    dag_id="egisz_reconcile_maintenance_dag",
     schedule=_setting("maintenance_schedule"),
     start_date=datetime(2023, 1, 1),
     catchup=False,
@@ -447,7 +447,7 @@ def reconcile_archive(pg_conn: psycopg2.extensions.connection) -> dict[str, int]
     params={"deep": False},
     tags=["egisz", "elt", "dwh", "maintenance"],
 )
-def egisz_maintenance_pipeline() -> None:
+def egisz_reconcile_maintenance_pipeline() -> None:
     # Ретраи гасят транзиентный DeadlockDetected: обслуживание пересекается с приёмом
     # по блокировкам documents/document_attributes; сверка и догрузка идемпотентны,
     # отметку задача не двигает — повтор безопасен.
@@ -460,8 +460,8 @@ def egisz_maintenance_pipeline() -> None:
         )
         pg_conn = _dwh_connection()
         try:
-            last_logid = int(get_cursors(pg_conn, PIPELINE).get("last_logid", 0))
-            if last_logid <= 0:
+            logid_cursor = int(get_cursors(pg_conn, PIPELINE).get("logid_cursor", 0))
+            if logid_cursor <= 0:
                 log.info("Reconcile: watermark not advanced yet; nothing to reconcile.")
                 return {"missing": 0, "transformed": 0, "unlinked": 0, "sends_without_clinic": 0}
 
@@ -520,4 +520,4 @@ def egisz_maintenance_pipeline() -> None:
     reconcile_journal_tail() >> reconcile_archive_attributes() >> maintain_partitions()
 
 
-egisz_maintenance_pipeline()
+egisz_reconcile_maintenance_pipeline()

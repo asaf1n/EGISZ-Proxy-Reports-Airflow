@@ -16,6 +16,9 @@ COPY --chown=1500:1500 metabase/entrypoint.sh /app/entrypoint.sh
 COPY --chown=1500:1500 metabase/provision.sh /app/provision.sh
 # bust COPY cache when provisioning scripts change
 COPY --chown=1500:1500 metabase/setup-dashboards.sh /app/setup-dashboards.sh
+# Список выведенных из обращения объектов: по нему архивируются наши переименованные
+# карточки/модели/дашборды и только они (коллекция живёт на общем Metabase).
+COPY --chown=1500:1500 metabase/retired-objects.json /app/retired-objects.json
 COPY --chown=1500:1500 metabase/sync-models.sh /app/sync-models.sh
 COPY --chown=1500:1500 metabase_models/ /app/metabase_models/
 # bust COPY cache when dashboard JSON changes (see up.ps1 Get-DashboardsManifestHash)

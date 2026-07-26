@@ -264,7 +264,7 @@ AS $$
     SELECT public.reconcile_document_attributes(NULL::text[]);
 $$;
 
--- error_text на грейне документа принадлежит последнему вердикту и проставляется
+-- error_text на грейне документа принадлежит последнему ответу и проставляется
 -- в transform вместе со статусом. Отдельная сверка по архиву здесь не нужна и вредна:
 -- выбирая последнее сообщение С текстом, она возвращала текст отказа на документы,
 -- которые прошли со второй попытки.
@@ -334,7 +334,7 @@ SELECT
     d.result_logid::text AS result_logid,
     a.request_msgid,
     d.result_msgid,
-    -- Время отклика ЕГИСЗ: от запроса файла (шаг 6 схемы регистрации) до вердикта.
+    -- Время отклика ЕГИСЗ: от запроса файла (шаг 6 схемы регистрации) до ответа.
     -- Считается по журналу, а не по дате создания CDA: document_created_at приходит далеко
     -- не во всех отправках, и метрика на его основе покрывала доли процента корпуса.
     CASE
@@ -439,7 +439,7 @@ FROM public.rpt_documents r
 WHERE r.sent_state IS NOT NULL;
 
 COMMENT ON VIEW public.rpt_documents_sent IS
-'Отправленные документы без вердикта ЕГИСЗ: ступень возраста обработки (dim_pending_segments) и состояние отправки («В обработке» / «Без ответа»).';
+'Отправленные документы без ответа ЕГИСЗ: ступень возраста обработки (dim_pending_segments) и состояние отправки («В обработке» / «Без ответа»).';
 
 CREATE OR REPLACE VIEW public.rpt_network_errors AS
 SELECT
@@ -490,8 +490,14 @@ WITH atom_types AS (
         -- Для непокрытых формулировок зона ответственности и повторяемость неизвестны.
         COALESCE(g.responsibility, 'смешанная') AS responsibility,
         COALESCE(g.is_retryable, false) AS is_retryable,
-        g.nsi_error_code,
-        c.nsi_error_description
+        -- Мнемоника, под которой пришёл отказ: своя, если тип рождён кодовым правилом,
+        -- иначе зонтичная (тип распознан текстом внутри VALIDATION_ERROR/RUNTIME_ERROR).
+        COALESCE(g.nsi_error_code, g.parent_nsi_error_code) AS nsi_error_code,
+        c.nsi_error_description,
+        -- Код отказа в своём пространстве имён: у контуров ИЭМК и шлюза мнемоники ФНСИ 305
+        -- нет по существу, и без этой пары колонка кода оставалась бы у них пустой.
+        g.error_code,
+        g.code_namespace
     FROM public.documents doc
     CROSS JOIN LATERAL unnest(
         -- error_types гарантированно непустой ниже по WHERE, поэтому фолбэк не нужен.
@@ -499,7 +505,8 @@ WITH atom_types AS (
     ) AS atom
     CROSS JOIN LATERAL (SELECT NULLIF(btrim(atom), '') AS norm) n
     LEFT JOIN public.dim_error_type_group g ON g.error_type = n.norm
-    LEFT JOIN public.dim_nsi_error_code c ON c.nsi_error_code = g.nsi_error_code
+    LEFT JOIN public.dim_nsi_error_code c
+      ON c.nsi_error_code = COALESCE(g.nsi_error_code, g.parent_nsi_error_code)
     WHERE doc.status IN ('async_error', 'network_error')
       AND doc.error_types IS NOT NULL
       AND btrim(doc.error_types) <> ''
@@ -518,7 +525,9 @@ SELECT
     a.responsibility,
     a.is_retryable,
     a.nsi_error_code,
-    a.nsi_error_description
+    a.nsi_error_description,
+    a.error_code,
+    a.code_namespace
 FROM atom_types a
 INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
 WITH DATA;
@@ -533,6 +542,7 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_clinic_jid ON public.rpt_error_breakdown (
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_semd_code ON public.rpt_error_breakdown (semd_code);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_responsibility ON public.rpt_error_breakdown (responsibility);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_nsi_error_code ON public.rpt_error_breakdown (nsi_error_code);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_code ON public.rpt_error_breakdown (error_code);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
 'Разбивка ошибок (matview): один ряд = один канонический тип на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform.';
@@ -612,7 +622,7 @@ COMMENT ON VIEW public.rpt_clinic_semd_licenses IS
 -- Недельная витрина документов: грейн (week_start, клиника). Хранятся только
 -- счётчики — доли считаются потребителями как ratio-of-sums, что даёт
 -- корректное взвешивание при агрегации недель/клиник. Инвариант:
--- docs_success + docs_error = docs_total (отправленные без вердикта вне корпуса).
+-- docs_success + docs_error = docs_total (отправленные без ответа вне корпуса).
 -- Уникальный ключ — clinic_label, а не clinic_jid: jid nullable, а label
 -- NOT NULL по построению ('— · —' при пустом jid), и REFRESH CONCURRENTLY
 -- требует уникальный btree без выражений.
@@ -687,7 +697,7 @@ COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_weekly IS
 -- Месячная витрина документов: грейн (month_start, клиника). Хранятся только
 -- счётчики — доли считаются потребителями как ratio-of-sums, что даёт
 -- корректное взвешивание при агрегации месяцев/клиник. Инвариант:
--- docs_success + docs_error = docs_total (отправленные без вердикта вне корпуса).
+-- docs_success + docs_error = docs_total (отправленные без ответа вне корпуса).
 -- Уникальный ключ — clinic_label, а не clinic_jid: jid nullable, а label
 -- NOT NULL по построению ('— · —' при пустом jid), и REFRESH CONCURRENTLY
 -- требует уникальный btree без выражений.
@@ -771,7 +781,7 @@ fact_24h AS (
     WHERE COALESCE(d.last_callback_at, d.first_sent_at, d.document_created_at) >= anchor.ref_ts - INTERVAL '24 hours'
     GROUP BY d.jid
 ),
-sent_without_verdict AS (
+sent_without_response AS (
     SELECT jid::text AS clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS sent_cnt
     FROM public.documents
     WHERE status = 'sent'
@@ -782,25 +792,25 @@ SELECT
     COALESCE(NULLIF(f.clinic_name, ''), 'Клиника JID: ' || f.clinic_jid) AS "Наименование клиники",
     ROUND(100.0 * f.err_cnt / NULLIF(f.docs_cnt, 0), 2) AS "Доля ошибок, %",
     f.docs_cnt AS "Документов за 24ч",
-    COALESCE(q.sent_cnt, 0)::bigint AS "Отправлено без вердикта (документов)",
+    COALESCE(q.sent_cnt, 0)::bigint AS "Отправлено без ответа (документов)",
     CASE
         WHEN ROUND(100.0 * f.err_cnt / NULLIF(f.docs_cnt, 0), 2) >= 20 OR COALESCE(q.sent_cnt, 0) >= 100 THEN 'critical'
         WHEN ROUND(100.0 * f.err_cnt / NULLIF(f.docs_cnt, 0), 2) >= 5 OR COALESCE(q.sent_cnt, 0) >= 20 THEN 'warning'
         ELSE 'ok'
     END AS "Уровень здоровья"
 FROM fact_24h f
-LEFT JOIN sent_without_verdict q ON q.clinic_jid = f.clinic_jid;
+LEFT JOIN sent_without_response q ON q.clinic_jid = f.clinic_jid;
 
 CREATE OR REPLACE VIEW public.rpt_health_proxy_db AS
 SELECT
     (SELECT COUNT(*) FROM public.documents)::bigint AS "DWH сообщений всего",
-    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent')::bigint AS "Отправлено без вердикта",
-    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours')::bigint AS "Без вердикта > 24ч",
-    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at >= now() - INTERVAL '24 hours' AND first_sent_at < now() - INTERVAL '1 hour')::bigint AS "Без вердикта 1-24ч",
-    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at >= now() - INTERVAL '1 hour')::bigint AS "Без вердикта < 1ч",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent')::bigint AS "Отправлено без ответа",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours')::bigint AS "Без ответа > 24ч",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at >= now() - INTERVAL '24 hours' AND first_sent_at < now() - INTERVAL '1 hour')::bigint AS "Без ответа 1-24ч",
+    (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at >= now() - INTERVAL '1 hour')::bigint AS "Без ответа < 1ч",
     (SELECT MAX(first_sent_at) FROM public.documents) AS "DWH max Sent",
-    (SELECT updated_at FROM elt_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
-    (SELECT last_logid FROM elt_state WHERE pipeline = 'egisz') AS "elt_state.last_logid",
+    (SELECT updated_at FROM etl_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
+    (SELECT logid_cursor FROM etl_state WHERE pipeline = 'egisz') AS "etl_state.logid_cursor",
     (SELECT MAX(COALESCE(result_logid, request_logid)) FROM public.documents) AS "DWH max LOGID fact",
     (SELECT COUNT(DISTINCT dwh_id) FROM public.documents)::bigint AS "Всего документов";
 
@@ -809,19 +819,32 @@ WITH anchor AS (
     SELECT MAX(COALESCE(last_callback_at, first_sent_at, document_created_at)) AS last_fact_ts
     FROM public.documents
 ),
--- Доля вердиктов ЕГИСЗ, которые не удалось связать с документом, за 24ч.
--- Вердикт несёт relatesToMessage; документ находится по реестру подач. Рост доли означает,
+-- Доля ответов ЕГИСЗ, которые не удалось связать с документом, за последний час приёма.
+-- Ответ несёт relatesToMessage; документ находится по реестру подач. Рост доли означает,
 -- что реестр отстал от журнала или подача в него не попала, — исход отправки при этом
 -- теряется, а документ остаётся в статусе «Отправлено».
-unlinked_24h AS (
+--
+-- Доля считается по последним ответам журнала — скользящей выборкой по LOGID, а не по
+-- временному окну. Окно по log_date брало бы строки, размеченные прежней версией правила
+-- (link_method пуст): они попадали в знаменатель как связанные и занижали долю. Окно по
+-- времени приёма эту ошибку снимает, но вводит другую — когда конвейер отстал и за час не
+-- разобрано ничего, пустая выборка даёт 0% и сигнал зеленеет ровно в момент поломки.
+-- Порядок журнала свободен от обеих: выборка не пустеет, пока есть хоть один размеченный
+-- ответ, не зависит от темпа приёма и не тянет дату разбора в отчётность.
+unlinked_recent AS (
     SELECT ROUND(
         100.0 * COUNT(*) FILTER (WHERE link_method = 'unlinked')
         / NULLIF(COUNT(*), 0),
         1
     ) AS pct
-    FROM public.transactions
-    WHERE log_date >= now() - INTERVAL '24 hours'
-      AND xml_relates_to_id IS NOT NULL
+    FROM (
+        SELECT link_method
+        FROM public.transactions
+        WHERE link_method IS NOT NULL
+          AND xml_relates_to_id IS NOT NULL
+        ORDER BY logid DESC
+        LIMIT 500
+    ) recent
 ),
 -- Граница перехода в состояние «Без ответа» берётся из лестницы ступеней, а не задаётся
 -- здесь повторно: ужесточение порога делается UPDATE по dim_pending_segments.
@@ -837,11 +860,21 @@ uncovered_types AS (
     FROM public.rpt_error_breakdown b
     LEFT JOIN public.dim_error_type_group g ON g.error_type = b.error_type
     WHERE g.error_type IS NULL
+),
+-- Клиники, документы которых есть, а записи в справочнике организаций нет: подпись
+-- вырождается в «<jid> · —» во всех срезах. Наполнение справочника — задача приёма
+-- (JPERSONS выгружается целиком), поэтому в отчётном слое это только сигнал.
+unknown_clinics AS (
+    SELECT d.jid, COUNT(*) AS docs
+    FROM public.documents d
+    LEFT JOIN public.dim_organizations o ON o.jid = d.jid
+    WHERE d.jid IS NOT NULL AND o.jid IS NULL
+    GROUP BY d.jid
 )
 SELECT * FROM (
     VALUES
         ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.documents), 'документов', 'documents', 'Контроль поступления СЭМД в DWH'),
-        ('sent_24h', 'Отправлено без вердикта > 24ч', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours'), 'документов', 'documents.status=sent', 'Проверить клиники без вердикта ЕГИСЗ и транспортный канал'),
+        ('sent_24h', 'Отправлено без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours'), 'документов', 'documents.status=sent', 'Проверить клиники без ответа ЕГИСЗ и транспортный канал'),
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'network_error'), 'документов', 'documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
         ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.documents WHERE status = 'async_error'), 'документов', 'documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('no_response_backlog',
@@ -854,7 +887,7 @@ SELECT * FROM (
          (SELECT COUNT(*)::numeric FROM public.documents d, no_response_after c WHERE d.status = 'sent' AND d.first_sent_at < c.ts),
          'документов',
          'rpt_documents_sent (состояние отправки)',
-         'Проверить транспорт клиник на вкладке «Отправленные»: вердикт по этим документам уже не ожидается'),
+         'Проверить транспорт клиник на вкладке «Отправленные»: ответ по этим документам уже не ожидается'),
         ('uncovered_error_types',
          'Отказы без правила классификации',
          CASE
@@ -866,16 +899,27 @@ SELECT * FROM (
          'документов',
          'rpt_error_breakdown вне dim_error_type_group',
          'Разобрать формулировки на вкладке «Анализ ошибок» и завести правило в dim_error_rules'),
-        ('unlinked_verdicts',
-         'Доля несвязанных вердиктов ЕГИСЗ',
+        ('unknown_clinics',
+         'JID без записи в справочнике организаций',
          CASE
-             WHEN COALESCE((SELECT pct FROM unlinked_24h), 0) >= 5 THEN 'red'
-             WHEN COALESCE((SELECT pct FROM unlinked_24h), 0) >= 1 THEN 'yellow'
+             WHEN (SELECT COUNT(*) FROM unknown_clinics) >= 10 THEN 'red'
+             WHEN (SELECT COUNT(*) FROM unknown_clinics) >= 1 THEN 'yellow'
              ELSE 'green'
          END,
-         COALESCE((SELECT pct FROM unlinked_24h), 0)::numeric,
-         '% (за 24ч)',
-         'transactions.link_method=unlinked за 24ч',
+         (SELECT COUNT(*)::numeric FROM unknown_clinics),
+         'клиник',
+         'documents.jid вне dim_organizations',
+         'Проверить наличие организации в JPERSONS источника: подпись клиники выводится как «<jid> · —»'),
+        ('unlinked_responses',
+         'Доля несвязанных ответов ЕГИСЗ',
+         CASE
+             WHEN COALESCE((SELECT pct FROM unlinked_recent), 0) >= 5 THEN 'red'
+             WHEN COALESCE((SELECT pct FROM unlinked_recent), 0) >= 1 THEN 'yellow'
+             ELSE 'green'
+         END,
+         COALESCE((SELECT pct FROM unlinked_recent), 0)::numeric,
+         '% последних ответов',
+         'transactions.link_method=unlinked, последние 500 по LOGID',
          'Проверить наполнение dim_message_document: подача документа не попала в реестр шлюза'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
@@ -919,6 +963,11 @@ SELECT
         HAVING count(DISTINCT NULLIF(btrim(semd_code), '')) > 1
      ) c)::bigint AS "Коллизии localUid (30д)";
 
+-- Смена владельца требует ACCESS EXCLUSIVE. Объект, занятый работающим конвейером
+-- (etl_state правится каждым запуском ETL), уводил весь накат в ошибку по lock_timeout —
+-- при том что смена владельца ему, как правило, и не нужна. Поэтому владелец меняется
+-- только там, где он не egisz, а занятый объект пропускается с предупреждением: схема
+-- идемпотентна, следующий прогон доберёт его.
 DO $$
 DECLARE
     r RECORD;
@@ -929,16 +978,21 @@ BEGIN
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
           AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+          AND pg_get_userbyid(c.relowner) <> 'egisz'
     LOOP
-        IF r.relkind IN ('r', 'p') THEN
-            EXECUTE format('ALTER TABLE public.%I OWNER TO egisz', r.relname);
-        ELSIF r.relkind = 'v' THEN
-            EXECUTE format('ALTER VIEW public.%I OWNER TO egisz', r.relname);
-        ELSIF r.relkind = 'm' THEN
-            EXECUTE format('ALTER MATERIALIZED VIEW public.%I OWNER TO egisz', r.relname);
-        ELSIF r.relkind = 'S' THEN
-            EXECUTE format('ALTER SEQUENCE public.%I OWNER TO egisz', r.relname);
-        END IF;
+        BEGIN
+            IF r.relkind IN ('r', 'p') THEN
+                EXECUTE format('ALTER TABLE public.%I OWNER TO egisz', r.relname);
+            ELSIF r.relkind = 'v' THEN
+                EXECUTE format('ALTER VIEW public.%I OWNER TO egisz', r.relname);
+            ELSIF r.relkind = 'm' THEN
+                EXECUTE format('ALTER MATERIALIZED VIEW public.%I OWNER TO egisz', r.relname);
+            ELSIF r.relkind = 'S' THEN
+                EXECUTE format('ALTER SEQUENCE public.%I OWNER TO egisz', r.relname);
+            END IF;
+        EXCEPTION WHEN lock_not_available OR query_canceled THEN
+            RAISE WARNING 'owner change skipped for %: object is busy', r.relname;
+        END;
     END LOOP;
 
     FOR r IN
@@ -946,6 +1000,7 @@ BEGIN
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
+          AND pg_get_userbyid(p.proowner) <> 'egisz'
     LOOP
         EXECUTE format('ALTER FUNCTION %s OWNER TO egisz', r.sig);
     END LOOP;

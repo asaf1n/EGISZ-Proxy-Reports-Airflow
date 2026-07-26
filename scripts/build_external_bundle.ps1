@@ -1,17 +1,17 @@
 param(
-    [ValidateSet("All", "Airflow", "Metabase", "Dwh")]
-    [string]$Target = "All",
     [switch]$Zip
 )
 
-# Сборка самодостаточных бандлов для импорта настроек во внешнюю инфраструктуру
-# (см. deploy/README.md). Бандлы всегда собираются из канонических исходников
-# репозитория — копии кода в git не хранятся, чтобы исключить их дрейф.
+# Сборка пакета настроек для переноса во внешнюю инфраструктуру (см. deploy/README.md).
+# Пакет собирается из канонических исходников репозитория — копии кода в git не хранятся,
+# чтобы исключить их дрейф.
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$DistRoot = Join-Path $RepoRoot "dist\external"
+$DistRoot = Join-Path $RepoRoot "dist"
+$BundleName = "egisz-bi"
+$BundleRoot = Join-Path $DistRoot $BundleName
 
 function New-CleanDirectory {
     param([string]$Path)
@@ -35,122 +35,58 @@ function Copy-BundleItem {
     Copy-Item -Recurse -Force $Source $Destination
 }
 
-function Get-ProjectDependencies {
-    # requirements.txt бандла генерируется из [project].dependencies pyproject.toml —
-    # единственный источник версий, ручная копия неизбежно разошлась бы.
-    $pyproject = Get-Content (Join-Path $RepoRoot "pyproject.toml") -Raw
-    if ($pyproject -notmatch '(?s)dependencies\s*=\s*\[(.*?)\]') {
-        throw "cannot find [project].dependencies in pyproject.toml"
-    }
-    $deps = @()
-    foreach ($match in [regex]::Matches($Matches[1], '"([^"]+)"')) {
-        $deps += $match.Groups[1].Value
-    }
-    if ($deps.Count -eq 0) {
-        throw "no dependencies parsed from pyproject.toml"
-    }
-    return $deps
-}
-
-function Write-BuildInfo {
-    param([string]$BundleRoot)
-
-    $ErrorActionPreference = 'Continue'
-    $sha = git -C $RepoRoot rev-parse --short HEAD
-    if ($LASTEXITCODE -ne 0) {
-        throw "git rev-parse failed with exit code ${LASTEXITCODE}"
-    }
-    $ErrorActionPreference = 'Stop'
-    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss K"
-    "commit: ${sha}`nbuilt: ${stamp}" |
-        Out-File -Encoding utf8 (Join-Path $BundleRoot "BUILD_INFO.txt")
-}
-
-function Complete-Bundle {
-    param(
-        [string]$Name,
-        [string]$BundleRoot,
-        [string]$ReadmeSource
-    )
-
-    Copy-BundleItem (Join-Path $RepoRoot $ReadmeSource) (Join-Path $BundleRoot "README.md")
-    Write-BuildInfo $BundleRoot
-    if ($Zip) {
-        $archive = Join-Path $DistRoot "egisz-external-${Name}.zip"
-        Compress-Archive -Path (Join-Path $BundleRoot "*") -DestinationPath $archive -Force
-    }
-    $count = (Get-ChildItem -Recurse -File $BundleRoot | Measure-Object).Count
-    Write-Host "[bundle] ${Name}: ${count} files -> ${BundleRoot}"
-}
-
-function Build-AirflowBundle {
-    $bundle = Join-Path $DistRoot "airflow"
-    New-CleanDirectory $bundle
-
-    # DAG-файлы самодостаточны: канонические исходники dags копируются
-    # как есть, целевому Airflow не нужны ни PYTHONPATH, ни pip install пакета.
-    $dagFiles = Get-ChildItem (Join-Path $RepoRoot "dags") -Filter "egisz_*.py"
+function Add-Dags {
+    # DAG-файлы самодостаточны: копируются как есть, целевому Airflow не нужны
+    # ни PYTHONPATH, ни установка пакета.
+    $dagFiles = Get-ChildItem (Join-Path $RepoRoot "dags") -Filter "egisz_*_dag.py"
     if ($dagFiles.Count -eq 0) {
-        throw "no egisz_*.py DAG files found in dags"
+        throw "no egisz_*_dag.py files found in dags"
     }
     foreach ($dagFile in $dagFiles) {
-        Copy-BundleItem $dagFile.FullName (Join-Path $bundle "dags\$($dagFile.Name)")
+        Copy-BundleItem $dagFile.FullName (Join-Path $BundleRoot "dags\$($dagFile.Name)")
     }
-
-    $header = "# DAG runtime dependencies, generated from pyproject.toml" +
-        " (Apache Airflow 2.x/3.x, Python 3.11+ provided by the target)."
-    @($header) + (Get-ProjectDependencies) |
-        Out-File -Encoding ascii (Join-Path $bundle "requirements.txt")
-
-    Complete-Bundle "airflow" $bundle "deploy\external-airflow\README.md"
 }
 
-function Build-MetabaseBundle {
-    $bundle = Join-Path $DistRoot "metabase"
-    New-CleanDirectory $bundle
+function Add-Schema {
+    # Раскладка db/ обязана сохраниться: точка входа подключает модули
+    # относительными \i db/*.sql, поэтому psql запускается из корня пакета.
+    Copy-BundleItem (Join-Path $RepoRoot "db\dwh_init.sql") (Join-Path $BundleRoot "db\dwh_init.sql")
+    foreach ($module in Get-ChildItem (Join-Path $RepoRoot "db") -Filter "0*.sql" | Sort-Object Name) {
+        Copy-BundleItem $module.FullName (Join-Path $BundleRoot "db\$($module.Name)")
+    }
+}
 
-    Copy-BundleItem (Join-Path $RepoRoot "metabase\setup-dashboards.sh") (Join-Path $bundle "setup-dashboards.sh")
-    Copy-BundleItem (Join-Path $RepoRoot "metabase\sync-models.sh") (Join-Path $bundle "sync-models.sh")
-    Copy-BundleItem (Join-Path $RepoRoot "metabase\include\mb_list.sh") (Join-Path $bundle "include\mb_list.sh")
-    Copy-BundleItem (Join-Path $RepoRoot "metabase_dashboards") (Join-Path $bundle "metabase_dashboards")
-    Copy-BundleItem (Join-Path $RepoRoot "metabase_models") (Join-Path $bundle "metabase_models")
+function Add-Metabase {
+    $metabase = Join-Path $BundleRoot "metabase"
+    Copy-BundleItem (Join-Path $RepoRoot "metabase\setup-dashboards.sh") (Join-Path $metabase "setup-dashboards.sh")
+    Copy-BundleItem (Join-Path $RepoRoot "metabase\sync-models.sh") (Join-Path $metabase "sync-models.sh")
+    # Импортёр подключает общие функции только из include/ рядом с собой.
+    Copy-BundleItem (Join-Path $RepoRoot "metabase\include\mb_list.sh") (Join-Path $metabase "include\mb_list.sh")
+    # Список выведенных из обращения объектов лежит рядом с импортёром: без него
+    # переименованные карточки и модели остались бы в коллекции дублями.
+    Copy-BundleItem (Join-Path $RepoRoot "metabase\retired-objects.json") (Join-Path $metabase "retired-objects.json")
+    Copy-BundleItem (Join-Path $RepoRoot "metabase_dashboards") (Join-Path $metabase "dashboards")
+    Copy-BundleItem (Join-Path $RepoRoot "metabase_models") (Join-Path $metabase "models")
 
-    # Манифест пересчитывается импортёром на месте; запечённый из образа неуместен.
-    $baked = Join-Path $bundle "metabase_dashboards\.manifest.sha256"
+    # Манифест пересчитывается импортёром на месте; включённый в образ неуместен.
+    $baked = Join-Path $metabase "dashboards\.manifest.sha256"
     if (Test-Path $baked) {
         Remove-Item -Force $baked
     }
-
-    Complete-Bundle "metabase" $bundle "deploy\external-metabase\README.md"
 }
 
-function Build-DwhBundle {
-    $bundle = Join-Path $DistRoot "dwh"
-    New-CleanDirectory $bundle
+New-CleanDirectory $BundleRoot
 
-    # Раскладка db/ обязана сохраниться: точка входа подключает модули
-    # относительными \i db/*.sql, поэтому psql запускается из корня бандла.
-    Copy-BundleItem (Join-Path $RepoRoot "db\dwh_init.sql") (Join-Path $bundle "db\dwh_init.sql")
-    foreach ($module in Get-ChildItem (Join-Path $RepoRoot "db") -Filter "0*.sql" | Sort-Object Name) {
-        Copy-BundleItem $module.FullName (Join-Path $bundle "db\$($module.Name)")
-    }
+Add-Schema
+Add-Dags
+Add-Metabase
+Copy-BundleItem (Join-Path $RepoRoot "deploy\README.md") (Join-Path $BundleRoot "README.md")
 
-    Complete-Bundle "dwh" $bundle "deploy\external-dwh\README.md"
+if ($Zip) {
+    $archive = Join-Path $DistRoot "${BundleName}.zip"
+    Compress-Archive -Path (Join-Path $BundleRoot "*") -DestinationPath $archive -Force
+    Write-Host "[bundle] archive -> ${archive}"
 }
 
-if (-not (Test-Path $DistRoot)) {
-    New-Item -ItemType Directory -Force $DistRoot | Out-Null
-}
-
-switch ($Target) {
-    "All" {
-        Build-DwhBundle
-        Build-AirflowBundle
-        Build-MetabaseBundle
-    }
-    "Airflow" { Build-AirflowBundle }
-    "Metabase" { Build-MetabaseBundle }
-    "Dwh" { Build-DwhBundle }
-}
-
-Write-Host "[bundle] done: ${DistRoot}"
+$count = (Get-ChildItem -Recurse -File $BundleRoot | Measure-Object).Count
+Write-Host "[bundle] ${BundleName}: ${count} files -> ${BundleRoot}"

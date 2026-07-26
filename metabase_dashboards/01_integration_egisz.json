@@ -525,7 +525,7 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с ответом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1379,7 +1379,7 @@
     },
     {
       "name": "Отказы по часам: связь и асинхронный ответ",
-      "description": "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов с вердиктом РЭМД за час (%). Отправленные без вердикта в знаменатель не входят. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
+      "description": "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов с ответом РЭМД за час (%). Отправленные без ответа в знаменатель не входят. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -2215,95 +2215,6 @@
       }
     },
     {
-      "name": "Отправлено без вердикта",
-      "description": "Документы, отправленные в ЕГИСЗ, по которым вердикт ещё не получен.",
-      "dataset_query": {
-        "type": "native",
-        "database": 1,
-        "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
-          "template-tags": {
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "f2000099-0099-4099-8099-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f2000099-0099-4099-8099-000000000011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000013",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "pending_segment": {
-              "widget-type": "string/=",
-              "display-name": "Ступень обработки",
-              "id": "f2000099-0099-4099-8099-000000000014",
-              "name": "pending_segment",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        }
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.field": "Документов",
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 0,
-      "col": 0,
-      "tab": "sent",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "first_sent_at"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_label"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "clinic_label"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_local_uid"
-        },
-        "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "pending_segment_label"
-        }
-      }
-    },
-    {
       "name": "В обработке",
       "description": "Отправленные в пределах ожидаемого времени ответа (ступени до последней, dim_pending_segments).",
       "dataset_query": {
@@ -2364,10 +2275,10 @@
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 12,
       "sizeY": 3,
       "row": 0,
-      "col": 6,
+      "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
@@ -2393,8 +2304,8 @@
       }
     },
     {
-      "name": "Без ответа",
-      "description": "Отправленные, по которым ожидаемое время ответа истекло: вердикт уже не ожидается.",
+      "name": "Ответ не получен (утилизирован)",
+      "description": "Отправленные, по которым ожидаемое время истекло: ответа не будет. Из остальных карточек такие документы исключены и подлежат очистке.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -2453,7 +2364,7 @@
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 12,
       "sizeY": 3,
       "row": 0,
       "col": 12,
@@ -2482,108 +2393,13 @@
       }
     },
     {
-      "name": "Доля без ответа, %",
-      "description": "Доля документов без ответа от всех отправленных без вердикта.",
+      "name": "Документы в обработке",
+      "description": "Отправленные, по которым ответ ещё ожидается; новые сверху. Ступень обработки, число подач.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT semd_local_uid) FILTER (WHERE sent_state = 'no_response') / NULLIF(COUNT(DISTINCT semd_local_uid), 0), 1) AS \"%\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
-          "template-tags": {
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "f2000099-0099-4099-8099-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f2000099-0099-4099-8099-000000000011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000013",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "pending_segment": {
-              "widget-type": "string/=",
-              "display-name": "Ступень обработки",
-              "id": "f2000099-0099-4099-8099-000000000014",
-              "name": "pending_segment",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        }
-      },
-      "display": "scalar",
-      "visualization_settings": {
-        "scalar.field": "Документов",
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"%\"]": {
-            "column_title": "%",
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          }
-        }
-      },
-      "sizeX": 6,
-      "sizeY": 3,
-      "row": 0,
-      "col": 18,
-      "tab": "sent",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "first_sent_at"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_label"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "clinic_label"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_local_uid"
-        },
-        "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "pending_segment_label"
-        }
-      }
-    },
-    {
-      "name": "Отправленные документы",
-      "description": "Построчный список отправленных без вердикта: состояние отправки, ступень обработки, число подач.",
-      "dataset_query": {
-        "type": "native",
-        "database": 1,
-        "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2745,7 +2561,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 3,
+      "row": 18,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2772,13 +2588,13 @@
       }
     },
     {
-      "name": "Топ клиник по документам в обработке > 1 суток",
-      "description": "Клиники с наибольшим числом документов в состоянии «В обработке» дольше 1 суток; документы «Без ответа» не учитываются.",
+      "name": "Ожидание ответа по клиникам и ступеням",
+      "description": "Отправленные без ответа по клиникам, разложенные по ступеням ожидания; клиники — по числу документов «Без ответа».",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' AND pending_hours > 24 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
+          "query": "WITH sent AS ( SELECT clinic_jid, clinic_label, semd_local_uid, sent_state, pending_segment_label, pending_segment_sort FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ), ranked AS ( SELECT clinic_jid, clinic_label, COUNT(DISTINCT semd_local_uid) FILTER (WHERE pending_segment_sort = (SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response)) AS stale_docs, COUNT(DISTINCT semd_local_uid) AS total_docs FROM sent GROUP BY 1, 2 ORDER BY stale_docs DESC, total_docs DESC LIMIT 15 ) SELECT r.clinic_jid::text AS \"JID Клиники\", r.clinic_label AS \"Клиника\", s.pending_segment_label AS \"Ступень обработки\", COUNT(DISTINCT s.semd_local_uid)::bigint AS \"Документов\" FROM ranked r JOIN sent s ON s.clinic_jid = r.clinic_jid GROUP BY 1, 2, 3, s.pending_segment_sort, r.stale_docs, r.total_docs ORDER BY r.stale_docs DESC, r.total_docs DESC, s.pending_segment_sort",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2825,7 +2641,8 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Клиника"
+          "Клиника",
+          "Ступень обработки"
         ],
         "graph.show_values": true,
         "column_settings": {
@@ -2845,11 +2662,12 @@
         },
         "graph.metrics": [
           "Документов"
-        ]
+        ],
+        "stackable.stack_type": "stacked"
       },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 13,
+      "sizeX": 14,
+      "sizeY": 9,
+      "row": 9,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2876,8 +2694,7 @@
       },
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
-        "semd_type": "semd_label",
-        "pending_segment": "pending_segment"
+        "semd_type": "semd_label"
       },
       "click_behavior": {
         "type": "link",
@@ -2894,18 +2711,29 @@
               "model_ref": "Отправленные",
               "field_name": "clinic_jid"
             }
+          },
+          "pending_segment_label": {
+            "source": {
+              "type": "column",
+              "name": "Ступень обработки"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Отправленные",
+              "field_name": "pending_segment_label"
+            }
           }
         }
       }
     },
     {
-      "name": "Ступени обработки",
-      "description": "Распределение отправленных по ступеням возраста обработки; порядок — по лестнице справочника.",
+      "name": "Ожидание ответа по типам СЭМД и ступеням",
+      "description": "Отправленные без ответа по типам СЭМД, разложенные по ступеням ожидания; типы — по числу документов «Без ответа».",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT pending_segment_label AS \"Ступень обработки\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY pending_segment_label, pending_segment_sort ORDER BY pending_segment_sort",
+          "query": "WITH sent AS ( SELECT semd_code, semd_local_uid, sent_state, pending_segment_label, pending_segment_sort FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ), typed AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS semd_code, semd_local_uid, sent_state, pending_segment_label, pending_segment_sort FROM sent ), ranked AS ( SELECT semd_code, COUNT(DISTINCT semd_local_uid) FILTER (WHERE pending_segment_sort = (SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response)) AS stale_docs, COUNT(DISTINCT semd_local_uid) AS total_docs FROM typed GROUP BY 1 ORDER BY stale_docs DESC, total_docs DESC LIMIT 20 ) SELECT r.semd_code AS \"Код СЭМД\", t.pending_segment_label AS \"Ступень обработки\", COUNT(DISTINCT t.semd_local_uid)::bigint AS \"Документов\" FROM ranked r JOIN typed t ON t.semd_code = r.semd_code GROUP BY 1, 2, t.pending_segment_sort, r.stale_docs, r.total_docs ORDER BY r.stale_docs DESC, r.total_docs DESC, t.pending_segment_sort",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2952,120 +2780,8 @@
       "display": "row",
       "visualization_settings": {
         "graph.dimensions": [
-          "Сегмент ожидания"
-        ],
-        "graph.show_values": true,
-        "series_settings": {
-          ">3 дней": {
-            "color": "#F59E0B"
-          },
-          ">30 дней": {
-            "color": "#9CA3AF"
-          },
-          ">7 дней": {
-            "color": "#EF4444"
-          },
-          "до 3 дней": {
-            "color": "#10B981"
-          }
-        },
-        "column_settings": {
-          "[\"name\",\"Документов\"]": {
-            "column_title": "Документов",
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Сегмент ожидания\"]": {
-            "column_title": "Сегмент"
-          }
-        },
-        "graph.metrics": [
-          "Документов"
-        ]
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 13,
-      "col": 12,
-      "tab": "sent",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "first_sent_at"
-        },
-        "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_label"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "clinic_label"
-        },
-        "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "semd_local_uid"
-        },
-        "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
-          "field_name": "pending_segment_label"
-        }
-      }
-    },
-    {
-      "name": "Топ типов СЭМД по документам в обработке > 1 суток",
-      "description": "Типы СЭМД с наибольшим числом документов в состоянии «В обработке» дольше 1 суток; документы «Без ответа» не учитываются.",
-      "dataset_query": {
-        "type": "native",
-        "database": 1,
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' AND pending_hours > 24 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
-          "template-tags": {
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Обработано»",
-              "id": "f2000099-0099-4099-8099-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            },
-            "semd_type": {
-              "widget-type": "string/=",
-              "display-name": "Код СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000010",
-              "name": "semd_type",
-              "required": false,
-              "type": "dimension"
-            },
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "JID Клиники",
-              "id": "f2000099-0099-4099-8099-000000000011",
-              "name": "jid",
-              "required": false,
-              "type": "dimension"
-            },
-            "local_uid": {
-              "widget-type": "string/=",
-              "display-name": "localUid СЭМД",
-              "id": "f2000099-0099-4099-8099-000000000013",
-              "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "pending_segment": {
-              "widget-type": "string/=",
-              "display-name": "Ступень обработки",
-              "id": "f2000099-0099-4099-8099-000000000014",
-              "name": "pending_segment",
-              "required": false,
-              "type": "dimension"
-            }
-          }
-        }
-      },
-      "display": "row",
-      "visualization_settings": {
-        "graph.dimensions": [
-          "Тип СЭМД"
+          "Код СЭМД",
+          "Ступень обработки"
         ],
         "graph.show_values": true,
         "column_settings": {
@@ -3080,12 +2796,13 @@
         },
         "graph.metrics": [
           "Документов"
-        ]
+        ],
+        "stackable.stack_type": "stacked"
       },
-      "sizeX": 24,
-      "sizeY": 7,
-      "row": 20,
-      "col": 0,
+      "sizeX": 10,
+      "sizeY": 9,
+      "row": 9,
+      "col": 14,
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
@@ -3111,8 +2828,7 @@
       },
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
-        "jid": "clinic_label",
-        "pending_segment": "pending_segment"
+        "jid": "clinic_label"
       },
       "click_behavior": {
         "type": "link",
@@ -3128,6 +2844,17 @@
               "type": "dimension",
               "model_ref": "Отправленные",
               "field_name": "semd_code"
+            }
+          },
+          "pending_segment_label": {
+            "source": {
+              "type": "column",
+              "name": "Ступень обработки"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Отправленные",
+              "field_name": "pending_segment_label"
             }
           }
         }
@@ -3365,7 +3092,7 @@
     },
     {
       "name": "Топ по типу ошибки",
-      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с вердиктом РЭМД (успех + ошибка).",
+      "description": "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. «% ошибок» — доля документов с этим типом от всех документов с ошибками; «% всего» — доля от всех документов с ответом РЭМД (успех + ошибка).",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -4221,7 +3948,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), '—') AS nsi_error_code, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, nsi_error_code, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", ec.nsi_error_code AS \"Код НСИ\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), NULLIF(TRIM(rpt_error_breakdown.error_code), ''), '—') AS error_code, COALESCE(NULLIF(TRIM(rpt_error_breakdown.code_namespace), ''), '—') AS code_namespace, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, error_code, code_namespace, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4, 5 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", ec.error_code AS \"Код отказа\", ec.code_namespace AS \"Справочник\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4261,6 +3988,7 @@
           360,
           200,
           280,
+          120,
           88,
           96,
           104
@@ -4276,7 +4004,11 @@
           },
           {
             "enabled": true,
-            "name": "Код НСИ"
+            "name": "Код отказа"
+          },
+          {
+            "enabled": true,
+            "name": "Справочник"
           },
           {
             "enabled": false,
@@ -4307,8 +4039,12 @@
             "column_title": "Тип ошибки",
             "text_style": "wrap"
           },
-          "[\"name\",\"Код НСИ\"]": {
-            "column_title": "Код НСИ",
+          "[\"name\",\"Код отказа\"]": {
+            "column_title": "Код отказа",
+            "text_style": "wrap"
+          },
+          "[\"name\",\"Справочник\"]": {
+            "column_title": "Справочник",
             "text_style": "wrap"
           }
         }
@@ -5453,6 +5189,258 @@
           "field_name": "logid"
         }
       }
+    },
+    {
+      "name": "Скорость регистрации в РЭМД",
+      "display": "funnel",
+      "tab": "operational",
+      "description": "Документы, по которым ответ уже получен: сколько из них уложилось в срок. Сроки ужесточаются слева направо, поэтому воронка сужается. Разрыв между базой и первой ступенью — регистрации дольше самой мягкой границы справочника. Ожидающие и «Без ответа» в корпус не входят: срока регистрации у них нет.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH sent AS ( SELECT dwh_id, delivery_seconds FROM public.rpt_documents WHERE first_sent_at IS NOT NULL AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'Получен ответ' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM sent UNION ALL SELECT -g.sort_order::int, regexp_replace(g.label, '^до ', '< '), COUNT(DISTINCT s.dwh_id) FILTER (WHERE s.delivery_seconds IS NOT NULL AND s.delivery_seconds <= g.max_age_minutes * 60)::bigint FROM public.dim_pending_segments g CROSS JOIN sent s WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
+          "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      },
+      "visualization_settings": {
+        "funnel.dimension": "Этап",
+        "funnel.metric": "Документов"
+      },
+      "row": 47,
+      "col": 0,
+      "sizeX": 24,
+      "sizeY": 6
+    },
+    {
+      "name": "Документы: ответ не получен (утилизирован)",
+      "display": "table",
+      "tab": "sent",
+      "description": "Отправленные, по которым ожидаемое время истекло и ответа уже не будет; самые давние сверху.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000013",
+              "name": "local_uid",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "first_sent_at"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "clinic_label"
+        },
+        "local_uid": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "semd_local_uid"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
+        }
+      },
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Состояние отправки"
+          },
+          {
+            "enabled": true,
+            "name": "Ступень обработки"
+          },
+          {
+            "enabled": true,
+            "name": "Суток с отправки"
+          },
+          {
+            "enabled": true,
+            "name": "Подач в ЕГИСЗ"
+          },
+          {
+            "enabled": true,
+            "name": "Дата отправки"
+          },
+          {
+            "enabled": true,
+            "name": "Клиника"
+          },
+          {
+            "enabled": true,
+            "name": "Код СЭМД"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование СЭМД"
+          },
+          {
+            "enabled": false,
+            "name": "JID Клиники"
+          },
+          {
+            "enabled": true,
+            "name": "localUid СЭМД"
+          }
+        ],
+        "table.cell_column": "Состояние отправки",
+        "column_settings": {
+          "[\"name\",\"Подач в ЕГИСЗ\"]": {
+            "column_title": "Подач в ЕГИСЗ",
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "row": 28,
+      "col": 0,
+      "sizeX": 24,
+      "sizeY": 10
+    },
+    {
+      "name": "В обработке на конец периода",
+      "display": "funnel",
+      "tab": "sent",
+      "description": "Очередь ожидания на правую границу выбранного периода: документ отправлен до неё, а ответ либо не пришёл вовсе, либо пришёл позже. Возраст ожидания отсчитывается от той же границы, поэтому срез не зависит от момента просмотра.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH anchor AS ( SELECT MAX(ips_date) AS ts FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] ), pending AS ( SELECT d.dwh_id, EXTRACT(EPOCH FROM (a.ts - d.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents d CROSS JOIN anchor a WHERE a.ts IS NOT NULL AND d.first_sent_at IS NOT NULL AND d.first_sent_at <= a.ts AND ( d.delivery_seconds IS NULL OR d.first_sent_at + make_interval(secs => d.delivery_seconds) > a.ts ) AND COALESCE(d.sent_state, '') <> 'no_response' [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'В обработке' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM pending UNION ALL SELECT g.sort_order::int, 'ждали > ' || regexp_replace(g.label, '^до ', ''), COUNT(DISTINCT p.dwh_id) FILTER (WHERE p.age_minutes > g.max_age_minutes)::bigint FROM public.dim_pending_segments g CROSS JOIN pending p WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
+          "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      },
+      "visualization_settings": {
+        "funnel.dimension": "Этап",
+        "funnel.metric": "Документов"
+      },
+      "row": 3,
+      "col": 0,
+      "sizeX": 24,
+      "sizeY": 6
     }
   ],
   "tabs": [

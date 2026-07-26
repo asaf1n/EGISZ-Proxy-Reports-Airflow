@@ -10,7 +10,7 @@ fetch_organizations = _etl_dag.fetch_organizations
 fetch_exchangelog_after_cursor = _etl_dag.fetch_exchangelog_after_cursor
 fetch_message_registry_after_cursor = _etl_dag.fetch_message_registry_after_cursor
 
-_maintenance_dag = load_dag_module("egisz_maintenance_dag")
+_maintenance_dag = load_dag_module("egisz_reconcile_maintenance_dag")
 fetch_exchangelog_by_logids = _maintenance_dag.fetch_exchangelog_by_logids
 source_logid_bounds = _maintenance_dag.source_logid_bounds
 fetch_source_logids_range = _maintenance_dag.fetch_source_logids_range

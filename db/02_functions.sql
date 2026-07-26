@@ -66,13 +66,13 @@ DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm;
 DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm;
 
 -- Нормализованные идентификаторы сообщений в transactions не служат ключом поиска:
--- вердикт связывается с документом через dim_message_document, а не обратным ходом
+-- ответ связывается с документом через dim_message_document, а не обратным ходом
 -- по журналу.
 DROP INDEX IF EXISTS idx_transactions_message_id_norm;
 DROP INDEX IF EXISTS idx_transactions_relates_to_norm;
 
 -- Канонический ключ реестра подач. Применяется симметрично: при загрузке
--- EGISZ_MESSAGES.MSGID в dim_message_document и при поиске по relatesToMessage вердикта.
+-- EGISZ_MESSAGES.MSGID в dim_message_document и при поиске по relatesToMessage ответа.
 -- Шлюз и ЕГИСЗ передают идентификатор в разных написаниях (с дефисами и без,
 -- с префиксом urn:uuid:, в разном регистре), поэтому ключ приводится к одному виду.
 CREATE OR REPLACE FUNCTION public.message_registry_key(p_value text)
@@ -508,7 +508,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (publi
 -- NB: синхронный ответ отдаётся в рамках registerDocument — исходящего вызова МИС→РЭМД,
 -- которого в журнале шлюза нет по построению, поэтому ветка 'accepted' недостижима на
 -- текущем контракте источника. Оставлена зарезервированной на случай, если шлюз начнёт
--- журналировать исходящую подачу. Документы без вердикта создаёт ветка getDocumentFile.
+-- журналировать исходящую подачу. Документы без ответа создаёт ветка getDocumentFile.
 -- 'accepted', а не 'pending': на грейне документа 'pending' — это состояние отправки
 -- (dim_sent_state), и совпадение имён на разных грейнах вводило бы в заблуждение.
 CREATE OR REPLACE FUNCTION public.classify_async_status(
@@ -559,6 +559,7 @@ CREATE TABLE IF NOT EXISTS dim_error_rules (
     match_code text,
     code_namespace text,
     nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code),
+    parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code),
     match_pattern text NOT NULL,
     interpretation text NOT NULL,
     error_category text NOT NULL DEFAULT 'Прочие',
@@ -574,6 +575,8 @@ ALTER TABLE dim_error_rules
     ADD COLUMN IF NOT EXISTS code_namespace text;
 ALTER TABLE dim_error_rules
     ADD COLUMN IF NOT EXISTS nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code);
+ALTER TABLE dim_error_rules
+    ADD COLUMN IF NOT EXISTS parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code);
 
 COMMENT ON COLUMN dim_error_rules.match_tier IS
 'Ярус матчинга: 1 — код + специфичный текст; 2 — только код (match_pattern = ''(?is).*''); 3 — специфичный текст без кода; 4 — широкий текстовый фолбэк. Первый ярус с совпадением побеждает.';
@@ -581,6 +584,8 @@ COMMENT ON COLUMN dim_error_rules.code_namespace IS
 'Пространство имён кода: «НСИ 305» — классификатор ФНСИ 1.2.643.5.1.13.13.99.2.305; «IHE XDS» — errorCode контура ИЭМК; «шлюз» — синтетический код интеграционного шлюза. NULL для текстовых ярусов.';
 COMMENT ON COLUMN dim_error_rules.nsi_error_code IS
 'Мнемоника справочника ФНСИ. Заполнена ровно для code_namespace = «НСИ 305» — внешний ключ не даёт завести правило на несуществующий код.';
+COMMENT ON COLUMN dim_error_rules.parent_nsi_error_code IS
+'Зонтичная мнемоника ФНСИ, отказ под которой уточняется текстом правила. Заполнена только для ярусов 3–4 контура регистрации: ярус 2 закрывает все коды НСИ 305 кроме VALIDATION_ERROR и RUNTIME_ERROR, поэтому текстовое правило срабатывает ровно под одной из них. NULL для ярусов 1–2 (мнемоника своя) и для контуров ИЭМК/шлюза (код вне НСИ 305).';
 
 -- Сид собирается во временной таблице, чтобы прунинг снимал правила, убранные из
 -- исходника: без него словарь в БД накапливал бы строки прошлых редакций и переставал
@@ -592,6 +597,7 @@ CREATE TEMP TABLE seed_error_rules (
     match_code text,
     code_namespace text,
     nsi_error_code text,
+    parent_nsi_error_code text,
     match_pattern text NOT NULL,
     interpretation text NOT NULL,
     error_category text NOT NULL
@@ -789,7 +795,7 @@ VALUES
     ('xds_unknown_repository_id_code', 2, 'XDSUNKNOWNREPOSITORYID', 'IHE XDS', NULL, '(?is).*', 'ИЭМК: неверный идентификатор репозитория', 'Ошибки ИЭМК'),
 
     -- ------------------------------------------------------------------
-    -- Ярус 2, контур шлюза: LOGSTATE = 3 — сбой транспорта до РЭМД, вердикта нет.
+    -- Ярус 2, контур шлюза: LOGSTATE = 3 — сбой транспорта до РЭМД, ответа нет.
     -- Код синтетический, проставляется при разборе журнала (db/03_transform.sql).
     -- ------------------------------------------------------------------
     ('gateway_transport_failure', 2, 'INTEGRATION_LOGSTATE_3', 'шлюз', NULL, '(?is).*', 'Сетевая ошибка', 'Ошибки связи'),
@@ -923,14 +929,29 @@ VALUES
     ('schematron_generic', 4, NULL, NULL, NULL, '(?is)(Ошибка валидации Schematron|схематрон)', 'Ошибка Schematron-валидации', 'Ошибки структуры и валидации'),
     ('transport_network', 4, NULL, NULL, NULL, '(?is)(\ynetwork\y|\yconnection\y|\ytransport\y|соединени|сетевая ошибка)', 'Сетевая ошибка', 'Ошибки связи');
 
-INSERT INTO dim_error_rules (rule_code, match_tier, match_code, code_namespace, nsi_error_code, match_pattern, interpretation, error_category)
-SELECT rule_code, match_tier, match_code, code_namespace, nsi_error_code, match_pattern, interpretation, error_category
+-- ------------------------------------------------------------------
+-- Зонтичная мнемоника текстовых ярусов. Ярус 2 закрывает весь классификатор кроме
+-- VALIDATION_ERROR и RUNTIME_ERROR, поэтому текстовое правило контура регистрации
+-- срабатывает ровно под одной из этих двух мнемоник — она и есть код отказа для типа,
+-- у которого своей мнемоники в НСИ 305 нет. Проверено по журналу: у отказов с одним
+-- атомом код совпадает с назначенным ниже во всех наблюдённых типах.
+-- ------------------------------------------------------------------
+UPDATE seed_error_rules SET parent_nsi_error_code = 'VALIDATION_ERROR' WHERE match_tier >= 3;
+UPDATE seed_error_rules SET parent_nsi_error_code = 'RUNTIME_ERROR'
+WHERE rule_code IN ('runtime_check_unavailable', 'runtime_request_processing', 'runtime_signature_check');
+-- Контуры вне НСИ 305: ИЭМК отвечает errorCode IHE XDS, сетевой сбой фиксирует шлюз.
+UPDATE seed_error_rules SET parent_nsi_error_code = NULL
+WHERE rule_code IN ('xds_pat_001_text', 'xds_replace_target_missing_text', 'transport_network');
+
+INSERT INTO dim_error_rules (rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, interpretation, error_category)
+SELECT rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, interpretation, error_category
 FROM seed_error_rules
 ON CONFLICT (rule_code) DO UPDATE SET
     match_tier = EXCLUDED.match_tier,
     match_code = EXCLUDED.match_code,
     code_namespace = EXCLUDED.code_namespace,
     nsi_error_code = EXCLUDED.nsi_error_code,
+    parent_nsi_error_code = EXCLUDED.parent_nsi_error_code,
     match_pattern = EXCLUDED.match_pattern,
     interpretation = EXCLUDED.interpretation,
     error_category = EXCLUDED.error_category,
@@ -959,6 +980,15 @@ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Своя и зонтичная мнемоники взаимно исключают друг друга: ярус 1–2 знает код отказа,
+-- ярус 3–4 — только зонтик, под которым отказ пришёл.
+DO $$
+BEGIN
+    ALTER TABLE dim_error_rules ADD CONSTRAINT chk_dim_error_rules_parent_code
+        CHECK (parent_nsi_error_code IS NULL OR (match_tier >= 3 AND nsi_error_code IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_dim_error_rules_match_code ON dim_error_rules (match_code) WHERE match_code IS NOT NULL;
 
 -- ============================================================================
@@ -971,6 +1001,7 @@ CREATE TABLE IF NOT EXISTS dim_error_type_group (
     error_type text PRIMARY KEY,
     error_category text NOT NULL,
     nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code),
+    parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code),
     responsibility text NOT NULL DEFAULT 'смешанная',
     is_retryable boolean NOT NULL DEFAULT false,
     updated_at timestamptz DEFAULT now()
@@ -984,6 +1015,19 @@ ALTER TABLE dim_error_type_group
     ADD COLUMN IF NOT EXISTS is_retryable boolean NOT NULL DEFAULT false;
 ALTER TABLE dim_error_type_group
     ADD COLUMN IF NOT EXISTS nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code);
+ALTER TABLE dim_error_type_group
+    ADD COLUMN IF NOT EXISTS parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code);
+ALTER TABLE dim_error_type_group
+    ADD COLUMN IF NOT EXISTS code_namespace text;
+ALTER TABLE dim_error_type_group
+    ADD COLUMN IF NOT EXISTS error_code text;
+
+COMMENT ON COLUMN dim_error_type_group.parent_nsi_error_code IS
+'Зонтичная мнемоника ФНСИ для типа, распознанного текстовым правилом (своей мнемоники в НСИ 305 у него нет). Отчётный слой показывает код отказа как COALESCE(nsi_error_code, parent_nsi_error_code).';
+COMMENT ON COLUMN dim_error_type_group.error_code IS
+'Код отказа в своём пространстве имён: мнемоника НСИ 305 для регистрационного пути, errorCode IHE XDS для ИЭМК, синтетический код для шлюза. NULL, если тип рождён правилами с разными кодами — показывать один из них означало бы выдавать частный случай за причину.';
+COMMENT ON COLUMN dim_error_type_group.code_namespace IS
+'Пространство имён error_code. Отделяет мнемонику ФНСИ 305 от кодов контуров ИЭМК и шлюза, у которых мнемоники в 305 нет по существу.';
 
 DO $$
 BEGIN
@@ -993,25 +1037,57 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 -- Канонические типы из активных правил. Код НСИ переносится с правила: тип, рождённый
--- уточняющим правилом яруса 1, наследует код уточняемого сообщения.
-INSERT INTO dim_error_type_group (error_type, error_category, nsi_error_code)
+-- уточняющим правилом яруса 1, наследует код уточняемого сообщения; тип, рождённый только
+-- текстовым правилом, — зонтичную мнемонику, под которой отказ пришёл. Порядок ярусов в
+-- DISTINCT ON отдаёт приоритет кодовому правилу: своя мнемоника точнее зонтичной.
+-- Код отказа и его пространство имён считаются по ВСЕМ правилам типа, а не по выбранному
+-- DISTINCT ON: один тип бывает исходом нескольких кодов (например «ИЭМК: сервис временно
+-- недоступен» — пять кодов XDS*BUSY/OUTOFRESOURCES). Показывать первый по алфавиту значило бы
+-- выдавать частный случай за причину, поэтому код проставляется только когда он единственный.
+WITH type_code AS (
+    SELECT
+        r.interpretation,
+        CASE WHEN count(DISTINCT c.code) = 1 THEN min(c.code) END AS error_code,
+        CASE WHEN count(DISTINCT c.namespace) = 1 THEN min(c.namespace) END AS code_namespace
+    FROM dim_error_rules r
+    CROSS JOIN LATERAL (
+        SELECT
+            COALESCE(r.nsi_error_code, r.parent_nsi_error_code, r.match_code) AS code,
+            -- Текстовый ярус кода в правиле не несёт, но его зонтичная мнемоника — из НСИ 305.
+            CASE
+                WHEN COALESCE(r.nsi_error_code, r.parent_nsi_error_code) IS NOT NULL THEN 'НСИ 305'
+                ELSE r.code_namespace
+            END AS namespace
+    ) c
+    WHERE r.is_active
+    GROUP BY r.interpretation
+)
+INSERT INTO dim_error_type_group (
+    error_type, error_category, nsi_error_code, parent_nsi_error_code, code_namespace, error_code
+)
 SELECT DISTINCT ON (r.interpretation)
-       r.interpretation, r.error_category, r.nsi_error_code
+       r.interpretation, r.error_category, r.nsi_error_code, r.parent_nsi_error_code,
+       t.code_namespace, t.error_code
 FROM dim_error_rules r
+JOIN type_code t ON t.interpretation = r.interpretation
 WHERE r.is_active
 ORDER BY r.interpretation, r.match_tier, r.rule_code
 ON CONFLICT (error_type) DO UPDATE SET
     error_category = EXCLUDED.error_category,
     nsi_error_code = EXCLUDED.nsi_error_code,
+    parent_nsi_error_code = EXCLUDED.parent_nsi_error_code,
+    code_namespace = EXCLUDED.code_namespace,
+    error_code = EXCLUDED.error_code,
     updated_at = now();
 
 -- Типы, выдаваемые движком классификации вне таблицы правил.
-INSERT INTO dim_error_type_group (error_type, error_category, nsi_error_code)
+INSERT INTO dim_error_type_group (error_type, error_category, nsi_error_code, parent_nsi_error_code)
 VALUES
-    ('Неизвестная ошибка', 'Прочие', NULL)
+    ('Неизвестная ошибка', 'Прочие', NULL, NULL)
 ON CONFLICT (error_type) DO UPDATE SET
     error_category = EXCLUDED.error_category,
     nsi_error_code = EXCLUDED.nsi_error_code,
+    parent_nsi_error_code = EXCLUDED.parent_nsi_error_code,
     updated_at = now();
 
 -- Прунинг: тип, переставший порождаться правилами, иначе остался бы в словаре

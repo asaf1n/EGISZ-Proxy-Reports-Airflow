@@ -1,7 +1,7 @@
 {
   "name": "Отправленные",
   "table_ref": "public.rpt_documents_sent",
-  "description": "Документы, отправленные в ЕГИСЗ без вердикта (grain: semd_local_uid). Состояние отправки и ступень обработки — из справочников dim_sent_state и dim_pending_segments.",
+  "description": "Документы, отправленные в ЕГИСЗ без ответа (grain: semd_local_uid). Состояние отправки и ступень обработки — из справочников dim_sent_state и dim_pending_segments.",
   "fields": {
     "semd_local_uid": { "semantic_type": "type/PK", "display_name": "localUid СЭМД" },
     "first_sent_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Первая отправка" },

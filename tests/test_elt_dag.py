@@ -15,7 +15,7 @@ def _read(dag_file: str) -> str:
     return (DAGS_DIR / dag_file).read_text(encoding="utf-8")
 
 
-DAG_STEMS = ("egisz_etl_dag", "egisz_marts_dag", "egisz_maintenance_dag")
+DAG_STEMS = ("egisz_etl_dag", "egisz_marts_dag", "egisz_reconcile_maintenance_dag")
 
 
 def test_dag_setting_keys_do_not_collide() -> None:
@@ -93,7 +93,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "transform_exchangelog(extracted)" in src
     assert "get_current_context" not in src
 
-    # Реестр подач читается до transform: без него вердикт ЕГИСЗ не с чем связать.
+    # Реестр подач читается до transform: без него ответ ЕГИСЗ не с чем связать.
     assert "def extract_message_registry" in src
     assert 'get_int("registry_rows")' in src
     assert "extracted >> registry >> dictionaries >> transformed" in src
@@ -117,7 +117,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
 def test_marts_dag_is_the_only_place_that_refreshes_matviews() -> None:
     marts = _read("egisz_marts_dag.py")
     etl = _read("egisz_etl_dag.py")
-    maintenance = _read("egisz_maintenance_dag.py")
+    maintenance = _read("egisz_reconcile_maintenance_dag.py")
 
     assert 'dag_id="egisz_marts_dag"' in marts
     # Запускается публикацией актива, а не расписанием: обновление витрин — следствие
@@ -136,9 +136,9 @@ def test_marts_dag_is_the_only_place_that_refreshes_matviews() -> None:
 
 
 def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
-    src = _read("egisz_maintenance_dag.py")
+    src = _read("egisz_reconcile_maintenance_dag.py")
 
-    assert 'dag_id="egisz_maintenance_dag"' in src
+    assert 'dag_id="egisz_reconcile_maintenance_dag"' in src
     assert "def reconcile_journal_tail" in src
     assert "def reconcile_archive_attributes" in src
     assert "def maintain_partitions" in src
@@ -148,7 +148,7 @@ def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
     assert "source_logids - raw_logids" in src
     assert 'get_int("reconcile_chunk_logids")' in src
     # Штатное окно — узкое; широкое доступно ручным прогоном (params.deep).
-    module = load_dag_module("egisz_maintenance_dag")
+    module = load_dag_module("egisz_reconcile_maintenance_dag")
     assert module.DEFAULTS["reconcile_lookback_days"] < module.DEFAULTS["reconcile_deep_lookback_days"]
     assert 'params={"deep": False}' in src
     assert "fetch_exchangelog_logids_in_band" not in src
@@ -162,7 +162,7 @@ def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
     assert "reconcile_document_attributes_ui" in src
     assert "recompute_document_versions" in src
     assert "ensure_time_partitions" in src
-    # error_text принадлежит последнему вердикту и пишется в transform: сверка по архиву
+    # error_text принадлежит последнему ответу и пишется в transform: сверка по архиву
     # возвращала текст отказа на документы, прошедшие со второй попытки.
     assert "repair_document_error_text" not in src
     assert "retries=2" in src
@@ -298,11 +298,11 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
     """
     etl = load_dag_module("egisz_etl_dag").egisz_etl_pipeline()
     marts = load_dag_module("egisz_marts_dag").egisz_marts_pipeline()
-    maintenance = load_dag_module("egisz_maintenance_dag").egisz_maintenance_pipeline()
+    maintenance = load_dag_module("egisz_reconcile_maintenance_dag").egisz_reconcile_maintenance_pipeline()
 
     assert etl.dag_id == "egisz_etl_dag"
     assert marts.dag_id == "egisz_marts_dag"
-    assert maintenance.dag_id == "egisz_maintenance_dag"
+    assert maintenance.dag_id == "egisz_reconcile_maintenance_dag"
 
     # Пул провижинится отдельно (up.ps1 / внешняя инструкция) — задачи обязаны его требовать.
     pooled = {
@@ -335,7 +335,7 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
         "maintain_partitions",
     }
 
-    # Реестр подач наполняется до transform, иначе вердикт не с чем связать.
+    # Реестр подач наполняется до transform, иначе ответ не с чем связать.
     assert etl.task_dict["extract_exchangelog"].downstream_task_ids == {
         "extract_message_registry",
         "transform_exchangelog",

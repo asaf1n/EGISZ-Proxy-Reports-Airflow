@@ -190,7 +190,7 @@ def top_error_type_table_issues(name: str, card: dict) -> list[str]:
     issues: list[str] = []
     columns = {col.get("name") for col in viz.get("table.columns") or []}
     # Контракт карточки: два знаменателя долей — «% ошибок» (от документов с ошибками)
-    # и «% обработанных» (от документов с вердиктом РЭМД), см. TOP_ERROR_TYPE_QUERY.
+    # и «% обработанных» (от документов с ответом РЭМД), см. TOP_ERROR_TYPE_QUERY.
     for required in (
         "Категория ошибки",
         "Тип ошибки",

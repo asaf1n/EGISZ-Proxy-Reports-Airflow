@@ -4,10 +4,10 @@
 --
 -- Mandatory one-time bootstrap (run against maintenance DB `postgres`):
 --   CREATE ROLE egisz LOGIN PASSWORD 'egisz';
---   CREATE DATABASE dwh_egisz OWNER postgres;
+--   CREATE DATABASE dwh_egisz OWNER egisz;
 --
--- Usage:
---   psql -U postgres -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+-- Usage (run from the repository/bundle root — parts are included by relative \i):
+--   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 -- ============================================================================
 
 \set ON_ERROR_STOP on

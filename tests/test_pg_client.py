@@ -21,7 +21,7 @@ DIRECTORY_SYNC_PAGE_SIZE = etl_dag.DIRECTORY_SYNC_PAGE_SIZE
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = etl_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
 sync_directory = etl_dag.sync_directory
 
-maintenance_dag = load_dag_module("egisz_maintenance_dag")
+maintenance_dag = load_dag_module("egisz_reconcile_maintenance_dag")
 coalesce_logid_windows = maintenance_dag.coalesce_logid_windows
 fetch_raw_logids_range = maintenance_dag.fetch_raw_logids_range
 transform_missing_windows = maintenance_dag.transform_missing_windows
@@ -252,8 +252,8 @@ def test_document_version_layer_groups_by_doc_number() -> None:
     assert "rpt_health_versions" in health
 
 
-def test_verdict_links_to_document_through_message_registry() -> None:
-    """Вердикт ЕГИСЗ не несёт localUid: документ находится по relatesToMessage через
+def test_response_links_to_document_through_message_registry() -> None:
+    """Ответ ЕГИСЗ не несёт localUid: документ находится по relatesToMessage через
     реестр подач dim_message_document. Ключ приводится к каноническому виду одной
     функцией на обеих сторонах — при загрузке реестра и при поиске."""
     parts = DWH_INIT_SQL_PATH.parent
@@ -516,7 +516,7 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "CREATE OR REPLACE FUNCTION public.document_source_mismatch" in parsing_sql
     assert "egisz_xml_text" not in transform_sql
     assert "outbound_ref.dwh_id" not in sql
-    # Вердикт связывается с документом по реестру подач; самосоединение по journal-MSGID
+    # Ответ связывается с документом по реестру подач; самосоединение по journal-MSGID
     # и позиционная догадка «последний getDocumentFile клиники» сняты.
     assert "msg_ref.dwh_id" in transform_sql
     assert "exch_ref" not in transform_sql
@@ -618,7 +618,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert con.committed is True
 
 
-def test_get_cursors_reads_last_logid_only() -> None:
+def test_get_cursors_reads_logid_cursor_only() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.sql = ""
@@ -643,7 +643,7 @@ def test_get_cursors_reads_last_logid_only() -> None:
             return self.cursor_instance
 
     con = Connection()
-    assert get_cursors(con, "egisz") == {"last_logid": 123, "last_egmid": 45}
+    assert get_cursors(con, "egisz") == {"logid_cursor": 123, "egmid_cursor": 45}
     assert "source_min_created_at" not in con.cursor_instance.sql
 
 
@@ -665,7 +665,7 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {"last_logid": 0, "last_egmid": 0}
+    assert get_cursors(Connection(), "egisz") == {"logid_cursor": 0, "egmid_cursor": 0}
 
 
 def test_fetch_raw_logids_range_reads_one_chunk() -> None:
@@ -747,13 +747,19 @@ def test_transform_missing_windows_calls_transform_per_window() -> None:
     assert calls == [(99, 101), (4999, 5000)]
 
 
-def test_dwh_init_sql_drops_source_min_created_at_from_elt_state() -> None:
+def test_dwh_init_sql_declares_only_final_state_shape() -> None:
+    """Схема объявляет конечное состояние, а не путь к нему.
+
+    Разовые переименования и снятие отживших колонок — операции развёртывания
+    (deploy/README.md §1.6–1.7), а не часть idempotent-схемы: в ней они превращаются
+    в мусор, который прогоняется на каждом накате и переживает свой смысл.
+    """
     sql = (DWH_INIT_SQL_PATH.parent / "01_schema.sql").read_text(encoding="utf-8")
 
-    # Дата-отсечка источника снята целиком: ни колонки, ни date-seed.
-    assert "ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at" in sql
-    assert "source_min_created_at timestamptz" not in sql
-    assert "INSERT INTO elt_state (pipeline, last_logid)\nVALUES ('egisz', 0)" in sql
+    for legacy in ("source_min_created_at", "elt_state", "elt_job_runs",
+                   "last_logid", "last_egmid"):
+        assert legacy not in sql, f"в схеме осталось упоминание {legacy!r}"
+    assert "INSERT INTO etl_state (pipeline, logid_cursor)\nVALUES ('egisz', 0)" in sql
     assert "2026-05-18" not in sql
     assert "SOURCE_MIN_CREATED_AT" not in sql
 
@@ -781,7 +787,7 @@ def test_load_raw_logs_uses_partitioned_upsert_target() -> None:
     assert "ON CONFLICT (logid, createdate)" in source
 
 
-def test_update_cursors_upserts_last_logid() -> None:
+def test_update_cursors_upserts_logid_cursor() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.calls: list[tuple[str, tuple[object, ...]]] = []
@@ -811,6 +817,6 @@ def test_update_cursors_upserts_last_logid() -> None:
 
     assert con.committed is True
     sql, params = con.cursor_instance.calls[0]
-    assert "INSERT INTO elt_state (pipeline, last_logid, last_egmid)" in sql
-    assert "last_logid = GREATEST(elt_state.last_logid, EXCLUDED.last_logid)" in sql
+    assert "INSERT INTO etl_state (pipeline, logid_cursor, egmid_cursor)" in sql
+    assert "logid_cursor = GREATEST(etl_state.logid_cursor, EXCLUDED.logid_cursor)" in sql
     assert params == ("egisz", 11, 0)

@@ -165,10 +165,10 @@ $$;
 --
 -- Классы сообщений и правила привязки к документу (README §«Связывание сообщений»):
 --   getDocumentFile          — localUid лежит в самом payload;
---   вердикт РЭМД/ИЭМК        — localUid в ответе нет, есть relatesToMessage; документ
+--   ответ РЭМД/ИЭМК        — localUid в ответе нет, есть relatesToMessage; документ
 --                              находится через реестр подач dim_message_document;
---   повторный вердикт        — подтверждающий путь по emdrId уже собранных документов.
--- Применённое правило пишется в transactions.link_method, непривязанные вердикты
+--   повторный ответ        — подтверждающий путь по emdrId уже собранных документов.
+-- Применённое правило пишется в transactions.link_method, непривязанные ответы
 -- помечаются 'unlinked' и попадают в сигналы здоровья, а не теряются молча.
 --
 -- Окно строго ограничено (from_logid, to_logid]: связывание не зависит от префикса
@@ -450,7 +450,7 @@ BEGIN
         END,
         error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
-        -- request_logid — LOGID отправки; наибольший из известных. Ветка вердикта эту
+        -- request_logid — LOGID отправки; наибольший из известных. Ветка ответа эту
         -- колонку не трогает, поэтому пара request_msgid ↔ relates_to_msgid остаётся целой.
         request_logid = GREATEST(
             COALESCE(public.documents.request_logid, 0),
@@ -469,7 +469,7 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM public.documents d WHERE d.dwh_id = tx.xml_dwh_id);
 
     -- ------------------------------------------------------------------
-    -- Ветка вердикта: классификация ответа и привязка к документу.
+    -- Ветка ответа: классификация ответа и привязка к документу.
     -- ------------------------------------------------------------------
     WITH candidate_log_ids AS (
         SELECT r.logid
@@ -580,7 +580,7 @@ BEGIN
             r.has_error_ilike,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
-        -- Штатный ключ: relatesToMessage вердикта → идентификатор подачи → localUid.
+        -- Штатный ключ: relatesToMessage ответа → идентификатор подачи → localUid.
         LEFT JOIN LATERAL (
             SELECT
                 public.dwh_id(m.document_uid) AS dwh_id,
@@ -591,7 +591,7 @@ BEGIN
               AND m.msgid = public.message_registry_key(r.relates_to_id)
             LIMIT 1
         ) msg_ref ON TRUE
-        -- Подтверждающий путь: повторный или поздний вердикт по уже известному emdrId.
+        -- Подтверждающий путь: повторный или поздний ответ по уже известному emdrId.
         LEFT JOIN LATERAL (
             SELECT fd.dwh_id
             FROM public.documents fd
@@ -740,7 +740,7 @@ BEGIN
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
-    -- Вердикты, не связавшиеся ни одним правилом, помечаются явно: без метки они
+    -- Ответы, не связавшиеся ни одним правилом, помечаются явно: без метки они
     -- неотличимы от неразобранных строк и деградация привязки остаётся незаметной.
     UPDATE public.transactions tx
     SET link_method = 'unlinked'
@@ -754,7 +754,7 @@ BEGIN
     -- ------------------------------------------------------------------
     -- Перенос исхода на грейн документа. Ветка создаёт запись, если отправки в журнале
     -- не было: ЕГИСЗ отклоняет часть документов до запроса файла, и единственный след
-    -- такого документа — сам вердикт.
+    -- такого документа — сам ответ.
     -- ------------------------------------------------------------------
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
@@ -840,7 +840,7 @@ BEGIN
         doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.documents.doctor_hash),
         updated_at = now();
 
-    -- Вердикт может прийти без KIND, а тип СЭМД уже известен из отправки.
+    -- Ответ может прийти без KIND, а тип СЭМД уже известен из отправки.
     -- Только документы, затронутые в этой транзакции: O(батч), не O(архив).
     WITH batch_docs AS (
         SELECT d.dwh_id

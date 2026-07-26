@@ -36,6 +36,10 @@ CODE_NAMESPACES = ("НСИ 305", "IHE XDS", "шлюз")
 # читается из текста ярусами 3–4.
 UMBRELLA_CODES = ("VALIDATION_ERROR", "RUNTIME_ERROR")
 
+# Категории, чьи отказы приходят вне НСИ 305: ИЭМК отвечает errorCode IHE XDS, сбой
+# транспорта фиксирует шлюз. Мнемоники классификатора 305 у их типов быть не может.
+NON_NSI_CATEGORIES = ("Ошибки ИЭМК", "Ошибки связи")
+
 
 @pytest.fixture(scope="module")
 def con():
@@ -129,7 +133,7 @@ CORPUS = [
      ["Получатель из запроса на регистрацию сведений не найден в СЭМД"], ["Данные пациента"]),
     ("RECEPIENT_INFO_MISMATCH", "",
      ["Получатель из запроса на регистрацию сведений не найден в СЭМД"], ["Данные пациента"]),
-    # Синтетический код шлюза: сбой транспорта до РЭМД, вердикта нет.
+    # Синтетический код шлюза: сбой транспорта до РЭМД, ответа нет.
     ("INTEGRATION_LOGSTATE_3", "Сетевая ошибка: Synapse TCP/IP Socket error 11001: Host not found",
      ["Сетевая ошибка"], ["Ошибки связи"]),
 
@@ -407,6 +411,39 @@ def test_types_carry_nsi_code_when_rule_is_code_gated(con):
                       WHERE r.is_active AND r.interpretation = g.error_type
                         AND r.code_namespace = 'НСИ 305')
     """) == 0
+
+
+def test_text_rules_declare_umbrella_code(con):
+    """Ярус 3–4 срабатывает только там, где промолчал ярус 2, то есть под зонтичным кодом.
+    Правило контура регистрации обязано его объявить; правило ИЭМК/шлюза — не может: его
+    код лежит вне НСИ 305. Кодовые ярусы 1–2 знают свою мнемонику, зонтик им не нужен."""
+    assert one(con, """
+        SELECT count(*) FROM dim_error_rules
+        WHERE match_tier >= 3 AND error_category NOT IN %s
+          AND COALESCE(parent_nsi_error_code, '') NOT IN %s
+    """, NON_NSI_CATEGORIES, UMBRELLA_CODES) == 0
+    assert one(con, """
+        SELECT count(*) FROM dim_error_rules
+        WHERE error_category IN %s AND parent_nsi_error_code IS NOT NULL
+    """, NON_NSI_CATEGORIES) == 0
+    assert one(con, """
+        SELECT count(*) FROM dim_error_rules
+        WHERE parent_nsi_error_code IS NOT NULL
+          AND (match_tier <= 2 OR nsi_error_code IS NOT NULL)
+    """) == 0
+
+
+def test_every_type_reports_a_refusal_code(con):
+    """Тип регистрационного контура показывает мнемонику отказа — свою либо зонтичную.
+    Пусто остаётся только там, где мнемоники в НСИ 305 нет: ИЭМК, транспорт, заглушка."""
+    missing = one(con, """
+        SELECT array_agg(g.error_type ORDER BY g.error_type)
+        FROM dim_error_type_group g
+        WHERE COALESCE(g.nsi_error_code, g.parent_nsi_error_code) IS NULL
+          AND g.error_category NOT IN %s
+          AND g.error_type <> 'Неизвестная ошибка'
+    """, NON_NSI_CATEGORIES)
+    assert (missing or []) == []
 
 
 # --- Инварианты словарей ---------------------------------------------------------------

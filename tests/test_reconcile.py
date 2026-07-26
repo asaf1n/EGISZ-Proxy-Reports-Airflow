@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from conftest import load_dag_module
 
-maintenance_dag = load_dag_module("egisz_maintenance_dag")
+maintenance_dag = load_dag_module("egisz_reconcile_maintenance_dag")
 
 reconcile_window_since = maintenance_dag.reconcile_window_since
 reconcile_journal_window = maintenance_dag.reconcile_journal_window
@@ -27,10 +27,10 @@ def test_reconcile_walks_window_in_chunks_without_loading_it_whole() -> None:
     fb_conn = MagicMock()
 
     with (
-        patch("egisz_maintenance_dag.source_logid_bounds", return_value=(1, 25)),
-        patch("egisz_maintenance_dag.fetch_source_logids_range", return_value=set()) as source,
-        patch("egisz_maintenance_dag.fetch_raw_logids_range", return_value=set()) as raw,
-        patch("egisz_maintenance_dag.load_raw_logs") as load_raw,
+        patch("egisz_reconcile_maintenance_dag.source_logid_bounds", return_value=(1, 25)),
+        patch("egisz_reconcile_maintenance_dag.fetch_source_logids_range", return_value=set()) as source,
+        patch("egisz_reconcile_maintenance_dag.fetch_raw_logids_range", return_value=set()) as raw,
+        patch("egisz_reconcile_maintenance_dag.load_raw_logs") as load_raw,
     ):
         totals = reconcile_journal_window(
             pg_conn,
@@ -59,17 +59,17 @@ def test_reconcile_loads_and_transforms_only_missing_rows() -> None:
     late_rows = [{"logid": 7}]
 
     with (
-        patch("egisz_maintenance_dag.source_logid_bounds", return_value=(1, 10)),
-        patch("egisz_maintenance_dag.fetch_source_logids_range", return_value={5, 6, 7}),
-        patch("egisz_maintenance_dag.fetch_raw_logids_range", return_value={5, 6}),
+        patch("egisz_reconcile_maintenance_dag.source_logid_bounds", return_value=(1, 10)),
+        patch("egisz_reconcile_maintenance_dag.fetch_source_logids_range", return_value={5, 6, 7}),
+        patch("egisz_reconcile_maintenance_dag.fetch_raw_logids_range", return_value={5, 6}),
         patch(
-            "egisz_maintenance_dag.fetch_exchangelog_by_logids",
+            "egisz_reconcile_maintenance_dag.fetch_exchangelog_by_logids",
             return_value=late_rows,
         ) as fetch_rows,
-        patch("egisz_maintenance_dag.load_raw_logs") as load_raw,
-        patch("egisz_maintenance_dag.run_analyze"),
+        patch("egisz_reconcile_maintenance_dag.load_raw_logs") as load_raw,
+        patch("egisz_reconcile_maintenance_dag.run_analyze"),
         patch(
-            "egisz_maintenance_dag.transform_missing_windows",
+            "egisz_reconcile_maintenance_dag.transform_missing_windows",
             return_value={"transformed": 3, "unlinked": 0, "sends_without_clinic": 0},
         ) as transform,
     ):
@@ -96,8 +96,8 @@ def test_reconcile_skips_empty_source_window() -> None:
     fb_conn = MagicMock()
 
     with (
-        patch("egisz_maintenance_dag.source_logid_bounds", return_value=(0, 0)),
-        patch("egisz_maintenance_dag.fetch_source_logids_range") as source,
+        patch("egisz_reconcile_maintenance_dag.source_logid_bounds", return_value=(0, 0)),
+        patch("egisz_reconcile_maintenance_dag.fetch_source_logids_range") as source,
     ):
         totals = reconcile_journal_window(pg_conn, fb_conn, lookback_days=2, chunk_logids=10)
 
@@ -113,7 +113,7 @@ def test_transform_missing_windows_runs_one_transform_per_dense_run() -> None:
     con = MagicMock()
 
     with patch(
-        "egisz_maintenance_dag.transform_raw_to_facts",
+        "egisz_reconcile_maintenance_dag.transform_raw_to_facts",
         return_value={"transformed": 2, "unlinked": 1, "sends_without_clinic": 0},
     ) as transform:
         totals = transform_missing_windows(con, [5, 6, 20])

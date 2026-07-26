@@ -41,33 +41,33 @@ GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
--- Курсоры приёма: last_logid — журнал EXCHANGELOG, last_egmid — реестр подач EGISZ_MESSAGES.
--- Оба продвигает только egisz_etl_dag, через GREATEST.
-CREATE TABLE IF NOT EXISTS elt_state (
+-- Конвейер по существу ETL (выгрузка → загрузка → разбор в факты), поэтому таблица
+-- состояния называется etl_state. Курсоры названы по ключу источника, который ведут:
+-- logid_cursor — журнал EXCHANGELOG (LOGID), egmid_cursor — реестр подач EGISZ_MESSAGES
+-- (EGMID). Оба курсора продвигает только egisz_etl_dag, через GREATEST.
+CREATE TABLE IF NOT EXISTS etl_state (
     pipeline text PRIMARY KEY,
-    last_logid bigint DEFAULT 0,
+    logid_cursor bigint DEFAULT 0,
+    egmid_cursor bigint DEFAULT 0,
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at;
-ALTER TABLE elt_state ADD COLUMN IF NOT EXISTS last_egmid bigint DEFAULT 0;
-
-INSERT INTO elt_state (pipeline, last_logid)
+INSERT INTO etl_state (pipeline, logid_cursor)
 VALUES ('egisz', 0)
 ON CONFLICT (pipeline) DO NOTHING;
 
 -- Отметки последнего выполнения задач, чья каденция реже каденции DAG: справочники
 -- (раз в час) и витрины динамики. Гейт читает ran_at и пропускает задачу до истечения
 -- интервала — см. общий блок DAG, should_run_now().
-CREATE TABLE IF NOT EXISTS elt_job_runs (
+CREATE TABLE IF NOT EXISTS etl_job_runs (
     job text PRIMARY KEY,
     ran_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Реестр подач шлюза (источник — EGISZ_MESSAGES): идентификатор исходящего сообщения,
--- которым МИС подаёт документ, и localUid этого документа. Асинхронный вердикт ЕГИСЗ
+-- которым МИС подаёт документ, и localUid этого документа. Асинхронный ответ ЕГИСЗ
 -- (РЭМД sendRegisterDocumentResult, ИЭМК ProvideAndRegisterDocumentSet-bAsyncResponse)
--- несёт только relatesToMessage, поэтому связывание вердикта с документом идёт через
+-- несёт только relatesToMessage, поэтому связывание ответа с документом идёт через
 -- этот реестр. msgid → document_uid однозначно; на один документ приходится несколько
 -- msgid — по одному на попытку подачи.
 -- msgid хранится каноническим ключом (public.message_registry_key), document_uid — в
@@ -231,7 +231,13 @@ VALUES
     ('p_24h', 'до 24 часов', 1440, 5, false),
     ('p_72h', 'до 3 суток', 4320, 6, false),
     ('p_7d', 'до 7 суток', 10080, 7, false),
-    ('p_over', 'свыше 7 суток', NULL, 8, true)
+    -- Граница утилизации в «Без ответа» — последняя нетерминальная ступень. 15 суток:
+    -- наблюдаемый максимум срока ответа 10.1 суток, позже 15 суток не приходило ни одного.
+    -- Замер цензурирован глубиной окна приёма, поэтому порог взят с запасом, но вдвое ниже
+    -- самого окна (EGISZ_EXTRACT_DEPTH_DAYS = 30): совпади он с глубиной хранения, документ
+    -- не успевал бы стать терминальным, пока лежит в DWH.
+    ('p_15d', 'до 15 суток', 21600, 8, false),
+    ('p_over', 'свыше 15 суток', NULL, 9, true)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     max_age_minutes = EXCLUDED.max_age_minutes,
@@ -239,7 +245,7 @@ ON CONFLICT (code) DO UPDATE SET
     is_no_response = EXCLUDED.is_no_response;
 
 DELETE FROM dim_pending_segments
-WHERE code NOT IN ('p_5m', 'p_1h', 'p_6h', 'p_12h', 'p_24h', 'p_72h', 'p_7d', 'p_over');
+WHERE code NOT IN ('p_5m', 'p_1h', 'p_6h', 'p_12h', 'p_24h', 'p_72h', 'p_7d', 'p_15d', 'p_over');
 
 CREATE TABLE IF NOT EXISTS dim_sent_state (
     code text PRIMARY KEY,
@@ -247,10 +253,13 @@ CREATE TABLE IF NOT EXISTS dim_sent_state (
     sort_order smallint NOT NULL
 );
 
+-- Код состояния остаётся no_response — это таксономия модели состояний отправки.
+-- Наименование говорит и об исходе, и о судьбе документа: ответа не будет, запись
+-- выводится из аналитики и подлежит очистке.
 INSERT INTO dim_sent_state (code, label, sort_order)
 VALUES
     ('pending', 'В обработке', 1),
-    ('no_response', 'Без ответа', 2)
+    ('no_response', 'Ответ не получен (утилизирован)', 2)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order;
@@ -778,7 +787,7 @@ BEGIN
 END $$;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS egisz_subsystem text;
 ALTER TABLE transactions DROP COLUMN IF EXISTS contour;
--- Правило, которым вердикт привязан к документу: payload_local_uid | message_registry
+-- Правило, которым ответ привязан к документу: payload_local_uid | message_registry
 -- | emdr_id | unlinked. Делает качество привязки измеримым — доля unlinked выведена
 -- в rpt_health_signals.
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS link_method text;
@@ -1122,10 +1131,16 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_link_method ON transactions (link_method)
+-- Сигнал здоровья берёт последние размеченные ответы в порядке журнала, поэтому индекс
+-- покрывает пару (правило привязки, LOGID). Прежние составы снимаются явно:
+-- CREATE ... IF NOT EXISTS не переопределяет уже существующий индекс.
+DROP INDEX IF EXISTS idx_transactions_link_method;
+DROP INDEX IF EXISTS idx_transactions_link_method_loaded_at;
+CREATE INDEX IF NOT EXISTS idx_transactions_link_method_logid
+    ON transactions (link_method, logid DESC)
     WHERE link_method IS NOT NULL;
 -- Индексы прежнего правила «последний getDocumentFile той же клиники» больше не нужны:
--- вердикт связывается с документом по реестру подач.
+-- ответ связывается с документом по реестру подач.
 DROP INDEX IF EXISTS idx_transactions_source_action_gdf;
 DROP INDEX IF EXISTS idx_transactions_gdf_jid_logid;
 

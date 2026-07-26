@@ -66,7 +66,7 @@ def test_dag_files_exist() -> None:
     assert {path.name for path in DAG_FILES} == {
         "egisz_etl_dag.py",
         "egisz_marts_dag.py",
-        "egisz_maintenance_dag.py",
+        "egisz_reconcile_maintenance_dag.py",
     }
 
 

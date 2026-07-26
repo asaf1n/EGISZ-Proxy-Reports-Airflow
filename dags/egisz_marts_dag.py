@@ -51,7 +51,7 @@ def _setting(key: str) -> str:
 
     Читается и при парсинге (расписание), и внутри задач — без обращения к метабазе Airflow.
     Значения фиксированы в DEFAULTS и переопределяются переменной окружения процессов Airflow
-    (см. deploy/external-airflow/README). Airflow Variables (метабаза) не используются —
+    (см. deploy/README.md). Airflow Variables (метабаза) не используются —
     на Airflow 3 их чтение при парсинге в воркере подвешивало DAG.
     """
     return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
@@ -96,7 +96,7 @@ def should_run_now(
         return True
     with con.cursor() as cur:
         cur.execute(
-            "SELECT ran_at <= now() - make_interval(mins => %s) FROM elt_job_runs WHERE job = %s",
+            "SELECT ran_at <= now() - make_interval(mins => %s) FROM etl_job_runs WHERE job = %s",
             (min_interval_minutes, job),
         )
         row = cur.fetchone()
@@ -108,7 +108,7 @@ def mark_job_run(con: psycopg2.extensions.connection, job: str) -> None:
     with con.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO elt_job_runs (job, ran_at)
+            INSERT INTO etl_job_runs (job, ran_at)
             VALUES (%s, now())
             ON CONFLICT (job) DO UPDATE SET ran_at = now();
             """,

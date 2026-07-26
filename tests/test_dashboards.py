@@ -249,7 +249,7 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
 
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
-    """«Отказы по часам» — error-rate: доли отказов от документов с вердиктом РЭМД
+    """«Отказы по часам» — error-rate: доли отказов от документов с ответом РЭМД
     за час (%). Счётной серии «Всего» нет: вторая ось визуально спорит с долями."""
     dashboard = _tab_dashboard("service")
     card = next(
@@ -259,7 +259,7 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "date_trunc('hour', ips_date)" in query
     assert "[[AND {{ips_date}}]]" in query
-    # Метрика отношения: знаменатель — корпус с вердиктом, «В обработке» в него не входит.
+    # Метрика отношения: знаменатель — корпус с ответом, «В обработке» в него не входит.
     assert "status <> 'sent'" in query
     assert "NULLIF(COUNT(DISTINCT dwh_id), 0)" in query
     assert 'AS "Ошибка связи, %"' in query
@@ -329,7 +329,7 @@ def test_operational_status_breakdown_uses_canonical_states() -> None:
         "table_ref": "public.rpt_documents",
         "field_name": "ips_date",
     }
-    # Отображаемый корпус — всё, кроме «Без ответа»: вердикта по ним уже не ожидается.
+    # Отображаемый корпус — всё, кроме «Без ответа»: ответа по ним уже не ожидается.
     assert "status_detail <> 'no_response'" in card["dataset_query"]["native"]["query"]
     assert "status_detail_label" in card["dataset_query"]["native"]["query"]
     assert card["visualization_settings"]["pie.metric"] == "Документов"
@@ -412,7 +412,7 @@ def test_documents_model_exposes_transport_fields() -> None:
 
 def test_status_distribution_cards_exclude_no_response() -> None:
     """Статус-карточки показывают три исхода плюс «В обработке». «Без ответа» исключено:
-    вердикта по этим документам уже не ожидается, они разбираются на вкладке «Отправленные»."""
+    ответа по этим документам уже не ожидается, они разбираются на вкладке «Отправленные»."""
     dashboard = _integration_dashboard()
     by_name = {c.get("name"): c for c in dashboard["cards"]}
 
@@ -965,7 +965,7 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
 
 def test_client_service_status_by_day_is_stacked_status_shares() -> None:
     """07: «Динамика статусов по дням» — стэк долей исходов (успех/async/сетевые, % от
-    документов с вердиктом, сумма 100%); абсолютная серия «Всего» не смешивается с
+    документов с ответом, сумма 100%); абсолютная серия «Всего» не смешивается с
     процентной осью."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     card = next(c for c in dashboard["cards"] if c.get("name") == "Динамика статусов по дням")
@@ -1250,7 +1250,8 @@ def test_operational_error_period_card_uses_atomic_error_types() -> None:
     assert "clinic_label" in query
     cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
     assert "Сводка ошибки" not in cols
-    assert "Код НСИ" in cols
+    assert "Код отказа" in cols
+    assert "Справочник" in cols
     assert "% ошибок" in cols
 
 
@@ -1265,11 +1266,14 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
     assert 'AS "Тип ошибки"' in query
     assert 'AS "Клиника"' in query
     assert 'AS "JID Клиники"' in query
-    assert 'AS "Код НСИ"' in query
+    assert 'AS "Код отказа"' in query
+    assert 'AS "Справочник"' in query
     assert 'AS "% ошибок"' in query
-    # Код НСИ берётся из витрины: словарь правил в клиентском дриле не нужен, а сырой
-    # regex правила в таблице для клиники был нечитаем.
+    # Код отказа берётся из витрины: словарь правил в клиентском дриле не нужен, а сырой
+    # regex правила в таблице для клиники был нечитаем. Мнемоника ФНСИ 305 приоритетнее
+    # кода контура — у регистрационного пути это одно и то же значение.
     assert "nsi_error_code" in query
+    assert "code_namespace" in query
     assert "dim_error_rules" not in query
     assert "match_pattern" not in query
 
@@ -1374,7 +1378,7 @@ def test_top_error_type_card_is_table_with_share() -> None:
     assert "error_category" in query
     assert '"Тип ошибки"' in query
     # «% ошибок» — доля среди документов с ошибками (грейн rpt_error_breakdown);
-    # «% обработанных» — доля среди всех документов с вердиктом РЭМД (грейн rpt_documents).
+    # «% обработанных» — доля среди всех документов с ответом РЭМД (грейн rpt_documents).
     assert 'AS "% ошибок"' in query
     assert 'AS "% обработанных"' in query
     assert "NULLIF((SELECT total_err FROM totals), 0)" in query
@@ -1484,10 +1488,12 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
     assert "CREATE TABLE IF NOT EXISTS dim_pending_segments" in tables
     assert "CREATE TABLE IF NOT EXISTS dim_sent_state" in tables
     for label in ("до 5 минут", "до 1 часа", "до 6 часов", "до 12 часов",
-                  "до 24 часов", "до 3 суток", "до 7 суток", "свыше 7 суток"):
+                  "до 24 часов", "до 3 суток", "до 7 суток", "до 15 суток", "свыше 15 суток"):
         assert f"'{label}'" in tables, f"ступень «{label}» отсутствует в справочнике"
     assert "'В обработке'" in tables
-    assert "'Без ответа'" in tables
+    # Код состояния остаётся no_response — меняется только наименование.
+    assert "'Ответ не получен (утилизирован)'" in tables
+    assert "'no_response'" in tables
 
     # Представление не должно содержать собственных порогов и подписей ступеней.
     assert "public.dim_pending_segments" in views
@@ -1497,9 +1503,14 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
         assert stale not in views, f"порог {stale} захардкожен в представлении"
 
     names = {c.get("name") for c in dashboard["cards"]}
-    assert {"Отправлено без вердикта", "В обработке", "Без ответа",
-            "Доля без ответа, %", "Отправленные документы", "Ступени обработки"} <= names
+    assert {"В обработке", "Ответ не получен (утилизирован)",
+            "Документы в обработке", "Документы: ответ не получен (утилизирован)"} <= names
+    # Утилизированные учитываются только в своей плитке и своей таблице.
+    assert "Отправлено без ответа" not in names
+    assert "Доля без ответа, %" not in names
     assert not any("Зависш" in n or "очеред" in n.lower() for n in names)
+    # «Вердикт» — не термин обмена СЭМД: ЕГИСЗ отвечает, а не выносит вердикт.
+    assert not any("ердикт" in n for n in names)
 
 
 def test_executive_mrr_queries_do_not_compare_jid_to_empty_string() -> None:
@@ -1552,9 +1563,9 @@ def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
         tab = card.get("tab")
         assert tab, f"card {card.get('name', '?')} missing tab"
         by_tab[tab] = by_tab.get(tab, 0) + 1
-    assert by_tab["operational"] == 9
+    assert by_tab["operational"] == 10
     assert by_tab["service"] == 9
-    assert by_tab["sent"] == 8
+    assert by_tab["sent"] == 7
     assert by_tab["errors"] == 7
     assert by_tab["archive"] == 6
 
@@ -1657,6 +1668,7 @@ def test_operational_tab_has_core_cards() -> None:
         "Успешность по типам СЭМД",
         "Объём ошибок по клиникам",
         "Тепловая карта: клиника × день",
+        "Скорость регистрации в РЭМД",
     }
 
 
@@ -1760,7 +1772,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     dashboard = json.loads(INTEGRATION_DASHBOARD.read_text(encoding="utf-8"))
     by_name = {c.get("name"): c for c in dashboard["cards"]}
 
-    sent_sql = by_name["Отправленные документы"]["dataset_query"]["native"]["query"]
+    sent_sql = by_name["Документы в обработке"]["dataset_query"]["native"]["query"]
     assert 'first_sent_at AS "Дата отправки"' in sent_sql
     assert 'pending_days AS "Суток с отправки"' in sent_sql
     assert 'sent_state_label AS "Состояние отправки"' in sent_sql
@@ -1780,18 +1792,31 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert '"OID из лицензий"' in detail_sql
 
     for card_name in (
-        "Отправлено без вердикта",
         "В обработке",
-        "Без ответа",
-        "Доля без ответа, %",
-        "Отправленные документы",
-        "Топ клиник по документам в обработке > 1 суток",
-        "Ступени обработки",
-        "Топ типов СЭМД по документам в обработке > 1 суток",
+        "Ответ не получен (утилизирован)",
+        "Документы в обработке",
+        "Документы: ответ не получен (утилизирован)",
+        "Ожидание ответа по клиникам и ступеням",
+        "Ожидание ответа по типам СЭМД и ступеням",
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
         assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
         assert filters.get("ips_date", {}).get("table_ref") == "public.rpt_documents_sent", card_name
+
+    # Воронка процесса живёт на полном корпусе, а не на срезе ожидающих: ступень ожидания
+    # и localUid к нему неприменимы, поэтому в неё не переносятся.
+    funnel = by_name["Скорость регистрации в РЭМД"]
+    filters = funnel.get("metabase-field-filters") or {}
+    assert set(filters) == {"ips_date", "semd_type", "jid"}
+    assert filters["ips_date"]["table_ref"] == "public.rpt_documents"
+    assert set(funnel["dataset_query"]["native"]["template-tags"]) == {"ips_date", "semd_type", "jid"}
+    # Корпус — только документы с полученным ответом: у ожидающих и у «Без ответа»
+    # срока регистрации нет, и в знаменателе они притворялись бы медленными.
+    query = funnel["dataset_query"]["native"]["query"]
+    assert "delivery_seconds IS NOT NULL" in query
+    # База обязана остаться: часть документов регистрируется дольше самой мягкой ступени
+    # (на проде — сотни), и без базы первый шаг молча стал бы стопроцентным.
+    assert "'Получен ответ'" in query
 
 
 def test_service_quality_detail_lists_all_rule_violations() -> None:
@@ -2067,7 +2092,7 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
     for name in (
         "Объём по клиникам",
         "Топ типов СЭМД по ошибкам",
-        "Топ клиник по документам в обработке > 1 суток",
+        "Ожидание ответа по клиникам и ступеням",
     ):
         click = by_name[name].get("click_behavior") or {}
         assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
@@ -2132,9 +2157,16 @@ def test_metabase_import_is_safe_for_shared_instance() -> None:
     sh = Path("metabase/setup-dashboards.sh").read_text(encoding="utf-8")
 
     # Архивирование карточек/дашбордов скоупится нашей коллекцией (COL_ID), а не всем инстансом.
-    assert "/api/collection/${COL_ID}/items?models=card" in sh
-    assert "/api/collection/${COL_ID}/items?models=dashboard" in sh
+    assert "/api/collection/${COL_ID}/items?models=${model_filter}" in sh
     assert ".collection_id == $col" in sh  # archive_cards_by_name
+
+    # Внутри коллекции архивируется только то, что мы сами вывели из обращения: имя обязано
+    # быть в retired-objects.json. Правило «нет в наших JSON — архивируем» унесло бы чужой
+    # объект, положенный в общую коллекцию.
+    assert "RETIRED_OBJECTS_FILE" in sh
+    assert 'grep -Fxq "${item_name}" "${retired_file}" || continue' in sh
+    for kind, model_filter in (("cards", "card"), ("models", "dataset"), ("dashboards", "dashboard")):
+        assert f"archive_retired_collection_items {kind} {model_filter}" in sh, kind
 
     # Глобальные настройки инстанса — за флагом, по умолчанию выключены.
     assert 'METABASE_MANAGE_INSTANCE_SETTINGS="${METABASE_MANAGE_INSTANCE_SETTINGS:-false}"' in sh
@@ -2154,6 +2186,33 @@ def test_metabase_import_is_safe_for_shared_instance() -> None:
     put_idx = fn.index('PUT "/api/setting/enable-public-sharing"')
     guard_idx = fn.index('METABASE_MANAGE_INSTANCE_SETTINGS}" = "true"')
     assert guard_idx < put_idx
+
+
+def test_retired_objects_manifest_lists_only_withdrawn_names() -> None:
+    """В списке на архивацию нет ни одного имени, которое сейчас в работе.
+
+    Иначе очередной импорт заархивировал бы карточку сразу после её создания.
+    """
+    retired = json.loads(Path("metabase/retired-objects.json").read_text(encoding="utf-8"))
+
+    live_cards: set[str] = set()
+    live_dashboards: set[str] = set()
+    for path in sorted(Path("metabase_dashboards").glob("*.json")):
+        dash = json.loads(path.read_text(encoding="utf-8"))
+        live_dashboards.add(dash.get("name"))
+        for card in dash.get("cards", []):
+            if card.get("name") and card.get("display") != "text":
+                live_cards.add(card["name"])
+    live_models = {
+        json.loads(p.read_text(encoding="utf-8")).get("name")
+        for p in sorted(Path("metabase_models").glob("*.json"))
+    }
+
+    assert not (set(retired["cards"]) & live_cards)
+    assert not (set(retired["dashboards"]) & live_dashboards)
+    assert not (set(retired["models"]) & live_models)
+    # Модель-предшественник «Отправленных» ссылается на снесённое представление DWH.
+    assert "Очередь без ответа" in retired["models"]
 
 
 def test_standalone_weekly_dashboard_removed() -> None:
@@ -2229,8 +2288,8 @@ def test_status_dynamics_are_stacked_area() -> None:
 
 
 def test_volume_dynamics_exclude_no_response() -> None:
-    """Объём по периодам: исходы с вердиктом плюс «В обработке». «Без ответа»
-    (docs_no_response) в динамику не выводится — эти документы вердикта уже не получат."""
+    """Объём по периодам: исходы с ответом плюс «В обработке». «Без ответа»
+    (docs_no_response) в динамику не выводится — эти документы ответа уже не получат."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
     for name in ("Объём документов по неделям", "Объём документов по месяцам"):
         card = by_name[name]
@@ -2251,7 +2310,7 @@ def test_weekly_sql_layer_contract() -> None:
     assert "uq_rpt_documents_weekly" in weekly
     assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
     assert "uq_rpt_error_breakdown_weekly" in weekly
-    # Корпус SLI — документы с вердиктом; состояния отправки идут отдельными счётчиками.
+    # Корпус SLI — документы с ответом; состояния отправки идут отдельными счётчиками.
     assert "FILTER (WHERE r.status <> 'sent')" in weekly
     assert "FILTER (WHERE r.sent_state = 'pending')" in weekly
     assert "FILTER (WHERE r.sent_state = 'no_response')" in weekly

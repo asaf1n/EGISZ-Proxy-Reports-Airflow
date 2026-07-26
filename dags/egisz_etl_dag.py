@@ -40,6 +40,9 @@ DEFAULTS: dict[str, str | int] = {
     "extract_raw_rounds": 3,
     "registry_rows": 5000,
     "registry_rounds": 3,
+    # Глубина приёма по CREATEDATE источника: строки старше окна не забираются.
+    # 0 снимает ограничение — разовый режим для полного заполнения с нуля.
+    "extract_depth_days": 30,
     "transform_rows": 3000,
     "transform_rounds": 6,
     # Отметка не поднимается вплотную к хвосту журнала: шлюз наполняет EXCHANGELOG не
@@ -55,7 +58,7 @@ def _setting(key: str) -> str:
 
     Читается и при парсинге (расписание), и внутри задач — без обращения к метабазе Airflow.
     Значения фиксированы в DEFAULTS и переопределяются переменной окружения процессов Airflow
-    (см. deploy/external-airflow/README). Airflow Variables (метабаза) не используются —
+    (см. deploy/README.md). Airflow Variables (метабаза) не используются —
     на Airflow 3 их чтение при парсинге в воркере подвешивало DAG.
     """
     return os.environ.get("EGISZ_" + key.upper(), str(DEFAULTS[key]))
@@ -67,7 +70,7 @@ def get_int(key: str) -> int:
 
 class BatchMetadata(TypedDict):
     count: int
-    last_logid: int
+    logid_cursor: int
     cursor_logid: int
 
 
@@ -153,7 +156,7 @@ def normalize_registry_key(value: Any) -> str | None:
 
     Шлюз и ЕГИСЗ передают идентификатор сообщения в разных написаниях (с дефисами и без,
     с префиксом urn:uuid:, в разном регистре); ключ приводится к одному виду на обеих
-    сторонах — при загрузке реестра и при поиске по relatesToMessage вердикта.
+    сторонах — при загрузке реестра и при поиске по relatesToMessage ответа.
     """
     text = str(value or "").strip().strip("<>").strip()
     if text.lower().startswith("urn:uuid:"):
@@ -164,7 +167,7 @@ def normalize_registry_key(value: Any) -> str | None:
 
 def pending_transform_tail(
     con: psycopg2.extensions.connection,
-    last_logid: int,
+    logid_cursor: int,
 ) -> tuple[int, int]:
     """Return (row_count, max_logid) of raw rows above the extract watermark."""
     with con.cursor() as cur:
@@ -174,10 +177,10 @@ def pending_transform_tail(
             FROM public.exchangelog_raw
             WHERE logid > %s
             """,
-            (last_logid, last_logid),
+            (logid_cursor, logid_cursor),
         )
         pending_rows, pending_max = cur.fetchone()
-    return int(pending_rows or 0), int(pending_max or last_logid)
+    return int(pending_rows or 0), int(pending_max or logid_cursor)
 
 
 def safe_transform_ceiling(*, watermark: int, tail_logid: int, lag_logids: int) -> int:
@@ -194,13 +197,13 @@ def safe_transform_ceiling(*, watermark: int, tail_logid: int, lag_logids: int) 
 def bounded_transform_to_logid(
     con: psycopg2.extensions.connection,
     *,
-    last_logid: int,
+    logid_cursor: int,
     cursor_logid: int,
     raw_rows: int,
 ) -> int:
     """Upper LOGID bound for the next transform chunk (at most ``raw_rows`` raw rows)."""
-    if cursor_logid <= last_logid or raw_rows <= 0:
-        return last_logid
+    if cursor_logid <= logid_cursor or raw_rows <= 0:
+        return logid_cursor
     with con.cursor() as cur:
         cur.execute(
             """
@@ -213,23 +216,23 @@ def bounded_transform_to_logid(
                 LIMIT %s
             ) bounded
             """,
-            (last_logid, last_logid, cursor_logid, raw_rows),
+            (logid_cursor, logid_cursor, cursor_logid, raw_rows),
         )
         row = cur.fetchone()
-    return int(row[0] if row else last_logid)
+    return int(row[0] if row else logid_cursor)
 
 
 def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
     """Read pipeline cursors: journal LOGID and message-registry EGMID."""
     with con.cursor() as cur:
         cur.execute(
-            "SELECT last_logid, last_egmid FROM elt_state WHERE pipeline = %s",
+            "SELECT logid_cursor, egmid_cursor FROM etl_state WHERE pipeline = %s",
             (pipeline,),
         )
         row = cur.fetchone()
     if row is None:
-        return {"last_logid": 0, "last_egmid": 0}
-    return {"last_logid": int(row[0] or 0), "last_egmid": int(row[1] or 0)}
+        return {"logid_cursor": 0, "egmid_cursor": 0}
+    return {"logid_cursor": int(row[0] or 0), "egmid_cursor": int(row[1] or 0)}
 
 
 def update_cursors(
@@ -242,11 +245,11 @@ def update_cursors(
     with con.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO elt_state (pipeline, last_logid, last_egmid)
+            INSERT INTO etl_state (pipeline, logid_cursor, egmid_cursor)
             VALUES (%s, %s, %s)
             ON CONFLICT (pipeline) DO UPDATE SET
-                last_logid = GREATEST(elt_state.last_logid, EXCLUDED.last_logid),
-                last_egmid = GREATEST(elt_state.last_egmid, EXCLUDED.last_egmid),
+                logid_cursor = GREATEST(etl_state.logid_cursor, EXCLUDED.logid_cursor),
+                egmid_cursor = GREATEST(etl_state.egmid_cursor, EXCLUDED.egmid_cursor),
                 updated_at = now();
             """,
             (pipeline, logid, egmid),
@@ -268,7 +271,7 @@ def should_run_now(
         return True
     with con.cursor() as cur:
         cur.execute(
-            "SELECT ran_at <= now() - make_interval(mins => %s) FROM elt_job_runs WHERE job = %s",
+            "SELECT ran_at <= now() - make_interval(mins => %s) FROM etl_job_runs WHERE job = %s",
             (min_interval_minutes, job),
         )
         row = cur.fetchone()
@@ -280,7 +283,7 @@ def mark_job_run(con: psycopg2.extensions.connection, job: str) -> None:
     with con.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO elt_job_runs (job, ran_at)
+            INSERT INTO etl_job_runs (job, ran_at)
             VALUES (%s, now())
             ON CONFLICT (job) DO UPDATE SET ran_at = now();
             """,
@@ -337,14 +340,22 @@ def load_message_registry(
     Ключ приводится к каноническому виду, идентификатор документа — к нижнему регистру,
     чтобы он совпадал с documents.dwh_id без приведения на чтении.
     """
-    values: list[tuple[Any, ...]] = []
+    # Один ключ реестра приходит в батче несколько раз: повторная подача документа и
+    # разные написания идентификатора сообщения дают ту же каноническую форму. ON CONFLICT
+    # DO UPDATE не может задеть строку дважды в одной команде, поэтому в батче остаётся
+    # запись с наибольшим EGMID — тот же исход, что и при загрузке этих строк по одной.
+    latest: dict[str, tuple[Any, ...]] = {}
     for egmid, msgid, reply_to, document_uid, created_at in rows:
         key = normalize_registry_key(msgid)
         uid = str(document_uid or "").strip().lower()
         if not key or not uid:
             continue
-        values.append((key, uid, reply_to, int(egmid), created_at))
+        candidate = (key, uid, reply_to, int(egmid), created_at)
+        current = latest.get(key)
+        if current is None or candidate[3] >= current[3]:
+            latest[key] = candidate
 
+    values = list(latest.values())
     if not values:
         return 0
 
@@ -375,7 +386,7 @@ def transform_raw_to_facts(
 ) -> dict[str, int]:
     """Run the database-side ELT transform for the requested LOGID window.
 
-    Возвращает счётчики батча: перенесённые строки, несвязанные вердикты и отправки,
+    Возвращает счётчики батча: перенесённые строки, несвязанные ответы и отправки,
     которым не удалось определить клинику.
     """
     with con.cursor() as cur:
@@ -429,6 +440,60 @@ DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 5000
 
 
+# Нижняя граница окна приёма по каждому источнику. Отбор по дате живёт здесь, а не в
+# постраничном запросе: keyset-пагинация идёт по идентификатору, и условие на дату
+# внутри страницы вернуло бы пустой результат на старом хвосте — цикл принял бы это за
+# конец данных и отметка встала бы навсегда.
+#
+# `probe` — дата строки сразу за отметкой (чтение по индексу первичного ключа), `floor` —
+# граница окна (скан по диапазону дат). Тяжёлый запрос выполняется только когда проба
+# показала, что отметка ещё не дошла до окна: на прод-объёме он стоит около трёх минут,
+# и в установившемся режиме платить за него каждый запуск незачем.
+DEPTH_FLOOR_SQL: dict[str, dict[str, str]] = {
+    "exchangelog": {
+        "probe": "SELECT CREATEDATE FROM EXCHANGELOG WHERE LOGID > ? ORDER BY LOGID ROWS 1",
+        "floor": "SELECT MIN(LOGID) FROM EXCHANGELOG WHERE CREATEDATE >= ?",
+    },
+    "message_registry": {
+        "probe": "SELECT CREATEDATE FROM EGISZ_MESSAGES WHERE EGMID > ? ORDER BY EGMID ROWS 1",
+        "floor": "SELECT MIN(EGMID) FROM EGISZ_MESSAGES WHERE CREATEDATE >= ?",
+    },
+}
+
+
+def _fetch_scalar(con: Any, statement: str, param: Any) -> Any:
+    cur = con.cursor()
+    try:
+        cur.execute(statement, (param,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+    return row[0] if row else None
+
+
+def fetch_depth_floor(con: Any, *, source: str, depth_days: int, after_id: int) -> int:
+    """Наименьший идентификатор источника, попадающий в окно глубины.
+
+    Возвращает отметку, ДО которой строки не нужны: курсор поднимается до неё и дальше
+    работает обычная keyset-пагинация. ``0`` означает «поднимать не надо» — отметка уже
+    в окне, в источнике не осталось строк или ограничение снято (``depth_days <= 0``).
+
+    Время источника наивное и трактуется как МСК (весь стек в Europe/Moscow), поэтому
+    граница считается наивным ``datetime.now()`` — сравнение идёт в одной шкале.
+    """
+    if depth_days <= 0:
+        return 0
+
+    boundary = datetime.now() - timedelta(days=depth_days)
+    next_row_date = _fetch_scalar(con, DEPTH_FLOOR_SQL[source]["probe"], int(after_id or 0))
+    if next_row_date is None or next_row_date >= boundary:
+        return 0
+
+    floor_id = _fetch_scalar(con, DEPTH_FLOOR_SQL[source]["floor"], boundary)
+    # Пустое окно (в источнике нет свежих строк) не должно обнулять отметку.
+    return int(floor_id) - 1 if floor_id is not None else 0
+
+
 def fetch_exchangelog_after_cursor(
     con: Any,
     *,
@@ -475,7 +540,7 @@ def fetch_message_registry_after_cursor(
     """Fetch EGISZ_MESSAGES rows via keyset pagination by EGMID.
 
     Реестр подач связывает идентификатор исходящего сообщения с localUid документа —
-    единственный ключ, по которому асинхронный вердикт ЕГИСЗ находит свой документ.
+    единственный ключ, по которому асинхронный ответ ЕГИСЗ находит свой документ.
     """
     if limit <= 0:
         return []
@@ -630,25 +695,50 @@ def extract_exchangelog_batch(
     *,
     raw_rows: int,
     raw_rounds: int,
+    depth_days: int,
+    lag_logids: int,
 ) -> BatchMetadata:
     """EXCHANGELOG → exchangelog_raw."""
-    last_logid = int(get_cursors(pg_conn, PIPELINE).get("last_logid", 0))
-    cursor_logid = last_logid
+    logid_cursor = int(get_cursors(pg_conn, PIPELINE).get("logid_cursor", 0))
+    cursor_logid = logid_cursor
     total_loaded = 0
     rounds = 0
 
-    pending_rows, pending_max = pending_transform_tail(pg_conn, last_logid)
-    if pending_rows > 0:
+    pending_rows, pending_max = pending_transform_tail(pg_conn, logid_cursor)
+    # Отсрочка — обратное давление: не тащим новое, пока не разобрано принятое. Но
+    # считаются только строки, которые transform реально может взять: последние
+    # lag_logids он придерживает намеренно. Гейт «есть хоть что-то выше отметки»
+    # смыкался с этим запасом — transform стоял (всё в запасе), extract не забирал
+    # («есть непринятое»), и конвейер вставал насовсем.
+    transform_has_work = (
+        safe_transform_ceiling(
+            watermark=logid_cursor, tail_logid=pending_max, lag_logids=lag_logids
+        )
+        > logid_cursor
+    )
+    if pending_rows > 0 and transform_has_work:
         log.info(
             "%s row(s) in exchangelog_raw above watermark LOGID=%s; deferring EXCHANGELOG fetch.",
             pending_rows,
-            last_logid,
+            logid_cursor,
         )
         return {
             "count": 0,
-            "last_logid": last_logid,
+            "logid_cursor": logid_cursor,
             "cursor_logid": pending_max,
         }
+
+    depth_floor = fetch_depth_floor(
+        fb_conn, source="exchangelog", depth_days=depth_days, after_id=cursor_logid
+    )
+    if depth_floor > cursor_logid:
+        log.info(
+            "Depth window %s day(s): starting EXCHANGELOG fetch at LOGID=%s instead of %s.",
+            depth_days,
+            depth_floor,
+            cursor_logid,
+        )
+        cursor_logid = depth_floor
 
     while rounds < raw_rounds:
         started_at = time.monotonic()
@@ -684,17 +774,17 @@ def extract_exchangelog_batch(
             rounds,
         )
 
-    _, pending_max = pending_transform_tail(pg_conn, last_logid)
+    _, pending_max = pending_transform_tail(pg_conn, logid_cursor)
     cursor_logid = max(cursor_logid, pending_max)
     log.info(
         "Extract complete: %s row(s), exchangelog_raw tail LOGID=%s (watermark=%s).",
         total_loaded,
         cursor_logid,
-        last_logid,
+        logid_cursor,
     )
     return {
         "count": total_loaded,
-        "last_logid": last_logid,
+        "logid_cursor": logid_cursor,
         "cursor_logid": cursor_logid,
     }
 
@@ -705,10 +795,23 @@ def extract_message_registry_batch(
     *,
     registry_rows: int,
     registry_rounds: int,
+    depth_days: int,
 ) -> int:
     """EGISZ_MESSAGES → dim_message_document."""
-    cursor_egmid = int(get_cursors(pg_conn, PIPELINE).get("last_egmid", 0))
+    cursor_egmid = int(get_cursors(pg_conn, PIPELINE).get("egmid_cursor", 0))
     total_loaded = 0
+
+    depth_floor = fetch_depth_floor(
+        fb_conn, source="message_registry", depth_days=depth_days, after_id=cursor_egmid
+    )
+    if depth_floor > cursor_egmid:
+        log.info(
+            "Depth window %s day(s): starting EGISZ_MESSAGES fetch at EGMID=%s instead of %s.",
+            depth_days,
+            depth_floor,
+            cursor_egmid,
+        )
+        cursor_egmid = depth_floor
 
     for round_index in range(registry_rounds):
         started_at = time.monotonic()
@@ -748,8 +851,8 @@ def transform_exchangelog_batch(
     transform_rounds: int,
     lag_logids: int,
 ) -> PipelineBatchInfo:
-    """exchangelog_raw → documents/transactions; advance elt_state watermark."""
-    watermark = int(load_info.get("last_logid", 0))
+    """exchangelog_raw → documents/transactions; advance etl_state watermark."""
+    watermark = int(load_info.get("logid_cursor", 0))
     tail_logid = int(load_info.get("cursor_logid", watermark))
     ceiling = safe_transform_ceiling(
         watermark=watermark,
@@ -780,7 +883,7 @@ def transform_exchangelog_batch(
         )
         to_logid = bounded_transform_to_logid(
             pg_conn,
-            last_logid=watermark,
+            logid_cursor=watermark,
             cursor_logid=ceiling,
             raw_rows=transform_rows,
         )
@@ -798,7 +901,7 @@ def transform_exchangelog_batch(
             totals[key] += int(batch.get(key, 0))
         log.info(
             "Transformed %s row(s) for LOGID (%s, %s] in %.1fs (iteration %s); "
-            "unlinked verdicts: %s, sends without clinic: %s.",
+            "unlinked responses: %s, sends without clinic: %s.",
             batch.get("transformed", 0),
             watermark,
             to_logid,
@@ -815,7 +918,7 @@ def transform_exchangelog_batch(
     if totals["transformed"] > 0:
         _analyze_exchangelog_documents(pg_conn)
 
-    return {**load_info, "last_logid": watermark, **totals}
+    return {**load_info, "logid_cursor": watermark, **totals}
 
 
 @dag(
@@ -837,12 +940,14 @@ def egisz_etl_pipeline() -> None:
                 fb_conn,
                 raw_rows=get_int("extract_raw_rows"),
                 raw_rounds=get_int("extract_raw_rounds"),
+                depth_days=get_int("extract_depth_days"),
+                lag_logids=get_int("etl_lag_logids"),
             )
         finally:
             fb_conn.close()
             pg_conn.close()
 
-    # Реестр подач наполняется ДО transform: без него асинхронный вердикт ЕГИСЗ
+    # Реестр подач наполняется ДО transform: без него асинхронный ответ ЕГИСЗ
     # не с чем связать, и исход отправки был бы потерян.
     @task(pool=DWH_POOL)
     def extract_message_registry() -> int:
@@ -854,6 +959,7 @@ def egisz_etl_pipeline() -> None:
                 fb_conn,
                 registry_rows=get_int("registry_rows"),
                 registry_rounds=get_int("registry_rounds"),
+                depth_days=get_int("extract_depth_days"),
             )
         finally:
             fb_conn.close()
