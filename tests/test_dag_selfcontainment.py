@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
+DAGS_DIR = Path(__file__).resolve().parents[1] / "dags"
 DAG_FILES = sorted(DAGS_DIR.glob("egisz_*.py"))
 
 # Целевой Airflow ставит только зависимости из pyproject.toml; ничего сверх них

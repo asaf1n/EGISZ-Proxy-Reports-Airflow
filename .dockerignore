@@ -5,7 +5,6 @@
 *.pyc
 k8s/**/*secret*.yaml
 !k8s/**/*.example.yaml
-airflow/logs
 
 tests/
 db/

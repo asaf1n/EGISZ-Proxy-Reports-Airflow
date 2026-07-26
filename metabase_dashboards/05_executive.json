@@ -514,7 +514,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting' AND now() - ips_date > INTERVAL '7 days') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Зависших >7 дн., %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'sent' AND now() - ips_date > INTERVAL '7 days') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Зависших >7 дн., %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -800,7 +800,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting') AS waiting FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT (SUM(CASE WHEN waiting::numeric / NULLIF(docs, 0) > 0.8 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском (затык)\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'sent') AS sent FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT (SUM(CASE WHEN sent::numeric / NULLIF(docs, 0) > 0.8 THEN 1 ELSE 0 END) * 10000)::numeric AS \"₽ под риском (затык)\" FROM per_jid",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -905,7 +905,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, MAX(clinic_name) AS clinic, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'waiting') AS waiting FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Попыток\", waiting AS \"Отправлено\", 10000 AS \"MRR, ₽\" FROM per_jid WHERE ok = 0 AND docs > 0 ORDER BY docs DESC LIMIT 15",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, MAX(clinic_name) AS clinic, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'sent') AS sent FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT jid AS \"JID\", clinic AS \"Клиника\", docs AS \"Попыток\", sent AS \"Отправлено\", 10000 AS \"MRR, ₽\" FROM per_jid WHERE ok = 0 AND docs > 0 ORDER BY docs DESC LIMIT 15",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1075,7 +1075,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1102,7 +1102,8 @@
         ],
         "graph.metrics": [
           "Успешно",
-          "С ошибкой"
+          "С ошибкой",
+          "В обработке"
         ],
         "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
@@ -1114,6 +1115,9 @@
           },
           "С ошибкой": {
             "color": "#E15759"
+          },
+          "В обработке": {
+            "color": "#A6C8E8"
           }
         },
         "column_settings": {
@@ -1519,7 +1523,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1546,7 +1550,8 @@
         ],
         "graph.metrics": [
           "Успешно",
-          "С ошибкой"
+          "С ошибкой",
+          "В обработке"
         ],
         "stackable.stack_type": "stacked",
         "graph.x_axis.scale": "timeseries",
@@ -1558,6 +1563,9 @@
           },
           "С ошибкой": {
             "color": "#E15759"
+          },
+          "В обработке": {
+            "color": "#A6C8E8"
           }
         },
         "column_settings": {

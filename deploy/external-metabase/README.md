@@ -10,14 +10,14 @@ metabase/                    # корень бандла (dist/external/metabase
 ├── setup-dashboards.sh      # главный импортёр (запускать его)
 ├── sync-models.sh           # sync Metabase Models (подключается импортёром)
 ├── include/mb_list.sh       # общие функции (подключается импортёром)
-├── metabase_dashboards/     # 4 дашборда (*.json) + field_filter_defaults.yaml
+├── metabase_dashboards/     # 4 дашборда (*.json)
 ├── metabase_models/         # 4 модели (*.json)
 ├── README.md
 └── BUILD_INFO.txt
 ```
 
-`field_filter_defaults.yaml` — design-time метаданные генераторов; импортёр читает только
-`*.json` (правила фильтров уже запечены в JSON дашбордов ключами `metabase-field-filters`).
+Привязка фильтров к полям запечена в JSON дашбордов ключами `metabase-field-filters` —
+импортёр читает только `*.json`, отдельного файла правил нет.
 
 ## 0. Предусловия
 

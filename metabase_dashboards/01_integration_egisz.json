@@ -34,8 +34,8 @@
     },
     {
       "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-      "name": "Сегмент ожидания",
-      "slug": "wait_segment_filter",
+      "name": "Ступень обработки",
+      "slug": "pending_segment_filter",
       "type": "string/=",
       "sectionId": "string"
     },
@@ -83,7 +83,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
+          "query": "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -208,13 +208,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -237,11 +237,11 @@
     },
     {
       "name": "Транзакции по дням и статусам",
-      "description": "Документы с вердиктом РЭМД по дням и исходу (stacked, без «Отправлено»). Клик по сегменту — архив с фильтром по статусу.",
+      "description": "Документы по дням и состоянию: три исхода РЭМД плюс «В обработке» (stacked). «Без ответа» — на вкладке «Отправленные». Клик по сегменту — архив с фильтром по статусу.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status <> 'waiting' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY ips_date::date, status_label, status_sort ORDER BY ips_date::date, status_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -318,6 +318,9 @@
           },
           "Успешно зарегистрирован": {
             "color": "#84BB4C"
+          },
+          "В обработке": {
+            "color": "#A6C8E8"
           }
         },
         "graph.x_axis.scale": "timeseries",
@@ -357,7 +360,7 @@
         "linkType": "question",
         "targetModel": "Документы",
         "parameterMapping": {
-          "status_label": {
+          "status_detail_label": {
             "source": {
               "type": "column",
               "name": "Статус"
@@ -365,7 +368,7 @@
             "target": {
               "type": "dimension",
               "model_ref": "Документы",
-              "field_name": "status_label"
+              "field_name": "status_detail_label"
             }
           }
         }
@@ -373,12 +376,12 @@
     },
     {
       "name": "Статусы за период",
-      "description": "Распределение документов с вердиктом РЭМД по исходу за период (без «Отправлено» — у них ещё нет результата).",
+      "description": "Распределение документов за период по состоянию: три исхода РЭМД плюс «В обработке». «Без ответа» разбирается на вкладке «Отправленные».",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status <> 'waiting' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY status_label, status_sort ORDER BY status_sort",
+          "query": "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -429,41 +432,36 @@
         "pie.show_labels": false,
         "pie.rows": [
           {
-            "color": "#88BF4D",
-            "enabled": true,
-            "hidden": false,
-            "isOther": false,
             "key": "Успешно зарегистрирован",
             "name": "Успешно зарегистрирован",
-            "originalName": "Успешно зарегистрирован"
+            "originalName": "Успешно зарегистрирован",
+            "color": "#84BB4C",
+            "enabled": true,
+            "hidden": false
           },
           {
-            "color": "#8A5EB0",
-            "defaultColor": false,
-            "enabled": true,
-            "hidden": false,
-            "isOther": false,
             "key": "Ошибка асинхронного ответа РЭМД",
             "name": "Ошибка асинхронного ответа РЭМД",
-            "originalName": "Ошибка асинхронного ответа РЭМД"
+            "originalName": "Ошибка асинхронного ответа РЭМД",
+            "color": "#A989C5",
+            "enabled": true,
+            "hidden": false
           },
           {
-            "color": "#F2994A",
-            "enabled": true,
-            "hidden": false,
-            "isOther": false,
             "key": "Ошибка связи",
             "name": "Ошибка связи",
-            "originalName": "Ошибка связи"
+            "originalName": "Ошибка связи",
+            "color": "#F2994A",
+            "enabled": true,
+            "hidden": false
           },
           {
-            "color": "#949AAB",
+            "key": "В обработке",
+            "name": "В обработке",
+            "originalName": "В обработке",
+            "color": "#A6C8E8",
             "enabled": true,
-            "hidden": true,
-            "isOther": false,
-            "key": "Отправлено",
-            "name": "Отправлено",
-            "originalName": "Отправлено"
+            "hidden": false
           }
         ],
         "pie.metric": "Документов",
@@ -511,7 +509,7 @@
         "linkType": "question",
         "targetModel": "Документы",
         "parameterMapping": {
-          "status_label": {
+          "status_detail_label": {
             "source": {
               "type": "column",
               "name": "Статус"
@@ -519,7 +517,7 @@
             "target": {
               "type": "dimension",
               "model_ref": "Документы",
-              "field_name": "status_label"
+              "field_name": "status_detail_label"
             }
           }
         }
@@ -814,13 +812,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "jid": "clinic_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -959,13 +957,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -992,7 +990,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='waiting')::bigint AS \"Отправлено\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -1125,13 +1123,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -1267,13 +1265,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -1381,11 +1379,11 @@
     },
     {
       "name": "Отказы по часам: связь и асинхронный ответ",
-      "description": "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов с вердиктом РЭМД за час (%). «Отправлено» (без исхода) исключено. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
+      "description": "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов с вердиктом РЭМД за час (%). Отправленные без вердикта в знаменатель не входят. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" FROM public.rpt_documents WHERE status <> 'waiting' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" FROM public.rpt_documents WHERE status <> 'sent' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1571,7 +1569,7 @@
         "linkType": "question",
         "targetModel": "Документы",
         "parameterMapping": {
-          "status_label": {
+          "status_detail_label": {
             "source": {
               "type": "column",
               "name": "Статус"
@@ -1579,7 +1577,7 @@
             "target": {
               "type": "dimension",
               "model_ref": "Документы",
-              "field_name": "status_label"
+              "field_name": "status_detail_label"
             }
           }
         }
@@ -1747,7 +1745,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из XML\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n    END AS \"OID из JPERSONS\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n    END AS \"OID из лицензий\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
+          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_detail_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из XML\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n    END AS \"OID из JPERSONS\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n    END AS \"OID из лицензий\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2217,32 +2215,33 @@
       }
     },
     {
-      "name": "В очереди (всего)",
-      "description": "Все документы без callback в выбранном срезе.",
+      "name": "Отправлено без вердикта",
+      "description": "Документы, отправленные в ЕГИСЗ, по которым вердикт ещё не получен.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f4000100-0100-4000-8000-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f4000100-0100-4000-8000-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f4000100-0100-4000-8000-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2250,22 +2249,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f4000100-0100-4000-8000-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f4000100-0100-4000-8000-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "scalar",
       "visualization_settings": {
@@ -2281,57 +2279,58 @@
       "sizeY": 3,
       "row": 0,
       "col": 0,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Зависших >3 дней",
-      "description": "Документы в очереди дольше 3 суток (жёлтая зона эскалации).",
+      "name": "В обработке",
+      "description": "Отправленные в пределах ожидаемого времени ответа (ступени до последней, dim_pending_segments).",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>3 дней', '>7 дней', '>30 дней') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f4000101-0101-4001-8001-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f4000101-0101-4001-8001-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f4000101-0101-4001-8001-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2339,22 +2338,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f4000101-0101-4001-8001-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f4000101-0101-4001-8001-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "scalar",
       "visualization_settings": {
@@ -2370,57 +2368,58 @@
       "sizeY": 3,
       "row": 0,
       "col": 6,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Зависших >7 дней",
-      "description": "Документы в очереди дольше 7 суток (красная зона эскалации).",
+      "name": "Без ответа",
+      "description": "Отправленные, по которым ожидаемое время ответа истекло: вердикт уже не ожидается.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment IN ('>7 дней', '>30 дней') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f4000102-0102-4002-8002-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f4000102-0102-4002-8002-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f4000102-0102-4002-8002-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2428,22 +2427,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f4000102-0102-4002-8002-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f4000102-0102-4002-8002-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "scalar",
       "visualization_settings": {
@@ -2459,57 +2457,58 @@
       "sizeY": 3,
       "row": 0,
       "col": 12,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Зависших >30 дней",
-      "description": "Архивный хвост очереди (серый сегмент).",
+      "name": "Доля без ответа, %",
+      "description": "Доля документов без ответа от всех отправленных без вердикта.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE wait_segment = '>30 дней' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT semd_local_uid) FILTER (WHERE sent_state = 'no_response') / NULLIF(COUNT(DISTINCT semd_local_uid), 0), 1) AS \"%\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f4000103-0103-4003-8003-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f4000103-0103-4003-8003-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f4000103-0103-4003-8003-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2517,22 +2516,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f4000103-0103-4003-8003-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f4000103-0103-4003-8003-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "scalar",
       "visualization_settings": {
@@ -2541,6 +2539,12 @@
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"%\"]": {
+            "column_title": "%",
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           }
         }
       },
@@ -2548,57 +2552,58 @@
       "sizeY": 3,
       "row": 0,
       "col": 18,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Очередь без ответа",
-      "description": "До 200 строк; сортировка по возрасту (старые сверху). Подсветка строк по сегменту ожидания.",
+      "name": "Отправленные документы",
+      "description": "Построчный список отправленных без вердикта: состояние отправки, ступень обработки, число подач.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", waiting_days AS \"Дней в ожидании\", attempt_count AS \"Подач в ЕГИСЗ\", wait_segment AS \"Сегмент ожидания\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f4000001-0001-4001-8001-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f4000001-0001-4001-8001-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f4000001-0001-4001-8001-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2606,26 +2611,25 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f4000001-0001-4001-8001-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f4000001-0001-4001-8001-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "table",
       "visualization_settings": {
-        "table.cell_column": "Сегмент ожидания",
+        "table.cell_column": "Состояние отправки",
         "table.column_formatting": [
           {
             "color": "#9CA3AF",
@@ -2661,11 +2665,15 @@
         "table.columns": [
           {
             "enabled": true,
-            "name": "Сегмент ожидания"
+            "name": "Состояние отправки"
           },
           {
             "enabled": true,
-            "name": "Дней в ожидании"
+            "name": "Ступень обработки"
+          },
+          {
+            "enabled": true,
+            "name": "Суток с отправки"
           },
           {
             "enabled": true,
@@ -2739,57 +2747,58 @@
       "sizeY": 10,
       "row": 3,
       "col": 0,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Топ клиник в очереди по документам",
-      "description": "Клиники с наибольшим числом документов без callback.",
+      "name": "Топ клиник среди отправленных",
+      "description": "Клиники с наибольшим числом отправленных без вердикта.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
+          "query": "SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f8000001-0001-4001-8001-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f8000001-0001-4001-8001-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f8000001-0001-4001-8001-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2797,22 +2806,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f8000001-0001-4001-8001-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f8000001-0001-4001-8001-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "row",
       "visualization_settings": {
@@ -2843,38 +2851,38 @@
       "sizeY": 7,
       "row": 13,
       "col": 0,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
         "semd_type": "semd_label",
-        "wait_segment": "wait_segment"
+        "pending_segment": "pending_segment"
       },
       "click_behavior": {
         "type": "link",
         "linkType": "question",
-        "targetModel": "Очередь без ответа",
+        "targetModel": "Отправленные",
         "parameterMapping": {
           "clinic_jid": {
             "source": {
@@ -2883,7 +2891,7 @@
             },
             "target": {
               "type": "dimension",
-              "model_ref": "Очередь без ответа",
+              "model_ref": "Отправленные",
               "field_name": "clinic_jid"
             }
           }
@@ -2891,32 +2899,33 @@
       }
     },
     {
-      "name": "Сегменты ожидания",
-      "description": "Распределение очереди по сегментам из DWH (до 3 / >3 / >7 / >30 дней).",
+      "name": "Ступени обработки",
+      "description": "Распределение отправленных по ступеням возраста обработки; порядок — по лестнице справочника.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT wait_segment AS \"Сегмент ожидания\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY MIN(waiting_days) DESC NULLS LAST",
+          "query": "SELECT pending_segment_label AS \"Ступень обработки\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY pending_segment_label, pending_segment_sort ORDER BY pending_segment_sort",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f8000002-0002-4002-8002-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f8000002-0002-4002-8002-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f8000002-0002-4002-8002-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -2924,22 +2933,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f8000002-0002-4002-8002-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f8000002-0002-4002-8002-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "row",
       "visualization_settings": {
@@ -2979,57 +2987,58 @@
       "sizeY": 7,
       "row": 13,
       "col": 12,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       }
     },
     {
-      "name": "Топ типов СЭМД в очереди",
-      "description": "Распределение документов без ответа по подписи СЭМД.",
+      "name": "Топ типов СЭМД среди отправленных",
+      "description": "Типы СЭМД с наибольшим числом отправленных без вердикта.",
       "dataset_query": {
         "type": "native",
+        "database": 1,
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_waiting WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{wait_segment}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
           "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
             "semd_type": {
               "widget-type": "string/=",
               "display-name": "Код СЭМД",
-              "id": "f8000003-0003-4003-8003-000000000010",
+              "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
-              "type": "dimension"
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "По дате «Отправлено»",
-              "id": "f8000003-0003-4003-8003-000000000001",
-              "name": "ips_date",
               "type": "dimension"
             },
             "jid": {
               "widget-type": "string/=",
               "display-name": "JID Клиники",
-              "id": "f8000003-0003-4003-8003-000000000011",
+              "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
               "type": "dimension"
@@ -3037,22 +3046,21 @@
             "local_uid": {
               "widget-type": "string/=",
               "display-name": "localUid СЭМД",
-              "id": "f8000003-0003-4003-8003-000000000012",
+              "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
               "required": false,
               "type": "dimension"
             },
-            "wait_segment": {
+            "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Сегмент ожидания",
-              "id": "f8000003-0003-4003-8003-000000000013",
-              "name": "wait_segment",
+              "display-name": "Ступень обработки",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
           }
-        },
-        "database": 1
+        }
       },
       "display": "row",
       "visualization_settings": {
@@ -3078,38 +3086,38 @@
       "sizeY": 7,
       "row": 20,
       "col": 0,
-      "tab": "queue",
+      "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_waiting",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_local_uid"
         },
-        "wait_segment": {
-          "table_ref": "public.rpt_documents_waiting",
-          "field_name": "wait_segment"
+        "pending_segment": {
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "pending_segment_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "first_sent_at",
         "jid": "clinic_label",
-        "wait_segment": "wait_segment"
+        "pending_segment": "pending_segment"
       },
       "click_behavior": {
         "type": "link",
         "linkType": "question",
-        "targetModel": "Очередь без ответа",
+        "targetModel": "Отправленные",
         "parameterMapping": {
           "semd_code": {
             "source": {
@@ -3118,7 +3126,7 @@
             },
             "target": {
               "type": "dimension",
-              "model_ref": "Очередь без ответа",
+              "model_ref": "Отправленные",
               "field_name": "semd_code"
             }
           }
@@ -3596,308 +3604,446 @@
           "Ошибки связи": {
             "color": "#499894"
           },
+          "Ошибки ИЭМК": {
+            "color": "#8CD17D"
+          },
+          "Ошибки ФРЛЛО": {
+            "color": "#D7B5A6"
+          },
           "Прочие": {
             "color": "#BAB0AC"
           },
-          "Не указан адрес пациента": {
-            "color": "#4E79A7"
+          "У запрашивающей РМИС/МИС нет разрешения на получение документа": {
+            "color": "#E15759"
           },
-          "Организация не привязана к РМИС": {
-            "color": "#B07AA1"
+          "Из предоставляющей РМИС/МИС передан документ, метаописание которого не соответствует зарегистрированному": {
+            "color": "#E15759"
           },
-          "Некорректно заполнен телефон": {
-            "color": "#B07AA1"
+          "Невозможно связать документы. Создание недопустимой связи документов": {
+            "color": "#E15759"
           },
-          "Специальность врача не соответствует справочнику НСИ": {
-            "color": "#59A14F"
+          "Не удалось построить цепочку сертификатов до аккредитованного удостоверяющего центра": {
+            "color": "#F28E2B"
           },
-          "СНИЛС автора (врача) не заполнен или некорректен": {
-            "color": "#59A14F"
+          "Регистрация версии документа невозможна": {
+            "color": "#E15759"
           },
-          "Дата рождения пациента не заполнена или некорректна": {
-            "color": "#4E79A7"
+          "Хеш-сумма документа, полученного из предоставляющей системы, не соответствует зарегистрированной в РЭМД": {
+            "color": "#F28E2B"
           },
-          "ФИО пациента не заполнено или некорректно": {
-            "color": "#4E79A7"
+          "РМИС/МИС зарегистрирована в РЭМД но не активна": {
+            "color": "#76B7B2"
           },
-          "СНИЛС пациента не заполнен или некорректен": {
-            "color": "#4E79A7"
+          "Сертификат ЭП недействителен на дату создания документа (документ создан позже окончания срока действия сертификата)": {
+            "color": "#F28E2B"
           },
-          "Данные заверителя документа не заполнены или некорректны": {
-            "color": "#B07AA1"
+          "Сертификат ЭП недействителен на дату создания документа (документ создан раньше начала срока действия сертификата)": {
+            "color": "#F28E2B"
           },
-          "Дата/время создания документа не заполнены или некорректны": {
-            "color": "#B07AA1"
+          "ЭП при одинаковых алгоритмах хеширования содержат разные хеш-суммы документов. ЭП от разных документов": {
+            "color": "#F28E2B"
           },
-          "Код типа документа не соответствует справочнику НСИ": {
-            "color": "#B07AA1"
-          },
-          "Данные хранителя документа не заполнены": {
-            "color": "#B07AA1"
-          },
-          "Данные организации автора документа не заполнены": {
-            "color": "#59A14F"
-          },
-          "Подписант из сертификата не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "РЭМД не смог обработать запрос": {
+          "Внутренняя ошибка": {
             "color": "#9C755F"
           },
-          "Документ уже зарегистрирован в РЭМД": {
-            "color": "#E15759"
-          },
-          "Данные пациента не соответствуют ГИП": {
-            "color": "#4E79A7"
-          },
-          "Должность врача не соответствует данным ФРМР": {
-            "color": "#59A14F"
-          },
-          "Медработник не найден в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Данные медработника не соответствуют ФРМР": {
-            "color": "#59A14F"
-          },
-          "Данные подписи не соответствуют данным документа": {
+          "Область использования ключа ЭП не соответствует предъявляемым требованиям": {
             "color": "#F28E2B"
           },
-          "Неактуальная версия справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Код отсутствует в справочнике НСИ": {
-            "color": "#EDC948"
-          },
-          "Наименование не соответствует справочнику НСИ": {
-            "color": "#EDC948"
-          },
-          "ИС зарегистрирована в РЭМД, но не активна: проверьте уведомления и переподключение ИС": {
-            "color": "#76B7B2"
-          },
-          "ИС не зарегистрирована в РЭМД или указаны неверные регистрационные данные": {
-            "color": "#76B7B2"
-          },
-          "Метаописание документа не соответствует зарегистрированному в РЭМД": {
-            "color": "#E15759"
-          },
-          "Сервис предоставляющей ИС недоступен: проверьте доступность getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Запрашиваемая запись ЭМД не найдена в предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "ИС не передала файл ЭМД в ответе getDocumentFile": {
-            "color": "#FF9DA7"
-          },
-          "Не удалось получить файл ЭМД из предоставляющей ИС": {
-            "color": "#FF9DA7"
-          },
-          "Не удалось проверить электронную подпись": {
-            "color": "#F28E2B"
-          },
-          "Получатель из запроса не найден в СЭМД": {
-            "color": "#4E79A7"
-          },
-          "Вид документа не актуален на дату создания": {
-            "color": "#E15759"
-          },
-          "Подразделение или запись справочника не найдены на дату документа": {
-            "color": "#E15759"
-          },
-          "Отчество врача не соответствует данным СЭМД": {
-            "color": "#59A14F"
-          },
-          "Документ не найден в РЭМД": {
-            "color": "#E15759"
-          },
-          "Неверный идентификатор документа РЭМД": {
-            "color": "#E15759"
-          },
-          "Организация не найдена в реестре РЭМД": {
-            "color": "#76B7B2"
-          },
-          "Доступ к операции запрещён в РЭМД": {
-            "color": "#E15759"
-          },
-          "Дублирующий запрос": {
-            "color": "#E15759"
-          },
-          "Неподдерживаемый тип СЭМД в РЭМД": {
-            "color": "#E15759"
-          },
-          "Неверный формат запроса": {
-            "color": "#E15759"
-          },
-          "Лицензия организации не найдена": {
-            "color": "#76B7B2"
-          },
-          "Неверный формат или контрольная сумма СНИЛС": {
-            "color": "#4E79A7"
-          },
-          "СНИЛС пациента обязателен для данного вида документов": {
-            "color": "#4E79A7"
-          },
-          "Организация не зарегистрирована в РЭМД": {
-            "color": "#76B7B2"
-          },
-          "Таймаут асинхронной обработки на стороне РЭМД": {
-            "color": "#9C755F"
-          },
-          "Недоступен сервис проверки подписи (УЦ) на стороне РЭМД": {
-            "color": "#9C755F"
-          },
-          "Подпись роли не соответствует требованиям РЭМД": {
-            "color": "#F28E2B"
-          },
-          "Срок действия сертификата организации истек": {
-            "color": "#F28E2B"
-          },
-          "Ошибка XSD-валидации XML": {
+          "Из предоставляющей РМИС/МИС передан документ, формат файла которого не соответствует требованиям вида документов": {
             "color": "#B07AA1"
           },
-          "Для данного вида ЭМД запрещена регистрация новых версий": {
-            "color": "#E15759"
-          },
-          "Формат файла не соответствует требованиям вида документа": {
+          "Дополнительные атрибуты документа не соответствуют схеме дополнительных атрибутов вида документов": {
             "color": "#B07AA1"
           },
-          "Дополнительные атрибуты документа не прошли валидацию": {
-            "color": "#B07AA1"
+          "Ошибка сервиса системы, предоставляющей документ": {
+            "color": "#FF9DA7"
           },
-          "Электронная подпись отсутствует": {
-            "color": "#F28E2B"
+          "Сервис системы, предоставляющей документ, не доступен": {
+            "color": "#FF9DA7"
           },
-          "Дублирование подписи в документе": {
-            "color": "#F28E2B"
-          },
-          "Не удалось декодировать электронную подпись": {
-            "color": "#F28E2B"
-          },
-          "Подпись не соответствует содержимому документа": {
-            "color": "#F28E2B"
-          },
-          "Неподдерживаемый алгоритм электронной подписи": {
-            "color": "#F28E2B"
-          },
-          "Неподдерживаемый формат электронной подписи": {
-            "color": "#F28E2B"
-          },
-          "В подписи отсутствует сертификат подписанта": {
-            "color": "#F28E2B"
-          },
-          "Сертификат не предназначен для подписания документов": {
-            "color": "#F28E2B"
-          },
-          "Сертификат подписи недействителен на дату создания документа": {
-            "color": "#F28E2B"
-          },
-          "В контейнере подписи более одного подписанта": {
-            "color": "#F28E2B"
-          },
-          "Подпись организации не соответствует требованиям вида документа": {
-            "color": "#F28E2B"
-          },
-          "Роль подписанта не предусмотрена для вида документа на дату": {
+          "Дата создания документа находится вне периода, допустимого для вида документов": {
             "color": "#E15759"
           },
-          "У подписанта не указана специальность": {
-            "color": "#59A14F"
+          "В ЭП отсутствует сертификат проверки подписи": {
+            "color": "#F28E2B"
           },
-          "Должность подписанта не соответствует роли подписи": {
-            "color": "#59A14F"
-          },
-          "Карточка медработника не найдена в ФРМР": {
-            "color": "#59A14F"
-          },
-          "Организация подписанта не соответствует организации документа": {
-            "color": "#59A14F"
-          },
-          "Имя врача не соответствует данным СЭМД": {
-            "color": "#59A14F"
-          },
-          "Сведения о пациенте отсутствуют или дублируются в документе": {
-            "color": "#4E79A7"
-          },
-          "Пациент не найден в ГИП": {
-            "color": "#4E79A7"
-          },
-          "Пациент уже зарегистрирован в ГИП": {
-            "color": "#4E79A7"
-          },
-          "Не удалось создать пациента в ГИП": {
-            "color": "#4E79A7"
-          },
-          "Требуются дополнительные сведения о пациенте (ГИП)": {
-            "color": "#4E79A7"
-          },
-          "Не указана серия документа, удостоверяющего личность": {
-            "color": "#4E79A7"
-          },
-          "Адрес пациента не найден в ФИАС": {
-            "color": "#4E79A7"
-          },
-          "Адрес пациента не соответствует ФИАС": {
-            "color": "#4E79A7"
-          },
-          "Организация не найдена в ФРМО": {
+          "РМИС/МИС не зарегистрирована в РЭМД": {
             "color": "#76B7B2"
           },
-          "Организация не действует в ФРМО на дату документа": {
-            "color": "#76B7B2"
-          },
-          "Подразделение организации не найдено в ФРМО": {
-            "color": "#76B7B2"
-          },
-          "Регион ИС не соответствует региону организации": {
-            "color": "#76B7B2"
-          },
-          "Дата создания документа позже даты регистрации": {
+          "В указанную дату для роли недоступно подписание документов указанного вида": {
             "color": "#E15759"
           },
-          "Не удалось зарегистрировать новую версию документа": {
-            "color": "#E15759"
+          "Отсутствуют подписи документа": {
+            "color": "#F28E2B"
           },
-          "Не удалось связать документ с записью РЭМД": {
-            "color": "#E15759"
+          "Наличие СНИЛС пациента не соответствует требованиям вида документов": {
+            "color": "#4E79A7"
+          },
+          "Наличие специальности подписанта не соответствует требованиям вида документов": {
+            "color": "#59A14F"
           },
           "Регистрируемая связь документов уже существует": {
             "color": "#E15759"
           },
-          "Неверный идентификатор сообщения (messageId)": {
+          "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован": {
             "color": "#E15759"
           },
-          "Техническая ошибка на стороне РЭМД": {
-            "color": "#9C755F"
+          "Не найдена запись справочника": {
+            "color": "#EDC948"
           },
-          "Превышен лимит запросов к РЭМД": {
-            "color": "#9C755F"
-          },
-          "Сертификат ЭП истёк": {
-            "color": "#F28E2B"
-          },
-          "Сертификат ЭП отозван": {
-            "color": "#F28E2B"
-          },
-          "Недействительный сертификат подписи": {
-            "color": "#F28E2B"
-          },
-          "Документ аннулирован": {
-            "color": "#E15759"
-          },
-          "Ошибка разбора XML-структуры документа": {
-            "color": "#B07AA1"
-          },
-          "Документ, удостоверяющий личность пациента: некорректные реквизиты": {
-            "color": "#4E79A7"
-          },
-          "Несоответствие данных организации в ФРМО": {
+          "Организация не найдена в ФРМО": {
             "color": "#76B7B2"
           },
-          "ФИО пациента в ЭМД не соответствует данным ЕГИСЗ": {
+          "Наличие подписи организации не соответствует требованиям вида документов": {
+            "color": "#F28E2B"
+          },
+          "Ошибка при создании пациента в ГИП": {
             "color": "#4E79A7"
           },
-          "Пол пациента в ЭМД не соответствует данным ЕГИСЗ": {
+          "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП": {
             "color": "#4E79A7"
+          },
+          "Наличие сведений о пациенте не соответствует требованиям вида документов": {
+            "color": "#4E79A7"
+          },
+          "Личное дело сотрудника отсутствует в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Сотрудник не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Переданная должность сотрудника не соответствует должности, зарегистрированной в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Наличие дополнительных атрибутов документа не соответствует требованиям вида документов": {
+            "color": "#B07AA1"
+          },
+          "Несоответствие должности и роли подписанта": {
+            "color": "#59A14F"
+          },
+          "Запрашиваемая запись регистра не найдена": {
+            "color": "#FF9DA7"
+          },
+          "Регион организации не соответствует региону РМИС/МИС": {
+            "color": "#76B7B2"
+          },
+          "Число ЭП сотрудников с требуемой ролью не соответствует требованиям вида документов": {
+            "color": "#F28E2B"
+          },
+          "Ошибка декодирования ЭП": {
+            "color": "#F28E2B"
+          },
+          "Подпись не верна": {
+            "color": "#F28E2B"
+          },
+          "Организация подписанта отлична от организации, регистрирующей документ (и РМИС/МИС не имеет на это разрешения)": {
+            "color": "#59A14F"
+          },
+          "Неподдерживаемый алгоритм подписи": {
+            "color": "#F28E2B"
+          },
+          "Несоответствие данных (сотрудника либо МО) в сообщении и в сертификате ЭП": {
+            "color": "#F28E2B"
+          },
+          "Переданные данные сотрудника не соответствуют данным, зарегистрированным в ФРМР": {
+            "color": "#59A14F"
+          },
+          "Дата создания документа больше даты регистрации": {
+            "color": "#E15759"
+          },
+          "Асинхронный запрос файла ЭМД с указанным messageID не найден": {
+            "color": "#E15759"
+          },
+          "МО недействительна на дату создания документа": {
+            "color": "#76B7B2"
+          },
+          "Дублирование подписи": {
+            "color": "#F28E2B"
+          },
+          "В контейнере ЭП указано более одного подписанта": {
+            "color": "#F28E2B"
+          },
+          "Неподдерживаемый формат ЭП": {
+            "color": "#F28E2B"
+          },
+          "Отсутствует информация о подразделении организации": {
+            "color": "#76B7B2"
+          },
+          "Документ не соответствует допустимому формату (для вида документов)": {
+            "color": "#B07AA1"
+          },
+          "ИС не передала файл ЭМД": {
+            "color": "#FF9DA7"
+          },
+          "Невозможно зарегистрировать ЭМД с обязательным указанием серии документа с помощью версии сервиса 3.0": {
+            "color": "#E15759"
+          },
+          "Необходимо указать серию документа": {
+            "color": "#4E79A7"
+          },
+          "Ошибка ответа от сервиса системы в getDocumentFileResponse, предоставляющей документ": {
+            "color": "#FF9DA7"
+          },
+          "Внутренняя ошибка ГИП при создании пациента": {
+            "color": "#4E79A7"
+          },
+          "Ошибка при получении файла документа из предоставляющей системы": {
+            "color": "#FF9DA7"
+          },
+          "Адрес OCSP-службы не указан или недоступен, CRL также недоступен": {
+            "color": "#F28E2B"
+          },
+          "МО-получатель заказа на оформление документа онлайн не может идентифицировать пациента. По полученным персональным данным пациента в МО данные не найдены": {
+            "color": "#4E79A7"
+          },
+          "Для формирования запрошенного в рамках услуги \"заказ справки он-лайн\" документа недостаточно сведений, гражданину необходимо обратиться с личным визитом для прохождения дополнительных исследований": {
+            "color": "#4E79A7"
+          },
+          "В запросе listDocKindSendRequest (сервис \"заказ справок онлайн\" на предоставление списка МО на ЕПГУ) есть конфликтующие записи по виду документов с пересечением дат доступности документов для заказа гражданами": {
+            "color": "#E15759"
+          },
+          "Уникальный идентификатор адресного объекта, переданного в СЭМД, не найден в ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Регион адресного объекта, переданного в СЭМД, не совпадает с регионом по данным ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Уникальный идентификатор дома, переданного в СЭМД, не найден в ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Уникальный идентификатор адресного объекта, переданного в СЭМД, не совпадает с адресом по данным ФИАС": {
+            "color": "#4E79A7"
+          },
+          "Для вида документа запрещено регистрировать новую версию": {
+            "color": "#E15759"
+          },
+          "Неверный формат передаваемого значения (формат или диапазон даты, маска или длина строки)": {
+            "color": "#D7B5A6"
+          },
+          "Неверный код термина для значения, определяемого по справочнику": {
+            "color": "#D7B5A6"
+          },
+          "Не переданы обязательные сведения о гражданине Имя или Фамилия или Отчество и пол, дата рождения": {
+            "color": "#D7B5A6"
+          },
+          "Не передано ни одного идентификатора гражданина": {
+            "color": "#D7B5A6"
+          },
+          "Переданы некорректные идентификаторы документов гражданина": {
+            "color": "#D7B5A6"
+          },
+          "Сведения о гражданине в регистре не найдены": {
+            "color": "#D7B5A6"
+          },
+          "Не передан код назначенной медицинской продукции или передана неоднозначная информация о коде": {
+            "color": "#D7B5A6"
+          },
+          "Информационная система не является владельцем сведений о назначении для категории льготы": {
+            "color": "#D7B5A6"
+          },
+          "Не переданы сведения об организации, назначившей мед. продукцию, или переданы противоречивые сведения об организации": {
+            "color": "#D7B5A6"
+          },
+          "У гражданина не найдены сведения по коду льготы": {
+            "color": "#D7B5A6"
+          },
+          "У гражданина отсутствуют льготы, в субъекте РФ, указанном в СЭМД": {
+            "color": "#D7B5A6"
+          },
+          "Отсутствуют сведения о врачебной комиссии при назначении лекарственного препарата по торговому наименованию": {
+            "color": "#D7B5A6"
+          },
+          "В СЭМД не корректно передана дата назначения": {
+            "color": "#D7B5A6"
+          },
+          "Дата срока действия не согласуется со сроком действия согласно справочнику ФНСИ 1.2.643.5.1.13.13.99.2.608": {
+            "color": "#D7B5A6"
+          },
+          "Не передан код отпущенной медицинской продукции либо передан неоднозначный код": {
+            "color": "#D7B5A6"
+          },
+          "Отсутствуют сведения о переданном назначении медицинской продукции": {
+            "color": "#D7B5A6"
+          },
+          "Не переданы сведения об организации, отпустившей мед. продукцию, или переданы противоречивые сведения об организации": {
+            "color": "#D7B5A6"
+          },
+          "Не корректно передана дата отпуска": {
+            "color": "#D7B5A6"
+          },
+          "Количество отпущенных потребительских упаковок не согласуется с кол-вом потребительских единиц": {
+            "color": "#D7B5A6"
+          },
+          "Используется некорректный механизм передачи сведений": {
+            "color": "#D7B5A6"
+          },
+          "СЭМД не прошел ФЛК, либо не направлялся на ФЛК": {
+            "color": "#D7B5A6"
+          },
+          "Передан СЭМД с типом, для которого не предусмотрена проверка в ФРЛЛО": {
+            "color": "#D7B5A6"
+          },
+          "Не удалось определить информационную систему, сформировавшую СЭМД по справочнику 1.2.643.5.1.13.13.99.2.622": {
+            "color": "#D7B5A6"
+          },
+          "Достигнут защитный лимит, просьба повторить через минуту или позже": {
+            "color": "#9C755F"
+          },
+          "Ошибка отправки запроса на валидацию в проверяющую систему": {
+            "color": "#9C755F"
+          },
+          "Превышено ожидание асинхронного ответа от проверяющей системы": {
+            "color": "#9C755F"
+          },
+          "Имя пациента в составе сведений о пациенте обязательно": {
+            "color": "#4E79A7"
+          },
+          "Фамилия пациента в составе сведений о пациенте обязательна": {
+            "color": "#4E79A7"
+          },
+          "По локальному идентификатору в ГИП найдено более одной записи": {
+            "color": "#4E79A7"
+          },
+          "Замечание от подсистемы ИПС по проверке данных запроса": {
+            "color": "#B07AA1"
+          },
+          "Внутренняя ошибка валидации СЭМД": {
+            "color": "#9C755F"
+          },
+          "Внутренняя ошибка обработки шаблона валидации": {
+            "color": "#9C755F"
+          },
+          "Ошибка при трансформации СЭМД для проверки (Schematron)": {
+            "color": "#B07AA1"
+          },
+          "Сертификат сотрудника недействителен на дату создания документа": {
+            "color": "#F28E2B"
+          },
+          "Фамилия медицинского работника в запросе на регистрацию отличается от фамилии в СЭМД": {
+            "color": "#59A14F"
+          },
+          "Имя медицинского работника в запросе на регистрацию отличается от имени в СЭМД": {
+            "color": "#59A14F"
+          },
+          "Отчество медицинского работника в запросе на регистрацию отличается от отчества в СЭМД": {
+            "color": "#59A14F"
+          },
+          "Медицинский работник, придавший документу юридическую силу, не найден в запросе на регистрацию сведений": {
+            "color": "#59A14F"
+          },
+          "Медицинский работник из запроса на регистрацию сведений не найден в СЭМД": {
+            "color": "#59A14F"
+          },
+          "Локальный идентификатор медицинского работника в запросе на регистрацию отличается от идентификатора в СЭМД": {
+            "color": "#59A14F"
+          },
+          "Медицинский работник не найден в СЭМД или в запросе на регистрацию": {
+            "color": "#59A14F"
+          },
+          "Не удалось найти поле, отвечающее за код справочника": {
+            "color": "#EDC948"
+          },
+          "Для данного вида документа недопустимо использование указанного справочника": {
+            "color": "#EDC948"
+          },
+          "Справочник с указанным кодом отсутствует": {
+            "color": "#EDC948"
+          },
+          "Версия справочника недопустима для данного вида документа": {
+            "color": "#EDC948"
+          },
+          "Значение с указанным кодом отсутствует в справочнике": {
+            "color": "#EDC948"
+          },
+          "Наименование элемента не соответствует наименованию элемента в НСИ": {
+            "color": "#EDC948"
+          },
+          "Внутренняя ошибка при проверке ЭМД в проверяющей системе": {
+            "color": "#9C755F"
+          },
+          "Получатель из запроса на регистрацию сведений не найден в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "СНИЛС получателя в запросе на регистрацию отличается от СНИЛС в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Фамилия получателя в запросе на регистрацию отличается от фамилия в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Имя получателя в запросе на регистрацию отличается от имени в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Отчество получателя в запросе на регистрацию отличается от отчества в СЭМД": {
+            "color": "#4E79A7"
+          },
+          "Сертификат сотрудника недействителен на дату проверки документа": {
+            "color": "#F28E2B"
+          },
+          "Истекло время выполнения заказа в рамках сервиса \"Заказ справок онлайн\"": {
+            "color": "#E15759"
+          },
+          "По данному заказу уже был отправлен статус на витрину, отличный от переданного": {
+            "color": "#E15759"
+          },
+          "В РЭМД не найден заказ с переданным идентификатором": {
+            "color": "#E15759"
+          },
+          "ИЭМК: данные не соответствуют справочнику НСИ": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: ошибка валидации структуры CDA": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: документ уже зарегистрирован": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: пациент не определён": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: некорректный идентификатор документа": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: внутренняя ошибка репозитория": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: ошибка обработки CDA": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: замена версии отклонена (другая организация)": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: внутренняя ошибка реестра": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: сервис временно недоступен": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: состав пакета не согласован (документы/метаданные)": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: ошибка метаданных документа": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: дублирующийся идентификатор в пакете": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: повторная загрузка с изменённым содержимым": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: замена версии отклонена (документ уже заменён)": {
+            "color": "#8CD17D"
+          },
+          "ИЭМК: неверный идентификатор репозитория": {
+            "color": "#8CD17D"
+          },
+          "Сетевая ошибка": {
+            "color": "#499894"
+          },
+          "Подписант из сертификата не найден в ФРМР": {
+            "color": "#59A14F"
+          },
+          "ИЭМК: заменяемый документ не найден (замена версии)": {
+            "color": "#8CD17D"
           },
           "Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию": {
             "color": "#E15759"
@@ -3905,8 +4051,14 @@
           "Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию": {
             "color": "#E15759"
           },
-          "Дата подписи МО позже даты поступления запроса на регистрацию": {
-            "color": "#E15759"
+          "СНИЛС пациента в ЭМД не совпадает с запросом на регистрацию": {
+            "color": "#4E79A7"
+          },
+          "ФИО пациента в ЭМД не совпадает с запросом на регистрацию": {
+            "color": "#4E79A7"
+          },
+          "Дата рождения пациента в ЭМД не совпадает с запросом на регистрацию": {
+            "color": "#4E79A7"
           },
           "Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию": {
             "color": "#E15759"
@@ -3914,23 +4066,122 @@
           "Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию": {
             "color": "#E15759"
           },
-          "СНИЛС не найден или не соответствует данным пациента/медработника": {
-            "color": "#4E79A7"
+          "Структурное подразделение (representedCustodianOrganization) в СЭМД не совпадает с запросом на регистрацию": {
+            "color": "#E15759"
           },
-          "Ошибка справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Недоступен сервис проверки статуса сертификата (CRL/OCSP)": {
-            "color": "#F28E2B"
-          },
-          "Сетевая ошибка": {
-            "color": "#499894"
-          },
-          "Ошибки организации": {
+          "ОГРН организации из СЭМД не совпадает с ФРМО": {
             "color": "#76B7B2"
           },
-          "Неизвестная ошибка": {
-            "color": "#BAB0AC"
+          "Локальный идентификатор пациента в ЭМД не совпадает с запросом на регистрацию": {
+            "color": "#4E79A7"
+          },
+          "Пол пациента в ЭМД не совпадает с запросом на регистрацию": {
+            "color": "#4E79A7"
+          },
+          "ФИО пациента содержит недопустимые символы": {
+            "color": "#4E79A7"
+          },
+          "Организация в СЭМД не совпадает с запросом на регистрацию": {
+            "color": "#E15759"
+          },
+          "Организация не привязана к РМИС": {
+            "color": "#76B7B2"
+          },
+          "Подразделение не существовало на дату создания документа": {
+            "color": "#76B7B2"
+          },
+          "Подразделение не соответствует организации документа": {
+            "color": "#76B7B2"
+          },
+          "Указанная версия отсутствует для данного справочника": {
+            "color": "#EDC948"
+          },
+          "Дата подписи МО позже даты поступления запроса на регистрацию": {
+            "color": "#E15759"
+          },
+          "Дата подписи медработника позже допустимой": {
+            "color": "#E15759"
+          },
+          "В подписи отсутствует атрибут «Дата и время создания»": {
+            "color": "#F28E2B"
+          },
+          "Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента: не указан тип адреса (address:Type)": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента: недопустимое число элементов addr": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента: составляющая адреса не заполнена": {
+            "color": "#4E79A7"
+          },
+          "Адрес пациента: сведения ФИАС не соответствуют требованиям": {
+            "color": "#4E79A7"
+          },
+          "Идентификатор пациента: недопустимый атрибут @nullFlavor": {
+            "color": "#4E79A7"
+          },
+          "Контактные данные: недопустимый атрибут @nullFlavor": {
+            "color": "#B07AA1"
+          },
+          "Сведения о связанном документе не соответствуют требованиям": {
+            "color": "#B07AA1"
+          },
+          "Контактные данные: не заполнен атрибут @value элемента telecom": {
+            "color": "#B07AA1"
+          },
+          "Контактные данные: отсутствует обязательный элемент telecom": {
+            "color": "#B07AA1"
+          },
+          "Контактные данные: номер телефона не соответствует требуемому формату": {
+            "color": "#B07AA1"
+          },
+          "Реквизиты организации в СЭМД не заполнены": {
+            "color": "#76B7B2"
+          },
+          "Реквизиты документа, удостоверяющего личность, не соответствуют требованиям": {
+            "color": "#4E79A7"
+          },
+          "Значение элемента не входит в перечень допустимых": {
+            "color": "#B07AA1"
+          },
+          "XSD: недопустимый элемент или нарушен порядок элементов": {
+            "color": "#B07AA1"
+          },
+          "XSD: недопустимый атрибут элемента": {
+            "color": "#B07AA1"
+          },
+          "XSD: отсутствует обязательный атрибут элемента": {
+            "color": "#B07AA1"
+          },
+          "XSD: значение не соответствует типу элемента": {
+            "color": "#B07AA1"
+          },
+          "XSD: не найдено объявление элемента": {
+            "color": "#B07AA1"
+          },
+          "Ошибка разбора XML-структуры документа": {
+            "color": "#B07AA1"
+          },
+          "Проверяющая подсистема РЭМД недоступна": {
+            "color": "#9C755F"
+          },
+          "РЭМД не смог обработать запрос": {
+            "color": "#9C755F"
+          },
+          "Непредвиденная ошибка РЭМД при проверке подписей": {
+            "color": "#9C755F"
+          },
+          "Срок действия сертификата ЭП истёк": {
+            "color": "#F28E2B"
+          },
+          "Сертификат ЭП отозван": {
+            "color": "#F28E2B"
+          },
+          "Документ аннулирован": {
+            "color": "#E15759"
           },
           "Ошибка Schematron-валидации": {
             "color": "#B07AA1"
@@ -3970,7 +4221,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ), rule_patterns AS ( SELECT interpretation AS error_type, (array_agg(COALESCE(match_code, '') || match_pattern ORDER BY match_tier, rule_code))[1] AS error_pattern FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", COALESCE(rp.error_pattern, ec.error_type) AS \"Паттерн ошибки\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), '—') AS nsi_error_code, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, nsi_error_code, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", ec.nsi_error_code AS \"Код НСИ\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4007,9 +4258,9 @@
       "visualization_settings": {
         "table.cell_column": "Документов",
         "table.column_widths": [
-          280,
-          200,
           360,
+          200,
+          280,
           88,
           96,
           104
@@ -4025,7 +4276,7 @@
           },
           {
             "enabled": true,
-            "name": "Паттерн ошибки"
+            "name": "Код НСИ"
           },
           {
             "enabled": false,
@@ -4056,8 +4307,8 @@
             "column_title": "Тип ошибки",
             "text_style": "wrap"
           },
-          "[\"name\",\"Паттерн ошибки\"]": {
-            "column_title": "Паттерн ошибки",
+          "[\"name\",\"Код НСИ\"]": {
+            "column_title": "Код НСИ",
             "text_style": "wrap"
           }
         }
@@ -4119,7 +4370,7 @@
         "ips_date": "ips_date",
         "semd_type": "semd_label",
         "jid": "clinic_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       }
     },
     {
@@ -4476,7 +4727,7 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         },
         "log_id": {
           "table_ref": "public.rpt_documents",
@@ -4595,7 +4846,7 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         },
         "log_id": {
           "table_ref": "public.rpt_documents",
@@ -4733,7 +4984,7 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         },
         "log_id": {
           "table_ref": "public.rpt_documents",
@@ -4859,13 +5110,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "semd_type": "semd_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -4997,13 +5248,13 @@
         },
         "status": {
           "table_ref": "public.rpt_documents",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         }
       },
       "metabase-model-drill-params": {
         "ips_date": "ips_date",
         "jid": "clinic_label",
-        "status": "status_label"
+        "status": "status_detail_label"
       },
       "click_behavior": {
         "type": "link",
@@ -5183,7 +5434,7 @@
         },
         "status": {
           "model_ref": "Документы",
-          "field_name": "status_label"
+          "field_name": "status_detail_label"
         },
         "local_uid": {
           "model_ref": "Документы",
@@ -5216,7 +5467,7 @@
       "position": 1
     },
     {
-      "id": "queue",
+      "id": "sent",
       "name": "Отправленные",
       "position": 2
     },

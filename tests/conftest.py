@@ -1,6 +1,6 @@
 """Загрузка самодостаточных DAG-файлов как модулей.
 
-Пакета egisz_elt больше нет: канонический исходник — airflow/dags/*.py. Тесты берут
+Пакета egisz_elt больше нет: канонический исходник — dags/*.py. Тесты берут
 функции напрямую из файла, который разворачивается на целевые контуры, поэтому проверяют
 именно поставляемый код. Импорт DAG-файла не должен требовать ни метабазы Airflow, ни
 Connections — настройки при импорте падают на DEFAULTS (см. _variable_or_default).
@@ -15,7 +15,7 @@ from pathlib import Path
 from types import ModuleType
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DAGS_DIR = REPO_ROOT / "airflow" / "dags"
+DAGS_DIR = REPO_ROOT / "dags"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
 os.environ.setdefault("AIRFLOW__CORE__LOAD_EXAMPLES", "False")
@@ -37,8 +37,24 @@ def load_script_module(stem: str) -> ModuleType:
     return module
 
 
+SQL_SECTION_MARKER = "-- ---------------------------------------------------------------- section: "
+
+
+def sql_section(text: str, name: str) -> str:
+    """Именованная секция склеенного модуля схемы (`db/*.sql`).
+
+    Модули собраны из секций по зонам ответственности. Тест, проверяющий контракт
+    одного слоя, обязан читать его секцию, а не весь файл: иначе соседняя секция
+    молча удовлетворяет или ломает утверждение.
+    """
+    start = text.index(SQL_SECTION_MARKER + name) + len(SQL_SECTION_MARKER + name)
+    rest = text[start:]
+    nxt = rest.find("\n" + SQL_SECTION_MARKER)
+    return rest if nxt < 0 else rest[:nxt]
+
+
 def load_dag_module(stem: str) -> ModuleType:
-    """Import ``airflow/dags/<stem>.py`` under its own name (cached in sys.modules).
+    """Import ``dags/<stem>.py`` under its own name (cached in sys.modules).
 
     Имя модуля совпадает с именем файла, поэтому patch-цели в тестах пишутся как
     ``egisz_etl_dag.<функция>``.

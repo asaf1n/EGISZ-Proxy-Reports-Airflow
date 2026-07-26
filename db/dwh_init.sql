@@ -23,17 +23,9 @@ BEGIN
 END
 $$;
 
-\i db/parts/00_bootstrap.sql
-\i db/parts/10_tables.sql
-\i db/parts/20_functions_parsing.sql
-\i db/parts/30_error_rules.sql
-\i db/parts/40_functions_errors.sql
-\i db/parts/50_transform.sql
-\i db/parts/60_drop_dependents.sql
-\i db/parts/70_views_core.sql
-\i db/parts/80_views_rpt.sql
-\i db/parts/85_views_weekly.sql
-\i db/parts/86_views_monthly.sql
-\i db/parts/90_views_health_and_finalize.sql
+\i db/01_schema.sql
+\i db/02_functions.sql
+\i db/03_transform.sql
+\i db/04_views.sql
 
 \echo 'DWH init complete: dwh_egisz schema is up to date'

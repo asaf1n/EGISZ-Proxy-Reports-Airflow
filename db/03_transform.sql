@@ -1,6 +1,12 @@
 -- ============================================================================
+-- 03_transform.sql — raw journal -> transactions -> documents
+-- Loaded by db/dwh_init.sql. Идемпотентен: повторный прогон не меняет состояние.
+-- ============================================================================
+
+-- ---------------------------------------------------------------- section: transform
+-- ============================================================================
 -- 50_transform.sql — transform_raw_to_facts
--- Loaded by db/dwh_init.sql via \i db/parts/50_transform.sql.
+-- Loaded by db/dwh_init.sql via \i db/03_transform.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
@@ -404,7 +410,7 @@ BEGIN
         a.dwh_id,
         a.local_uid,
         a.semd_code,
-        CASE WHEN a.has_network_error THEN 'network_error' ELSE 'waiting' END,
+        CASE WHEN a.has_network_error THEN 'network_error' ELSE public.document_status_nonfinal() END,
         a.sent_at,
         a.request_logid,
         CASE WHEN a.has_network_error THEN a.network_logid END,
@@ -429,7 +435,7 @@ BEGIN
             COALESCE(EXCLUDED.first_sent_at, public.documents.first_sent_at)
         ),
         status = CASE
-            WHEN public.documents.status IN ('success', 'async_error', 'network_error')
+            WHEN public.documents.status IN (SELECT public.document_status_final())
             THEN public.documents.status
             ELSE EXCLUDED.status
         END,
@@ -767,7 +773,7 @@ BEGIN
             WHEN f.status = 'success' THEN 'success'
             WHEN f.status = 'error' AND f.error_type = 'Сетевая ошибка' THEN 'network_error'
             WHEN f.status = 'error' THEN 'async_error'
-            ELSE 'waiting'
+            ELSE public.document_status_nonfinal()
         END,
         public.clean_text_value(f.message_id),
         public.clean_text_value(f.relates_to_id),

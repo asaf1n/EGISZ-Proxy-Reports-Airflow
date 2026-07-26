@@ -69,7 +69,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -331,11 +331,11 @@
     },
     {
       "name": "Динамика статусов по дням",
-      "description": "Доли документов по исходам за день: успешно, ошибка асинхронного ответа РЭМД и ошибка связи — в процентах от документов с вердиктом РЭМД (сумма = 100%). «Отправлено» (без исхода) исключено — см. карточку «Отправленные — клиент».",
+      "description": "Доли документов по состоянию за день: успешно, ошибка асинхронного ответа РЭМД, ошибка связи и «В обработке» (сумма = 100%). «Без ответа» исключено — см. карточку «Отправленные — клиент».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Успешно, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
+          "query": "SELECT ips_date::date AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Успешно, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail = 'pending') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"В обработке, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
           "template-tags": {
             "clinic_label": {
               "name": "clinic_label",
@@ -442,7 +442,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -525,7 +525,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1109,7 +1109,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1224,7 +1224,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", ROUND(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400.0, 1) AS \"Дней в ожидании\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status = 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "SELECT ips_date AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", ROUND(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400.0, 1) AS \"Дней в ожидании\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status = 'sent' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",

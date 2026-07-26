@@ -510,34 +510,46 @@ function Initialize-AirflowDwhPool {
 }
 
 
+function Test-AirflowConnectionExists {
+    param([Parameter(Mandatory = $true)][string]$ConnId)
+
+    $stored = Invoke-AirflowSchedulerCli -Arguments @('connections', 'get', $ConnId) -AllowFailure
+    return ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace(($stored | Out-String)))
+}
+
 function Initialize-AirflowEgiszConnections {
     # Подключения живут в метабазе Airflow (Admin -> Connections), как на внешнем
     # контуре: env-переменные из секрета перекрывали бы их и расходились с UI.
+    #
+    # Провижининг значениями не владеет: файл — только начальное наполнение для пустой
+    # метабазы. Уже заведённое подключение не трогаем — реквизиты правят в UI, и
+    # перезапись затирала бы рабочие адреса и пароли значениями из шаблона.
     $connectionsFile = Join-Path $PSScriptRoot "k8s\airflow\egisz-connections.json"
     if (-not (Test-Path $connectionsFile)) {
         throw "Airflow connections file not found: ${connectionsFile}"
     }
 
-    Write-Host "Provisioning Airflow connections (Admin -> Connections)..."
+    Write-Host "Ensuring Airflow connections (Admin -> Connections)..."
     $connections = Get-Content $connectionsFile -Raw | ConvertFrom-Json
     foreach ($prop in $connections.PSObject.Properties) {
         $connId = $prop.Name
         $connUri = [string]$prop.Value
+
+        if (Test-AirflowConnectionExists -ConnId $connId) {
+            Write-Host "  ${connId}: уже заведено, оставлено без изменений"
+            continue
+        }
+
         if ([string]::IsNullOrWhiteSpace($connUri)) {
             throw "Connection URI for ${connId} is empty in ${connectionsFile}."
         }
-        # delete + add вместо `connections import --overwrite`: работает на всех 2.x
-        # и делает провижининг идемпотентным при смене URI.
-        Invoke-AirflowSchedulerCli -Arguments @('connections', 'delete', $connId) -AllowFailure | Out-Null
+
+        Write-Host "  ${connId}: не найдено, заводим из ${connectionsFile}"
         Invoke-Checked "Add Airflow connection ${connId}" {
             Invoke-AirflowSchedulerCli -Arguments @('connections', 'add', $connId, '--conn-uri', $connUri)
         }
-    }
-
-    foreach ($prop in $connections.PSObject.Properties) {
-        $stored = Invoke-AirflowSchedulerCli -Arguments @('connections', 'get', $prop.Name) -AllowFailure
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace(($stored | Out-String))) {
-            throw "Airflow connection $($prop.Name) is missing after provisioning. Check ${connectionsFile}."
+        if (-not (Test-AirflowConnectionExists -ConnId $connId)) {
+            throw "Airflow connection ${connId} is missing after provisioning. Check ${connectionsFile}."
         }
     }
 
@@ -644,7 +656,7 @@ function Get-DagSourcesHash {
 import hashlib
 from pathlib import Path
 h = hashlib.sha256()
-for path in sorted(Path('airflow/dags').glob('*.py')):
+for path in sorted(Path('dags').glob('*.py')):
     h.update(path.read_bytes())
 print(h.hexdigest())
 "@
@@ -675,7 +687,7 @@ function Install-Airflow {
         # docker buildx прогресс летит в stderr; под $ErrorActionPreference='Stop'
         # это валит скрипт ещё до проверки exit-кода. Сливаем потоки и пускаем
         # через ForEach-Object, чтобы каждая строка стала обычным stdout.
-        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f airflow/Dockerfile . 2>&1 | ForEach-Object {
+        docker build -t $AirflowImage -t egisz-airflow-worker:latest -f k8s/airflow/Dockerfile . 2>&1 | ForEach-Object {
             if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
         }
     }

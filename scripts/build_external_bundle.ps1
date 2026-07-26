@@ -87,11 +87,11 @@ function Build-AirflowBundle {
     $bundle = Join-Path $DistRoot "airflow"
     New-CleanDirectory $bundle
 
-    # DAG-файлы самодостаточны: канонические исходники airflow/dags копируются
+    # DAG-файлы самодостаточны: канонические исходники dags копируются
     # как есть, целевому Airflow не нужны ни PYTHONPATH, ни pip install пакета.
-    $dagFiles = Get-ChildItem (Join-Path $RepoRoot "airflow\dags") -Filter "egisz_*.py"
+    $dagFiles = Get-ChildItem (Join-Path $RepoRoot "dags") -Filter "egisz_*.py"
     if ($dagFiles.Count -eq 0) {
-        throw "no egisz_*.py DAG files found in airflow\dags"
+        throw "no egisz_*.py DAG files found in dags"
     }
     foreach ($dagFile in $dagFiles) {
         Copy-BundleItem $dagFile.FullName (Join-Path $bundle "dags\$($dagFile.Name)")
@@ -128,10 +128,12 @@ function Build-DwhBundle {
     $bundle = Join-Path $DistRoot "dwh"
     New-CleanDirectory $bundle
 
-    # Раскладка db/dwh_init.sql + db/parts/ обязана сохраниться: точка входа
-    # подключает части относительными \i db/parts/*.sql.
+    # Раскладка db/ обязана сохраниться: точка входа подключает модули
+    # относительными \i db/*.sql, поэтому psql запускается из корня бандла.
     Copy-BundleItem (Join-Path $RepoRoot "db\dwh_init.sql") (Join-Path $bundle "db\dwh_init.sql")
-    Copy-BundleItem (Join-Path $RepoRoot "db\parts") (Join-Path $bundle "db\parts")
+    foreach ($module in Get-ChildItem (Join-Path $RepoRoot "db") -Filter "0*.sql" | Sort-Object Name) {
+        Copy-BundleItem $module.FullName (Join-Path $bundle "db\$($module.Name)")
+    }
 
     Complete-Bundle "dwh" $bundle "deploy\external-dwh\README.md"
 }

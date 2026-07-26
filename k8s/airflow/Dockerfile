@@ -17,4 +17,4 @@ RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('/opt/egisz-elt
     && pip install --no-cache-dir -r /tmp/egisz-requirements.txt \
     && rm /tmp/egisz-requirements.txt
 
-COPY --chown=airflow:0 airflow/dags /opt/airflow/dags
+COPY --chown=airflow:0 dags /opt/airflow/dags

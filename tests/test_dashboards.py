@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from conftest import sql_section
+
 INTEGRATION_DASHBOARD = Path("metabase_dashboards/01_integration_egisz.json")
 
 
@@ -105,7 +107,7 @@ def test_service_network_top_groups_by_typed_label() -> None:
     dashboard = _tab_dashboard("service")
     card = next(c for c in dashboard["cards"] if c.get("name") == "Типы сетевых ошибок (за период)")
     query = card["dataset_query"]["native"]["query"]
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "network_error_type" in query
     assert "public.network_error_type(r.error_text) AS network_error_type" in sql
@@ -135,7 +137,7 @@ def test_quality_dashboard_has_no_transport_detail_block() -> None:
 
 
 def test_operational_error_types_include_network_slice() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     dashboard = _tab_dashboard("errors")
     card = next(card for card in dashboard["cards"] if card.get("name") == "Топ категорий и типов ошибки")
     query = card["dataset_query"]["native"]["query"]
@@ -147,12 +149,12 @@ def test_operational_error_types_include_network_slice() -> None:
     assert "public.documents doc" in sql
     assert "INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id" in sql
     assert "doc.status IN ('async_error', 'network_error')" in sql
-    tables_sql = Path("db/parts/10_tables.sql").read_text(encoding="utf-8")
+    tables_sql = Path("db/01_schema.sql").read_text(encoding="utf-8")
     assert "'Ошибка связи'" in tables_sql
 
 
 def _view_column_names(view_name: str) -> set[str]:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     marker = f"CREATE OR REPLACE VIEW public.{view_name} AS"
     start = sql.index(marker)
     select_start = sql.index("SELECT", start)
@@ -234,8 +236,8 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
 
 
 def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
+    transform_sql = Path("db/03_transform.sql").read_text(encoding="utf-8")
 
     assert "NULLIF(btrim(d.dwh_id), '') IS NOT NULL" in sql
     assert "NULLIF(btrim(e.semd_local_uid), '') IS NOT NULL" not in sql
@@ -257,7 +259,8 @@ def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "date_trunc('hour', ips_date)" in query
     assert "[[AND {{ips_date}}]]" in query
-    assert "status <> 'waiting'" in query
+    # Метрика отношения: знаменатель — корпус с вердиктом, «В обработке» в него не входит.
+    assert "status <> 'sent'" in query
     assert "NULLIF(COUNT(DISTINCT dwh_id), 0)" in query
     assert 'AS "Ошибка связи, %"' in query
     assert 'AS "Ошибка асинхронного ответа РЭМД, %"' in query
@@ -311,7 +314,7 @@ def test_service_transport_block_layout() -> None:
     assert "rpt_network_errors" in trend["dataset_query"]["native"]["query"]
 
 
-def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
+def test_operational_status_breakdown_uses_canonical_states() -> None:
     dashboard = _tab_dashboard("operational")
     latest_card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
     card = next(card for card in dashboard["cards"] if card["name"] == "Статусы за период")
@@ -326,24 +329,28 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
         "table_ref": "public.rpt_documents",
         "field_name": "ips_date",
     }
-    assert "status <> 'waiting'" in card["dataset_query"]["native"]["query"]
-    assert "status_label" in card["dataset_query"]["native"]["query"]
+    # Отображаемый корпус — всё, кроме «Без ответа»: вердикта по ним уже не ожидается.
+    assert "status_detail <> 'no_response'" in card["dataset_query"]["native"]["query"]
+    assert "status_detail_label" in card["dataset_query"]["native"]["query"]
     assert card["visualization_settings"]["pie.metric"] == "Документов"
     assert "Успешно зарегистрирован" in row_keys
     assert "Ошибка асинхронного ответа РЭМД" in row_keys
     assert "Ошибка связи" in row_keys
-    assert "Отправлено" in row_keys
+    assert "В обработке" in row_keys
+    # «Без ответа» не может прийти из запроса — срез не должен нести мёртвую строку.
+    assert "Без ответа" not in row_keys
+    assert "Отправлено" not in row_keys
     assert "Успешный ответ" not in row_keys
     assert "Неизвестная ошибка" not in row_keys
     assert "Нераспознан" not in row_keys
-    # Тренд по дням: текущий статус документа и день из ips_date.
+    # Тренд по дням: текущее состояние документа и день из ips_date.
     assert "public.rpt_documents" in trend_query
     assert "ips_date::date" in trend_query
-    assert "status_label" in trend_query
+    assert "status_detail_label" in trend_query
     assert "public.transactions" not in trend_query
     assert "WHERE \"Статус\" IN ('success', 'error')" not in trend_query
-    assert "CREATE OR REPLACE VIEW public.rpt_documents" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    assert "FROM public.rpt_documents" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW public.rpt_documents" in Path("db/04_views.sql").read_text(encoding="utf-8")
+    assert "FROM public.rpt_documents" in Path("db/04_views.sql").read_text(encoding="utf-8")
     assert trend_card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "public.rpt_documents",
         "field_name": "ips_date",
@@ -351,9 +358,9 @@ def test_operational_status_breakdown_uses_four_canonical_statuses() -> None:
 
 
 def test_documents_view_exposes_canonical_status_label_and_code() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    core = Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
-    tables_sql = Path("db/parts/10_tables.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
+    core = Path("db/04_views.sql").read_text(encoding="utf-8")
+    tables_sql = Path("db/01_schema.sql").read_text(encoding="utf-8")
 
     # Канонические RU-лейблы задаются один раз в dim_document_status.
     assert "'Успешно зарегистрирован'" in tables_sql
@@ -371,9 +378,9 @@ def test_documents_view_exposes_canonical_status_label_and_code() -> None:
 def test_documents_view_unifies_logid_msgid_naming() -> None:
     """Транспорт СЭМД: request_*/result_* + COALESCE LOGID (у «Отправлено» не пусто) +
     request_msgid из document_attributes (README §«Парсинг»)."""
-    rpt = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    core = Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
-    transform = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    rpt = Path("db/04_views.sql").read_text(encoding="utf-8")
+    core = Path("db/04_views.sql").read_text(encoding="utf-8")
+    transform = Path("db/03_transform.sql").read_text(encoding="utf-8")
 
     # LOGID состояния: исход если есть, иначе отправка — больше не NULL для «Отправлено».
     assert "COALESCE(d.result_logid, d.request_logid)::text AS logid" in rpt
@@ -403,21 +410,71 @@ def test_documents_model_exposes_transport_fields() -> None:
     assert "is_resolved" not in documents["fields"]
 
 
-def test_status_distribution_cards_exclude_waiting() -> None:
-    """Статус-карточки строятся только на документах с вердиктом РЭМД: «Отправлено»
-    (status='waiting') не входит в распределение (статистика не искажается)."""
+def test_status_distribution_cards_exclude_no_response() -> None:
+    """Статус-карточки показывают три исхода плюс «В обработке». «Без ответа» исключено:
+    вердикта по этим документам уже не ожидается, они разбираются на вкладке «Отправленные»."""
     dashboard = _integration_dashboard()
     by_name = {c.get("name"): c for c in dashboard["cards"]}
 
     trend = by_name["Транзакции по дням и статусам"]
     trend_sql = trend["dataset_query"]["native"]["query"]
-    assert "status <> 'waiting'" in trend_sql
-    assert "Отправлено" not in trend.get("visualization_settings", {}).get("series_settings", {})
+    assert "status_detail <> 'no_response'" in trend_sql
+    trend_series = trend.get("visualization_settings", {}).get("series_settings", {})
+    assert "В обработке" in trend_series
+    assert "Без ответа" not in trend_series
+    assert "Отправлено" not in trend_series
 
     donut = by_name["Статусы за период"]
     donut_sql = donut["dataset_query"]["native"]["query"]
-    assert "status <> 'waiting'" in donut_sql
-    assert "Отправлено" not in donut.get("visualization_settings", {}).get("series_settings", {})
+    assert "status_detail <> 'no_response'" in donut_sql
+    donut_rows = {r["key"] for r in donut["visualization_settings"]["pie.rows"]}
+    assert "В обработке" in donut_rows
+    assert "Без ответа" not in donut_rows
+
+
+def test_no_waiting_identifier_left_in_sources() -> None:
+    """Код статуса `waiting` описывал наблюдателя, а не документ, и заменён на `sent`.
+
+    Проверяем весь слой схемы, генераторов и артефактов BI: пропущенное вхождение даёт
+    молча пустую карточку — SQL остаётся корректным, а строк не возвращает.
+    """
+    roots = ("db", "metabase_dashboards", "metabase_models", "scripts")
+    allowed = {
+        # Дроп представления под прежним именем нужен, пока оно есть в развёртываниях.
+        Path("db/04_views.sql"),
+        # Таблица миграции токенов: старое имя здесь — левая часть правила.
+        Path("scripts/apply_dashboard_plan.py"),
+    }
+    offenders: list[str] = []
+    for root in roots:
+        for path in sorted(Path(root).rglob("*")):
+            if not path.is_file() or path.suffix not in {".sql", ".json", ".yaml", ".py"}:
+                continue
+            if path in allowed:
+                continue
+            text = path.read_text(encoding="utf-8")
+            for lineno, line in enumerate(text.splitlines(), 1):
+                if "waiting" in line:
+                    offenders.append(f"{path}:{lineno}: {line.strip()[:120]}")
+    assert not offenders, "остались вхождения `waiting`:\n" + "\n".join(offenders)
+
+
+def test_no_response_confined_to_sent_tab() -> None:
+    """«Без ответа» выводится только на вкладке «Отправленные»: в остальных срезах эти
+    документы искажали бы картину, показывая как «в работе» то, что уже не разрешится."""
+    dashboard = _integration_dashboard()
+    for card in dashboard["cards"]:
+        if card.get("display") == "text":
+            continue
+        query = (card.get("dataset_query", {}).get("native") or {}).get("query") or ""
+        # Отбор состояния, а не его исключение: `<> 'no_response'` — это как раз та
+        # отсечка, которую карточки вне вкладки обязаны нести.
+        if "= 'no_response'" not in query:
+            continue
+        assert card.get("tab") == "sent", (
+            f"«{card.get('name')}» вне вкладки «Отправленные» обращается к состоянию "
+            "no_response — состояние выводится только там"
+        )
 
 
 def test_quality_error_slices_use_documents_ui_not_legacy_error_status() -> None:
@@ -527,7 +584,7 @@ def test_semd_volume_uses_same_document_universe_as_total() -> None:
 
 
 def test_transform_backfills_semd_code_from_transactions() -> None:
-    sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    sql = Path("db/03_transform.sql").read_text(encoding="utf-8")
     assert "UPDATE public.documents d" in sql
     assert "FROM public.transactions t" in sql
     assert "NULLIF(btrim(d.semd_code), '') IS NULL" in sql
@@ -568,7 +625,7 @@ def test_document_metric_cards_count_distinct_dwh_id() -> None:
 
 
 def test_archive_no_code_documents_are_qualified_by_status() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     dashboard = _integration_dashboard()
     card = next(
         card for card in dashboard["cards"]
@@ -585,7 +642,7 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
 
 
 def test_document_views_use_document_grain_without_redundant_dedup() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "ROW_NUMBER() OVER" not in sql
     assert "FROM public.documents d" in sql
@@ -594,7 +651,7 @@ def test_document_views_use_document_grain_without_redundant_dedup() -> None:
 
 def test_dashboards_do_not_expose_technical_dwh_id_fallbacks() -> None:
     payload = "\n".join(path.read_text(encoding="utf-8") for path in _dashboard_paths())
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "document_group_key" not in payload
     assert "Ключ документа (группировка)" not in payload
@@ -605,7 +662,7 @@ def test_dashboards_do_not_expose_technical_dwh_id_fallbacks() -> None:
 
 
 def test_only_recognized_documents_feed_non_queue_dashboards() -> None:
-    transform_sql = Path("db/parts/50_transform.sql").read_text(encoding="utf-8")
+    transform_sql = Path("db/03_transform.sql").read_text(encoding="utf-8")
     assert "NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL" in transform_sql
     assert "egisz_xml_text" not in transform_sql
     assert "pending_source AS" not in transform_sql
@@ -644,7 +701,7 @@ def test_document_volume_by_day_uses_first_sent_not_sent_at() -> None:
         if c.get("name") == "Динамика документов по дням" and c.get("tab") == "archive"
     )
     query = card["dataset_query"]["native"]["query"]
-    assert "first_sent_at" in Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    assert "first_sent_at" in Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "first_sent_at" in query
     assert "FROM public.rpt_documents" in query
     assert "documents fd" not in query
@@ -699,8 +756,11 @@ def test_quality_error_structure_section_is_category_colored_row_card() -> None:
     assert viz.get("graph.y_axis.title_text", "unset") == ""
     # Каждый тип окрашен в цвет своей категории (единая палитра, согласована с сунбёрстом).
     ss = viz["series_settings"]
-    assert ss["Данные пациента не соответствуют ГИП"]["color"] == "#4E79A7"
+    # Наименования типов — формулировки классификатора ФНСИ 1.2.643.5.1.13.13.99.2.305.
+    assert ss["Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП"]["color"] == "#4E79A7"
+    assert ss["Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям"]["color"] == "#4E79A7"
     assert ss["Сетевая ошибка"]["color"] == "#499894"
+    assert ss["ИЭМК: ошибка валидации структуры CDA"]["color"] == "#8CD17D"
     assert "click_behavior" not in card
 
 
@@ -949,7 +1009,7 @@ def test_client_top_error_type_shows_processed_share() -> None:
 def test_client_service_licenses_tab_lists_available_semd_types() -> None:
     """07: вкладка «Доступные типы СЭМД» — записи EGISZ_LICENSES на паре JID+KIND
     (rpt_clinic_semd_licenses); наименование — dim_semd_types, фильтры клиники общие."""
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" in sql
     assert "FROM public.dim_licenses" in sql
     assert "GROUP BY jid, kind" in sql
@@ -985,7 +1045,7 @@ def test_client_service_licenses_tab_lists_available_semd_types() -> None:
 
 
 def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "CREATE OR REPLACE VIEW public.rpt_documents" in sql
     assert "FROM public.rpt_documents" in sql
@@ -1190,7 +1250,7 @@ def test_operational_error_period_card_uses_atomic_error_types() -> None:
     assert "clinic_label" in query
     cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
     assert "Сводка ошибки" not in cols
-    assert "Паттерн ошибки" in cols
+    assert "Код НСИ" in cols
     assert "% ошибок" in cols
 
 
@@ -1205,13 +1265,13 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
     assert 'AS "Тип ошибки"' in query
     assert 'AS "Клиника"' in query
     assert 'AS "JID Клиники"' in query
-    assert 'AS "Паттерн ошибки"' in query
+    assert 'AS "Код НСИ"' in query
     assert 'AS "% ошибок"' in query
-    # Паттерн ошибки = match_code + match_pattern из dim_error_rules.
-    assert "rule_patterns" in query
-    assert "dim_error_rules" in query
-    assert "match_code" in query
-    assert "match_pattern" in query
+    # Код НСИ берётся из витрины: словарь правил в клиентском дриле не нужен, а сырой
+    # regex правила в таблице для клиники был нечитаем.
+    assert "nsi_error_code" in query
+    assert "dim_error_rules" not in query
+    assert "match_pattern" not in query
 
 
 def test_error_period_card_uses_breakdown_model() -> None:
@@ -1409,34 +1469,37 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
 
 
 def test_network_errors_view_exposes_canonical_local_uid() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "semd_local_uid" in sql
     assert "CREATE OR REPLACE VIEW public.rpt_network_errors" in sql
 
 
-def test_no_response_view_exposes_wait_segments() -> None:
-    sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
-    dashboard = _tab_dashboard("queue")
+def test_sent_view_derives_states_from_dictionaries() -> None:
+    """Ступени и состояния отправки задаются справочниками, а не текстом представления:
+    порог перехода в «Без ответа» меняется UPDATE'ом, без правки SQL и пересчёта фактов."""
+    tables = Path("db/01_schema.sql").read_text(encoding="utf-8")
+    views = Path("db/04_views.sql").read_text(encoding="utf-8")
+    dashboard = _tab_dashboard("sent")
 
-    assert '>30 дней' in sql
-    assert '>7 дней' in sql
-    assert '>3 дней' in sql
-    assert 'до 3 дней' in sql
-    assert "wait_segment" in sql
-    assert "waiting_days" in sql
+    assert "CREATE TABLE IF NOT EXISTS dim_pending_segments" in tables
+    assert "CREATE TABLE IF NOT EXISTS dim_sent_state" in tables
+    for label in ("до 5 минут", "до 1 часа", "до 6 часов", "до 12 часов",
+                  "до 24 часов", "до 3 суток", "до 7 суток", "свыше 7 суток"):
+        assert f"'{label}'" in tables, f"ступень «{label}» отсутствует в справочнике"
+    assert "'В обработке'" in tables
+    assert "'Без ответа'" in tables
+
+    # Представление не должно содержать собственных порогов и подписей ступеней.
+    assert "public.dim_pending_segments" in views
+    assert "public.dim_sent_state" in views
+    assert "CREATE OR REPLACE VIEW public.rpt_documents_sent" in views
+    for stale in ("'>30 дней'", "'>7 дней'", "'>3 дней'", "'до 3 дней'"):
+        assert stale not in views, f"порог {stale} захардкожен в представлении"
 
     names = {c.get("name") for c in dashboard["cards"]}
-    assert "Сегменты ожидания" in names
-    assert "Зависших >3 дней" in names
-    assert "Зависших >7 дней" in names
-    assert "Зависших >30 дней" in names
-    assert "Зависшие — детализация" not in names
-    assert "Возраст зависших документов" not in names
-
-    table = next(c for c in dashboard["cards"] if c.get("name") == "Очередь без ответа")
-    formatting = table["visualization_settings"]["table.column_formatting"]
-    values = {rule["value"] for rule in formatting}
-    assert values == {">3 дней", ">7 дней", ">30 дней"}
+    assert {"Отправлено без вердикта", "В обработке", "Без ответа",
+            "Доля без ответа, %", "Отправленные документы", "Ступени обработки"} <= names
+    assert not any("Зависш" in n or "очеред" in n.lower() for n in names)
 
 
 def test_executive_mrr_queries_do_not_compare_jid_to_empty_string() -> None:
@@ -1491,7 +1554,7 @@ def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
         by_tab[tab] = by_tab.get(tab, 0) + 1
     assert by_tab["operational"] == 9
     assert by_tab["service"] == 9
-    assert by_tab["queue"] == 8
+    assert by_tab["sent"] == 8
     assert by_tab["errors"] == 7
     assert by_tab["archive"] == 6
 
@@ -1624,8 +1687,10 @@ def test_metabase_models_catalog_exists() -> None:
     assert "delivery_seconds" in documents["fields"]
     assert "status" in documents["hidden_fields"]
     no_response = json.loads(Path("metabase_models/03_no_response.json").read_text(encoding="utf-8"))
-    assert no_response["name"] == "Очередь без ответа"
-    assert "wait_segment" in no_response["fields"]
+    assert no_response["name"] == "Отправленные"
+    assert no_response["table_ref"] == "public.rpt_documents_sent"
+    assert "pending_segment_label" in no_response["fields"]
+    assert "sent_state_label" in no_response["fields"]
     network_errors = json.loads(Path("metabase_models/04_network_errors.json").read_text(encoding="utf-8"))
     assert network_errors["name"] == "Сбои транспорта"
 
@@ -1695,11 +1760,12 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     dashboard = json.loads(INTEGRATION_DASHBOARD.read_text(encoding="utf-8"))
     by_name = {c.get("name"): c for c in dashboard["cards"]}
 
-    queue_sql = by_name["Очередь без ответа"]["dataset_query"]["native"]["query"]
-    assert 'sent_at AS "Дата отправки"' in queue_sql
-    assert 'waiting_days AS "Дней в ожидании"' in queue_sql
-    assert 'wait_segment AS "Сегмент ожидания"' in queue_sql
-    assert ', "Дата отправки"' not in queue_sql
+    sent_sql = by_name["Отправленные документы"]["dataset_query"]["native"]["query"]
+    assert 'first_sent_at AS "Дата отправки"' in sent_sql
+    assert 'pending_days AS "Суток с отправки"' in sent_sql
+    assert 'sent_state_label AS "Состояние отправки"' in sent_sql
+    assert 'pending_segment_label AS "Ступень обработки"' in sent_sql
+    assert ', "Дата отправки"' not in sent_sql
 
     network_sql = by_name["Последние сбои транспорта"]["dataset_query"]["native"]["query"]
     assert "LEFT(error_text, 140)" in network_sql
@@ -1714,17 +1780,18 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert '"OID из лицензий"' in detail_sql
 
     for card_name in (
-        "Зависших >3 дней",
-        "Зависших >7 дней",
-        "Зависших >30 дней",
-        "В очереди (всего)",
-        "Очередь без ответа",
-        "Топ клиник в очереди по документам",
-        "Сегменты ожидания",
-        "Топ типов СЭМД в очереди",
+        "Отправлено без вердикта",
+        "В обработке",
+        "Без ответа",
+        "Доля без ответа, %",
+        "Отправленные документы",
+        "Топ клиник среди отправленных",
+        "Ступени обработки",
+        "Топ типов СЭМД среди отправленных",
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
-        assert filters.get("wait_segment", {}).get("field_name") == "wait_segment", card_name
+        assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
+        assert filters.get("ips_date", {}).get("table_ref") == "public.rpt_documents_sent", card_name
 
 
 def test_service_quality_detail_lists_all_rule_violations() -> None:
@@ -1757,7 +1824,7 @@ def test_service_quality_detail_lists_all_rule_violations() -> None:
 
 
 def test_document_attributes_table_has_no_legacy_labels() -> None:
-    core_sql = Path("db/parts/70_views_core.sql").read_text(encoding="utf-8")
+    core_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     for legacy_name in (
         "Идентификатор документа (localUid)",
         "JID из журнала (gost, число)",
@@ -1774,7 +1841,7 @@ def test_document_attributes_table_has_no_legacy_labels() -> None:
 
 
 def test_connectivity_view_no_stale_jid_coalesce() -> None:
-    rpt_sql = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    rpt_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "JID из журнала" not in rpt_sql
     assert "JID Клиники (ключ)" not in rpt_sql
     assert "Ответы РЭМД: успех (документов)" not in rpt_sql
@@ -1934,11 +2001,14 @@ def test_no_legacy_date_tokens_anywhere() -> None:
         blob = path.read_text(encoding="utf-8")
         for tok in ("dwh_date", "processed_at", "processed_day", "arrival_day", "mgmt_period", "client_period"):
             assert tok not in blob, f"{path.name}: stale date token {tok!r}"
-    views = Path("db/parts/80_views_rpt.sql").read_text(encoding="utf-8")
+    views = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) AS ips_date" in views
-    assert "AT TIME ZONE 'Europe/Moscow'" not in views  # день берём из полной даты, стек МСК-pinned
+    # Документный слой берёт день из полной даты (стек МСК-pinned). Единственное место,
+    # где сдвиг пояса применяется сознательно, — периодические матвью: там date_trunc
+    # вычисляется в момент REFRESH, роль которого timezone не пинит.
+    assert "AT TIME ZONE 'Europe/Moscow'" not in sql_section(views, "rpt_documents")
     assert "AS processed_at" not in views and "AS processed_day" not in views
-    tables = Path("db/parts/10_tables.sql").read_text(encoding="utf-8")
+    tables = Path("db/01_schema.sql").read_text(encoding="utf-8")
     assert "loaded_at timestamptz DEFAULT now()" in tables
 
 
@@ -1963,7 +2033,7 @@ def test_lookup_filters_confined_to_archive() -> None:
         if card.get("display") == "text" or card.get("tab") == "archive":
             continue
         # queue — тоже lookup-контекст: localUid там уместен, остальные lookup-фильтры нет.
-        forbidden = _LOOKUP_FILTERS - {"local_uid"} if card.get("tab") == "queue" else _LOOKUP_FILTERS
+        forbidden = _LOOKUP_FILTERS - {"local_uid"} if card.get("tab") == "sent" else _LOOKUP_FILTERS
         leaked = _card_filter_keys(card) & forbidden
         assert not leaked, f"{card.get('name')} (tab={card.get('tab')}): lookup filters leaked {leaked}"
     archive_keys: set[str] = set()
@@ -1975,7 +2045,7 @@ def test_lookup_filters_confined_to_archive() -> None:
 
 def test_jid_semd_status_bound_to_label_columns() -> None:
     """Поиск по «код или наименование»: JID/СЭМД/Статус привязаны к label-колонкам во всех дашбордах."""
-    label_field = {"jid": "clinic_label", "semd_type": "semd_label", "status": "status_label"}
+    label_field = {"jid": "clinic_label", "semd_type": "semd_label", "status": "status_detail_label"}
     for path in _dashboard_paths():
         dashboard = json.loads(path.read_text(encoding="utf-8"))
         for card in dashboard["cards"]:
@@ -1994,7 +2064,7 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
     """Дрилл из агрегатов идёт в модель (linkType=question), а не на вкладку «Архив»."""
     dash = _integration_dashboard()
     by_name = {c.get("name"): c for c in dash["cards"]}
-    for name in ("Объём по клиникам", "Топ типов СЭМД по ошибкам", "Топ клиник в очереди по документам"):
+    for name in ("Объём по клиникам", "Топ типов СЭМД по ошибкам", "Топ клиник среди отправленных"):
         click = by_name[name].get("click_behavior") or {}
         assert click.get("linkType") == "question", f"{name}: ждали drill в модель"
         assert "targetDashboard" not in click and click.get("tab") != "archive"
@@ -2030,7 +2100,7 @@ def test_dashboard_json_matches_generators() -> None:
     «Динамика статусов по дням» после выгрузки из живого Metabase. Проверка read-only:
     запись перехватывается, файлы не трогаются.
     """
-    from conftest import load_script_module
+    from conftest import load_script_module, sql_section
 
     for stem in ("apply_dashboard_plan", "layout_operational_tab"):
         module = load_script_module(stem)
@@ -2154,43 +2224,47 @@ def test_status_dynamics_are_stacked_area() -> None:
             assert f"SUM({col})" in query, (name, col)
 
 
-def test_volume_dynamics_exclude_sent_without_verdict() -> None:
-    """Объём по периодам — только исходы с вердиктом (успех/с ошибкой); «Отправлено»
-    (docs_waiting) не показываем: статус не финализирован (правило проекта)."""
+def test_volume_dynamics_exclude_no_response() -> None:
+    """Объём по периодам: исходы с вердиктом плюс «В обработке». «Без ответа»
+    (docs_no_response) в динамику не выводится — эти документы вердикта уже не получат."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
     for name in ("Объём документов по неделям", "Объём документов по месяцам"):
         card = by_name[name]
         viz = card["visualization_settings"]
-        assert viz["graph.metrics"] == ["Успешно", "С ошибкой"], name
-        assert "Ожидают ответа" not in viz.get("series_settings", {}), name
+        assert viz["graph.metrics"] == ["Успешно", "С ошибкой", "В обработке"], name
         query = card["dataset_query"]["native"]["query"]
-        assert "docs_waiting" not in query, name
+        assert "SUM(docs_pending)" in query, name
+        assert "docs_no_response" not in query, name
+        assert "docs_sent" not in query, name
         assert "Ожидают ответа" not in query, name
 
 
 def test_weekly_sql_layer_contract() -> None:
     """Недельный слой: matview в 85, DROP в 60, REFRESH+ANALYZE в 90, include в init."""
-    weekly = Path("db/parts/85_views_weekly.sql").read_text(encoding="utf-8")
+    weekly = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "CREATE MATERIALIZED VIEW public.rpt_documents_weekly" in weekly
     assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown_weekly" in weekly
     assert "uq_rpt_documents_weekly" in weekly
     assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
     assert "uq_rpt_error_breakdown_weekly" in weekly
-    assert "FILTER (WHERE r.status <> 'waiting')" in weekly
+    # Корпус SLI — документы с вердиктом; состояния отправки идут отдельными счётчиками.
+    assert "FILTER (WHERE r.status <> 'sent')" in weekly
+    assert "FILTER (WHERE r.sent_state = 'pending')" in weekly
+    assert "FILTER (WHERE r.sent_state = 'no_response')" in weekly
     assert "is_complete_week" in weekly
 
-    drops = Path("db/parts/60_drop_dependents.sql").read_text(encoding="utf-8")
+    drops = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;" in drops
     assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;" in drops
 
-    finalize = Path("db/parts/90_views_health_and_finalize.sql").read_text(encoding="utf-8")
+    finalize = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;" in finalize
     assert "REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;" in finalize
     assert "ANALYZE public.rpt_documents_weekly;" in finalize
     assert "ANALYZE public.rpt_error_breakdown_weekly;" in finalize
 
     init = Path("db/dwh_init.sql").read_text(encoding="utf-8")
-    assert r"\i db/parts/85_views_weekly.sql" in init
+    assert r"\i db/04_views.sql" in init
 
 
 def test_periodic_sli_is_ratio_of_sums() -> None:

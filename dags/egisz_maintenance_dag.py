@@ -423,9 +423,10 @@ def reconcile_journal_window(
 def reconcile_archive(pg_conn: psycopg2.extensions.connection) -> dict[str, int]:
     """Пересчёт производных слоёв по всему архиву документов.
 
-    Атрибуты документа зависят от справочников (наименование клиники, резолв JID),
-    слой версий — от состава групп, текст ошибки — от правил классификации. Все три
-    расходятся медленно, поэтому сверяются раз в сутки, а не на каждом батче приёма.
+    Оба слоя зависят от данных за пределами батча приёма: атрибуты — от справочников
+    (переименование клиники, резолв JID), слой версий — от состава группы, куда версия
+    может доехать позже соседей. Приём пересчитывает только затронутые документы,
+    поэтому полный проход идёт раз в сутки.
     """
     results: dict[str, int] = {}
     with pg_conn.cursor() as cur:
@@ -433,8 +434,6 @@ def reconcile_archive(pg_conn: psycopg2.extensions.connection) -> dict[str, int]
         results["attributes"] = int(cur.fetchone()[0] or 0)
         cur.execute("SELECT public.recompute_document_versions(NULL::text[])")
         results["versions"] = int(cur.fetchone()[0] or 0)
-        cur.execute("SELECT public.repair_document_error_text()")
-        results["error_text"] = int(cur.fetchone()[0] or 0)
     pg_conn.commit()
     return results
 
@@ -491,10 +490,9 @@ def egisz_maintenance_pipeline() -> None:
                     "ANALYZE public.documents",
                 )
             log.info(
-                "Archive reconcile: %s attribute row(s), %s version row(s), %s error text(s).",
+                "Archive reconcile: %s attribute row(s), %s version row(s).",
                 results["attributes"],
                 results["versions"],
-                results["error_text"],
             )
             return results
         finally:

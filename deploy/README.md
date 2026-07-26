@@ -19,7 +19,7 @@
 dist/external/
 ├── airflow/    # самодостаточные DAG-файлы + requirements — см. external-airflow/README.md
 ├── metabase/   # importer-скрипты + дашборды + модели   — см. external-metabase/README.md
-└── dwh/        # db/dwh_init.sql + db/parts/            — см. external-dwh/README.md
+└── dwh/        # db/dwh_init.sql + db/            — см. external-dwh/README.md
 ```
 
 Каждый бандл несёт свой `README.md` (копия соответствующего `deploy/external-*/README.md`)
@@ -33,6 +33,6 @@ dist/external/
 
 | Бандл | Канонические исходники | Кому передавать |
 | --- | --- | --- |
-| `dwh` | `db/dwh_init.sql`, `db/parts/*.sql` | DBA целевого PostgreSQL |
-| `airflow` | `airflow/dags/*.py` (самодостаточные DAG-файлы, копируются как есть) | администратор Airflow |
+| `dwh` | `db/dwh_init.sql`, `db/*.sql` | DBA целевого PostgreSQL |
+| `airflow` | `dags/*.py` (самодостаточные DAG-файлы, копируются как есть) | администратор Airflow |
 | `metabase` | `metabase/setup-dashboards.sh`, `metabase/sync-models.sh`, `metabase/include/`, `metabase_dashboards/`, `metabase_models/` | администратор Metabase |

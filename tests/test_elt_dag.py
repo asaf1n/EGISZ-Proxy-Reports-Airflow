@@ -3,11 +3,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from conftest import load_dag_module
+from conftest import load_dag_module, sql_section
 
-DAGS_DIR = Path(__file__).resolve().parents[1] / "airflow" / "dags"
-REPO_ROOT = DAGS_DIR.parents[1]
-PARTS_DIR = REPO_ROOT / "db" / "parts"
+DAGS_DIR = Path(__file__).resolve().parents[1] / "dags"
+REPO_ROOT = DAGS_DIR.parent
+PARTS_DIR = REPO_ROOT / "db"
 DWH_POOL = "dwh_postgres"
 
 
@@ -161,8 +161,10 @@ def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
     assert '_setting("maintenance_schedule")' in src
     assert "reconcile_document_attributes_ui" in src
     assert "recompute_document_versions" in src
-    assert "repair_document_error_text" in src
     assert "ensure_time_partitions" in src
+    # error_text принадлежит последнему вердикту и пишется в transform: сверка по архиву
+    # возвращала текст отказа на документы, прошедшие со второй попытки.
+    assert "repair_document_error_text" not in src
     assert "retries=2" in src
 
 
@@ -183,24 +185,21 @@ def test_dag_files_are_self_contained_units() -> None:
 
 def test_report_marts_refresh_matches_sql_layer() -> None:
     """Список обновляемых витрин в DAG-ах совпадает с матвью недельного и месячного слоёв."""
-    weekly_sql = (PARTS_DIR / "85_views_weekly.sql").read_text(encoding="utf-8")
-    monthly_sql = (PARTS_DIR / "86_views_monthly.sql").read_text(encoding="utf-8")
-    declared = set(
-        re.findall(
-            r"CREATE MATERIALIZED VIEW (public\.\w+)",
-            weekly_sql + monthly_sql,
-        )
-    )
+    views_sql = (PARTS_DIR / "04_views.sql").read_text(encoding="utf-8")
+    # REPORT_MARTS — только периодический слой: rpt_error_breakdown обновляется
+    # отдельной задачей (refresh_fact_marts) сразу за фактами, до периодических витрин.
+    periodic_sql = sql_section(views_sql, "weekly") + sql_section(views_sql, "monthly")
+    declared = set(re.findall(r"CREATE MATERIALIZED VIEW (public\.\w+)", periodic_sql))
 
     # Список витрин живёт только в DAG, который их обновляет.
     assert set(load_dag_module("egisz_marts_dag").REPORT_MARTS) == declared
 
-    # Идемпотентность каркаса: DROP в 60, первичное наполнение в 90, часть подключена в init.
-    drops = (PARTS_DIR / "60_drop_dependents.sql").read_text(encoding="utf-8")
-    finalize = (PARTS_DIR / "90_views_health_and_finalize.sql").read_text(encoding="utf-8")
-    init = (PARTS_DIR.parent / "dwh_init.sql").read_text(encoding="utf-8")
+    # Идемпотентность каркаса: DROP, CREATE и первичное наполнение — в одном модуле схемы.
+    drops = views_sql
+    finalize = views_sql
+    init = (PARTS_DIR / "dwh_init.sql").read_text(encoding="utf-8")
 
-    assert "\\i db/parts/86_views_monthly.sql" in init
+    assert "\\i db/04_views.sql" in init
     for matview in declared:
         assert f"DROP MATERIALIZED VIEW IF EXISTS {matview} CASCADE" in drops, matview
         assert f"REFRESH MATERIALIZED VIEW {matview}" in finalize, matview
@@ -214,7 +213,7 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
     # REFRESH CONCURRENTLY в DAG-ах требует уникального индекса на каждой витрине.
     for matview in declared:
         table = matview.split(".", 1)[1]
-        assert re.search(rf"CREATE UNIQUE INDEX[^;]+ON {matview}\b", weekly_sql + monthly_sql), table
+        assert re.search(rf"CREATE UNIQUE INDEX[^;]+ON {matview}\b", periodic_sql), table
 
 
 def test_all_dag_files_compile() -> None:
@@ -242,6 +241,10 @@ def test_up_ps1_provisions_airflow_pool_and_connections() -> None:
     assert "'connections', 'add'" in src
     assert "Test-AirflowConnectionsFromSecret" not in src
     assert "AIRFLOW_CONN_DWH_EGISZ_PG" not in src
+    # Провижининг значениями не владеет: файл наполняет только пустую метабазу.
+    # delete + add затирал бы реквизиты, заведённые в UI, значениями из шаблона.
+    assert "'connections', 'delete'" not in src
+    assert "Test-AirflowConnectionExists" in src
     # Airflow 3: api-server и dag-processor вместо webserver, чарт закреплён.
     assert "component=api-server,release=airflow" in src
     assert "component=dag-processor,release=airflow" in src
@@ -266,7 +269,7 @@ def test_up_ps1_provisions_airflow_pool_and_connections() -> None:
 def test_airflow_stack_targets_one_version() -> None:
     """Пин зависимости, базовый образ и airflowVersion чарта не должны расходиться."""
     pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    dockerfile = (REPO_ROOT / "airflow" / "Dockerfile").read_text(encoding="utf-8")
+    dockerfile = (REPO_ROOT / "k8s" / "airflow" / "Dockerfile").read_text(encoding="utf-8")
     values = (REPO_ROOT / "k8s" / "airflow" / "values.yaml").read_text(encoding="utf-8")
 
     pinned = re.search(r'"apache-airflow==([\d.]+)"', pyproject)

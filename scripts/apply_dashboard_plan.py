@@ -31,21 +31,47 @@ CATEGORY_COLORS: dict[str, str] = {
     "Ошибки ЭП и сертификатов": "#F28E2B",
     "Технические ошибки РЭМД": "#9C755F",
     "Ошибки связи": "#499894",
+    "Ошибки ИЭМК": "#8CD17D",
+    "Ошибки ФРЛЛО": "#D7B5A6",
     "Прочие": "#BAB0AC",
 }
 
 
+def _nsi_error_label(description: str) -> str:
+    """Наименование типа из описания ФНСИ — та же нормализация, что в сиде правил:
+    плейсхолдеры значений в квадратных скобках снимаются, пробелы схлопываются."""
+    return re.sub(r"\s{2,}", " ", re.sub(r"\s*\[[^\]]*\]", "", description)).strip()
+
+
 def error_type_color_map() -> dict[str, str]:
-    """Map each canonical error type → its category color, derived from the seed
-    (db/parts/30_error_rules.sql: dim_error_rules + dim_error_type_group) so the
-    palette stays a single source of truth and never drifts from the dictionary."""
-    sql = (ROOT / "db" / "parts" / "30_error_rules.sql").read_text(encoding="utf-8")
+    """Map each canonical error type → its category color.
+
+    Источник — те же сиды, что наполняют словарь: справочник ФНСИ в db/01_schema.sql
+    (код → описание) и таблица правил в db/02_functions.sql (код → категория, при
+    необходимости — своя формулировка). Палитра остаётся производной от словаря
+    и не может разойтись с ним.
+    """
+    schema_sql = (ROOT / "db" / "01_schema.sql").read_text(encoding="utf-8")
+    rules_sql = (ROOT / "db" / "02_functions.sql").read_text(encoding="utf-8")
     cats = "|".join(re.escape(c) for c in CATEGORY_COLORS)
-    # ...'<type>', '<category>')  — последние две строки в строке VALUES (правило/спец-тип).
-    pairs = re.findall(r"'((?:[^']|'')+)',\s*'(" + cats + r")'\s*\)", sql)
+
     colors = {"Категория ошибки": "#BAB0AC"}
     colors.update(CATEGORY_COLORS)  # сами категории (внутреннее кольцо сунберста)
-    for label, cat in pairs:
+
+    # ('CODE', <id>, '<описание>', '<контур>') — сид dim_nsi_error_code.
+    nsi = {
+        code: descr.replace("''", "'")
+        for code, descr in re.findall(r"\('([A-Z0-9_.]+)',\s*\d+,\s*'((?:[^']|'')+)',\s*'", schema_sql)
+    }
+    # ('CODE', '<категория>', NULL|'<формулировка>') — курируемая часть яруса 2.
+    for code, cat, label in re.findall(
+        r"\('([A-Z0-9_.]+)',\s*'(" + cats + r")',\s*(NULL|'(?:[^']|'')+')\)", rules_sql
+    ):
+        text = label[1:-1].replace("''", "'") if label != "NULL" else _nsi_error_label(nsi.get(code, ""))
+        if text:
+            colors[text] = CATEGORY_COLORS[cat]
+    # ...'<тип>', '<категория>') — литеральные правила текстовых ярусов и контура ИЭМК.
+    for label, cat in re.findall(r"'((?:[^']|'')+)',\s*'(" + cats + r")'\s*\)", rules_sql):
         colors[label.replace("''", "'")] = CATEGORY_COLORS[cat]
     return colors
 
@@ -82,8 +108,17 @@ RENAME_01 = {
     "Виды ошибок по категориям": "Топ категорий и типов ошибки",
     "Виды ошибок по типам СЭМД": "Топ типов СЭМД по видам ошибки",
     "Документы по дням": "Динамика документов по дням",
-    "Топ клиник в очереди": "Топ клиник в очереди по документам",
-    "Очередь по типам СЭМД": "Топ типов СЭМД в очереди",
+    "Топ клиник в очереди": "Топ клиник среди отправленных",
+    "Топ клиник в очереди по документам": "Топ клиник среди отправленных",
+    "Очередь без ответа": "Отправленные документы",
+    "В очереди (всего)": "Отправлено без вердикта",
+    "Очередь по типам СЭМД": "Топ типов СЭМД среди отправленных",
+    "Топ типов СЭМД в очереди": "Топ типов СЭМД среди отправленных",
+    "Сегменты ожидания": "Ступени обработки",
+    # Пороговые плитки заменены состояниями: порог живёт в dim_pending_segments.
+    "Зависших >3 дней": "В обработке",
+    "Зависших >7 дней": "Без ответа",
+    "Зависших >30 дней": "Доля без ответа, %",
 }
 
 RENAME_OTHER = {
@@ -103,9 +138,20 @@ RENAME_OTHER = {
     },
 }
 
+# Канонические цвета состояний документа. «В обработке» — светло-синий (документ ещё в
+# работе), «Без ответа» — светло-серый (вердикта уже не ожидается; выводится только на
+# вкладке «Отправленные», в общих распределениях не участвует).
+STATUS_DETAIL_COLORS: dict[str, dict[str, str]] = {
+    "Успешно зарегистрирован": {"color": "#84BB4C"},
+    "Ошибка асинхронного ответа РЭМД": {"color": "#A989C5"},
+    "Ошибка связи": {"color": "#F2994A"},
+    "В обработке": {"color": "#A6C8E8"},
+    "Без ответа": {"color": "#C8CDD5"},
+}
+
 DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
-WAITING_MODEL_REF = "Очередь без ответа"
+SENT_MODEL_REF = "Отправленные"
 
 # Карточки без дрилла (агрегаты-рейтинги без естественного грейна для строки).
 DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
@@ -120,9 +166,9 @@ ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
 # через CONTAINS по полному списку error_types (документ с несколькими ошибками не теряется).
 MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Последние операции": [("clinic_label", "Клиника")],
-    "Статусы за период": [("status_label", "Статус")],
-    "Транзакции по дням и статусам": [("status_label", "Статус")],
-    "РЭМД vs связь": [("status_label", "Статус")],
+    "Статусы за период": [("status_detail_label", "Статус")],
+    "Транзакции по дням и статусам": [("status_detail_label", "Статус")],
+    "РЭМД vs связь": [("status_detail_label", "Статус")],
     "Объём по клиникам": [("clinic_jid", "JID Клиники")],
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
     "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
@@ -130,8 +176,8 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Успешность по типам СЭМД": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
-    "Топ клиник в очереди по документам": [("clinic_jid", "JID Клиники")],
-    "Топ типов СЭМД в очереди": [("semd_code", "Код СЭМД")],
+    "Топ клиник среди отправленных": [("clinic_jid", "JID Клиники")],
+    "Топ типов СЭМД среди отправленных": [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
         ("error_types", "Тип ошибки", "contains"),
         ("clinic_jid", "JID Клиники"),
@@ -142,8 +188,8 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
 MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {
     "Топ типов СЭМД по ошибкам": ERROR_BREAKDOWN_MODEL_REF,
     "Топ типов СЭМД по видам ошибки": ERROR_BREAKDOWN_MODEL_REF,
-    "Топ клиник в очереди по документам": WAITING_MODEL_REF,
-    "Топ типов СЭМД в очереди": WAITING_MODEL_REF,
+    "Топ клиник среди отправленных": SENT_MODEL_REF,
+    "Топ типов СЭМД среди отправленных": SENT_MODEL_REF,
 }
 
 # Активные фильтры дашборда, переносимые в модель (без измерения-грейна самой строки).
@@ -159,8 +205,8 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
     "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
     "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
-    "Топ клиник в очереди по документам": ["ips_date", "semd_type", "wait_segment"],
-    "Топ типов СЭМД в очереди": ["ips_date", "jid", "wait_segment"],
+    "Топ клиник среди отправленных": ["ips_date", "semd_type", "pending_segment"],
+    "Топ типов СЭМД среди отправленных": ["ips_date", "jid", "pending_segment"],
     "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid", "status"],
 }
 
@@ -168,14 +214,14 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
 MODEL_PARAM_FIELDS: dict[str, dict[str, str]] = {
     DOCUMENTS_MODEL_REF: {
         "ips_date": "ips_date", "semd_type": "semd_label",
-        "jid": "clinic_label", "status": "status_label",
+        "jid": "clinic_label", "status": "status_detail_label",
     },
     ERROR_BREAKDOWN_MODEL_REF: {
         "ips_date": "ips_date", "semd_type": "semd_label", "jid": "clinic_label",
     },
-    WAITING_MODEL_REF: {
+    SENT_MODEL_REF: {
         "ips_date": "first_sent_at", "semd_type": "semd_label",
-        "jid": "clinic_label", "wait_segment": "wait_segment",
+        "jid": "clinic_label", "pending_segment": "pending_segment",
     },
 }
 
@@ -183,7 +229,7 @@ DOCUMENTS_PARAM_TARGETS = {
     "ips_date": {"model_ref": "Документы", "field_name": "ips_date"},
     "jid": {"model_ref": "Документы", "field_name": "clinic_label"},
     "semd_type": {"model_ref": "Документы", "field_name": "semd_label"},
-    "status": {"model_ref": "Документы", "field_name": "status_label"},
+    "status": {"model_ref": "Документы", "field_name": "status_detail_label"},
     "local_uid": {"model_ref": "Документы", "field_name": "semd_local_uid"},
     "relates_to": {"model_ref": "Документы", "field_name": "relates_to_msgid"},
     "emdr_id": {"model_ref": "Документы", "field_name": "semd_emdr_id"},
@@ -225,7 +271,7 @@ LATEST_OPERATIONS_TABLE_COLUMNS = [
 
 LATEST_OPERATIONS_QUERY_FIELDS = [
     ["field", "Документы:processed_at", None],
-    ["field", "Документы:status_label", None],
+    ["field", "Документы:status_detail_label", None],
     ["field", "Документы:clinic_label", None],
     ["field", "Документы:clinic_host", None],
     ["field", "Документы:semd_label", None],
@@ -262,22 +308,23 @@ DOCUMENT_VOLUME_BY_DAY_QUERY = (
     f"{DOCUMENT_FILTERS} GROUP BY arrival_day ORDER BY arrival_day ASC"
 )
 
-# Распределение по статусам строится только на корпусе с вердиктом РЭМД (status <> 'waiting'):
-# «Отправлено» не имеет исхода и не входит в статистику (см. README §«Учёт отправленных»).
+# Распределение по статусам: три исхода плюс «В обработке». «Без ответа» исключено —
+# вердикта по этим документам уже не ожидается, они разбираются на вкладке «Отправленные»
+# (см. README §«Учёт отправленных»).
 TRANSACTIONS_BY_DAY_STATUS_QUERY = (
-    "SELECT processed_day AS \"Дата\", status_label AS \"Статус\", "
+    "SELECT processed_day AS \"Дата\", status_detail_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM public.rpt_documents WHERE status <> 'waiting' "
+    "FROM public.rpt_documents WHERE status_detail <> 'no_response' "
     "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-    "GROUP BY processed_day, status_label, status_sort "
-    "ORDER BY processed_day, status_sort"
+    "GROUP BY processed_day, status_detail_label, status_detail_sort "
+    "ORDER BY processed_day, status_detail_sort"
 )
 
-# Ошибки — как доля от общего числа документов с вердиктом РЭМД за день (успех+ошибка),
-# общий объём — отдельной серией «Всего» (пунктирная линия на правой оси). «Отправлено»
-# (status='waiting', без исхода) исключено — см. README §«Учёт отправленных».
-# Стэк долей исходов за день (сумма = 100%): счётный ряд «Всего» на второй оси
-# визуально спорит с процентными рядами, поэтому объём вынесен в отдельные карточки.
+# Стэк долей состояний за день (сумма = 100%): три исхода плюс «В обработке». Знаменатель —
+# тот же отображаемый корпус, поэтому доли складываются в 100. «Без ответа» исключено:
+# вердикта по ним уже не ожидается, разбор — на вкладке «Отправленные».
+# Счётный ряд «Всего» на второй оси визуально спорит с процентными рядами, поэтому
+# объём вынесен в отдельные карточки.
 CLIENT_STATUS_BY_DAY_QUERY = (
     "SELECT ips_date::date AS \"Дата\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') "
@@ -285,29 +332,31 @@ CLIENT_STATUS_BY_DAY_QUERY = (
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
     "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
-    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\" "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail = 'pending') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"В обработке, %\" "
     "FROM public.rpt_documents "
     "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] "
-    "AND status <> 'waiting' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] "
+    "AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] "
     "GROUP BY ips_date::date ORDER BY ips_date::date"
 )
 
-# Отказы по часам — как доля от документов с вердиктом РЭМД за час (успех+ошибка).
-# Серии объёма нет: счётный ряд на второй оси визуально спорит с процентными рядами.
-# «Отправлено» (status='waiting', без исхода) исключено — см. README §«Учёт отправленных».
+# Отказы по часам — доля от корпуса с вердиктом РЭМД за час (успех+ошибка). Это метрика
+# отношения, а не распределение: «В обработке» — ещё не исход и в знаменатель не входит,
+# поэтому отсечка идёт по status, а не по status_detail (см. README §«Учёт отправленных»).
 SERVICE_REFUSALS_BY_HOUR_QUERY = (
     "SELECT date_trunc('hour', ips_date) AS \"Час\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
     "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
     "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" "
-    "FROM public.rpt_documents WHERE status <> 'waiting' "
+    "FROM public.rpt_documents WHERE status <> 'sent' "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY 1 ORDER BY 1"
 )
 
 LATEST_OPERATIONS_QUERY = (
-    "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", "
+    "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", "
     "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
     "semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", "
     "semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" "
@@ -317,10 +366,10 @@ LATEST_OPERATIONS_QUERY = (
 )
 
 STATUS_PERIOD_QUERY = (
-    "SELECT status_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM public.rpt_documents WHERE status <> 'waiting' "
+    "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
+    "FROM public.rpt_documents WHERE status_detail <> 'no_response' "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-    "GROUP BY status_label, status_sort ORDER BY status_sort"
+    "GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort"
 )
 
 DOCUMENTS_FILTER_TEMPLATE_TAGS = {
@@ -361,7 +410,7 @@ DOCUMENTS_FILTER_FIELD_FILTERS = {
     "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
     "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
     "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
-    "status": {"table_ref": "public.rpt_documents", "field_name": "status_label"},
+    "status": {"table_ref": "public.rpt_documents", "field_name": "status_detail_label"},
 }
 
 CLIENT_JID_PARAM_ID = "07c00000-0000-4000-8000-000000000003"
@@ -419,8 +468,9 @@ CLINIC_ERROR_VOLUME_QUERY = (
     ') u ORDER BY "Документов" DESC'
 )
 
-# «Паттерн ошибки» = match_code + match_pattern правила для канонического типа (interpretation).
-# При нескольких правилах на один тип берётся паттерн самого точного яруса (match_tier).
+# «Код НСИ» — мнемоника классификатора 1.2.643.5.1.13.13.99.2.305, с которой пришёл отказ:
+# по ней обращаются в СТП ЕГИСЗ и ищут проверку в методической документации. Берётся из
+# витрины (там она уже разложена по типу), поэтому обращения к словарю правил не нужно.
 ERROR_TYPE_CLINIC_QUERY = (
     "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
     "FROM public.rpt_documents "
@@ -431,27 +481,24 @@ ERROR_TYPE_CLINIC_QUERY = (
     # в полное имя public.rpt_error_breakdown.error_type, и алиас ломает ссылку.
     "base AS ( SELECT "
     "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, "
+    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), '—') AS nsi_error_code, "
     "rpt_error_breakdown.clinic_label AS clinic_label, "
     "rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id "
     "FROM public.rpt_error_breakdown "
     "INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id "
     "WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' "
     "[[AND {{error_type}}]] ), "
-    "error_clinic AS ( SELECT error_type, clinic_label, clinic_jid, "
+    "error_clinic AS ( SELECT error_type, nsi_error_code, clinic_label, clinic_jid, "
     "COUNT(DISTINCT dwh_id)::bigint AS doc_count "
-    "FROM base GROUP BY 1, 2, 3 ), "
+    "FROM base GROUP BY 1, 2, 3, 4 ), "
     "clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs "
-    "FROM period_docs GROUP BY clinic_jid ), "
-    "rule_patterns AS ( SELECT interpretation AS error_type, "
-    "(array_agg(COALESCE(match_code, '') || match_pattern ORDER BY match_tier, rule_code))[1] AS error_pattern "
-    "FROM public.dim_error_rules WHERE is_active GROUP BY interpretation ) "
+    "FROM period_docs GROUP BY clinic_jid ) "
     'SELECT ec.error_type AS "Тип ошибки", ec.clinic_label AS "Клиника", '
-    'COALESCE(rp.error_pattern, ec.error_type) AS "Паттерн ошибки", '
+    'ec.nsi_error_code AS "Код НСИ", '
     'ec.clinic_jid AS "JID Клиники", ec.doc_count AS "Документов", '
     'ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS "% ошибок" '
     "FROM error_clinic ec "
     "JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid "
-    "LEFT JOIN rule_patterns rp ON rp.error_type = ec.error_type "
     "ORDER BY ec.doc_count DESC"
 )
 
@@ -579,13 +626,13 @@ ERROR_TYPE_CLINIC_FIELD_FILTERS = {
 ERROR_TYPE_CLINIC_TABLE_COLUMNS = [
     {"enabled": True, "name": "Тип ошибки"},
     {"enabled": True, "name": "Клиника"},
-    {"enabled": True, "name": "Паттерн ошибки"},
+    {"enabled": True, "name": "Код НСИ"},
     {"enabled": False, "name": "JID Клиники"},
     {"enabled": True, "name": "Документов"},
     {"enabled": True, "name": "% ошибок"},
 ]
 
-ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [280, 200, 360, 88, 96, 104]
+ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [360, 200, 280, 88, 96, 104]
 
 SUCCESS_CLINIC_COLUMN_WIDTHS = [88, 300, 88, 88]
 SUCCESS_SEMD_COLUMN_WIDTHS = [88, 120, 88, 88, 88]
@@ -659,9 +706,10 @@ ERROR_TYPE_CLINIC_TEMPLATE_TAGS = {
     },
 }
 
-QUEUE_TABLE_COLUMNS = [
-    {"enabled": True, "name": "Сегмент ожидания"},
-    {"enabled": True, "name": "Дней в ожидании"},
+SENT_TABLE_COLUMNS = [
+    {"enabled": True, "name": "Состояние отправки"},
+    {"enabled": True, "name": "Ступень обработки"},
+    {"enabled": True, "name": "Суток с отправки"},
     {"enabled": True, "name": "Подач в ЕГИСЗ"},
     {"enabled": True, "name": "Дата отправки"},
     {"enabled": True, "name": "Клиника"},
@@ -672,18 +720,170 @@ QUEUE_TABLE_COLUMNS = [
 ]
 
 # Число подач берётся из реестра шлюза: повторная отправка не меняет localUid, поэтому
-# счётчик показывает, сколько раз документ уже отправляли, пока он ждёт вердикта.
-# Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "public"."rpt_documents_waiting".<col>.
-QUEUE_TABLE_QUERY = (
+# счётчик показывает, сколько раз документ уже отправляли до текущего момента.
+# Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "public"."rpt_documents_sent".<col>.
+SENT_TABLE_QUERY = (
     'SELECT semd_local_uid AS "localUid СЭМД", semd_code AS "Код СЭМД", '
     'semd_name AS "Наименование СЭМД", clinic_jid::text AS "JID Клиники", '
     'clinic_label AS "Клиника", first_sent_at AS "Дата отправки", '
-    'waiting_days AS "Дней в ожидании", attempt_count AS "Подач в ЕГИСЗ", '
-    'wait_segment AS "Сегмент ожидания" '
-    "FROM public.rpt_documents_waiting "
+    'pending_days AS "Суток с отправки", attempt_count AS "Подач в ЕГИСЗ", '
+    'sent_state_label AS "Состояние отправки", '
+    'pending_segment_label AS "Ступень обработки" '
+    "FROM public.rpt_documents_sent "
     "WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-    "[[AND {{local_uid}}]] [[AND {{wait_segment}}]] "
+    "[[AND {{local_uid}}]] [[AND {{pending_segment}}]] "
     "ORDER BY first_sent_at ASC NULLS LAST LIMIT 200"
+)
+
+# Вкладка «Отправленные» целиком строится на rpt_documents_sent: состояние отправки и
+# ступень обработки приходят из справочников (dim_sent_state, dim_pending_segments),
+# поэтому карточки не содержат ни порогов, ни подписей — только отбор по состоянию.
+SENT_FILTERS = (
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "[[AND {{local_uid}}]] [[AND {{pending_segment}}]]"
+)
+
+SENT_FILTER_TEMPLATE_TAGS = {
+    "ips_date": {
+        "widget-type": "date/all-options",
+        "display-name": "По дате «Обработано»",
+        "id": "f2000099-0099-4099-8099-000000000001",
+        "name": "ips_date",
+        "type": "dimension",
+    },
+    "semd_type": {
+        "widget-type": "string/=",
+        "display-name": "Код СЭМД",
+        "id": "f2000099-0099-4099-8099-000000000010",
+        "name": "semd_type",
+        "required": False,
+        "type": "dimension",
+    },
+    "jid": {
+        "widget-type": "string/=",
+        "display-name": "JID Клиники",
+        "id": "f2000099-0099-4099-8099-000000000011",
+        "name": "jid",
+        "required": False,
+        "type": "dimension",
+    },
+    "local_uid": {
+        "widget-type": "string/=",
+        "display-name": "localUid СЭМД",
+        "id": "f2000099-0099-4099-8099-000000000013",
+        "name": "local_uid",
+        "required": False,
+        "type": "dimension",
+    },
+    "pending_segment": {
+        "widget-type": "string/=",
+        "display-name": "Ступень обработки",
+        "id": "f2000099-0099-4099-8099-000000000014",
+        "name": "pending_segment",
+        "required": False,
+        "type": "dimension",
+    },
+}
+
+SENT_FIELD_FILTERS = {
+    "ips_date": {"table_ref": "public.rpt_documents_sent", "field_name": "first_sent_at"},
+    "semd_type": {"table_ref": "public.rpt_documents_sent", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents_sent", "field_name": "clinic_label"},
+    "local_uid": {"table_ref": "public.rpt_documents_sent", "field_name": "semd_local_uid"},
+    "pending_segment": {
+        "table_ref": "public.rpt_documents_sent",
+        "field_name": "pending_segment_label",
+    },
+}
+
+
+def _sent_scalar_query(where: str) -> str:
+    return (
+        'SELECT COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
+        "FROM public.rpt_documents_sent "
+        f"WHERE {where} {SENT_FILTERS}"
+    )
+
+
+SENT_TOTAL_QUERY = _sent_scalar_query("1=1")
+SENT_PENDING_QUERY = _sent_scalar_query("sent_state = 'pending'")
+SENT_NO_RESPONSE_QUERY = _sent_scalar_query("sent_state = 'no_response'")
+
+SENT_NO_RESPONSE_SHARE_QUERY = (
+    "SELECT ROUND(100.0 * COUNT(DISTINCT semd_local_uid) "
+    "FILTER (WHERE sent_state = 'no_response') "
+    '/ NULLIF(COUNT(DISTINCT semd_local_uid), 0), 1) AS "%" '
+    "FROM public.rpt_documents_sent "
+    f"WHERE 1=1 {SENT_FILTERS}"
+)
+
+SENT_TOP_CLINICS_QUERY = (
+    'SELECT clinic_jid::text AS "JID Клиники", clinic_label AS "Клиника", '
+    'COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
+    "FROM public.rpt_documents_sent "
+    f"WHERE 1=1 {SENT_FILTERS} "
+    "GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 15"
+)
+
+# Порядок ступеней — из справочника (pending_segment_sort), а не по числу документов:
+# лестница читается сверху вниз как течение времени.
+SENT_SEGMENTS_QUERY = (
+    'SELECT pending_segment_label AS "Ступень обработки", '
+    'COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
+    "FROM public.rpt_documents_sent "
+    f"WHERE 1=1 {SENT_FILTERS} "
+    "GROUP BY pending_segment_label, pending_segment_sort "
+    "ORDER BY pending_segment_sort"
+)
+
+SENT_TOP_SEMD_QUERY = (
+    "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS \"Код СЭМД\", "
+    'COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
+    "FROM public.rpt_documents_sent "
+    f"WHERE 1=1 {SENT_FILTERS} "
+    "GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
+)
+
+SENT_TAB_QUERIES: dict[str, str] = {
+    "Отправлено без вердикта": SENT_TOTAL_QUERY,
+    "В обработке": SENT_PENDING_QUERY,
+    "Без ответа": SENT_NO_RESPONSE_QUERY,
+    "Доля без ответа, %": SENT_NO_RESPONSE_SHARE_QUERY,
+    "Отправленные документы": SENT_TABLE_QUERY,
+    "Топ клиник среди отправленных": SENT_TOP_CLINICS_QUERY,
+    "Ступени обработки": SENT_SEGMENTS_QUERY,
+    "Топ типов СЭМД среди отправленных": SENT_TOP_SEMD_QUERY,
+}
+
+SENT_TAB_DESCRIPTIONS: dict[str, str] = {
+    "Отправлено без вердикта": "Документы, отправленные в ЕГИСЗ, по которым вердикт ещё не получен.",
+    "В обработке": "Отправленные в пределах ожидаемого времени ответа (ступени до последней, dim_pending_segments).",
+    "Без ответа": "Отправленные, по которым ожидаемое время ответа истекло: вердикт уже не ожидается.",
+    "Доля без ответа, %": "Доля документов без ответа от всех отправленных без вердикта.",
+    "Отправленные документы": "Построчный список отправленных без вердикта: состояние отправки, ступень обработки, число подач.",
+    "Топ клиник среди отправленных": "Клиники с наибольшим числом отправленных без вердикта.",
+    "Ступени обработки": "Распределение отправленных по ступеням возраста обработки; порядок — по лестнице справочника.",
+    "Топ типов СЭМД среди отправленных": "Типы СЭМД с наибольшим числом отправленных без вердикта.",
+}
+
+# «Всего» — весь срез клиники, включая отправленные без вердикта; «% успеха» считается
+# от корпуса с вердиктом, поэтому отправленные не размывают долю. Прежняя единая колонка
+# «Отправлено» разделена на два состояния: они требуют разных действий поддержки.
+CLINIC_SUCCESS_QUERY = (
+    "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", "
+    "COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", "
+    'COUNT(DISTINCT dwh_id)::bigint AS "Всего", '
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", "
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id) FILTER "
+    "(WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" "
+    "FROM public.rpt_documents "
+    "WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' "
+    "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] "
+    "GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC"
 )
 
 COUNT_COLUMN_SETTINGS = {
@@ -714,7 +914,7 @@ def fix_sql(query: str) -> str:
     q = q.replace("AS error_category,", 'AS "Категория ошибки",')
     q = q.replace("AS error_type,", 'AS "Тип ошибки",')
     q = q.replace("AS network_error_type,", 'AS "Тип сетевой ошибки",')
-    q = q.replace("AS wait_segment,", 'AS "Сегмент ожидания",')
+    q = q.replace("AS pending_segment,", 'AS "Ступень обработки",')
     q = q.replace("AS processed_day,", 'AS "День",')
     q = q.replace("SELECT b.t AS semd_code,", 'SELECT b.t AS "Код СЭМД",')
     q = q.replace(
@@ -799,7 +999,7 @@ def fix_detail_quality_sql() -> str:
         "WITH base AS (\n"
         "  SELECT\n"
         "    rpt_documents.processed_at AS \"Дата обработки\",\n"
-        "    rpt_documents.status_label AS \"Статус\",\n"
+        "    rpt_documents.status_detail_label AS \"Статус\",\n"
         "    rpt_documents.clinic_label AS \"Клиника\",\n"
         "    rpt_documents.semd_code AS \"Код СЭМД\",\n"
         "    rpt_documents.semd_name AS \"Наименование СЭМД\",\n"
@@ -998,8 +1198,8 @@ def apply_quality_detail(card: dict) -> None:
 def apply_transactions_trend(card: dict) -> None:
     card["display"] = "bar"
     card["description"] = (
-        "Документы с вердиктом РЭМД по дням и исходу (stacked, без «Отправлено»). "
-        "Клик по сегменту — архив с фильтром по статусу."
+        "Документы по дням и состоянию: три исхода РЭМД плюс «В обработке» (stacked). "
+        "«Без ответа» — на вкладке «Отправленные». Клик по сегменту — архив с фильтром по статусу."
     )
     dq = card.setdefault("dataset_query", {})
     dq["native"]["query"] = TRANSACTIONS_BY_DAY_STATUS_QUERY
@@ -1019,19 +1219,17 @@ def apply_transactions_trend(card: dict) -> None:
     viz["graph.label_value_formatting"] = "compact"
     viz["stackable.stack_type"] = "stacked"
     series = viz.setdefault("series_settings", {})
-    series.pop("Отправлено", None)  # «Отправлено» исключён из распределения статусов
+    # «Без ответа» из запроса не приходит — серия с этим ключом осталась бы мёртвой.
+    for stale in ("Отправлено", "Без ответа"):
+        series.pop(stale, None)
     series.update(
-        {
-            "Ошибка асинхронного ответа РЭМД": {"color": "#A989C5"},
-            "Ошибка связи": {"color": "#F2994A"},
-            "Успешно зарегистрирован": {"color": "#84BB4C"},
-        }
+        {k: deepcopy(v) for k, v in STATUS_DETAIL_COLORS.items() if k != "Без ответа"}
     )
-    # graph.series_order может нести устаревшую серию «Отправлено» из прежней раскладки.
+    # graph.series_order может нести серии прежней раскладки статусов.
     if isinstance(viz.get("graph.series_order"), list):
         viz["graph.series_order"] = [
             s for s in viz["graph.series_order"]
-            if not (isinstance(s, dict) and s.get("key") == "Отправлено")
+            if not (isinstance(s, dict) and s.get("key") in ("Отправлено", "Без ответа"))
         ]
     cs = viz.setdefault("column_settings", {})
     cs['["name","Документов"]'] = {
@@ -1047,7 +1245,7 @@ def apply_refusals_hourly(card: dict) -> None:
     card["display"] = "line"
     card["description"] = (
         "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов "
-        "с вердиктом РЭМД за час (%). «Отправлено» (без исхода) исключено. "
+        "с вердиктом РЭМД за час (%). Отправленные без вердикта в знаменатель не входят. "
         "Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS»."
     )
     card["dataset_query"]["native"]["query"] = SERVICE_REFUSALS_BY_HOUR_QUERY
@@ -1182,10 +1380,7 @@ def apply_error_type_clinic(card: dict) -> None:
             "suffix": " %",
         },
         '["name","Тип ошибки"]': {"column_title": "Тип ошибки", "text_style": "wrap"},
-        '["name","Паттерн ошибки"]': {
-            "column_title": "Паттерн ошибки",
-            "text_style": "wrap",
-        },
+        '["name","Код НСИ"]': {"column_title": "Код НСИ", "text_style": "wrap"},
     }
     viz["column_settings"] = cs
     strip_chart_keys(viz, "table")
@@ -1312,21 +1507,61 @@ def apply_success_slice_tables(card: dict) -> None:
     name = card.get("name", "")
     if name == "Успешность по клиникам":
         viz["table.column_widths"] = deepcopy(SUCCESS_CLINIC_COLUMN_WIDTHS)
+        native = card.get("dataset_query", {}).get("native")
+        if native:
+            native["query"] = CLINIC_SUCCESS_QUERY
     elif name == "Успешность по типам СЭМД":
         viz["table.column_widths"] = deepcopy(SUCCESS_SEMD_COLUMN_WIDTHS)
 
 
-def apply_queue_table(card: dict) -> None:
-    native = card.setdefault("dataset_query", {}).setdefault("native", {})
-    native["query"] = QUEUE_TABLE_QUERY
-    viz = card.setdefault("visualization_settings", {})
-    viz["table.columns"] = deepcopy(QUEUE_TABLE_COLUMNS)
-    viz["table.cell_column"] = "Сегмент ожидания"
-    viz.setdefault("column_settings", {})['["name","Подач в ЕГИСЗ"]'] = {
-        "column_title": "Подач в ЕГИСЗ",
-        "decimals": 0,
-        "number_separators": ", ",
-    }
+def apply_sent_tab(dash: dict) -> None:
+    """Вкладка «Отправленные»: единый источник (rpt_documents_sent), единый блок фильтров.
+
+    KPI-плитки заменяют прежние пороговые счётчики («Зависших > N дней»): пороги теперь
+    живут в dim_pending_segments, а карточка отбирает по состоянию, а не по числу дней.
+    """
+    for card in dash.get("cards", []):
+        if card.get("tab") != "sent" or card.get("display") == "text":
+            continue
+        name = card.get("name", "")
+        query = SENT_TAB_QUERIES.get(name)
+        if not query:
+            continue
+        card["description"] = SENT_TAB_DESCRIPTIONS[name]
+        card.pop("query_tier", None)
+        card.pop("source_model", None)
+        card.pop("metabase-parameter-targets", None)
+        card["dataset_query"] = {
+            "type": "native",
+            "database": 1,
+            "native": {
+                "query": query,
+                "template-tags": deepcopy(SENT_FILTER_TEMPLATE_TAGS),
+            },
+        }
+        card["metabase-field-filters"] = deepcopy(SENT_FIELD_FILTERS)
+        viz = card.setdefault("visualization_settings", {})
+        if name == "Отправленные документы":
+            viz["table.columns"] = deepcopy(SENT_TABLE_COLUMNS)
+            viz["table.cell_column"] = "Состояние отправки"
+            viz.setdefault("column_settings", {})['["name","Подач в ЕГИСЗ"]'] = {
+                "column_title": "Подач в ЕГИСЗ",
+                "decimals": 0,
+                "number_separators": ", ",
+            }
+        elif name == "Доля без ответа, %":
+            viz.setdefault("column_settings", {})['["name","%"]'] = {
+                "column_title": "%",
+                "decimals": 1,
+                "number_separators": ", ",
+                "suffix": " %",
+            }
+        elif card.get("display") in ("row", "bar"):
+            viz.setdefault("column_settings", {})['["name","Документов"]'] = {
+                "column_title": "Документов",
+                "decimals": 0,
+                "number_separators": ", ",
+            }
 
 
 def apply_latest_operations(card: dict) -> None:
@@ -1358,8 +1593,8 @@ def apply_latest_operations(card: dict) -> None:
 
 def apply_status_period(card: dict) -> None:
     card["description"] = (
-        "Распределение документов с вердиктом РЭМД по исходу за период "
-        "(без «Отправлено» — у них ещё нет результата)."
+        "Распределение документов за период по состоянию: три исхода РЭМД плюс "
+        "«В обработке». «Без ответа» разбирается на вкладке «Отправленные»."
     )
     card.pop("query_tier", None)
     card.pop("source_model", None)
@@ -1379,6 +1614,23 @@ def apply_status_period(card: dict) -> None:
         },
     }
     card["metabase-field-filters"] = deepcopy(status_filters)
+    # pie.rows несёт подписи и цвета срезов. Прежняя раскладка держала скрытую строку
+    # «Отправлено», которая из запроса прийти не могла; состав приводится к тому,
+    # что карточка действительно возвращает.
+    viz = card.setdefault("visualization_settings", {})
+    order = list(STATUS_DETAIL_COLORS)
+    order.remove("Без ответа")
+    viz["pie.rows"] = [
+        {
+            "key": label,
+            "name": label,
+            "originalName": label,
+            "color": STATUS_DETAIL_COLORS[label]["color"],
+            "enabled": True,
+            "hidden": False,
+        }
+        for label in order
+    ]
 
 
 def fix_viz(viz: dict, *, display: str = "table") -> None:
@@ -1438,8 +1690,8 @@ def _dim(d: str) -> str:
         "Вид ошибки": "Тип ошибки",
         "error_category": "Категория ошибки",
         "network_error_type": "Тип сетевой ошибки",
-        "wait_segment": "Сегмент ожидания",
-        "status_label": "Статус",
+        "pending_segment": "Ступень обработки",
+        "status_detail_label": "Статус",
         "processed_day": "День",
     }
     return mapping.get(d, d)
@@ -1543,7 +1795,7 @@ IPS_DATE_DISPLAY = "Обработано IPS"
 LABEL_FIELD_BY_KEY = {
     "jid": "clinic_label",
     "semd_type": "semd_label",
-    "status": "status_label",
+    "status": "status_detail_label",
 }
 DATE_FIELD_RENAME = {
     "processed_at": "ips_date",
@@ -1555,7 +1807,7 @@ DATE_FIELD_RENAME = {
 # Каноничный порядок фильтров в WHERE-блоке.
 FILTER_ORDER = [
     "ips_date", "semd_type", "jid", "local_uid", "relates_to",
-    "emdr_id", "status", "log_id", "wait_segment", "error_type",
+    "emdr_id", "status", "log_id", "pending_segment", "error_type",
 ]
 
 # Конфайн lookup-фильтров: агрегатные карточки несут только 3 общих (+ status, где осмыслен).
@@ -1570,9 +1822,39 @@ SLIM_FILTERS: dict[str, set[str]] = {
 }
 
 
+# Миграция статусной модели в SQL карточек, которые не собираются генератором целиком
+# (дашборды 05/07/08). Корпус отображения — всё, кроме «Без ответа»: по этим документам
+# вердикта уже не ожидается, они разбираются на вкладке «Отправленные».
+# Знаменатели долей, перечисляющие исходы явным FILTER (...), правило не затрагивает.
+STATUS_TOKEN_MIGRATION = [
+    ("status <> 'waiting'", "status_detail <> 'no_response'"),
+    ("status != 'waiting'", "status_detail <> 'no_response'"),
+    ("status = 'waiting'", "status = 'sent'"),
+    ("status IN ('waiting')", "status = 'sent'"),
+    ("rpt_documents_waiting", "rpt_documents_sent"),
+    ("waiting_days", "pending_days"),
+    ("waiting_hours", "pending_hours"),
+    ("wait_segment", "pending_segment"),
+    # Локальные алиасы CTE в управленческом дашборде: имя alias'а читается в заголовках
+    # колонок и в условиях риска, поэтому приводится к той же терминологии.
+    ("FILTER (WHERE status = 'sent') AS waiting", "FILTER (WHERE status = 'sent') AS sent"),
+    ("waiting::numeric", "sent::numeric"),
+    ('waiting AS "Отправлено"', 'sent AS "Отправлено"'),
+]
+
+
+def migrate_status_tokens(query: str) -> str:
+    if not query:
+        return query
+    for old, new in STATUS_TOKEN_MIGRATION:
+        query = query.replace(old, new)
+    return query
+
+
 def _rename_sql_tokens(query: str) -> str:
     if not query:
         return query
+    query = migrate_status_tokens(query)
     q = query
     for tok in DATE_FILTER_TOKENS:
         q = re.sub(r"\{\{\s*" + tok + r"\s*\}\}", "{{ips_date}}", q)
@@ -1624,7 +1906,7 @@ MODEL_DRILL_FIELD_RENAME = {
     "arrival_day": "first_sent_at",
     "clinic_jid": "clinic_label",
     "semd_code": "semd_label",
-    "status": "status_label",
+    "status": "status_detail_label",
 }
 
 
@@ -1694,10 +1976,31 @@ def normalize_parameters(dash: dict) -> None:
             p["name"] = "Клиника"
         elif slug == "semd_type_filter":
             p["name"] = "Тип СЭМД"
+        elif slug == "wait_segment_filter":
+            p["slug"] = "pending_segment_filter"
+            p["name"] = "Ступень обработки"
+        elif slug == "pending_segment_filter":
+            p["name"] = "Ступень обработки"
+
+
+# Вкладка «очереди» переименована в «Отправленные»: документ без вердикта не стоит
+# в очереди на стороне шлюза, он уже отправлен. Идентификатор нормализуется здесь,
+# чтобы прежние выгрузки дашборда подхватывались без ручной правки.
+TAB_RENAME = {"queue": "sent"}
+
+
+def normalize_tabs(dash: dict) -> None:
+    for tab in dash.get("tabs", []) or []:
+        if tab.get("id") in TAB_RENAME:
+            tab["id"] = TAB_RENAME[tab["id"]]
+    for card in dash.get("cards", []):
+        if card.get("tab") in TAB_RENAME:
+            card["tab"] = TAB_RENAME[card["tab"]]
 
 
 def normalize_dashboard(dash: dict) -> None:
     """Единый идемпотентный проход: даты→ips_date, привязки→label, чистка orphan-тегов."""
+    normalize_tabs(dash)
     normalize_parameters(dash)
     for card in dash.get("cards", []):
         if card.get("display") == "text":
@@ -1760,8 +2063,6 @@ def apply_01(dash: dict) -> None:
             apply_top_semd_by_errors(card)
         elif name in ("Успешность по клиникам", "Успешность по типам СЭМД"):
             apply_success_slice_tables(card)
-        elif name == "Очередь без ответа":
-            apply_queue_table(card)
         elif name == "Транзакции по дням и статусам" and dq.get("type") == "native":
             apply_transactions_trend(card)
         elif name == "Отказы по часам: связь и асинхронный ответ" and dq.get("type") == "native":
@@ -1815,6 +2116,9 @@ def apply_01(dash: dict) -> None:
     dash["cards"] = filtered
     restore_archive_top_semd(dash)
     normalize_dashboard(dash)
+    # После нормализации: вкладка «Отправленные» задаёт собственный блок фильтров
+    # (pending_segment вместо status), который общий проход не должен переписывать.
+    apply_sent_tab(dash)
 
 
 def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
@@ -1853,7 +2157,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         for k, v in {
             "jid": "clinic_label", "ips_date": "ips_date", "semd_type": "semd_label",
             "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
-            "emdr_id": "semd_emdr_id", "status": "status_label", "log_id": "logid",
+            "emdr_id": "semd_emdr_id", "status": "status_detail_label", "log_id": "logid",
         }.items()
     }
     card = {
@@ -2039,10 +2343,9 @@ def apply_client_dashboards(path: Path) -> bool:
             }
             card["metabase-field-filters"] = ff
             card["description"] = (
-                "Доли документов по исходам за день: успешно, ошибка асинхронного ответа "
-                "РЭМД и ошибка связи — в процентах от документов с вердиктом РЭМД "
-                "(сумма = 100%). «Отправлено» (без исхода) исключено — см. карточку "
-                "«Отправленные — клиент»."
+                "Доли документов по состоянию за день: успешно, ошибка асинхронного "
+                "ответа РЭМД, ошибка связи и «В обработке» (сумма = 100%). «Без ответа» "
+                "исключено — см. карточку «Отправленные — клиент»."
             )
             card["display"] = "bar"
             viz = card.setdefault("visualization_settings", {})

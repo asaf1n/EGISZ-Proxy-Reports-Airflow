@@ -4,7 +4,7 @@ import pytest
 
 from pathlib import Path
 
-from conftest import load_dag_module
+from conftest import load_dag_module, sql_section
 
 # Общие функции берём из ETL-DAG: он канонический носитель общего блока,
 # идентичность копий в соседних DAG-файлах проверяет test_dag_selfcontainment.py.
@@ -30,8 +30,8 @@ DWH_INIT_SQL_PATH = Path(__file__).resolve().parents[1] / "db" / "dwh_init.sql"
 
 
 def _read_dwh_init_sql() -> str:
-    # Находим папку db/parts
-    parts_dir = DWH_INIT_SQL_PATH.parent / "parts"
+    # Находим папку db
+    parts_dir = DWH_INIT_SQL_PATH.parent
     sql_contents = []
 
     # Читаем все SQL-файлы и склеиваем их
@@ -142,7 +142,7 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
 
 
 def test_error_matching_matches_all_rules_independently() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "40_functions_errors.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     assert "error_matching_rule_labels" in sql
     assert "ORDER BY r.rule_code" in sql
     matching_fn = sql.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
@@ -152,15 +152,15 @@ def test_error_matching_matches_all_rules_independently() -> None:
 def test_error_matching_is_tiered() -> None:
     """Ярусный матчинг: победа первого яруса (min match_tier), внутри яруса — все
     совпадения с дедупом интерпретаций."""
-    parts = DWH_INIT_SQL_PATH.parent / "parts"
-    rules = (parts / "30_error_rules.sql").read_text(encoding="utf-8")
+    parts = DWH_INIT_SQL_PATH.parent
+    rules = (parts / "02_functions.sql").read_text(encoding="utf-8")
     assert "match_tier" in rules
     assert "chk_dim_error_rules_match_tier" in rules
     # таксономия: зона ответственности и повторяемость с CHECK-доменом
     assert "responsibility" in rules
     assert "is_retryable" in rules
     assert "chk_dim_error_type_group_responsibility" in rules
-    fns = (parts / "40_functions_errors.sql").read_text(encoding="utf-8")
+    fns = (parts / "02_functions.sql").read_text(encoding="utf-8")
     matching_fn = fns.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
     assert "min(match_tier)" in matching_fn
     # ИЭМК: RegistryError (атрибуты) парсится отдельной веткой build_errors_json
@@ -168,13 +168,13 @@ def test_error_matching_is_tiered() -> None:
     build_fn = fns.split("CREATE OR REPLACE FUNCTION public.build_errors_json")[1].split("$$;")[0]
     assert "xml_registry_errors" in build_fn
     # faultcode: локальная часть в UPPERCASE, последним в COALESCE error_code
-    parsing = (parts / "20_functions_parsing.sql").read_text(encoding="utf-8")
+    parsing = (parts / "02_functions.sql").read_text(encoding="utf-8")
     assert "faultcode" in parsing
     assert "COALESCE(v_error_code_xml, v_code_xml, v_faultcode)" in parsing
 
 
 def test_rpt_error_breakdown_exposes_responsibility() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split(
         "COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
     assert "responsibility" in breakdown
@@ -182,7 +182,7 @@ def test_rpt_error_breakdown_exposes_responsibility() -> None:
 
 
 def test_error_classify_uses_atomic_item_atoms() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "40_functions_errors.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     assert "CREATE OR REPLACE FUNCTION public.error_item_atoms" in sql
     classify = sql.split("CREATE OR REPLACE FUNCTION public.error_classify")[1].split("$$;")[0]
     assert "error_item_atoms" in classify
@@ -190,7 +190,7 @@ def test_error_classify_uses_atomic_item_atoms() -> None:
 
 
 def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     # Матвью: горячая витрина «Анализ ошибок» предрассчитана и индексирована.
     assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
     breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split("COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
@@ -203,7 +203,7 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
     assert "uq_rpt_error_breakdown" in sql
     # Дроп обоих видов объекта + REFRESH после transform.
-    drops = (DWH_INIT_SQL_PATH.parent / "parts" / "60_drop_dependents.sql").read_text(encoding="utf-8")
+    drops = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE" in drops
 
 
@@ -211,7 +211,7 @@ def test_rpt_documents_exposes_error_types_list_only() -> None:
     """rpt_document_versions (база rpt_documents) отдаёт полный список error_types
     как есть из documents; отбор по типу идёт через rpt_error_breakdown.
     rpt_documents = тот же проекшн, отфильтрованный по is_current_version."""
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_document_versions")[1].split("COMMENT ON VIEW public.rpt_document_versions")[0]
     assert "d.error_types" in rpt
     assert "canonical_error_list" not in rpt
@@ -222,11 +222,11 @@ def test_rpt_documents_exposes_error_types_list_only() -> None:
 def test_document_version_layer_groups_by_doc_number() -> None:
     """Логический документ = (jid + semd_code + doc_number=PROTOCOLID); localUid — версия.
     CDA setId источником не отдаётся — группируем по журналу."""
-    parts = DWH_INIT_SQL_PATH.parent / "parts"
-    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
-    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
-    rpt = (parts / "80_views_rpt.sql").read_text(encoding="utf-8")
-    health = (parts / "90_views_health_and_finalize.sql").read_text(encoding="utf-8")
+    parts = DWH_INIT_SQL_PATH.parent
+    tables = (parts / "01_schema.sql").read_text(encoding="utf-8")
+    transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
+    rpt = (parts / "04_views.sql").read_text(encoding="utf-8")
+    health = (parts / "04_views.sql").read_text(encoding="utf-8")
 
     for col in (
         "doc_number",
@@ -256,10 +256,10 @@ def test_verdict_links_to_document_through_message_registry() -> None:
     """Вердикт ЕГИСЗ не несёт localUid: документ находится по relatesToMessage через
     реестр подач dim_message_document. Ключ приводится к каноническому виду одной
     функцией на обеих сторонах — при загрузке реестра и при поиске."""
-    parts = DWH_INIT_SQL_PATH.parent / "parts"
-    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
-    parsing = (parts / "20_functions_parsing.sql").read_text(encoding="utf-8")
-    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
+    parts = DWH_INIT_SQL_PATH.parent
+    tables = (parts / "01_schema.sql").read_text(encoding="utf-8")
+    parsing = (parts / "02_functions.sql").read_text(encoding="utf-8")
+    transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS dim_message_document" in tables
     assert "CREATE OR REPLACE FUNCTION public.message_registry_key" in parsing
@@ -284,9 +284,9 @@ def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
     (нет msgid/localUid/emdrId/getDocumentFile) в transactions не вставляются, поэтому
     анти-джойн по transactions.xml_parsed_at перепарсивал их каждым полножурнальным
     lookback'ом reconcile (~65 тыс. строк ≈ 6,4 мин на окно)."""
-    parts = DWH_INIT_SQL_PATH.parent / "parts"
-    tables = (parts / "10_tables.sql").read_text(encoding="utf-8")
-    transform = (parts / "50_transform.sql").read_text(encoding="utf-8")
+    parts = DWH_INIT_SQL_PATH.parent
+    tables = (parts / "01_schema.sql").read_text(encoding="utf-8")
+    transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS exchangelog_parse_attempts" in tables
     # Бэкфилл маркера из уже распарсенных строк transactions: без него первый
@@ -313,8 +313,8 @@ def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
 
 def test_document_attributes_maintained_without_enriched_mart() -> None:
     sql = _read_dwh_init_sql()
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
-    core_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "70_views_core.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
+    core_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS public.document_attributes" in core_sql
     assert "CREATE OR REPLACE FUNCTION public.reconcile_document_attributes" in core_sql
@@ -330,7 +330,7 @@ def test_document_attributes_maintained_without_enriched_mart() -> None:
 
 
 def test_rpt_documents_view_has_expected_columns() -> None:
-    rpt_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    rpt_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     for legacy_name in (
         "Идентификатор документа (localUid)",
         "JID из журнала (gost, число)",
@@ -366,7 +366,7 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "error_text",
     ):
         assert column in rpt_sql
-    core_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "70_views_core.sql").read_text(encoding="utf-8")
+    core_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "clinic_oid_xml" in core_sql
     assert "clinic_oid_jpersons" in core_sql
     assert "public.document_source_mismatch" in core_sql
@@ -375,7 +375,7 @@ def test_rpt_documents_view_has_expected_columns() -> None:
 
 
 def test_connectivity_view_has_no_stale_jid_coalesce() -> None:
-    rpt_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    rpt_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "JID из журнала" not in rpt_sql
     assert "JID клиники (ключ)" not in rpt_sql
     assert "Ответы РЭМД: успех (документов)" not in rpt_sql
@@ -385,7 +385,7 @@ def test_connectivity_view_has_no_stale_jid_coalesce() -> None:
 
 def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     sql = _read_dwh_init_sql()
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
     assert "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)" in sql
     assert "oid = EXCLUDED.code" in sql
@@ -434,7 +434,14 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
 
 
 def test_reporting_views_do_not_depend_on_raw_tables() -> None:
-    reporting_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    views_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
+    # Только слой rpt_*: message-грейн он не читает. Секция document_attributes сюда не
+    # входит — она как раз и переносит реквизиты с грейна transactions на документ,
+    # чтобы отчётному слою не приходилось этого делать.
+    reporting_sql = "\n".join(
+        line.split("--", 1)[0]
+        for line in sql_section(views_sql, "rpt_documents").splitlines()
+    )
 
     assert "exchangelog_raw" not in reporting_sql
     assert "egisz_messages_raw" not in reporting_sql
@@ -446,13 +453,21 @@ def test_reporting_views_do_not_depend_on_raw_tables() -> None:
 
 def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors() -> None:
     sql = _read_dwh_init_sql()
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
-    assert "Не указан адрес пациента" in sql
-    assert "Данные пациента не соответствуют ГИП" in sql
-    assert "Документ уже зарегистрирован в РЭМД" in sql
-    assert "Не удалось получить файл ЭМД из предоставляющей ИС" in sql
+    # Наименования типов — формулировки классификатора ФНСИ 1.2.643.5.1.13.13.99.2.305.
+    assert "dim_nsi_error_code" in sql
+    assert "1.2.643.5.1.13.13.99.2.305" in sql
+    assert "Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям" in sql
+    assert "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП" in sql
+    assert "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован" in sql
+    assert "Ошибка при получении файла документа из предоставляющей системы" in sql
     assert "Ошибка асинхронного ответа" in sql
+    # Трактовки, разошедшиеся со справочником, сняты вместе с выдуманными кодами.
+    assert "Не указан адрес пациента" not in sql
+    assert "Срок действия сертификата организации истек" not in sql
+    assert "ORGANIZATION_NOT_REGISTERED" not in sql
+    assert "CA_UNAVAILABLE" not in sql
     assert "Отказ РЭМД" not in sql
     assert "Отказ РЭМД (ns2status: error)" not in sql
     assert "Сетевая ошибка: " in sql
@@ -472,26 +487,29 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
 
 def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     sql = _read_dwh_init_sql()
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
-    # Синхронный RegisterDocumentResponse = только приём запроса (pending);
+    # Синхронный ответ (шаг 4 схемы регистрации) = только приём запроса ('accepted');
     # регистрация подтверждается асинхронным callback'ом.
-    assert "приём запроса РЭМД, а не регистрацию документа" in sql
+    assert "приём запроса на регистрацию (шаг 4 схемы)" in sql
     assert "COALESCE(p_document_status, '') ~* 'зарегистр'" in sql
     assert "'RegisterDocumentResponse'" in sql
     assert "THEN 'success'" in sql
-    assert "THEN 'sent'" not in sql
-    assert "WHEN t.status = 'sent' THEN 'Отправлен'" not in sql
+    assert "THEN 'accepted'" in sql
     assert "CREATE TABLE IF NOT EXISTS dim_document_status" in sql
     assert "('success', 'Успешно зарегистрирован'" in sql
     assert "('network_error', 'Ошибка связи'" in sql
     assert "('async_error', 'Ошибка асинхронного ответа РЭМД'" in sql
+    assert "('sent', 'Отправлено'" in sql
+    # Код нефинального статуса не дублируется литералом в ветвях transform.
+    assert "ELSE 'waiting'" not in sql
+    assert "public.document_status_nonfinal()" in transform_sql
     assert "ds.label AS status_label" in sql
     assert "WHEN d.status = 'success' THEN 'Успешно зарегистрирован'" not in sql
     assert "WHERE e.final_status IN ('success', 'error')" in sql
     assert "NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL" in transform_sql
-    parsing_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "20_functions_parsing.sql").read_text(encoding="utf-8")
-    drop_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "60_drop_dependents.sql").read_text(encoding="utf-8")
+    parsing_sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
+    drop_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "CREATE OR REPLACE FUNCTION public.resolve_document_jid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_mo_uid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_host" in parsing_sql
@@ -510,14 +528,14 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "xml_parsed_at" in sql
     assert "CREATE TABLE IF NOT EXISTS dim_egisz_message_refs" not in sql
     assert "DROP TABLE IF EXISTS public.dim_egisz_message_refs" not in drop_sql
-    assert "status = 'waiting'" in sql
+    assert "status = 'sent'" in sql
     assert "f.error_json_text" in sql
     assert "error_messages_row" in transform_sql
     assert "COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message)" not in transform_sql
     assert ", message, jid, jid_resolve_method, semd_code" in sql
     assert "error_message," not in transform_sql
     assert "error_message =" not in transform_sql
-    rpt_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "80_views_rpt.sql").read_text(encoding="utf-8")
+    rpt_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "NULLIF(btrim(d.dwh_id), '') IS NOT NULL" in rpt_sql
     assert "DWH_ID" not in rpt_sql
     assert "public.clean_text_value(t.message_id),\n        t.logid::text" not in sql
@@ -527,7 +545,7 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
 
 def test_dwh_init_sql_does_not_keep_legacy_egisz_messages_staging() -> None:
     sql = _read_dwh_init_sql()
-    drop_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "60_drop_dependents.sql").read_text(encoding="utf-8")
+    drop_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS stg_egisz_messages" not in sql
     assert "CREATE TABLE IF NOT EXISTS egisz_messages_raw" not in sql
@@ -730,7 +748,7 @@ def test_transform_missing_windows_calls_transform_per_window() -> None:
 
 
 def test_dwh_init_sql_drops_source_min_created_at_from_elt_state() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "10_tables.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "01_schema.sql").read_text(encoding="utf-8")
 
     # Дата-отсечка источника снята целиком: ни колонки, ни date-seed.
     assert "ALTER TABLE elt_state DROP COLUMN IF EXISTS source_min_created_at" in sql
@@ -741,8 +759,8 @@ def test_dwh_init_sql_drops_source_min_created_at_from_elt_state() -> None:
 
 
 def test_dwh_init_sql_partitions_time_series_tables() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "parts" / "10_tables.sql").read_text(encoding="utf-8")
-    transform_sql = (DWH_INIT_SQL_PATH.parent / "parts" / "50_transform.sql").read_text(encoding="utf-8")
+    sql = (DWH_INIT_SQL_PATH.parent / "01_schema.sql").read_text(encoding="utf-8")
+    transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
     assert "PARTITION BY RANGE (createdate)" in sql
     assert "PARTITION BY RANGE (log_date)" in sql
