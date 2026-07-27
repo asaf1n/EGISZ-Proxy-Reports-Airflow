@@ -13,6 +13,7 @@
 DROP VIEW IF EXISTS public.rpt_health_by_clinic CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_signals CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_proxy_db CASCADE;
+DROP VIEW IF EXISTS public.rpt_health_sync CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_versions CASCADE;
 DROP VIEW IF EXISTS public.rpt_network_errors CASCADE;
 -- Недельный (85_views_weekly) и месячный (86_views_monthly) слои зависят от
@@ -116,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
 
 -- Пересборка атрибутов документа из documents + справочников + последнего callback.
-CREATE OR REPLACE FUNCTION public.reconcile_document_attributes(p_dwh_ids text[] DEFAULT NULL)
+CREATE OR REPLACE FUNCTION public.recompute_document_attributes(p_dwh_ids text[] DEFAULT NULL)
 RETURNS bigint
 LANGUAGE plpgsql
 AS $$
@@ -257,12 +258,9 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.reconcile_document_attributes_ui()
-RETURNS bigint
-LANGUAGE sql
-AS $$
-    SELECT public.reconcile_document_attributes(NULL::text[]);
-$$;
+-- Параметр по умолчанию покрывает полный проход, поэтому обёртки без аргументов нет.
+DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui();
+DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[]);
 
 -- error_text на грейне документа принадлежит последнему ответу и проставляется
 -- в transform вместе со статусом. Отдельная сверка по архиву здесь не нужна и вредна:
@@ -801,7 +799,9 @@ SELECT
 FROM fact_24h f
 LEFT JOIN sent_without_response q ON q.clinic_jid = f.clinic_jid;
 
-CREATE OR REPLACE VIEW public.rpt_health_proxy_db AS
+-- Сопоставление отметок конвейера с фактами DWH: докуда журнал выгружен, докуда разобран
+-- и куда дошли документы. Сам шлюз здесь не проверяется.
+CREATE OR REPLACE VIEW public.rpt_health_sync AS
 SELECT
     (SELECT COUNT(*) FROM public.documents)::bigint AS "DWH сообщений всего",
     (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent')::bigint AS "Отправлено без ответа",
@@ -810,7 +810,10 @@ SELECT
     (SELECT COUNT(DISTINCT dwh_id) FROM public.documents WHERE status = 'sent' AND first_sent_at >= now() - INTERVAL '1 hour')::bigint AS "Без ответа < 1ч",
     (SELECT MAX(first_sent_at) FROM public.documents) AS "DWH max Sent",
     (SELECT updated_at FROM etl_state WHERE pipeline = 'egisz') AS "Последний апдейт курсора",
-    (SELECT logid_cursor FROM etl_state WHERE pipeline = 'egisz') AS "etl_state.logid_cursor",
+    -- Хвост exchangelog_raw отдельной колонкой не выводится: он выводим из самой таблицы
+    -- и в установившемся режиме повторяет позицию разбора.
+    (SELECT extract_logid_cursor FROM etl_state WHERE pipeline = 'egisz') AS "etl_state.extract_logid_cursor",
+    (SELECT transform_logid_cursor FROM etl_state WHERE pipeline = 'egisz') AS "etl_state.transform_logid_cursor",
     (SELECT MAX(COALESCE(result_logid, request_logid)) FROM public.documents) AS "DWH max LOGID fact",
     (SELECT COUNT(DISTINCT dwh_id) FROM public.documents)::bigint AS "Всего документов";
 
@@ -861,8 +864,17 @@ uncovered_types AS (
     LEFT JOIN public.dim_error_type_group g ON g.error_type = b.error_type
     WHERE g.error_type IS NULL
 ),
+-- Полнота выгрузки журнала. Шлюз нумерует EXCHANGELOG непрерывно, поэтому число
+-- пропущенных LOGID между краями загруженного диапазона — прямая мера потерь. Это тот же
+-- инвариант, по которому продвигается etl_state.extract_logid_cursor: отметка идёт только
+-- по непрерывному участку, значит ненулевое значение означает и недостачу строк, и
+-- остановку разбора на этом месте.
+journal_gaps AS (
+    SELECT COALESCE(MAX(logid) - MIN(logid) + 1 - COUNT(*), 0) AS missing
+    FROM public.exchangelog_raw
+),
 -- Клиники, документы которых есть, а записи в справочнике организаций нет: подпись
--- вырождается в «<jid> · —» во всех срезах. Наполнение справочника — задача приёма
+-- вырождается в «<jid> · —» во всех срезах. Наполнение справочника — задача выгрузки
 -- (JPERSONS выгружается целиком), поэтому в отчётном слое это только сигнал.
 unknown_clinics AS (
     SELECT d.jid, COUNT(*) AS docs
@@ -910,6 +922,17 @@ SELECT * FROM (
          'клиник',
          'documents.jid вне dim_organizations',
          'Проверить наличие организации в JPERSONS источника: подпись клиники выводится как «<jid> · —»'),
+        ('journal_continuity',
+         'Пропуски в выгрузке журнала',
+         CASE
+             WHEN (SELECT missing FROM journal_gaps) >= 100 THEN 'red'
+             WHEN (SELECT missing FROM journal_gaps) >= 1 THEN 'yellow'
+             ELSE 'green'
+         END,
+         (SELECT missing FROM journal_gaps)::numeric,
+         'LOGID',
+         'разрывы LOGID в exchangelog_raw',
+         'Строки журнала не доехали: отметка выгрузки стоит перед разрывом, разбор дальше не идёт. Проверить доступ к Firebird и прогон consistency_check'),
         ('unlinked_responses',
          'Доля несвязанных ответов ЕГИСЗ',
          CASE
@@ -1024,7 +1047,7 @@ END;
 $$;
 
 -- Первичное наполнение отчётного слоя: выполняется, только когда в схеме уже есть
--- документы, а производные слои ещё пусты (развёртывание на существующий архив).
+-- документы, а атрибуты ещё пусты (развёртывание на существующий архив).
 -- Сопровождение архива — пересчёт атрибутов, слоя версий и текстов ошибок — ведёт
 -- суточный DAG обслуживания, обновление витрин — DAG витрин. Полные проходы в теле
 -- наката пересекались по блокировкам с пятиминутным приёмом и давали взаимоблокировки.
@@ -1032,7 +1055,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM public.documents)
        AND NOT EXISTS (SELECT 1 FROM public.document_attributes) THEN
-        PERFORM public.reconcile_document_attributes(NULL::text[]);
+        PERFORM public.recompute_document_attributes(NULL::text[]);
         PERFORM public.recompute_document_versions(NULL::text[]);
         -- Матпредставления созданы в 80/85/86 с данными; пересобираем после сборки
         -- атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.

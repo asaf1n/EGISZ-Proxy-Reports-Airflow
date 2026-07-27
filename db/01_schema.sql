@@ -42,27 +42,25 @@ GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 -- ============================================================================
 
 -- Конвейер по существу ETL (выгрузка → загрузка → разбор в факты), поэтому таблица
--- состояния называется etl_state. Курсоры названы по ключу источника, который ведут:
--- logid_cursor — журнал EXCHANGELOG (LOGID), egmid_cursor — реестр подач EGISZ_MESSAGES
--- (EGMID). Оба курсора продвигает только egisz_etl_dag, через GREATEST.
+-- состояния называется etl_state. Курсор назван по фазе и объекту, по которому считает:
+-- extract_logid_cursor — позиция выгрузки в журнале шлюза (EXCHANGELOG.LOGID),
+-- extract_egmid_cursor — там же по реестру подач (EGISZ_MESSAGES.EGMID),
+-- transform_logid_cursor — позиция разбора в exchangelog_raw. Объекты разные, поэтому
+-- отметки самостоятельные. Все курсоры продвигает только egisz_etl_dag, через GREATEST.
 CREATE TABLE IF NOT EXISTS etl_state (
     pipeline text PRIMARY KEY,
-    logid_cursor bigint DEFAULT 0,
-    egmid_cursor bigint DEFAULT 0,
+    extract_logid_cursor bigint DEFAULT 0,
+    transform_logid_cursor bigint DEFAULT 0,
+    extract_egmid_cursor bigint DEFAULT 0,
     updated_at timestamptz DEFAULT now()
 );
 
-INSERT INTO etl_state (pipeline, logid_cursor)
-VALUES ('egisz', 0)
+INSERT INTO etl_state (pipeline)
+VALUES ('egisz')
 ON CONFLICT (pipeline) DO NOTHING;
 
--- Отметки последнего выполнения задач, чья каденция реже каденции DAG: справочники
--- (раз в час) и витрины динамики. Гейт читает ran_at и пропускает задачу до истечения
--- интервала — см. общий блок DAG, should_run_now().
-CREATE TABLE IF NOT EXISTS etl_job_runs (
-    job text PRIMARY KEY,
-    ran_at timestamptz NOT NULL DEFAULT now()
-);
+-- Каденция задач задаётся расписанием DAG, а не отметками в базе.
+DROP TABLE IF EXISTS etl_job_runs;
 
 -- Реестр подач шлюза (источник — EGISZ_MESSAGES): идентификатор исходящего сообщения,
 -- которым МИС подаёт документ, и localUid этого документа. Асинхронный ответ ЕГИСЗ
@@ -1101,7 +1099,7 @@ UPDATE documents SET
     is_current_version        = COALESCE(is_current_version, true)
 WHERE is_current_version IS NULL OR document_group_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
--- Составной ключ покрывает «последняя транзакция документа» (reconcile_document_attributes
+-- Составной ключ покрывает «последняя транзакция документа» (recompute_document_attributes
 -- берёт её дважды на документ) и заменяет одиночный индекс по dwh_id.
 DROP INDEX IF EXISTS idx_transactions_dwh_id;
 CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_recent

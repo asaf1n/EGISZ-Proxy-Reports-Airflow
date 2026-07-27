@@ -27,91 +27,76 @@ def fb_conn() -> MagicMock:
     return MagicMock()
 
 
-def test_extract_exchangelog_defers_fetch_when_raw_tail_exists(pg_conn: MagicMock, fb_conn: MagicMock) -> None:
-    with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 100}),
-        patch("egisz_etl_dag.pending_transform_tail", return_value=(50, 200)),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor") as fetch,
-    ):
-        result = extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0, lag_logids=0
-        )
+def _raw_row(logid: int) -> dict[str, object]:
+    return {
+        "logid": logid,
+        "logdate": None,
+        "createdate": None,
+        "msgid": None,
+        "logstate": None,
+        "logtext": None,
+        "msgtext": None,
+        "uri": "/emdr/callback",
+    }
 
-    fetch.assert_not_called()
-    assert result == {"count": 0, "logid_cursor": 100, "cursor_logid": 200}
 
-
-def test_extract_fetches_when_pending_tail_lies_inside_safety_lag(
+def test_extract_cursor_counts_the_proxy_not_raw(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Остаток целиком в защитном запасе — приём обязан продолжиться.
-
-    transform по построению придерживает последние lag_logids строк, поэтому при гейте
-    «есть хоть что-то выше отметки» обе стороны замирали: transform не брал (всё в
-    запасе), extract не забирал (есть непринятое), и конвейер вставал насовсем.
-    """
-    with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 32080628}),
-        patch("egisz_etl_dag.pending_transform_tail", side_effect=[(1000, 32081628), (0, 32081628)]),
-        patch("egisz_etl_dag.fetch_depth_floor", return_value=0),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[]) as fetch,
-    ):
-        extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0, lag_logids=1000
-        )
-
-    fetch.assert_called_once_with(fb_conn, after_logid=32080628, limit=2000)
-
-
-def test_extract_exchangelog_loads_from_source_when_raw_is_current(
-    pg_conn: MagicMock,
-    fb_conn: MagicMock,
-) -> None:
-    rows = [
-        {
-            "logid": 101,
-            "logdate": None,
-            "createdate": None,
-            "msgid": None,
-            "logstate": None,
-            "logtext": None,
-            "msgtext": None,
-            "uri": "/emdr/callback",
-        }
-    ]
+    """Отметка выгрузки считает по журналу шлюза и стартует от себя, а не от отметки
+    разбора: объекты разные, и общий курсор заставлял перечитывать прокси."""
+    rows = [_raw_row(101)]
 
     with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 100}),
-        patch("egisz_etl_dag.pending_transform_tail", side_effect=[(0, 100), (0, 100)]),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100, transform=100)),
         patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=rows) as fetch,
         patch("egisz_etl_dag.load_raw_logs") as load_raw,
+        patch("egisz_etl_dag.update_cursors") as update,
         patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze_raw,
     ):
         result = extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0, lag_logids=0
+            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0
         )
 
     fetch.assert_called_once_with(fb_conn, after_logid=100, limit=2000)
     load_raw.assert_called_once_with(pg_conn, rows)
     analyze_raw.assert_called_once_with(pg_conn)
-    assert result["count"] == 1
-    assert result["logid_cursor"] == 100
-    assert result["cursor_logid"] == 101
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=101)
+    assert result == {"count": 1, "extract_logid_cursor": 101}
+
+
+def test_extract_lifts_cursor_to_depth_floor(
+    pg_conn: MagicMock,
+    fb_conn: MagicMock,
+) -> None:
+    """Отметка ниже окна поднимается к его границе: приём не ползёт по архиву."""
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100, transform=100)),
+        patch("egisz_etl_dag.fetch_depth_floor", return_value=32_000_000),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[]) as fetch,
+        patch("egisz_etl_dag.update_cursors") as update,
+    ):
+        extract_exchangelog_batch(
+            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=30
+        )
+
+    fetch.assert_called_once_with(fb_conn, after_logid=32_000_000, limit=2000)
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=32_000_000)
+
+
+def _cursors(*, extract: int = 0, transform: int = 0, egmid: int = 0) -> dict[str, int]:
+    return {
+        "extract_logid_cursor": extract,
+        "transform_logid_cursor": transform,
+        "extract_egmid_cursor": egmid,
+    }
 
 
 def test_transform_exchangelog_runs_multiple_iterations(pg_conn: MagicMock) -> None:
-    load_info = {"count": 0, "logid_cursor": 100, "cursor_logid": 500}
-    # Хвост опрашивается один раз на итерацию; третий опрос возвращает пустой остаток.
-    pending_side_effects = [
-        (10, 500),
-        (5, 500),
-        (0, 300),
-    ]
-
     with (
-        patch("egisz_etl_dag.pending_transform_tail", side_effect=pending_side_effects),
-        patch("egisz_etl_dag.bounded_transform_to_logid", side_effect=[200, 300]),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=500, transform=100)),
+        patch("egisz_etl_dag.bounded_transform_to_logid", side_effect=[200, 300, 300]),
         patch(
             "egisz_etl_dag.transform_raw_to_facts",
             side_effect=[
@@ -124,10 +109,8 @@ def test_transform_exchangelog_runs_multiple_iterations(pg_conn: MagicMock) -> N
     ):
         result = transform_exchangelog_batch(
             pg_conn,
-            load_info,
             transform_rows=5000,
             transform_rounds=6,
-            lag_logids=0,
         )
 
     assert transform.call_count == 2
@@ -136,49 +119,37 @@ def test_transform_exchangelog_runs_multiple_iterations(pg_conn: MagicMock) -> N
     assert result["transformed"] == 150
     assert result["unlinked"] == 2
     assert result["sends_without_clinic"] == 1
-    assert result["logid_cursor"] == 300
+    assert result["transform_logid_cursor"] == 300
 
 
-def test_transform_exchangelog_noop_when_tail_equals_watermark(pg_conn: MagicMock) -> None:
-    load_info = {"count": 0, "logid_cursor": 100, "cursor_logid": 100}
-
-    with patch("egisz_etl_dag.transform_raw_to_facts") as transform:
+def test_transform_is_bounded_by_the_extract_cursor(pg_conn: MagicMock) -> None:
+    """Разбор не заходит выше отметки выгрузки: только до неё прокси вычитана без
+    пропусков. Обе отметки берутся из etl_state, поэтому сорванная выгрузка разбор
+    не снимает."""
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=102, transform=102)),
+        patch("egisz_etl_dag.transform_raw_to_facts") as transform,
+        patch("egisz_etl_dag.update_cursors") as update,
+    ):
         result = transform_exchangelog_batch(
             pg_conn,
-            load_info,
             transform_rows=5000,
             transform_rounds=6,
-            lag_logids=0,
         )
 
     transform.assert_not_called()
+    update.assert_not_called()
     assert result["transformed"] == 0
+    assert result["transform_logid_cursor"] == 102
 
 
-def test_transform_holds_watermark_back_by_safety_lag(pg_conn: MagicMock) -> None:
-    """Хвост журнала в пределах защитного запаса не разбирается: строка, опоздавшая
-    на несколько позиций LOGID, иначе осталась бы ниже отметки навсегда."""
-    load_info = {"count": 0, "logid_cursor": 100, "cursor_logid": 150}
-
-    with patch("egisz_etl_dag.transform_raw_to_facts") as transform:
-        result = transform_exchangelog_batch(
-            pg_conn,
-            load_info,
-            transform_rows=5000,
-            transform_rounds=6,
-            lag_logids=1000,
-        )
-
-    transform.assert_not_called()
-    assert result["transformed"] == 0
-    assert result["logid_cursor"] == 100
-
-
-def test_safe_transform_ceiling_keeps_lag_below_journal_tail() -> None:
-    assert extract_dag.safe_transform_ceiling(watermark=100, tail_logid=5000, lag_logids=1000) == 4000
-    # Запас шире доступного хвоста — разбирать нечего, отметка остаётся на месте.
-    assert extract_dag.safe_transform_ceiling(watermark=100, tail_logid=500, lag_logids=1000) == 100
-    assert extract_dag.safe_transform_ceiling(watermark=100, tail_logid=5000, lag_logids=0) == 5000
+def test_bounded_transform_to_logid_stops_at_the_extract_cursor() -> None:
+    con = MagicMock()
+    assert extract_dag.bounded_transform_to_logid(
+        con, from_logid=100, to_logid=100, raw_rows=5000) == 100
+    assert extract_dag.bounded_transform_to_logid(
+        con, from_logid=100, to_logid=500, raw_rows=0) == 100
+    con.cursor.assert_not_called()
 
 
 def test_normalize_registry_key_matches_sql_canonical_form() -> None:
@@ -223,7 +194,7 @@ def test_extract_message_registry_advances_its_own_cursor(
     rows = [(7, "MSG-1", "http://gost-1.lan:9945", "UID-1", None)]
 
     with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 0, "egmid_cursor": 5}),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(egmid=5)),
         patch("egisz_etl_dag.fetch_message_registry_after_cursor", side_effect=[rows, []]) as fetch,
         patch("egisz_etl_dag.load_message_registry", return_value=1) as load,
         patch("egisz_etl_dag.update_cursors") as update,
@@ -240,7 +211,7 @@ def test_extract_message_registry_advances_its_own_cursor(
     assert loaded == 1
     fetch.assert_called_once_with(fb_conn, after_egmid=5, limit=5000)
     load.assert_called_once_with(pg_conn, rows)
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, egmid=7)
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_egmid=7)
 
 
 def test_depth_floor_skips_source_prefix_outside_window(fb_conn: MagicMock) -> None:
@@ -304,7 +275,7 @@ def test_extract_message_registry_lifts_cursor_to_depth_floor(
     rows = [(10_500_100, "MSG-1", "http://gost-1.lan:9945", "UID-1", None)]
 
     with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 0, "egmid_cursor": 5}),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(egmid=5)),
         patch("egisz_etl_dag.fetch_depth_floor", return_value=10_499_999),
         patch("egisz_etl_dag.fetch_message_registry_after_cursor", side_effect=[rows, []]) as fetch,
         patch("egisz_etl_dag.load_message_registry", return_value=1),
@@ -328,7 +299,7 @@ def test_extract_message_registry_keeps_cursor_ahead_of_depth_floor(
 ) -> None:
     """Отметка выше границы окна не откатывается: курсоры только растут."""
     with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 0, "egmid_cursor": 10_600_000}),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(egmid=10_600_000)),
         patch("egisz_etl_dag.fetch_depth_floor", return_value=10_499_999),
         patch("egisz_etl_dag.fetch_message_registry_after_cursor", return_value=[]) as fetch,
         patch("egisz_etl_dag.run_analyze"),
@@ -342,23 +313,6 @@ def test_extract_message_registry_keeps_cursor_ahead_of_depth_floor(
         )
 
     fetch.assert_called_once_with(fb_conn, after_egmid=10_600_000, limit=5000)
-
-
-def test_extract_exchangelog_lifts_cursor_to_depth_floor(
-    pg_conn: MagicMock,
-    fb_conn: MagicMock,
-) -> None:
-    with (
-        patch("egisz_etl_dag.get_cursors", return_value={"logid_cursor": 100}),
-        patch("egisz_etl_dag.pending_transform_tail", side_effect=[(0, 100), (0, 100)]),
-        patch("egisz_etl_dag.fetch_depth_floor", return_value=32_000_000),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[]) as fetch,
-    ):
-        extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=30, lag_logids=0
-        )
-
-    fetch.assert_called_once_with(fb_conn, after_logid=32_000_000, limit=2000)
 
 
 def test_run_analyze_commits_before_switching_autocommit(pg_conn: MagicMock) -> None:

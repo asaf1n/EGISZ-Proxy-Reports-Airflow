@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 from typing import Any, TypedDict
 
 import psycopg2
-from airflow.sdk import Asset, Connection, dag, task
+from airflow.exceptions import AirflowSkipException
+from airflow.sdk import Connection, dag, task
 from firebird.driver import connect
 from psycopg2.extras import execute_values
 
@@ -26,12 +27,29 @@ DWH_CONN_ID = "dwh_egisz_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 DWH_POOL = "dwh_postgres"
 
-# Активы связывают производителей фактов с DAG обновления витрин: REFRESH выполняется
-# в одном месте (egisz_marts_dag), которое запускается по публикации актива.
-ASSET_FACTS = Asset("egisz://facts")
-ASSET_DICTIONARIES = Asset("egisz://dictionaries")
-
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext", "uri")
+
+# Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
+REPORT_MARTS = (
+    "public.rpt_error_breakdown",
+    "public.rpt_documents_weekly",
+    "public.rpt_error_breakdown_weekly",
+    "public.rpt_documents_monthly",
+    "public.rpt_error_breakdown_monthly",
+)
+
+ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
+DIRECTORY_COLUMNS = {
+    "dim_organizations": ("jid", "name", "inn", "address", "fir_oid"),
+    "dim_licenses": ("id", "service_type", "jid", "mo_uid", "mo_domen", "bdate", "fdate", "kind", "modifydate"),
+}
+DIRECTORY_PK_COLUMNS = {
+    "dim_organizations": ("jid",),
+    "dim_licenses": ("id",),
+}
+DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
+DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
+DIRECTORY_SYNC_PAGE_SIZE = 5000
 
 # Дефолты настроек DAG; переопределяются переменной окружения EGISZ_<KEY> (env, не Airflow Variables).
 DEFAULTS: dict[str, str | int] = {
@@ -45,11 +63,6 @@ DEFAULTS: dict[str, str | int] = {
     "extract_depth_days": 30,
     "transform_rows": 3000,
     "transform_rounds": 6,
-    # Отметка не поднимается вплотную к хвосту журнала: шлюз наполняет EXCHANGELOG не
-    # строго по возрастанию LOGID, и строка, опоздавшая на несколько позиций, иначе
-    # осталась бы ниже отметки навсегда. Запас на порядок больше наблюдаемого разброса.
-    "etl_lag_logids": 1000,
-    "dictionaries_interval_minutes": 60,
 }
 
 
@@ -68,16 +81,16 @@ def get_int(key: str) -> int:
     return int(_setting(key))
 
 
-class BatchMetadata(TypedDict):
+class ExtractResult(TypedDict):
     count: int
-    logid_cursor: int
-    cursor_logid: int
+    extract_logid_cursor: int
 
 
-class PipelineBatchInfo(BatchMetadata, total=False):
+class TransformResult(TypedDict):
     transformed: int
     unlinked: int
     sends_without_clinic: int
+    transform_logid_cursor: int
 
 
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
@@ -165,45 +178,37 @@ def normalize_registry_key(value: Any) -> str | None:
     return text or None
 
 
-def pending_transform_tail(
-    con: psycopg2.extensions.connection,
-    logid_cursor: int,
-) -> tuple[int, int]:
-    """Return (row_count, max_logid) of raw rows above the extract watermark."""
-    with con.cursor() as cur:
-        cur.execute(
-            """
-            SELECT COUNT(*)::bigint, COALESCE(MAX(logid), %s)::bigint
-            FROM public.exchangelog_raw
-            WHERE logid > %s
-            """,
-            (logid_cursor, logid_cursor),
-        )
-        pending_rows, pending_max = cur.fetchone()
-    return int(pending_rows or 0), int(pending_max or logid_cursor)
+def contiguous_prefix_end(logids: list[int], *, after: int) -> int:
+    """Последний LOGID непрерывного участка страницы источника, начинающегося за ``after``.
 
+    Отметка выгрузки не переступает разрыв: строка, которую шлюз закоммитил позже соседей,
+    иначе осталась бы ниже отметки навсегда. Пока идентификаторы идут подряд, отметка равна
+    последнему из них; на первом пропуске она останавливается, и строку подберёт обычный
+    прямой ход следующего запуска. Строки выше разрыва уже загружены в raw — их разберут,
+    когда отметка дойдёт.
 
-def safe_transform_ceiling(*, watermark: int, tail_logid: int, lag_logids: int) -> int:
-    """Верхняя граница transform с защитным отставанием от хвоста журнала.
-
-    Строки журнала появляются не строго по возрастанию LOGID. Пока отметка держится
-    на ``lag_logids`` ниже хвоста, опоздавшая строка попадает в обычный прямой ход;
-    сверка нужна лишь для того, что отстало больше запаса.
+    ``after <= 0`` — холодный старт: началом участка становится первая строка источника.
     """
-    ceiling = tail_logid - max(lag_logids, 0)
-    return ceiling if ceiling > watermark else watermark
+    if not logids:
+        return after
+    end = logids[0] - 1 if after <= 0 else after
+    for logid in logids:
+        if logid != end + 1:
+            break
+        end = logid
+    return end
 
 
 def bounded_transform_to_logid(
     con: psycopg2.extensions.connection,
     *,
-    logid_cursor: int,
-    cursor_logid: int,
+    from_logid: int,
+    to_logid: int,
     raw_rows: int,
 ) -> int:
     """Upper LOGID bound for the next transform chunk (at most ``raw_rows`` raw rows)."""
-    if cursor_logid <= logid_cursor or raw_rows <= 0:
-        return logid_cursor
+    if to_logid <= from_logid or raw_rows <= 0:
+        return from_logid
     with con.cursor() as cur:
         cur.execute(
             """
@@ -216,78 +221,57 @@ def bounded_transform_to_logid(
                 LIMIT %s
             ) bounded
             """,
-            (logid_cursor, logid_cursor, cursor_logid, raw_rows),
+            (from_logid, from_logid, to_logid, raw_rows),
         )
         row = cur.fetchone()
-    return int(row[0] if row else logid_cursor)
+    return int(row[0] if row else from_logid)
 
 
-def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, Any]:
-    """Read pipeline cursors: journal LOGID and message-registry EGMID."""
+def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str, int]:
+    """Read pipeline cursors: extract position in the gateway journal, transform position in raw."""
     with con.cursor() as cur:
         cur.execute(
-            "SELECT logid_cursor, egmid_cursor FROM etl_state WHERE pipeline = %s",
+            "SELECT extract_logid_cursor, transform_logid_cursor, extract_egmid_cursor "
+            "FROM etl_state WHERE pipeline = %s",
             (pipeline,),
         )
         row = cur.fetchone()
     if row is None:
-        return {"logid_cursor": 0, "egmid_cursor": 0}
-    return {"logid_cursor": int(row[0] or 0), "egmid_cursor": int(row[1] or 0)}
+        return {
+            "extract_logid_cursor": 0,
+            "transform_logid_cursor": 0,
+            "extract_egmid_cursor": 0,
+        }
+    return {
+        "extract_logid_cursor": int(row[0] or 0),
+        "transform_logid_cursor": int(row[1] or 0),
+        "extract_egmid_cursor": int(row[2] or 0),
+    }
 
 
 def update_cursors(
     con: psycopg2.extensions.connection,
     pipeline: str,
-    logid: int = 0,
-    egmid: int = 0,
+    *,
+    extract_logid: int = 0,
+    transform_logid: int = 0,
+    extract_egmid: int = 0,
 ) -> None:
     """Advance cursors through ``GREATEST`` — they never roll back. Only the ETL DAG writes here."""
     with con.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO etl_state (pipeline, logid_cursor, egmid_cursor)
-            VALUES (%s, %s, %s)
+            INSERT INTO etl_state (
+                pipeline, extract_logid_cursor, transform_logid_cursor, extract_egmid_cursor
+            )
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (pipeline) DO UPDATE SET
-                logid_cursor = GREATEST(etl_state.logid_cursor, EXCLUDED.logid_cursor),
-                egmid_cursor = GREATEST(etl_state.egmid_cursor, EXCLUDED.egmid_cursor),
+                extract_logid_cursor = GREATEST(etl_state.extract_logid_cursor, EXCLUDED.extract_logid_cursor),
+                transform_logid_cursor = GREATEST(etl_state.transform_logid_cursor, EXCLUDED.transform_logid_cursor),
+                extract_egmid_cursor = GREATEST(etl_state.extract_egmid_cursor, EXCLUDED.extract_egmid_cursor),
                 updated_at = now();
             """,
-            (pipeline, logid, egmid),
-        )
-    con.commit()
-
-
-def should_run_now(
-    con: psycopg2.extensions.connection,
-    job: str,
-    min_interval_minutes: int,
-) -> bool:
-    """True, если с прошлого выполнения ``job`` прошло не меньше указанного интервала.
-
-    Гейт каденции для задач, которые живут внутри более частого DAG: справочники
-    и витрины динамики не нуждаются в пятиминутной свежести.
-    """
-    if min_interval_minutes <= 0:
-        return True
-    with con.cursor() as cur:
-        cur.execute(
-            "SELECT ran_at <= now() - make_interval(mins => %s) FROM etl_job_runs WHERE job = %s",
-            (min_interval_minutes, job),
-        )
-        row = cur.fetchone()
-    return True if row is None else bool(row[0])
-
-
-def mark_job_run(con: psycopg2.extensions.connection, job: str) -> None:
-    """Записать момент выполнения задачи с собственной каденцией."""
-    with con.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO etl_job_runs (job, ran_at)
-            VALUES (%s, now())
-            ON CONFLICT (job) DO UPDATE SET ran_at = now();
-            """,
-            (job,),
+            (pipeline, extract_logid, transform_logid, extract_egmid),
         )
     con.commit()
 
@@ -418,26 +402,38 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
         con.set_session(autocommit=previous_autocommit)
 
 
+def _refresh_matview(con: psycopg2.extensions.connection, qualified_name: str) -> None:
+    """Refresh a materialized view after facts change.
+
+    CONCURRENTLY (needs the unique index + a populated matview) keeps dashboard reads
+    unblocked during the ~seconds-long rebuild; falls back to a plain refresh if the
+    matview was never populated. Runs in autocommit — REFRESH CONCURRENTLY cannot run
+    inside a transaction block.
+    """
+    con.commit()
+    previous_autocommit = con.autocommit
+    con.set_session(autocommit=True)
+    try:
+        with con.cursor() as cur:
+            try:
+                cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {qualified_name}")
+            except psycopg2.Error as exc:
+                log.warning(
+                    "CONCURRENTLY refresh of %s failed (%s); falling back to plain refresh",
+                    qualified_name,
+                    exc,
+                )
+                cur.execute(f"REFRESH MATERIALIZED VIEW {qualified_name}")
+    finally:
+        con.set_session(autocommit=previous_autocommit)
+
+
 def _dwh_connection():
     return connect_pg(Connection.get(DWH_CONN_ID))
 
 
 def _proxy_connection():
     return connect_fb(Connection.get(PROXY_CONN_ID))
-
-
-ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
-DIRECTORY_COLUMNS = {
-    "dim_organizations": ("jid", "name", "inn", "address", "fir_oid"),
-    "dim_licenses": ("id", "service_type", "jid", "mo_uid", "mo_domen", "bdate", "fdate", "kind", "modifydate"),
-}
-DIRECTORY_PK_COLUMNS = {
-    "dim_organizations": ("jid",),
-    "dim_licenses": ("id",),
-}
-DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
-DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
-DIRECTORY_SYNC_PAGE_SIZE = 5000
 
 
 # Нижняя граница окна приёма по каждому источнику. Отбор по дате живёт здесь, а не в
@@ -676,6 +672,24 @@ def sync_directories(
     return changed
 
 
+def recompute_documents_full(con: psycopg2.extensions.connection) -> dict[str, int]:
+    """Пересчёт атрибутов и версий по всему архиву документов.
+
+    Батч сопровождает себя сам: transform_raw_to_facts пересчитывает атрибуты по dwh_id
+    батча и версии по батчу с соседями по группе. Полный проход нужен единственному входу
+    за пределами батча — справочникам: переименование клиники и резолв JID меняют атрибуты
+    документов, которых в батче нет.
+    """
+    results: dict[str, int] = {}
+    with con.cursor() as cur:
+        cur.execute("SELECT public.recompute_document_attributes(NULL::text[])")
+        results["attributes"] = int(cur.fetchone()[0] or 0)
+        cur.execute("SELECT public.recompute_document_versions(NULL::text[])")
+        results["versions"] = int(cur.fetchone()[0] or 0)
+    con.commit()
+    return results
+
+
 def _analyze_exchangelog_raw(pg_conn: psycopg2.extensions.connection) -> None:
     run_analyze(pg_conn, "ANALYZE public.exchangelog_raw")
 
@@ -696,37 +710,17 @@ def extract_exchangelog_batch(
     raw_rows: int,
     raw_rounds: int,
     depth_days: int,
-    lag_logids: int,
-) -> BatchMetadata:
-    """EXCHANGELOG → exchangelog_raw."""
-    logid_cursor = int(get_cursors(pg_conn, PIPELINE).get("logid_cursor", 0))
-    cursor_logid = logid_cursor
-    total_loaded = 0
-    rounds = 0
+) -> ExtractResult:
+    """EXCHANGELOG → exchangelog_raw.
 
-    pending_rows, pending_max = pending_transform_tail(pg_conn, logid_cursor)
-    # Отсрочка — обратное давление: не тащим новое, пока не разобрано принятое. Но
-    # считаются только строки, которые transform реально может взять: последние
-    # lag_logids он придерживает намеренно. Гейт «есть хоть что-то выше отметки»
-    # смыкался с этим запасом — transform стоял (всё в запасе), extract не забирал
-    # («есть непринятое»), и конвейер вставал насовсем.
-    transform_has_work = (
-        safe_transform_ceiling(
-            watermark=logid_cursor, tail_logid=pending_max, lag_logids=lag_logids
-        )
-        > logid_cursor
-    )
-    if pending_rows > 0 and transform_has_work:
-        log.info(
-            "%s row(s) in exchangelog_raw above watermark LOGID=%s; deferring EXCHANGELOG fetch.",
-            pending_rows,
-            logid_cursor,
-        )
-        return {
-            "count": 0,
-            "logid_cursor": logid_cursor,
-            "cursor_logid": pending_max,
-        }
+    Отметка выгрузки считает по журналу шлюза: докуда прокси вычитана в raw. Двигается по
+    концу непрерывного участка страницы — разрыв означает строку, которую источник ещё не
+    закоммитил, и её подберёт следующий запуск. Повтор безопасен: загрузка идемпотентна
+    (UPSERT по ``(logid, createdate)``), а строка журнала в источнике не меняется.
+    """
+    started_cursor = int(get_cursors(pg_conn, PIPELINE)["extract_logid_cursor"])
+    cursor_logid = started_cursor
+    total_loaded = 0
 
     depth_floor = fetch_depth_floor(
         fb_conn, source="exchangelog", depth_days=depth_days, after_id=cursor_logid
@@ -740,7 +734,7 @@ def extract_exchangelog_batch(
         )
         cursor_logid = depth_floor
 
-    while rounds < raw_rounds:
+    for round_index in range(raw_rounds):
         started_at = time.monotonic()
         log_rows = fetch_exchangelog_after_cursor(
             fb_conn,
@@ -752,7 +746,7 @@ def extract_exchangelog_batch(
             len(log_rows),
             cursor_logid,
             time.monotonic() - started_at,
-            rounds + 1,
+            round_index + 1,
         )
 
         if not log_rows:
@@ -760,33 +754,35 @@ def extract_exchangelog_batch(
 
         load_raw_logs(pg_conn, log_rows)
         total_loaded += len(log_rows)
-        cursor_logid = max(int(row["logid"]) for row in log_rows)
-        rounds += 1
 
+        logids = [int(row["logid"]) for row in log_rows]
+        advanced = contiguous_prefix_end(logids, after=cursor_logid)
+        if advanced < logids[-1]:
+            log.warning(
+                "EXCHANGELOG gap above LOGID=%s: %s row(s) loaded, extract cursor holds until "
+                "the missing row arrives.",
+                advanced,
+                len(log_rows),
+            )
+            cursor_logid = advanced
+            break
+
+        cursor_logid = advanced
         if len(log_rows) < raw_rows:
             break
 
+    if cursor_logid > started_cursor:
+        update_cursors(pg_conn, PIPELINE, extract_logid=cursor_logid)
     if total_loaded > 0:
         _analyze_exchangelog_raw(pg_conn)
-        log.info(
-            "ANALYZE done for exchangelog_raw after %s row(s) in %s round(s).",
-            total_loaded,
-            rounds,
-        )
 
-    _, pending_max = pending_transform_tail(pg_conn, logid_cursor)
-    cursor_logid = max(cursor_logid, pending_max)
     log.info(
-        "Extract complete: %s row(s), exchangelog_raw tail LOGID=%s (watermark=%s).",
+        "Extract complete: %s row(s), extract cursor LOGID=%s (was %s).",
         total_loaded,
         cursor_logid,
-        logid_cursor,
+        started_cursor,
     )
-    return {
-        "count": total_loaded,
-        "logid_cursor": logid_cursor,
-        "cursor_logid": cursor_logid,
-    }
+    return {"count": total_loaded, "extract_logid_cursor": cursor_logid}
 
 
 def extract_message_registry_batch(
@@ -798,7 +794,7 @@ def extract_message_registry_batch(
     depth_days: int,
 ) -> int:
     """EGISZ_MESSAGES → dim_message_document."""
-    cursor_egmid = int(get_cursors(pg_conn, PIPELINE).get("egmid_cursor", 0))
+    cursor_egmid = int(get_cursors(pg_conn, PIPELINE)["extract_egmid_cursor"])
     total_loaded = 0
 
     depth_floor = fetch_depth_floor(
@@ -832,7 +828,7 @@ def extract_message_registry_batch(
 
         total_loaded += load_message_registry(pg_conn, rows)
         cursor_egmid = max(int(row[0]) for row in rows)
-        update_cursors(pg_conn, PIPELINE, egmid=cursor_egmid)
+        update_cursors(pg_conn, PIPELINE, extract_egmid=cursor_egmid)
 
         if len(rows) < registry_rows:
             break
@@ -845,57 +841,35 @@ def extract_message_registry_batch(
 
 def transform_exchangelog_batch(
     pg_conn: psycopg2.extensions.connection,
-    load_info: BatchMetadata,
     *,
     transform_rows: int,
     transform_rounds: int,
-    lag_logids: int,
-) -> PipelineBatchInfo:
-    """exchangelog_raw → documents/transactions; advance etl_state watermark."""
-    watermark = int(load_info.get("logid_cursor", 0))
-    tail_logid = int(load_info.get("cursor_logid", watermark))
-    ceiling = safe_transform_ceiling(
-        watermark=watermark,
-        tail_logid=tail_logid,
-        lag_logids=lag_logids,
-    )
-    if ceiling <= watermark:
-        log.info(
-            "exchangelog_raw tail LOGID=%s within the %s-LOGID safety lag above watermark %s; "
-            "nothing to transform yet.",
-            tail_logid,
-            lag_logids,
-            watermark,
-        )
-        return {**load_info, "transformed": 0, "unlinked": 0, "sends_without_clinic": 0}
+) -> TransformResult:
+    """exchangelog_raw → documents/transactions; двигает отметку разбора.
 
+    Отметка разбора считает по exchangelog_raw: докуда raw превращена в факты. Верхняя
+    граница — отметка выгрузки: только до неё журнал заведомо вычитан без пропусков.
+
+    Обе отметки читаются из etl_state, а не приходят от выгрузки: сорванная выгрузка
+    (недоступный Firebird) не должна мешать разобрать то, что уже лежит в raw.
+    """
+    cursors = get_cursors(pg_conn, PIPELINE)
+    ceiling = int(cursors["extract_logid_cursor"])
+    watermark = int(cursors["transform_logid_cursor"])
     totals = {"transformed": 0, "unlinked": 0, "sends_without_clinic": 0}
-    for iteration in range(transform_rounds):
-        pending_rows, tail_logid = pending_transform_tail(pg_conn, watermark)
-        if pending_rows == 0:
-            log.info("exchangelog_raw cleared above watermark LOGID=%s.", watermark)
-            break
 
-        ceiling = safe_transform_ceiling(
-            watermark=watermark,
-            tail_logid=tail_logid,
-            lag_logids=lag_logids,
-        )
+    for iteration in range(transform_rounds):
         to_logid = bounded_transform_to_logid(
             pg_conn,
-            logid_cursor=watermark,
-            cursor_logid=ceiling,
+            from_logid=watermark,
+            to_logid=ceiling,
             raw_rows=transform_rows,
         )
         if to_logid <= watermark:
             break
 
         started_at = time.monotonic()
-        batch = transform_raw_to_facts(
-            pg_conn,
-            from_logid=watermark,
-            to_logid=to_logid,
-        )
+        batch = transform_raw_to_facts(pg_conn, from_logid=watermark, to_logid=to_logid)
         elapsed = time.monotonic() - started_at
         for key in totals:
             totals[key] += int(batch.get(key, 0))
@@ -911,14 +885,13 @@ def transform_exchangelog_batch(
             batch.get("sends_without_clinic", 0),
         )
 
-        update_cursors(pg_conn, PIPELINE, logid=to_logid)
+        update_cursors(pg_conn, PIPELINE, transform_logid=to_logid)
         watermark = to_logid
-        log.info("Updated %s watermark to LOGID=%s.", PIPELINE, watermark)
 
     if totals["transformed"] > 0:
         _analyze_exchangelog_documents(pg_conn)
 
-    return {**load_info, "logid_cursor": watermark, **totals}
+    return {**totals, "transform_logid_cursor": watermark}
 
 
 @dag(
@@ -930,8 +903,11 @@ def transform_exchangelog_batch(
     tags=["egisz", "elt", "dwh", "etl"],
 )
 def egisz_etl_pipeline() -> None:
-    @task
-    def extract_exchangelog() -> BatchMetadata:
+    # Ретраи гасят обрывы связи с источником: шлюз и его DNS пропадают на минуты, и
+    # одиночный сбой не должен ронять весь запуск. Отметка двигается только после успеха,
+    # поэтому повтор безопасен.
+    @task(retries=2, retry_delay=timedelta(minutes=1))
+    def extract_exchangelog() -> ExtractResult:
         pg_conn = _dwh_connection()
         fb_conn = _proxy_connection()
         try:
@@ -941,16 +917,21 @@ def egisz_etl_pipeline() -> None:
                 raw_rows=get_int("extract_raw_rows"),
                 raw_rounds=get_int("extract_raw_rounds"),
                 depth_days=get_int("extract_depth_days"),
-                lag_logids=get_int("etl_lag_logids"),
             )
         finally:
             fb_conn.close()
             pg_conn.close()
 
     # Реестр подач наполняется ДО transform: без него асинхронный ответ ЕГИСЗ
-    # не с чем связать, и исход отправки был бы потерян.
-    @task(pool=DWH_POOL)
-    def extract_message_registry() -> int:
+    # не с чем связать, и исход отправки был бы потерян. Недоступный источник не снимает
+    # остальную цепочку — то, что уже лежит в raw, разбирается и без него.
+    @task(
+        pool=DWH_POOL,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+        trigger_rule="all_done",
+    )
+    def extract_registry() -> int:
         pg_conn = _dwh_connection()
         fb_conn = _proxy_connection()
         try:
@@ -965,64 +946,115 @@ def egisz_etl_pipeline() -> None:
             fb_conn.close()
             pg_conn.close()
 
-    # Справочники живут в приёме, но со своей каденцией: выборка из Firebird занимает
-    # порядка десяти секунд и пятиминутной свежести не требует. Проход по архиву
-    # документов относится к обслуживанию и здесь не выполняется.
-    @task(pool=DWH_POOL)
-    def sync_dictionaries() -> dict[str, int]:
+    # Справочники читаются до transform: атрибуты документов батча резолвят по ним
+    # клинику и вид СЭМД.
+    @task(
+        pool=DWH_POOL,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+        trigger_rule="all_done",
+    )
+    def sync_dictionaries() -> int:
         pg_conn = _dwh_connection()
+        fb_conn = _proxy_connection()
         try:
-            interval_minutes = get_int("dictionaries_interval_minutes")
-            if not should_run_now(pg_conn, "sync_dictionaries", interval_minutes):
-                log.info("Dictionaries synced less than %s minute(s) ago; skipping.", interval_minutes)
-                return {"organizations": 0, "licenses": 0, "changed": 0}
-
-            fb_conn = _proxy_connection()
-            try:
-                organization_rows = fetch_organizations(fb_conn)
-                license_rows = fetch_licenses(fb_conn)
-            finally:
-                fb_conn.close()
-
+            organization_rows = fetch_organizations(fb_conn)
+            license_rows = fetch_licenses(fb_conn)
             log.info(
                 "Fetched %s organization and %s license row(s) from proxy.",
                 len(organization_rows),
                 len(license_rows),
             )
             changed = sync_directories(pg_conn, organization_rows, license_rows)
-            mark_job_run(pg_conn, "sync_dictionaries")
             log.info("%s dictionary row(s) changed.", changed)
-            return {
-                "organizations": len(organization_rows),
-                "licenses": len(license_rows),
-                "changed": changed,
-            }
+            return changed
         finally:
+            fb_conn.close()
             pg_conn.close()
 
     # Ретраи гасят транзиентный DeadlockDetected: суточное обслуживание пересекается
     # с пятиминутным батчем по блокировкам documents/document_attributes; откат
     # и повтор безопасны — transform идемпотентен, отметка двигается только после успеха.
-    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1), outlets=[ASSET_FACTS])
-    def transform_exchangelog(load_info: BatchMetadata) -> PipelineBatchInfo:
+    @task(
+        pool=DWH_POOL,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+        trigger_rule="all_done",
+    )
+    def transform() -> TransformResult:
         pg_conn = _dwh_connection()
         try:
             return transform_exchangelog_batch(
                 pg_conn,
-                load_info,
                 transform_rows=get_int("transform_rows"),
                 transform_rounds=get_int("transform_rounds"),
-                lag_logids=get_int("etl_lag_logids"),
             )
         finally:
             pg_conn.close()
 
-    extracted = extract_exchangelog()
-    registry = extract_message_registry()
-    dictionaries = sync_dictionaries()
-    transformed = transform_exchangelog(extracted)
+    # Полный проход по архиву нужен только после правки справочника: документы своего
+    # батча пересчитывает сам transform. Вне этого условия проход стоит десятки секунд
+    # и держит блокировки documents/document_attributes ради нуля изменённых строк.
+    @task(
+        pool=DWH_POOL,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+        trigger_rule="all_done",
+    )
+    def recompute_documents(dictionaries_changed: int | None) -> dict[str, int]:
+        if not dictionaries_changed:
+            raise AirflowSkipException(
+                "Справочники не менялись — атрибуты и версии вне батча пересчитывать не от чего."
+            )
+        pg_conn = _dwh_connection()
+        try:
+            results = recompute_documents_full(pg_conn)
+            if any(results.values()):
+                run_analyze(
+                    pg_conn,
+                    "ANALYZE public.document_attributes",
+                    "ANALYZE public.documents",
+                )
+            log.info(
+                "Recomputed %s attribute row(s) and %s version row(s).",
+                results["attributes"],
+                results["versions"],
+            )
+            return results
+        finally:
+            pg_conn.close()
 
-    extracted >> registry >> dictionaries >> transformed
+    # Витрины обновляются там же, где меняется их основание, — иначе слой со «свежестью
+    # фактов» отстаёт от фактов.
+    @task(
+        pool=DWH_POOL,
+        retries=2,
+        retry_delay=timedelta(minutes=1),
+        trigger_rule="all_done",
+    )
+    def refresh_marts(
+        transformed: TransformResult | None,
+        recomputed: dict[str, int] | None,
+    ) -> None:
+        changed = int((transformed or {}).get("transformed", 0)) + sum((recomputed or {}).values())
+        if not changed:
+            raise AirflowSkipException("Ни факты, ни атрибуты не изменились — обновлять нечего.")
+        pg_conn = _dwh_connection()
+        try:
+            for matview in REPORT_MARTS:
+                _refresh_matview(pg_conn, matview)
+            run_analyze(pg_conn, *(f"ANALYZE {matview}" for matview in REPORT_MARTS))
+        finally:
+            pg_conn.close()
+
+    extracted = extract_exchangelog()
+    registry = extract_registry()
+    dictionaries = sync_dictionaries()
+    transformed = transform()
+    recomputed = recompute_documents(dictionaries)
+    refreshed = refresh_marts(transformed, recomputed)
+
+    extracted >> registry >> dictionaries >> transformed >> recomputed >> refreshed
 
 
 egisz_etl_pipeline()

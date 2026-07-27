@@ -1,8 +1,8 @@
 """Контракт самодостаточных DAG-файлов.
 
-Общий блок (подключения, watermark, обновление витрин) продублирован в трёх файлах
-сознательно: каждый разворачивается на целевой Airflow как есть. Цена дублирования —
-риск дрейфа копий, который и снимают эти тесты.
+Общий блок (подключения, курсоры, обновление витрин) продублирован по файлам сознательно:
+каждый разворачивается на целевой Airflow как есть. Цена дублирования — риск дрейфа копий,
+который и снимают эти тесты.
 """
 
 from __future__ import annotations
@@ -65,8 +65,7 @@ def _top_level_definitions(tree: ast.Module) -> dict[str, ast.AST]:
 def test_dag_files_exist() -> None:
     assert {path.name for path in DAG_FILES} == {
         "egisz_etl_dag.py",
-        "egisz_marts_dag.py",
-        "egisz_reconcile_maintenance_dag.py",
+        "egisz_maintenance_dag.py",
     }
 
 

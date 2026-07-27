@@ -6,13 +6,16 @@ from typing import Any
 from conftest import load_dag_module
 
 _etl_dag = load_dag_module("egisz_etl_dag")
-fetch_organizations = _etl_dag.fetch_organizations
 fetch_exchangelog_after_cursor = _etl_dag.fetch_exchangelog_after_cursor
 fetch_message_registry_after_cursor = _etl_dag.fetch_message_registry_after_cursor
 
-_maintenance_dag = load_dag_module("egisz_reconcile_maintenance_dag")
+_refresh_dag = _etl_dag
+fetch_organizations = _refresh_dag.fetch_organizations
+
+_maintenance_dag = load_dag_module("egisz_maintenance_dag")
 fetch_exchangelog_by_logids = _maintenance_dag.fetch_exchangelog_by_logids
-source_logid_bounds = _maintenance_dag.source_logid_bounds
+source_window_low = _maintenance_dag.source_window_low
+count_source_logids = _maintenance_dag.count_source_logids
 fetch_source_logids_range = _maintenance_dag.fetch_source_logids_range
 
 
@@ -130,19 +133,28 @@ def test_fetch_message_registry_empty_limit_skips_query() -> None:
     assert con.executed_sql == []
 
 
-def test_source_logid_bounds_limits_scan_to_window() -> None:
-    con = FakeConnection([(100, 200)])
+def test_source_window_low_limits_scan_to_window() -> None:
+    con = FakeConnection([(100,)])
     since = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
-    assert source_logid_bounds(con, since=since) == (100, 200)
+    assert source_window_low(con, since=since) == 100
     assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
     assert con.cursor_instance.params == (since,)
 
 
-def test_source_logid_bounds_empty_window_returns_zeros() -> None:
-    con = FakeConnection([(None, None)])
+def test_source_window_low_empty_window_returns_zero() -> None:
+    con = FakeConnection([(None,)])
 
-    assert source_logid_bounds(con, since=datetime(2026, 6, 1, tzinfo=timezone.utc)) == (0, 0)
+    assert source_window_low(con, since=datetime(2026, 6, 1, tzinfo=timezone.utc)) == 0
+
+
+def test_count_source_logids_asks_for_a_count_not_a_set() -> None:
+    """Штатный прогон проверки сравнивает счётчики: множества по проводам не гоняются."""
+    con = FakeConnection([(901,)])
+
+    assert count_source_logids(con, low=100, high=1000) == 901
+    assert "COUNT(*)" in con.cursor_instance.executed_sql
+    assert con.cursor_instance.params == (100, 1000)
 
 
 def test_fetch_source_logids_range_reads_one_chunk() -> None:

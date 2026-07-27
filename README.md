@@ -81,13 +81,13 @@
 
 ```
 proxy_egisz (EXCHANGELOG, JPERSONS, EGISZ_LICENSES)
-        │  extract / reconcile
+        │  extract
         ▼
 exchangelog_raw  ──transform──►  transactions  ──►  documents
         │                              │                │
         │                              └──── document_attributes
         ▼
-   etl_state.logid_cursor          dim_* (справочники)
+   etl_state (курсоры фаз)            dim_* (справочники)
                                         │
                                         ▼
                                    rpt_*  ──►  Metabase
@@ -106,7 +106,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 ## Источник данных
 
-Инкрементальная выборка журнала — по монотонному `EXCHANGELOG.LOGID` (`LOGID > logid_cursor`).
+Инкрементальная выборка журнала — по монотонному `EXCHANGELOG.LOGID` (`LOGID > extract_logid_cursor`).
 
 | Таблица | Grain | Поля |
 | ------- | ----- | ---- |
@@ -131,62 +131,55 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 ## ELT-конвейер
 
-Три DAG, разграниченных по зоне ответственности: приём фактов, обновление витрин, обслуживание. У каждого `max_active_runs = 1`.
+Два DAG: батч фактов и суточное обслуживание. Витрину обновляет тот DAG, который меняет её основание, поэтому активов и гейтов каденции в базе нет — каденция задана расписанием. У каждого `max_active_runs = 1`.
 
-### Приём фактов — `egisz_etl_dag`
+### Факты — `egisz_etl_dag`, каждые 5 минут
 
 ```
-extract_exchangelog ▸ extract_message_registry ▸ sync_dictionaries ▸ transform_exchangelog
+extract_exchangelog ▸ extract_registry ▸ sync_dictionaries ▸ transform ▸ recompute_documents ▸ refresh_marts
 ```
 
 | Задача | Действие |
 | ------ | -------- |
-| `extract_exchangelog` | Читает `etl_state.logid_cursor`. Пока в `exchangelog_raw` есть строки с `logid` выше отметки — источник не читается. Иначе fetch `EXCHANGELOG` → UPSERT в `exchangelog_raw`, `ANALYZE`. |
-| `extract_message_registry` | `EGISZ_MESSAGES` → `dim_message_document` по курсору `etl_state.egmid_cursor`. Выполняется до transform: без реестра ответ ЕГИСЗ не с чем связать. |
-| `sync_dictionaries` | UPSERT `dim_organizations` ← `JPERSONS`, `dim_licenses` ← `EGISZ_LICENSES`. Гейт `etl_job_runs`: не чаще раза в час. |
-| `transform_exchangelog` | Цикл `transform_raw_to_facts(from, to)`: разбор raw в `transactions`, сборка `documents`, сдвиг отметки через `GREATEST`. Публикует актив `egisz://facts`. |
+| `extract_exchangelog` | Читает `etl_state.extract_logid_cursor`, fetch `EXCHANGELOG` → UPSERT в `exchangelog_raw`, `ANALYZE`. Отметку двигает по непрерывному участку страницы. |
+| `extract_registry` | `EGISZ_MESSAGES` → `dim_message_document` по курсору `etl_state.extract_egmid_cursor`. Выполняется до `transform`: без реестра ответ ЕГИСЗ не с чем связать. |
+| `sync_dictionaries` | UPSERT `dim_organizations` ← `JPERSONS`, `dim_licenses` ← `EGISZ_LICENSES`. Тоже до `transform`: по справочникам резолвятся клиника и вид СЭМД. Возвращает число изменённых строк. |
+| `transform` | Цикл `transform_raw_to_facts(from, to)`: разбор raw в `transactions`, сборка `documents`, сдвиг `etl_state.transform_logid_cursor` через `GREATEST`. |
+| `recompute_documents` | `recompute_document_attributes(NULL)` и `recompute_document_versions(NULL)` — полный проход по архиву. Пропускается, когда справочники не менялись. |
+| `refresh_marts` | `REFRESH ... CONCURRENTLY` разбивки ошибок и периодического слоя поверх неё. Пропускается, когда ни факты, ни атрибуты не изменились; `trigger_rule=none_failed` — пропуск пересчёта выше обновление не снимает. |
 
-**Защитное отставание отметки.** Шлюз наполняет `EXCHANGELOG` не строго по возрастанию `LOGID`. Отметка не поднимается выше `max(logid) − EGISZ_ETL_LAG_LOGIDS`, поэтому строка, опоздавшая в пределах запаса, попадает в обычный прямой ход, а не требует сверки.
+**Обрыв связи с источником не снимает запуск.** Задачи, ходящие в Firebird
+(`extract_exchangelog`, `extract_registry`, `sync_dictionaries`), повторяются дважды с
+минутной паузой: шлюз и его DNS пропадают на минуты. Всё, что ниже, запускается по
+`all_done`, а границы разбора читаются из `etl_state`, а не приходят от выгрузки, — поэтому
+недоступный источник не мешает разобрать то, что уже лежит в `exchangelog_raw`, и обновить
+витрины. Отметки двигаются только после успеха, так что сорванный запуск не оставляет
+частичного состояния: следующий продолжает с той же точки.
 
-**Обратное давление приёма.** `extract_exchangelog` не тащит новое, пока в `exchangelog_raw` есть непринятое. Считаются только строки, которые `transform` реально может взять, — то есть **ниже** защитного запаса. Учитывать «есть хоть что-то выше отметки» нельзя: когда весь остаток попадает в запас, `transform` стоит по построению, а приём отказывается забирать новое — конвейер встаёт насовсем, и отметка замирает при исправных курсорах.
+**Когда нужен полный пересчёт.** Атрибуты и версии документов батча сопровождает сам `transform`: он вызывает `recompute_document_attributes` по `dwh_id` батча и `recompute_document_versions` по батчу с соседями по группе версий. Полный проход по архиву нужен единственному входу за пределами батча — справочникам: переименование клиники или резолв JID меняют атрибуты документов, которых в батче нет. Поэтому `recompute_documents` работает по факту изменения справочника, а не по расписанию: холостой проход стоит десятки секунд и держит блокировки `documents` / `document_attributes` ради нуля изменённых строк.
+
+**Отметка идёт по непрерывному участку.** Шлюз нумерует `EXCHANGELOG` подряд, поэтому пропуск в странице означает строку, которую источник ещё не закоммитил. Отметка выгрузки встаёт перед разрывом и переступает его, только когда строка доедет; сами строки страницы грузятся в `exchangelog_raw` целиком. Разбор ограничен отметкой выгрузки — фактами становится только то, про что известно, что журнал там вычитан без пропусков.
+
+**Курсор на фазу и объект.** `extract_logid_cursor` — позиция выгрузки в журнале шлюза (докуда прокси вычитана в raw), `transform_logid_cursor` — позиция разбора в `exchangelog_raw` (докуда raw превращена в факты), `extract_egmid_cursor` — реестр подач. Объекты разные, поэтому отметки самостоятельные: выгрузка стартует со своей и не перечитывает прокси из-за того, что отстал разбор. Хвост `exchangelog_raw` отдельной отметкой не хранится — он выводим из самой таблицы.
+
+Повтор безопасен на обеих фазах: загрузка идемпотентна (UPSERT по `(logid, createdate)`), строка журнала в источнике не меняется, а повторный разбор пропускает уже разобранное по `exchangelog_parse_attempts`.
 
 При сбое отметка не откатывается: следующий прогон перечитывает тот же диапазон. Дублей документов нет (UPSERT по `dwh_id`).
 
-### Обновление витрин — `egisz_marts_dag`
-
-Запускается публикацией активов `egisz://facts` и `egisz://dictionaries`, а не расписанием: обновление витрин — следствие того, что изменились факты, а не того, кто именно их изменил. Это единственное место, где выполняется `REFRESH MATERIALIZED VIEW`.
+### Обслуживание — `egisz_maintenance_dag`, раз в сутки
 
 | Задача | Действие |
 | ------ | -------- |
-| `refresh_fact_marts` | `REFRESH ... CONCURRENTLY public.rpt_error_breakdown` — свежесть та же, что у фактов. |
-| `refresh_period_marts` | Витрины динамики (`rpt_documents_weekly` / `rpt_error_breakdown_weekly` / `rpt_documents_monthly` / `rpt_error_breakdown_monthly`). Полный агрегат по архиву, поэтому со своим гейтом каденции. |
-
-Порядок обязателен: витрины динамики читают `rpt_error_breakdown`.
-
-### Обслуживание — `egisz_reconcile_maintenance_dag`
-
-| Задача | Действие |
-| ------ | -------- |
-| `reconcile_journal_tail` | Сверка `LOGID` источника и `exchangelog_raw` шагами по `reconcile_chunk_logids`: окно целиком в память воркера не поднимается. Догрузка недостающего → transform по плотным диапазонам. Отметку не двигает. Публикует `egisz://facts`. |
-| `reconcile_archive_attributes` | Пересчёт по архиву: `reconcile_document_attributes_ui()`, `recompute_document_versions(NULL)`. Публикует `egisz://dictionaries`. |
+| `consistency_check` | Страховочная проверка полноты журнала за `EGISZ_CONSISTENCY_LOOKBACK_DAYS`. Сравнивает счётчики источника и `exchangelog_raw` в диапазоне до отметки выгрузки; при совпадении — `skipped`. Множества и догрузка — только по расхождению. Курсоры не двигает. |
 | `maintain_partitions` | `ensure_time_partitions(12, 24)` — создание месячных партиций на предстоящий период. |
 
-Штатное окно сверки узкое (`reconcile_lookback_days`); широкое доступно ручным прогоном с параметром `deep`.
-
-### Периодичность
-
-| Поток | Интервал |
-| ----- | -------- |
-| Приём фактов | каждые 5 мин |
-| Справочники | раз в час (гейт внутри приёма) |
-| Витрины | по активу; витрины динамики — не чаще `period_marts_interval_minutes` |
-| Обслуживание | раз в сутки |
+Задачи независимы: обслуживание партиций не зависит от исхода проверки.
 
 ---
 
 ## Парсинг и нормализация
 
-Каждая строка `exchangelog_raw` парсится **один раз** функцией `parse_exchangelog_row(msgtext, msgid, logtext)`; результат пишется в `transactions` (`xml_*`). Попытка парсинга фиксируется в узкой таблице `exchangelog_parse_attempts` (LOGID): строка, чей payload не даёт реквизитов (нет `msgid`/`localUid`/`emdrId`/`getDocumentFile`), в `transactions` не попадает, но повторно не парсится — без маркера полножурнальный lookback reconcile перепарсивал такой «мусор» каждым окном. Дальнейшая сборка документа читает только `transactions`.
+Каждая строка `exchangelog_raw` парсится **один раз** функцией `parse_exchangelog_row(msgtext, msgid, logtext)`; результат пишется в `transactions` (`xml_*`). Попытка парсинга фиксируется в узкой таблице `exchangelog_parse_attempts` (LOGID): строка, чей payload не даёт реквизитов (нет `msgid`/`localUid`/`emdrId`/`getDocumentFile`), в `transactions` не попадает, но повторно не парсится — без маркера широкое окно проверки полноты перепарсивало такой «мусор» каждым прогоном. Дальнейшая сборка документа читает только `transactions`.
 
 Утилиты (`db/02_functions.sql`):
 
@@ -378,8 +371,7 @@ extract_exchangelog ▸ extract_message_registry ▸ sync_dictionaries ▸ trans
 
 | Слой | Объект | Grain / назначение |
 | ---- | ------ | ------------------ |
-| Состояние | `etl_state` | `logid_cursor` — курсор журнала, `egmid_cursor` — курсор реестра подач |
-| Состояние | `etl_job_runs` | Отметки задач с каденцией реже, чем у своего DAG |
+| Состояние | `etl_state` | `extract_logid_cursor` — позиция выгрузки в журнале шлюза, `transform_logid_cursor` — позиция разбора в `exchangelog_raw`, `extract_egmid_cursor` — реестр подач |
 | Реестр подач | `dim_message_document` | `msgid` подачи → `document_uid` (localUid) + `reply_to`; ключ связывания ответа с документом |
 | Raw | `exchangelog_raw` | Строка журнала как в источнике |
 | Транзакции | `transactions` | Строка журнала + `xml_*` (разбор один раз) + `error_type` на ответе + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки (не путать с `ips_date`) |

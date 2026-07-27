@@ -11,7 +11,7 @@
 -- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
--- reconcile_document_attributes — в 70_views_core.sql
+-- recompute_document_attributes — в 70_views_core.sql
 
 -- Слой версий/логического документа (README §«Версии и идентичность документа»).
 -- Пересобирает document_group_id / version / цепочку / is_current_version для групп,
@@ -882,7 +882,7 @@ BEGIN
       AND d.attempt_count IS DISTINCT FROM src.attempts;
 
     -- Инкрементальное сопровождение document_attributes по dwh_id из батча.
-    PERFORM public.reconcile_document_attributes(
+    PERFORM public.recompute_document_attributes(
         ARRAY(
             SELECT d.dwh_id::text
             FROM public.documents d

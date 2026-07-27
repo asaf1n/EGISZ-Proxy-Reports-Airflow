@@ -15,7 +15,7 @@ def _read(dag_file: str) -> str:
     return (DAGS_DIR / dag_file).read_text(encoding="utf-8")
 
 
-DAG_STEMS = ("egisz_etl_dag", "egisz_marts_dag", "egisz_reconcile_maintenance_dag")
+DAG_STEMS = ("egisz_etl_dag", "egisz_maintenance_dag")
 
 
 def test_dag_setting_keys_do_not_collide() -> None:
@@ -90,77 +90,79 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "BATCH_SIZE = 5000" not in src
     assert "@task.short_circuit" not in src
 
-    assert "transform_exchangelog(extracted)" in src
     assert "get_current_context" not in src
 
-    # Реестр подач читается до transform: без него ответ ЕГИСЗ не с чем связать.
-    assert "def extract_message_registry" in src
-    assert 'get_int("registry_rows")' in src
-    assert "extracted >> registry >> dictionaries >> transformed" in src
+    # Обрыв связи с источником не должен снимать разбор того, что уже лежит в raw:
+    # задачи источника ретраятся, дальше цепочка идёт по all_done, а границы разбора
+    # читаются из etl_state, а не приходят XCom-ом от выгрузки.
+    assert 'trigger_rule="all_done"' in src
+    assert "def transform() ->" in src
 
-    # Справочники живут здесь, но со своей каденцией; проход по архиву — в обслуживании.
+    # Реестр подач и справочники читаются до transform: без реестра ответ ЕГИСЗ не с чем
+    # связать, по справочникам резолвятся клиника и вид СЭМД.
+    assert "def extract_registry" in src
+    assert 'get_int("registry_rows")' in src
     assert "def sync_dictionaries" in src
     assert "sync_directories" in src
-    assert 'should_run_now(pg_conn, "sync_dictionaries"' in src
-    assert "reconcile_document_attributes_ui" not in src
+    assert (
+        "extracted >> registry >> dictionaries >> transformed >> recomputed >> refreshed"
+        in src
+    )
+    # Ретраи на задачах, ходящих к источнику: шлюз и его DNS пропадают на минуты.
+    assert src.count("retries=2") >= 5
 
-    # Отметка держится ниже хвоста журнала на защитный запас.
-    assert 'get_int("etl_lag_logids")' in src
-    assert "safe_transform_ceiling(" in src
+    # Полный пересчёт архива нужен только после правки справочника: свой батч
+    # сопровождает сам transform.
+    assert "def recompute_documents" in src
+    assert "recompute_document_attributes" in src
+    assert "recompute_document_versions" in src
+    assert "if not dictionaries_changed:" in src
+    assert "AirflowSkipException" in src
 
-    # Витрины обновляет отдельный DAG-потребитель: здесь только публикация актива.
-    assert "outlets=[ASSET_FACTS]" in src
-    assert "REFRESH MATERIALIZED VIEW" not in src
-    assert "REPORT_MARTS" not in src
+    # Защитный запас снят: разбор ограничен отметкой выгрузки, а не хвостом минус запас.
+    assert "etl_lag_logids" not in src
+    assert "safe_transform_ceiling" not in src
+    assert "pending_transform_tail" not in src
+    assert "extract_logid_cursor" in src
+    assert "contiguous_prefix_end(" in src
 
+    # Витрины обновляются там же, где меняется их основание; пропущенный пересчёт
+    # не должен снимать обновление.
+    assert "def refresh_marts" in src
+    assert "REPORT_MARTS" in src
 
-def test_marts_dag_is_the_only_place_that_refreshes_matviews() -> None:
-    marts = _read("egisz_marts_dag.py")
-    etl = _read("egisz_etl_dag.py")
-    maintenance = _read("egisz_reconcile_maintenance_dag.py")
-
-    assert 'dag_id="egisz_marts_dag"' in marts
-    # Запускается публикацией актива, а не расписанием: обновление витрин — следствие
-    # изменения фактов, а не того, кто именно их изменил.
-    assert "schedule=[ASSET_FACTS, ASSET_DICTIONARIES]" in marts
-    assert "def refresh_fact_marts" in marts
-    assert "def refresh_period_marts" in marts
-    assert "refresh_fact_marts() >> refresh_period_marts()" in marts
-    assert 'should_run_now(pg_conn, "refresh_period_marts"' in marts
-
-    # Ни один другой DAG матвью не обновляет и не несёт их список.
-    for src in (etl, maintenance):
-        assert "refresh_report_marts" not in src
-        assert "_refresh_matview" not in src
-        assert "REFRESH MATERIALIZED VIEW" not in src
+    # Каденция задаётся расписанием DAG-а, а не отметками в базе и не активами.
+    assert "should_run_now" not in src
+    assert "mark_job_run" not in src
+    assert "etl_job_runs" not in src
+    assert "Asset(" not in src
 
 
-def test_maintenance_dag_corrects_journal_without_moving_watermark() -> None:
-    src = _read("egisz_reconcile_maintenance_dag.py")
+def test_maintenance_dag_checks_journal_without_moving_cursors() -> None:
+    src = _read("egisz_maintenance_dag.py")
 
-    assert 'dag_id="egisz_reconcile_maintenance_dag"' in src
-    assert "def reconcile_journal_tail" in src
-    assert "def reconcile_archive_attributes" in src
+    assert 'dag_id="egisz_maintenance_dag"' in src
+    assert "def consistency_check" in src
     assert "def maintain_partitions" in src
+    assert "def reconcile_journal_tail" not in src
 
-    # Сверка идёт шагами по LOGID: окно целиком в память воркера не поднимается.
-    assert "reconcile_journal_window(" in src
-    assert "source_logids - raw_logids" in src
-    assert 'get_int("reconcile_chunk_logids")' in src
-    # Штатное окно — узкое; широкое доступно ручным прогоном (params.deep).
-    module = load_dag_module("egisz_reconcile_maintenance_dag")
-    assert module.DEFAULTS["reconcile_lookback_days"] < module.DEFAULTS["reconcile_deep_lookback_days"]
-    assert 'params={"deep": False}' in src
-    assert "fetch_exchangelog_logids_in_band" not in src
-    assert "ReconcileWindowVolumeError" not in src
+    # Сначала счётчики, множества — только по расхождению; совпадение даёт пропуск.
+    assert "count_source_logids(" in src
+    assert "count_raw_logids(" in src
+    assert "AirflowSkipException" in src
+    assert "from airflow.exceptions import AirflowSkipException" in src
+    assert "source_logids_range" in src
+    assert 'get_int("consistency_lookback_days")' in src
+    # Разовых режимов и настроек ширины шага не осталось.
+    assert "reconcile_chunk_logids" not in src
+    assert 'params={"deep"' not in src
+    assert "reconcile_deep_lookback_days" not in src
 
-    # Отметку двигает только приём: обслуживание её не трогает.
+    # Курсоры двигает только DAG выгрузки: обслуживание их не трогает.
     assert "def update_cursors" not in src
     assert "update_cursors(" not in src
 
     assert '_setting("maintenance_schedule")' in src
-    assert "reconcile_document_attributes_ui" in src
-    assert "recompute_document_versions" in src
     assert "ensure_time_partitions" in src
     # error_text принадлежит последнему ответу и пишется в transform: сверка по архиву
     # возвращала текст отказа на документы, прошедшие со второй попытки.
@@ -186,13 +188,15 @@ def test_dag_files_are_self_contained_units() -> None:
 def test_report_marts_refresh_matches_sql_layer() -> None:
     """Список обновляемых витрин в DAG-ах совпадает с матвью недельного и месячного слоёв."""
     views_sql = (PARTS_DIR / "04_views.sql").read_text(encoding="utf-8")
-    # REPORT_MARTS — только периодический слой: rpt_error_breakdown обновляется
-    # отдельной задачей (refresh_fact_marts) сразу за фактами, до периодических витрин.
     periodic_sql = sql_section(views_sql, "weekly") + sql_section(views_sql, "monthly")
     declared = set(re.findall(r"CREATE MATERIALIZED VIEW (public\.\w+)", periodic_sql))
 
-    # Список витрин живёт только в DAG, который их обновляет.
-    assert set(load_dag_module("egisz_marts_dag").REPORT_MARTS) == declared
+    # Список витрин живёт только в DAG, который их обновляет: разбивка ошибок и
+    # построенный над ней периодический слой.
+    marts = load_dag_module("egisz_etl_dag").REPORT_MARTS
+    assert set(marts) == declared | {"public.rpt_error_breakdown"}
+    # Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
+    assert marts[0] == "public.rpt_error_breakdown"
 
     # Идемпотентность каркаса: DROP, CREATE и первичное наполнение — в одном модуле схемы.
     drops = views_sql
@@ -297,62 +301,69 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
     вызовом, который выполняет сам файл при парсинге.
     """
     etl = load_dag_module("egisz_etl_dag").egisz_etl_pipeline()
-    marts = load_dag_module("egisz_marts_dag").egisz_marts_pipeline()
-    maintenance = load_dag_module("egisz_reconcile_maintenance_dag").egisz_reconcile_maintenance_pipeline()
+    maintenance = load_dag_module("egisz_maintenance_dag").egisz_maintenance_pipeline()
 
     assert etl.dag_id == "egisz_etl_dag"
-    assert marts.dag_id == "egisz_marts_dag"
-    assert maintenance.dag_id == "egisz_reconcile_maintenance_dag"
+    assert maintenance.dag_id == "egisz_maintenance_dag"
 
     # Пул провижинится отдельно (up.ps1 / внешняя инструкция) — задачи обязаны его требовать.
     pooled = {
         task.task_id
-        for dag in (etl, marts, maintenance)
+        for dag in (etl, maintenance)
         for task in dag.tasks
         if task.pool == DWH_POOL
     }
     assert pooled == {
-        "extract_message_registry",
+        "extract_registry",
         "sync_dictionaries",
-        "transform_exchangelog",
-        "refresh_fact_marts",
-        "refresh_period_marts",
-        "reconcile_journal_tail",
-        "reconcile_archive_attributes",
+        "transform",
+        "recompute_documents",
+        "refresh_marts",
+        "consistency_check",
         "maintain_partitions",
     }
 
     assert {t.task_id for t in etl.tasks} == {
         "extract_exchangelog",
-        "extract_message_registry",
+        "extract_registry",
         "sync_dictionaries",
-        "transform_exchangelog",
+        "transform",
+        "recompute_documents",
+        "refresh_marts",
     }
-    assert {t.task_id for t in marts.tasks} == {"refresh_fact_marts", "refresh_period_marts"}
     assert {t.task_id for t in maintenance.tasks} == {
-        "reconcile_journal_tail",
-        "reconcile_archive_attributes",
+        "consistency_check",
         "maintain_partitions",
     }
 
-    # Реестр подач наполняется до transform, иначе ответ не с чем связать.
-    assert etl.task_dict["extract_exchangelog"].downstream_task_ids == {
-        "extract_message_registry",
-        "transform_exchangelog",
+    # Реестр подач и справочники наполняются до transform; пересчёт архива и витрины —
+    # после него.
+    assert etl.task_dict["extract_exchangelog"].downstream_task_ids == {"extract_registry"}
+    assert etl.task_dict["extract_registry"].downstream_task_ids == {"sync_dictionaries"}
+    assert etl.task_dict["sync_dictionaries"].downstream_task_ids == {
+        "transform",
+        "recompute_documents",
     }
-    assert etl.task_dict["extract_message_registry"].downstream_task_ids == {"sync_dictionaries"}
-    assert etl.task_dict["sync_dictionaries"].downstream_task_ids == {"transform_exchangelog"}
-    assert etl.task_dict["transform_exchangelog"].downstream_task_ids == set()
-
-    # Разбивка ошибок обновляется раньше периодических витрин, которые её читают.
-    assert marts.task_dict["refresh_fact_marts"].downstream_task_ids == {"refresh_period_marts"}
-
-    # Производители фактов публикуют активы, на которые подписан DAG витрин.
-    def _asset_names(task: object) -> set[str]:
-        return {asset.name for asset in (getattr(task, "outlets", None) or [])}
-
-    assert _asset_names(etl.task_dict["transform_exchangelog"]) == {"egisz://facts"}
-    assert _asset_names(maintenance.task_dict["reconcile_journal_tail"]) == {"egisz://facts"}
-    assert _asset_names(maintenance.task_dict["reconcile_archive_attributes"]) == {
-        "egisz://dictionaries"
+    assert etl.task_dict["transform"].downstream_task_ids == {
+        "recompute_documents",
+        "refresh_marts",
     }
+    assert etl.task_dict["recompute_documents"].downstream_task_ids == {"refresh_marts"}
+    assert etl.task_dict["refresh_marts"].downstream_task_ids == set()
+
+    # Недоступный источник не снимает цепочку: всё, что ниже выгрузки, идёт по all_done.
+    for task_id in ("extract_registry", "sync_dictionaries", "transform",
+                    "recompute_documents", "refresh_marts"):
+        assert etl.task_dict[task_id].trigger_rule == "all_done", task_id
+    # Задачи, ходящие к Firebird, переживают обрыв связи повтором.
+    for task_id in ("extract_exchangelog", "extract_registry", "sync_dictionaries"):
+        assert etl.task_dict[task_id].retries == 2, task_id
+
+    # Обслуживание партиций не зависит от исхода проверки полноты.
+    assert maintenance.task_dict["consistency_check"].downstream_task_ids == set()
+    assert maintenance.task_dict["maintain_partitions"].upstream_task_ids == set()
+
+    # Активов не осталось: витрины обновляет тот DAG, который меняет их основание.
+    for dag in (etl, maintenance):
+        for task in dag.tasks:
+            assert not (getattr(task, "outlets", None) or []), task.task_id

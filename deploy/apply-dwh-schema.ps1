@@ -5,8 +5,7 @@
 .DESCRIPTION
 Сценарий рабочего места оператора (в переносимый пакет не входит, см. deploy/README.md §4):
 проверяет доступность psql, забирает пароль роли из переменной окружения, запускает
-`db/dwh_init.sql` из корня пакета и, по запросу, выполняет разовую миграцию значения статуса
-и обновление витрин.
+`db/dwh_init.sql` из корня пакета и, по запросу, обновляет витрины.
 
 Источник схемы — собранный пакет `dist/egisz-bi`, при его отсутствии рабочая копия
 репозитория.
@@ -15,7 +14,7 @@
 .\deploy\apply-dwh-schema.ps1
 
 .EXAMPLE
-.\deploy\apply-dwh-schema.ps1 -MigrateSentStatus
+.\deploy\apply-dwh-schema.ps1 -RefreshMarts
 #>
 param(
     [string]$PgHost = "dwh-egisz-rw.bi.sdsys.svc",
@@ -23,9 +22,6 @@ param(
     [string]$Database = "dwh_egisz",
     [string]$User = "egisz",
     [string]$PasswordVariable = "EGISZ_BI_DWH_PASSWORD",
-    # Разовая миграция значения статуса `waiting` → `sent` для развёртываний,
-    # созданных до модели состояний отправки. Повторный запуск затрагивает 0 строк.
-    [switch]$MigrateSentStatus,
     [switch]$RefreshMarts,
     [switch]$SkipSchema,
     [switch]$Force
@@ -87,8 +83,7 @@ WHERE datname = current_database()
   AND pid <> pg_backend_pid()
   AND state <> 'idle'
   AND (query ILIKE '%transform_raw_to_facts%'
-    OR query ILIKE '%reconcile_%'
-    OR query ILIKE '%recompute_document_versions%'
+    OR query ILIKE '%recompute_document_%'
     OR query ILIKE '%REFRESH MATERIALIZED VIEW%'
     OR query ILIKE '%exchangelog_raw%')
 '@
@@ -113,18 +108,6 @@ function Invoke-SchemaScript {
     finally {
         Pop-Location
     }
-}
-
-function Invoke-SentStatusMigration {
-    $sql = @'
-WITH migrated AS (
-    UPDATE public.documents SET status = 'sent' WHERE status = 'waiting' RETURNING 1
-)
-SELECT count(*) FROM migrated
-'@
-    $updated = Invoke-PsqlScalar $sql
-    Write-Host "[dwh] миграция статуса: обновлено строк — ${updated}"
-    return [int]$updated
 }
 
 function Update-ReportMarts {
@@ -155,23 +138,13 @@ try {
         Assert-PipelineIdle
     }
 
-    $needRefresh = $RefreshMarts.IsPresent
-
     if (-not $SkipSchema) {
         $started = Get-Date
         Invoke-SchemaScript $root
         Write-Host "[dwh] схема применена за $([int]((Get-Date) - $started).TotalMinutes) мин"
     }
 
-    if ($MigrateSentStatus) {
-        # Витрины пересобираются самим накатом схемы, поэтому обновлять их
-        # отдельно нужно только после правки данных.
-        if ((Invoke-SentStatusMigration) -gt 0) {
-            $needRefresh = $true
-        }
-    }
-
-    if ($needRefresh) {
+    if ($RefreshMarts) {
         Update-ReportMarts
     }
 

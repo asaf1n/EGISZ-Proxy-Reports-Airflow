@@ -8,7 +8,7 @@ $Namespace = "egisz-bi"
 
 $DwhPoolName = "dwh_postgres"
 $DwhPoolSlots = 1
-$DwhPoolDescription = "Exclusive DWH transform / reconcile / enriched mart maintenance"
+$DwhPoolDescription = "Exclusive DWH transform / recompute / mart refresh"
 $AirflowImage = "egisz-airflow-worker:latest"
 $AirflowChartVersion = "1.22.0"
 $MetabaseImage = "egisz-metabase:latest"

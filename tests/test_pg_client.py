@@ -15,13 +15,13 @@ load_raw_logs = extract_dag.load_raw_logs
 transform_raw_to_facts = extract_dag.transform_raw_to_facts
 update_cursors = extract_dag.update_cursors
 
-etl_dag = extract_dag
-DIRECTORY_SYNC_LOCK_TIMEOUT = etl_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
-DIRECTORY_SYNC_PAGE_SIZE = etl_dag.DIRECTORY_SYNC_PAGE_SIZE
-DIRECTORY_SYNC_STATEMENT_TIMEOUT = etl_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
-sync_directory = etl_dag.sync_directory
+refresh_dag = extract_dag  # общий блок живёт в DAG фактов
+DIRECTORY_SYNC_LOCK_TIMEOUT = refresh_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
+DIRECTORY_SYNC_PAGE_SIZE = refresh_dag.DIRECTORY_SYNC_PAGE_SIZE
+DIRECTORY_SYNC_STATEMENT_TIMEOUT = refresh_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
+sync_directory = refresh_dag.sync_directory
 
-maintenance_dag = load_dag_module("egisz_reconcile_maintenance_dag")
+maintenance_dag = load_dag_module("egisz_maintenance_dag")
 coalesce_logid_windows = maintenance_dag.coalesce_logid_windows
 fetch_raw_logids_range = maintenance_dag.fetch_raw_logids_range
 transform_missing_windows = maintenance_dag.transform_missing_windows
@@ -317,13 +317,17 @@ def test_document_attributes_maintained_without_enriched_mart() -> None:
     core_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS public.document_attributes" in core_sql
-    assert "CREATE OR REPLACE FUNCTION public.reconcile_document_attributes" in core_sql
+    assert "CREATE OR REPLACE FUNCTION public.recompute_document_attributes" in core_sql
     assert "CREATE TABLE public.REMOVED_ENRICHED_UI" not in sql
     assert "CREATE MATERIALIZED VIEW public.REMOVED_ENRICHED_UI" not in sql
     assert "REFRESH MATERIALIZED VIEW CONCURRENTLY public.REMOVED_ENRICHED_UI" not in sql
     assert "REFRESH MATERIALIZED VIEW public.REMOVED_ENRICHED_UI" not in sql
-    assert "reconcile_document_attributes" in transform_sql
-    assert "reconcile_document_attributes_ui" in core_sql
+    assert "recompute_document_attributes" in transform_sql
+    # Параметр по умолчанию покрывает полный проход — обёртки без аргументов нет,
+    # прежние имена снимаются с уже развёрнутых контуров.
+    assert "CREATE OR REPLACE FUNCTION public.reconcile_document_attributes" not in core_sql
+    assert "DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui()" in core_sql
+    assert "DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[])" in core_sql
     assert "INSERT INTO public.REMOVED_ENRICHED_UI" not in transform_sql
     assert "CREATE MATERIALIZED VIEW public.v_documents_daily_ui" not in sql
     assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui" not in sql
@@ -618,7 +622,7 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert con.committed is True
 
 
-def test_get_cursors_reads_logid_cursor_only() -> None:
+def test_get_cursors_reads_a_cursor_per_phase() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.sql = ""
@@ -632,8 +636,8 @@ def test_get_cursors_reads_logid_cursor_only() -> None:
         def execute(self, sql: str, _params: tuple[object, ...]) -> None:
             self.sql = sql
 
-        def fetchone(self) -> tuple[int, int]:
-            return (123, 45)
+        def fetchone(self) -> tuple[int, int, int]:
+            return (123, 90, 45)
 
     class Connection:
         def __init__(self) -> None:
@@ -643,7 +647,11 @@ def test_get_cursors_reads_logid_cursor_only() -> None:
             return self.cursor_instance
 
     con = Connection()
-    assert get_cursors(con, "egisz") == {"logid_cursor": 123, "egmid_cursor": 45}
+    assert get_cursors(con, "egisz") == {
+        "extract_logid_cursor": 123,
+        "transform_logid_cursor": 90,
+        "extract_egmid_cursor": 45,
+    }
     assert "source_min_created_at" not in con.cursor_instance.sql
 
 
@@ -665,7 +673,11 @@ def test_get_cursors_returns_defaults_when_pipeline_missing() -> None:
         def cursor(self) -> Cursor:
             return Cursor()
 
-    assert get_cursors(Connection(), "egisz") == {"logid_cursor": 0, "egmid_cursor": 0}
+    assert get_cursors(Connection(), "egisz") == {
+        "extract_logid_cursor": 0,
+        "transform_logid_cursor": 0,
+        "extract_egmid_cursor": 0,
+    }
 
 
 def test_fetch_raw_logids_range_reads_one_chunk() -> None:
@@ -750,16 +762,23 @@ def test_transform_missing_windows_calls_transform_per_window() -> None:
 def test_dwh_init_sql_declares_only_final_state_shape() -> None:
     """Схема объявляет конечное состояние, а не путь к нему.
 
-    Разовые переименования и снятие отживших колонок — операции развёртывания
-    (deploy/README.md §1.6–1.7), а не часть idempotent-схемы: в ней они превращаются
-    в мусор, который прогоняется на каждом накате и переживает свой смысл.
+    Разовые переименования и снятие отживших колонок — операции развёртывания, а не часть
+    idempotent-схемы: в ней они превращаются в мусор, который прогоняется на каждом накате
+    и переживает свой смысл.
     """
     sql = (DWH_INIT_SQL_PATH.parent / "01_schema.sql").read_text(encoding="utf-8")
 
-    for legacy in ("source_min_created_at", "elt_state", "elt_job_runs",
+    for legacy in ("source_min_created_at", "elt_state",
                    "last_logid", "last_egmid"):
         assert legacy not in sql, f"в схеме осталось упоминание {legacy!r}"
-    assert "INSERT INTO etl_state (pipeline, logid_cursor)\nVALUES ('egisz', 0)" in sql
+    # Курсор назван по фазе, которая его ведёт; строка конвейера заводится без значений.
+    for cursor_column in (
+        "extract_logid_cursor",
+        "transform_logid_cursor",
+        "extract_egmid_cursor",
+    ):
+        assert f"    {cursor_column} bigint DEFAULT 0," in sql
+    assert "INSERT INTO etl_state (pipeline)\nVALUES ('egisz')" in sql
     assert "2026-05-18" not in sql
     assert "SOURCE_MIN_CREATED_AT" not in sql
 
@@ -787,7 +806,7 @@ def test_load_raw_logs_uses_partitioned_upsert_target() -> None:
     assert "ON CONFLICT (logid, createdate)" in source
 
 
-def test_update_cursors_upserts_logid_cursor() -> None:
+def test_update_cursors_upserts_every_phase_cursor() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.calls: list[tuple[str, tuple[object, ...]]] = []
@@ -813,10 +832,11 @@ def test_update_cursors_upserts_logid_cursor() -> None:
             self.committed = True
 
     con = Connection()
-    update_cursors(con, "egisz", logid=11)
+    update_cursors(con, "egisz", extract_logid=11)
 
     assert con.committed is True
     sql, params = con.cursor_instance.calls[0]
-    assert "INSERT INTO etl_state (pipeline, logid_cursor, egmid_cursor)" in sql
-    assert "logid_cursor = GREATEST(etl_state.logid_cursor, EXCLUDED.logid_cursor)" in sql
-    assert params == ("egisz", 11, 0)
+    assert "pipeline, extract_logid_cursor, transform_logid_cursor, extract_egmid_cursor" in sql
+    for column in ("extract_logid_cursor", "transform_logid_cursor", "extract_egmid_cursor"):
+        assert f"{column} = GREATEST(etl_state.{column}, EXCLUDED.{column})" in sql
+    assert params == ("egisz", 11, 0, 0)

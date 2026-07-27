@@ -14,8 +14,7 @@ egisz-bi/
 │  └─ 04_views.sql           # отчётный слой rpt_*, права владельца, ANALYZE
 ├─ dags/                     # DAG-файлы Airflow (переносятся вручную)
 │  ├─ egisz_etl_dag.py
-│  ├─ egisz_marts_dag.py
-│  └─ egisz_reconcile_maintenance_dag.py
+│  └─ egisz_maintenance_dag.py
 ├─ metabase/
 │  ├─ setup-dashboards.sh    # импортёр (запускать его)
 │  ├─ sync-models.sh         # синхронизация моделей (подключается импортёром)
@@ -85,8 +84,7 @@ CONFLICT`): повторный прогон обязан пройти чисто
 представлений (`rpt_error_breakdown`, `rpt_documents_weekly`, `rpt_error_breakdown_weekly`,
 `rpt_documents_monthly`, `rpt_error_breakdown_monthly`) — они создаются сразу с данными.
 Отдельное обновление после применения схемы не нужно; оно требуется только если данные
-правились после неё (например, миграцией §1.6). Порядок обязателен — разбивка ошибок раньше
-периодических витрин:
+правились после неё. Порядок обязателен — разбивка ошибок раньше периодических витрин:
 
 ```bash
 psql -h PG_HOST -U egisz -d dwh_egisz \
@@ -97,38 +95,9 @@ psql -h PG_HOST -U egisz -d dwh_egisz \
   -c "REFRESH MATERIALIZED VIEW CONCURRENTLY public.rpt_error_breakdown_monthly"
 ```
 
-В штатной эксплуатации витрины обновляет `egisz_marts_dag` — единственное место
-`REFRESH MATERIALIZED VIEW` в конвейере.
+В штатной эксплуатации все пять витрин обновляет `egisz_etl_dag` вслед за фактами.
 
-### 1.6. Разовая миграция значения статуса
-
-Контуры, развёрнутые до модели состояний отправки, хранят в `documents.status` значение
-`waiting`. Код статуса заменён на `sent`; в схему миграция не входит — это правка данных,
-выполняется один раз после применения схемы (повторный запуск затрагивает 0 строк), после
-неё обновляются витрины §1.5:
-
-```sql
-UPDATE public.documents SET status = 'sent' WHERE status = 'waiting';
-```
-
-### 1.7. Разовое переименование таблиц состояния
-
-Контуры, развёрнутые до переименования, хранят состояние в `elt_state` / `elt_job_runs`
-с курсорами `last_logid` / `last_egmid`. Переименование выполняется **до** применения
-схемы и **один раз**: `dwh_init.sql` объявляет только конечные имена, поэтому по старой
-базе он создаст рядом пустые `etl_state` / `etl_job_runs`, курсоры уйдут в ноль и
-выгрузка пойдёт с начала источника.
-
-```sql
-ALTER TABLE public.elt_state RENAME TO etl_state;
-ALTER TABLE public.elt_job_runs RENAME TO etl_job_runs;
-ALTER TABLE public.etl_state RENAME COLUMN last_logid TO logid_cursor;
-ALTER TABLE public.etl_state RENAME COLUMN last_egmid TO egmid_cursor;
-```
-
-DAG-файлы обращаются к новым именам, поэтому на время шага их держат снятыми или на паузе.
-
-### 1.8. Проверка
+### 1.6. Проверка
 
 ```bash
 psql -h PG_HOST -U egisz -d dwh_egisz -c "\dt public.*"      # etl_state, exchangelog_raw, documents, transactions, dim_*
@@ -156,7 +125,7 @@ psql -h PG_HOST -U egisz -d dwh_egisz -c "SHOW timezone"     # Europe/Moscow
 
 DAG-файлы переносятся вручную: `dags/*.py` копируются в DAGs-папку целевого Airflow
 (`AIRFLOW__CORE__DAGS_FOLDER`). Каждый файл самодостаточен — подключения, watermark,
-transform-циклы, справочники и сверка лежат в самом файле, разворачивать пакет
+transform-циклы, справочники и проверка полноты лежат в самом файле, разворачивать пакет
 (`PYTHONPATH` / `pip install`) не нужно. Файлы не редактировать на целевой стороне: правки
 вносятся в исходники проекта с последующей пересборкой пакета.
 
@@ -219,59 +188,53 @@ airflow pools set dwh_postgres 1 "Exclusive DWH transform / marts / maintenance"
 
 | Env-переменная | Дефолт | Назначение |
 | --- | --- | --- |
-| `EGISZ_ETL_SCHEDULE` | `*/5 * * * *` | Расписание DAG приёма фактов |
+| `EGISZ_ETL_SCHEDULE` | `*/5 * * * *` | Расписание DAG фактов |
 | `EGISZ_MAINTENANCE_SCHEDULE` | `@daily` | Расписание DAG обслуживания |
 | `EGISZ_EXTRACT_RAW_ROWS` | `1000` | Размер батча выборки журнала обмена |
 | `EGISZ_EXTRACT_RAW_ROUNDS` | `3` | Максимум циклов выборки за один запуск |
 | `EGISZ_REGISTRY_ROWS` | `5000` | Размер батча выборки реестра подач |
 | `EGISZ_REGISTRY_ROUNDS` | `3` | Максимум циклов выборки реестра за один запуск |
-| `EGISZ_EXTRACT_DEPTH_DAYS` | `30` | Глубина приёма по `CREATEDATE` источника; `0` снимает ограничение |
+| `EGISZ_EXTRACT_DEPTH_DAYS` | `30` | Глубина выгрузки по `CREATEDATE` источника; `0` снимает ограничение |
 | `EGISZ_TRANSFORM_ROWS` | `3000` | Размер батча `transform_raw_to_facts` |
 | `EGISZ_TRANSFORM_ROUNDS` | `6` | Максимум циклов трансформации за один запуск |
-| `EGISZ_ETL_LAG_LOGIDS` | `1000` | Защитное отставание отметки от хвоста журнала |
-| `EGISZ_DICTIONARIES_INTERVAL_MINUTES` | `60` | Минимальный интервал синхронизации справочников |
-| `EGISZ_PERIOD_MARTS_INTERVAL_MINUTES` | `60` | Минимальный интервал обновления витрин динамики |
-| `EGISZ_RECONCILE_LOOKBACK_DAYS` | `2` | Штатное окно сверки |
-| `EGISZ_RECONCILE_DEEP_LOOKBACK_DAYS` | `30` | Окно сверки при ручном прогоне с параметром `deep` |
-| `EGISZ_RECONCILE_CHUNK_LOGIDS` | `200000` | Ширина шага сверки по идентификатору записи журнала |
+| `EGISZ_CONSISTENCY_LOOKBACK_DAYS` | `7` | Окно суточной проверки полноты журнала |
 
 Значения по умолчанию рабочие — переопределять не обязательно. Смена расписания подхватится
 при следующем парсинге, параметров выполнения — при следующем запуске задачи.
 
-Глубина приёма работает нижней границей отметки, а не условием отбора внутри страницы:
+Глубина выгрузки работает нижней границей отметки, а не условием отбора внутри страницы:
 выборка идёт keyset-пагинацией по идентификатору, и фильтр по дате на старом хвосте вернул
 бы пустую страницу — цикл принял бы её за конец данных. Поэтому отметка ниже окна
 поднимается к его границе, а выше — остаётся на месте: отметки только растут. Чтобы забрать
-историю глубже окна, задайте `EGISZ_EXTRACT_DEPTH_DAYS` больше нужного и опустите отметку в
-`etl_state` вручную — сама по себе она вниз не пойдёт.
+историю глубже окна, задайте `EGISZ_EXTRACT_DEPTH_DAYS` больше нужного и опустите
+`etl_state.extract_logid_cursor` вручную — сам по себе он вниз не пойдёт.
 
 ### 2.6. DAG, которые появятся
 
 | dag_id | Расписание | Задачи |
 | --- | --- | --- |
-| `egisz_etl_dag` | `*/5` | `extract_exchangelog → extract_message_registry → sync_dictionaries → transform_exchangelog` |
-| `egisz_marts_dag` | по активам | `refresh_fact_marts → refresh_period_marts` — единственное место `REFRESH MATERIALIZED VIEW` |
-| `egisz_reconcile_maintenance_dag` | `@daily` | `reconcile_journal_tail → reconcile_archive_attributes → maintain_partitions` |
+| `egisz_etl_dag` | `*/5` | `extract_exchangelog → extract_registry → sync_dictionaries → transform → recompute_documents → refresh_marts` |
+| `egisz_maintenance_dag` | `@daily` | `consistency_check`, `maintain_partitions` |
 
-Все три — `max_active_runs=1`, `catchup=False`. Курсоры `etl_state.logid_cursor` и
-`etl_state.egmid_cursor` двигает только DAG приёма (через `GREATEST`, без отката).
-`egisz_marts_dag` расписания не имеет: он запускается публикацией активов `egisz://facts` и
-`egisz://dictionaries`. Новые DAG появятся на паузе — снять после настройки Connections и
-пула.
+Оба — `max_active_runs=1`, `catchup=False`. Курсоры `etl_state` двигает только DAG фактов
+(через `GREATEST`, без отката): `extract_logid_cursor` и `extract_egmid_cursor` — задачи
+выгрузки, `transform_logid_cursor` — разбор. `recompute_documents` и `refresh_marts`
+завершаются статусом `skipped`, когда менять нечего, — это штатный исход. Новые DAG
+появятся на паузе — снять после настройки Connections и пула.
 
 ### 2.7. Проверка
 
 ```bash
 airflow dags list-import-errors          # ожидаемо пусто
-airflow dags list | grep egisz           # три DAG в списке
+airflow dags list | grep egisz           # два DAG в списке
 airflow dags unpause egisz_etl_dag
-airflow dags unpause egisz_marts_dag
-airflow dags unpause egisz_reconcile_maintenance_dag
+airflow dags unpause egisz_maintenance_dag
 ```
 
 Смоук: запустить `egisz_etl_dag` вручную и убедиться, что в DWH растут `exchangelog_raw`,
-`documents`, `dim_message_document`, курсоры `etl_state` продвинулись, а `egisz_marts_dag`
-запустился следом сам — по активу.
+`documents`, `dim_message_document`, а курсоры `etl_state` продвинулись. Суточный
+`consistency_check` при исправной выгрузке завершается статусом `skipped` — это ожидаемый
+исход, а не сбой.
 
 `ModuleNotFoundError: firebird` / `psycopg2` — не установлены зависимости (§2.2). Падение
 `firebird` при подключении — не установлена `libfbclient` (§2.1). Задачи вечно в
