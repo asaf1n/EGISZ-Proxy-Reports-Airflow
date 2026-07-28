@@ -1649,11 +1649,11 @@
     },
     {
       "name": "Контроль качества данных",
-      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; расхождение OID и JID (несовпадение OID организации/клиники или JID по хосту vs справочнику); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
+      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; OID вне реестра медорганизаций (OID из обмена не найден ни в одной лицензии); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'Расхождение OID и JID',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_jid_mismatch = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
+          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1741,11 +1741,11 @@
     },
     {
       "name": "Детализация контроля качества",
-      "description": "Документы с любым нарушением правил сводной таблицы «Контроль качества данных» за период. Колонка «Нарушения» перечисляет сработавшие проверки; ячейки с нарушениями и расхождениями источников подсвечены красным. Лимит 1000 строк.",
+      "description": "Документы с любым нарушением правил сводной таблицы «Контроль качества данных» за период. Колонка «Нарушения» перечисляет сработавшие проверки; «ЮЛ по реестру OID» показывает, к какой клинике реестр относит OID из обмена. Лимит 1000 строк.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_detail_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из XML\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n    END AS \"OID из JPERSONS\",\n    CASE\n      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n       AND (\n         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n       )\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n    END AS \"OID из лицензий\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
+          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_detail_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN rpt_documents.clinic_oid_unknown\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из обмена\",\n    COALESCE(NULLIF(BTRIM(rpt_document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1838,9 +1838,7 @@
           {
             "color": "#FEE2E2",
             "columns": [
-              "OID из XML",
-              "OID из JPERSONS",
-              "OID из лицензий"
+              "OID из обмена"
             ],
             "operator": "starts-with",
             "type": "single",
@@ -1870,15 +1868,11 @@
           },
           {
             "enabled": true,
-            "name": "OID из XML"
+            "name": "OID из обмена"
           },
           {
             "enabled": true,
-            "name": "OID из JPERSONS"
-          },
-          {
-            "enabled": true,
-            "name": "OID из лицензий"
+            "name": "ЮЛ по реестру OID"
           },
           {
             "enabled": true,
@@ -1899,10 +1893,6 @@
           {
             "enabled": true,
             "name": "localUid СЭМД"
-          },
-          {
-            "enabled": false,
-            "name": "Расхождение источников JID"
           }
         ],
         "column_settings": {

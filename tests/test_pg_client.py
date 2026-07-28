@@ -364,7 +364,7 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "clinic_oid",
         "clinic_host",
         "clinic_inn",
-        "clinic_jid_mismatch",
+        "clinic_oid_unknown",
         "semd_emdr_id",
         "error_types",
         "error_text",
@@ -372,8 +372,13 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         assert column in rpt_sql
     core_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "clinic_oid_xml" in core_sql
-    assert "clinic_oid_jpersons" in core_sql
-    assert "public.document_source_mismatch" in core_sql
+    # Реквизиты, снятые вместе с отказом от лицензий в резолве: OID берётся из обмена,
+    # признак «OID вне реестра» считается на чтении поверх dim_clinic_oid.
+    assert "a.clinic_oid_jpersons" not in rpt_sql
+    assert "a.clinic_oid_license" not in rpt_sql
+    assert "a.clinic_jid_mismatch" not in rpt_sql
+    assert "public.document_source_mismatch(" not in rpt_sql
+    assert "public.dim_clinic_oid r" in rpt_sql
     assert "LEFT JOIN public.dim_document_status ds ON ds.code = d.status" in rpt_sql
     assert "'нет'::text AS \"Расхождение источников JID\"" not in core_sql
 
@@ -517,7 +522,6 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     assert "CREATE OR REPLACE FUNCTION public.resolve_document_jid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_mo_uid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_host" in parsing_sql
-    assert "CREATE OR REPLACE FUNCTION public.document_source_mismatch" in parsing_sql
     assert "egisz_xml_text" not in transform_sql
     assert "outbound_ref.dwh_id" not in sql
     # Ответ связывается с документом по реестру подач; самосоединение по journal-MSGID
@@ -618,8 +622,25 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert "IS DISTINCT FROM EXCLUDED." in str(captured["sql"])
     assert captured["values"] == [(1, "Clinic", "1234567890", "Address", "1.2.3")]
     assert captured["page_size"] == DIRECTORY_SYNC_PAGE_SIZE
-    assert captured.get("fetch", False) is False
     assert con.committed is True
+
+
+def test_clinic_registries_resolve_without_exchange_marker() -> None:
+    """Резолв ЮЛ идёт по реестрам поверх лицензий, а не по отметке обмена MODIFYDATE.
+
+    OID регистрационный: несколько ЮЛ на один OID означают отправку дочерних клиник
+    с хоста головного ЮЛ, поэтому кандидат выбирается по собственному хосту. Адрес
+    обмена несёт JID владельца хоста прямо в имени (gost-<N>, он же REPLY_TO подачи).
+    """
+    parsing_sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE VIEW public.dim_clinic_oid" in parsing_sql
+    assert "CREATE OR REPLACE VIEW public.dim_clinic_endpoint" in parsing_sql
+    assert "ORDER BY oid, own_host DESC NULLS LAST, jid" in parsing_sql
+    assert "FROM public.dim_clinic_oid r" in parsing_sql
+    assert "modifydate" not in parsing_sql
+    # Именованные хосты (gost-sova) не должны обрезаться шаблоном по первому дефису.
+    assert "gost-[a-z0-9]+(?:-[a-z0-9]+)*" in parsing_sql
 
 
 def test_get_cursors_reads_a_cursor_per_phase() -> None:

@@ -49,6 +49,10 @@ DROP VIEW IF EXISTS public.rpt_documents_sent CASCADE;
 -- документа. Дроп нужен, пока в развёртываниях остаётся представление под старым именем.
 DROP VIEW IF EXISTS public.rpt_documents_waiting CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_lineage CASCADE;
+-- Витрина доступных типов СЭМД строилась на EGISZ_LICENSES; её заменяет
+-- rpt_clinic_semd_activity на фактах обмена.
+DROP VIEW IF EXISTS public.rpt_clinic_semd_licenses CASCADE;
+DROP VIEW IF EXISTS public.rpt_clinic_semd_activity CASCADE;
 
 -- Классификация даёт документу два поля: error_types (канонические типы,
 -- error_classify) и error_text (исходные <message>, error_messages_row).
@@ -76,12 +80,8 @@ DROP TABLE IF EXISTS public.error_interpretation_rules;
 CREATE TABLE IF NOT EXISTS public.document_attributes (
     dwh_id text PRIMARY KEY,
     clinic_oid_xml text,
-    clinic_oid_jpersons text,
-    clinic_oid_license text,
     clinic_host text,
     clinic_jid_resolve_method text,
-    message_endpoint text,
-    clinic_jid_mismatch boolean,
     patient_name_masked text,
     snils_masked text,
     doctor_name text,
@@ -113,6 +113,16 @@ END $$;
 ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS egisz_subsystem text;
 ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS contour;
 
+-- Реквизиты, снятые вместе с отказом от EGISZ_LICENSES в резолве:
+--   clinic_oid_jpersons — JPERSONS.FIR_OID источником не заполняется;
+--   clinic_oid_license  — OID берётся из содержания обмена (documents.org_oid);
+--   message_endpoint    — адрес искали в теле ответа, где его нет (0 заполненных строк);
+--   clinic_jid_mismatch — считается в rpt_document_versions поверх dim_clinic_oid.
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_oid_jpersons;
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_oid_license;
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS message_endpoint;
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_jid_mismatch;
+
 CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
 
@@ -138,12 +148,8 @@ BEGIN
     INSERT INTO public.document_attributes (
         dwh_id,
         clinic_oid_xml,
-        clinic_oid_jpersons,
-        clinic_oid_license,
         clinic_host,
         clinic_jid_resolve_method,
-        message_endpoint,
-        clinic_jid_mismatch,
         patient_name_masked,
         snils_masked,
         doctor_name,
@@ -156,17 +162,8 @@ BEGIN
     SELECT
         d.dwh_id,
         public.clean_text_value(d.org_oid) AS clinic_oid_xml,
-        o.fir_oid AS clinic_oid_jpersons,
-        l.mo_uid AS clinic_oid_license,
-        public.clean_host(l.mo_domen) AS clinic_host,
+        public.clean_host(COALESCE(ep.endpoint, reg.reply_to)) AS clinic_host,
         d.jid_resolve_method AS clinic_jid_resolve_method,
-        ep.endpoint AS message_endpoint,
-        public.document_source_mismatch(
-            d.jid_resolve_method,
-            d.org_oid,
-            o.fir_oid,
-            l.mo_uid
-        ) AS clinic_jid_mismatch,
         tx.patient_name_masked,
         tx.snils_masked,
         tx.doctor_name,
@@ -176,14 +173,6 @@ BEGIN
         sub.egisz_subsystem,
         now() AS updated_at
     FROM public.documents d
-    LEFT JOIN public.dim_organizations o ON o.jid = d.jid
-    LEFT JOIN LATERAL (
-        SELECT dl.*
-        FROM public.dim_licenses dl
-        WHERE d.jid IS NOT NULL AND dl.jid = d.jid
-        ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
-        LIMIT 1
-    ) l ON TRUE
     LEFT JOIN LATERAL (
         SELECT
             t.patient_name_masked,
@@ -196,12 +185,23 @@ BEGIN
         ORDER BY t.log_date DESC NULLS LAST, t.logid DESC
         LIMIT 1
     ) tx ON TRUE
+    -- Адрес обмена — реквизит самой отправки: он лежит в строке запроса файла, а если её
+    -- текста нет — в REPLY_TO реестра подач (тот же адрес, что MO_DOMEN лицензии).
     LEFT JOIN LATERAL (
-        SELECT public.extract_gost_endpoint(COALESCE(tx.xml_message, '')) AS endpoint
-        FROM public.transactions tx
-        WHERE tx.logid = COALESCE(d.result_logid, d.request_logid)
+        SELECT public.extract_gost_endpoint(
+            COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, '')
+        ) AS endpoint
+        FROM public.exchangelog_raw r
+        WHERE r.logid = d.request_logid
         LIMIT 1
     ) ep ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT m.reply_to
+        FROM public.dim_message_document m
+        WHERE m.document_uid = d.dwh_id
+        ORDER BY m.source_egmid DESC
+        LIMIT 1
+    ) reg ON TRUE
     LEFT JOIN LATERAL (
         SELECT t.source_message_id_norm AS request_msgid
         FROM public.transactions t
@@ -220,12 +220,8 @@ BEGIN
     WHERE d.dwh_id = ANY (p_dwh_ids)
     ON CONFLICT (dwh_id) DO UPDATE SET
         clinic_oid_xml = EXCLUDED.clinic_oid_xml,
-        clinic_oid_jpersons = EXCLUDED.clinic_oid_jpersons,
-        clinic_oid_license = EXCLUDED.clinic_oid_license,
         clinic_host = EXCLUDED.clinic_host,
         clinic_jid_resolve_method = EXCLUDED.clinic_jid_resolve_method,
-        message_endpoint = EXCLUDED.message_endpoint,
-        clinic_jid_mismatch = EXCLUDED.clinic_jid_mismatch,
         patient_name_masked = EXCLUDED.patient_name_masked,
         snils_masked = EXCLUDED.snils_masked,
         doctor_name = EXCLUDED.doctor_name,
@@ -239,12 +235,8 @@ BEGIN
     -- весь архив и менял updated_at — повторный прогон не был no-op (CLAUDE.md §3).
     WHERE
         public.document_attributes.clinic_oid_xml IS DISTINCT FROM EXCLUDED.clinic_oid_xml
-     OR public.document_attributes.clinic_oid_jpersons IS DISTINCT FROM EXCLUDED.clinic_oid_jpersons
-     OR public.document_attributes.clinic_oid_license IS DISTINCT FROM EXCLUDED.clinic_oid_license
      OR public.document_attributes.clinic_host IS DISTINCT FROM EXCLUDED.clinic_host
      OR public.document_attributes.clinic_jid_resolve_method IS DISTINCT FROM EXCLUDED.clinic_jid_resolve_method
-     OR public.document_attributes.message_endpoint IS DISTINCT FROM EXCLUDED.message_endpoint
-     OR public.document_attributes.clinic_jid_mismatch IS DISTINCT FROM EXCLUDED.clinic_jid_mismatch
      OR public.document_attributes.patient_name_masked IS DISTINCT FROM EXCLUDED.patient_name_masked
      OR public.document_attributes.snils_masked IS DISTINCT FROM EXCLUDED.snils_masked
      OR public.document_attributes.doctor_name IS DISTINCT FROM EXCLUDED.doctor_name
@@ -317,12 +309,12 @@ SELECT
         || ' · ' ||
     COALESCE(NULLIF(BTRIM(o.name), ''), '—') AS clinic_label,
     o.inn AS clinic_inn,
-    COALESCE(
-        NULLIF(btrim(a.clinic_oid_license), ''),
-        NULLIF(btrim(d.org_oid), '')
-    ) AS clinic_oid,
+    public.clean_text_value(d.org_oid) AS clinic_oid,
     a.clinic_host,
-    a.clinic_jid_mismatch,
+    -- OID из обмена не найден в реестре медорганизаций: клиника определена по адресу или
+    -- пришла с OID, которого нет ни в одной лицензии. Признак живой — реестр меняется
+    -- справочником, а не фактами документа.
+    (NULLIF(btrim(d.org_oid), '') IS NOT NULL AND oid_ref.jid IS NULL) AS clinic_oid_unknown,
     -- Транспорт СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
     -- relates_to_msgid (relatesToMessage ответа) = request_msgid у склеенных — ключ корреляции.
     public.clean_text_value(d.relates_to_msgid) AS relates_to_msgid,
@@ -363,6 +355,9 @@ SELECT
     d.supersedes_dwh_id
 FROM public.documents d
 LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
+-- Реестр OID — маленькое соединение (тысячи строк): коррелированный NOT EXISTS на грейне
+-- документа пересобирал бы представление реестра на каждую строку.
+LEFT JOIN public.dim_clinic_oid oid_ref ON oid_ref.oid = btrim(public.clean_text_value(d.org_oid))
 LEFT JOIN public.dim_document_status ds ON ds.code = d.status
 -- Ступень — первая по sort_order, чья граница покрывает возраст обработки; терминальная
 -- (max_age_minutes IS NULL) замыкает лестницу и ловит в том числе отправки без first_sent_at:
@@ -551,58 +546,60 @@ SELECT
     d.jid AS clinic_jid,
     o.name AS clinic_name,
     a.clinic_oid_xml,
-    a.clinic_oid_jpersons,
-    a.clinic_oid_license,
     a.clinic_host,
     a.clinic_jid_resolve_method,
-    a.message_endpoint,
-    a.clinic_jid_mismatch,
+    r.jid AS clinic_jid_by_oid,
     d.org_oid AS document_org_oid,
     d.jid_resolve_method AS document_jid_resolve_method
 FROM public.documents d
 LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
 LEFT JOIN public.dim_organizations o ON o.jid = d.jid
+LEFT JOIN public.dim_clinic_oid r ON r.oid = btrim(public.clean_text_value(d.org_oid))
 WHERE d.dwh_id IS NOT NULL;
 
 COMMENT ON VIEW public.rpt_document_lineage IS
-'Lineage документа: атомы идентификаторов клиники из XML, лицензий и журнала.';
+'Lineage документа: OID и адрес обмена из журнала рядом с ЮЛ, к которому их относит реестр OID.';
 
--- Доступные клинике типы СЭМД: одна запись EGISZ_LICENSES на пару JID+KIND.
--- Маркер актуальности — MAX(modifydate) по записям пары; дата начала использования —
--- MIN(bdate) (в источнике пока не заполняется, колонка экспонируется на будущее).
--- clinic_label собирается идентично rpt_documents, чтобы общий дашборд-фильтр
--- «Клиника» привязывался одним значением к обеим витринам.
-CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses AS
+-- Типы СЭМД, которые клиника фактически отправляет: грейн (clinic_jid, semd_code) по
+-- документам, а не по лицензиям. Прежняя витрина строилась на EGISZ_LICENSES и выдавала
+-- за «актуальность» отметку MODIFYDATE — маркер повторной отправки, а не свойство лицензии.
+-- clinic_label собирается идентично rpt_documents, чтобы общий дашборд-фильтр «Клиника»
+-- привязывался одним значением к обеим витринам.
+CREATE OR REPLACE VIEW public.rpt_clinic_semd_activity AS
 SELECT
-    l.jid AS clinic_jid,
-    COALESCE(NULLIF(BTRIM(l.jid::text), ''), '—')
+    f.clinic_jid,
+    COALESCE(NULLIF(BTRIM(f.clinic_jid::text), ''), '—')
         || ' · ' ||
     COALESCE(NULLIF(BTRIM(o.name), ''), '—') AS clinic_label,
     o.name AS clinic_name,
-    l.kind AS semd_code,
+    f.semd_code,
     st.name AS semd_name,
     CASE
-        WHEN st.name IS NOT NULL THEN l.kind || ' · ' || st.name
-        ELSE l.kind || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+        WHEN st.name IS NOT NULL THEN f.semd_code || ' · ' || st.name
+        ELSE f.semd_code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
     END AS semd_label,
-    l.license_modified_at,
-    l.license_started_at
+    f.last_sent_at,
+    f.last_registered_at,
+    f.documents_total
 FROM (
+    -- Счётчик на грейне логического документа (rpt_documents = текущие версии), иначе
+    -- повторная подача того же документа считалась бы как ещё один документ клиники.
     SELECT
-        jid,
-        kind,
-        MAX(modifydate) AS license_modified_at,
-        MIN(bdate) AS license_started_at
-    FROM public.dim_licenses
-    WHERE jid IS NOT NULL
-      AND NULLIF(btrim(kind), '') IS NOT NULL
-    GROUP BY jid, kind
-) l
-LEFT JOIN public.dim_organizations o ON o.jid = l.jid
-LEFT JOIN public.dim_semd_types st ON st.code = l.kind;
+        r.clinic_jid,
+        r.semd_code,
+        MAX(r.first_sent_at) AS last_sent_at,
+        MAX(r.registered_at) AS last_registered_at,
+        count(*) AS documents_total
+    FROM public.rpt_documents r
+    WHERE r.clinic_jid IS NOT NULL
+      AND r.semd_code IS NOT NULL
+    GROUP BY 1, 2
+) f
+LEFT JOIN public.dim_organizations o ON o.jid = f.clinic_jid
+LEFT JOIN public.dim_semd_types st ON st.code = f.semd_code;
 
-COMMENT ON VIEW public.rpt_clinic_semd_licenses IS
-'Доступные клинике типы СЭМД: грейн (clinic_jid, semd_code = EGISZ_LICENSES.KIND); наименование — dim_semd_types, актуальность — MAX(modifydate), начало использования — MIN(bdate).';
+COMMENT ON VIEW public.rpt_clinic_semd_activity IS
+'Типы СЭМД в обмене клиники: грейн (clinic_jid, semd_code) по фактам документов; последняя отправка, последняя регистрация и число документов.';
 
 -- ---------------------------------------------------------------- section: weekly
 -- ============================================================================

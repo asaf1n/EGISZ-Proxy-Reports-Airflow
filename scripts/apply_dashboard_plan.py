@@ -1145,44 +1145,16 @@ def fix_detail_quality_sql() -> str:
         "    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n"
         "    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n"
         "    CASE\n"
-        "      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n"
-        "       AND (\n"
-        "         (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n"
-        "         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_xml) <> btrim(rpt_document_lineage.clinic_oid_license))\n"
-        "       )\n"
+        "      WHEN rpt_documents.clinic_oid_unknown\n"
         "      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n"
         "      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n"
-        "    END AS \"OID из XML\",\n"
-        "    CASE\n"
-        "      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n"
-        "       AND (\n"
-        "         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_xml))\n"
-        "         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_jpersons) <> btrim(rpt_document_lineage.clinic_oid_license))\n"
-        "       )\n"
-        "      THEN '↯ ' || rpt_document_lineage.clinic_oid_jpersons\n"
-        "      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), ''), '—')\n"
-        "    END AS \"OID из JPERSONS\",\n"
-        "    CASE\n"
-        "      WHEN NULLIF(btrim(rpt_document_lineage.clinic_oid_license), '') IS NOT NULL\n"
-        "       AND (\n"
-        "         (NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_xml))\n"
-        "         OR (NULLIF(btrim(rpt_document_lineage.clinic_oid_jpersons), '') IS NOT NULL\n"
-        "          AND btrim(rpt_document_lineage.clinic_oid_license) <> btrim(rpt_document_lineage.clinic_oid_jpersons))\n"
-        "       )\n"
-        "      THEN '↯ ' || rpt_document_lineage.clinic_oid_license\n"
-        "      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_license), ''), '—')\n"
-        "    END AS \"OID из лицензий\",\n"
+        "    END AS \"OID из обмена\",\n"
+        "    COALESCE(NULLIF(BTRIM(rpt_document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n"
         "    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n"
         "    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n"
-        "    rpt_documents.clinic_jid_mismatch AS \"Расхождение источников JID\",\n"
         "    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n"
         "      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n"
-        "      CASE WHEN rpt_documents.clinic_jid_mismatch = true THEN 'расхождение OID/JID' END,\n"
+        "      CASE WHEN rpt_documents.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n"
         "      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n"
         "      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n"
         "      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.processed_at IS NULL THEN 'успех без даты' END\n"
@@ -1249,8 +1221,8 @@ def apply_quality_detail(card: dict) -> None:
     card["display"] = "table"
     card["description"] = (
         "Документы с любым нарушением правил сводной таблицы «Контроль качества данных» за период. "
-        "Колонка «Нарушения» перечисляет сработавшие проверки; ячейки с нарушениями и расхождениями "
-        "источников подсвечены красным. Лимит 1000 строк."
+        "Колонка «Нарушения» перечисляет сработавшие проверки; «ЮЛ по реестру OID» показывает, к какой "
+        "клинике реестр относит OID из обмена. Лимит 1000 строк."
     )
     dq = card.setdefault("dataset_query", {})
     dq["native"]["query"] = fix_detail_quality_sql()
@@ -1261,15 +1233,13 @@ def apply_quality_detail(card: dict) -> None:
         {"enabled": True, "name": "Нарушения"},
         {"enabled": True, "name": "Клиника"},
         {"enabled": True, "name": "JID Клиники"},
-        {"enabled": True, "name": "OID из XML"},
-        {"enabled": True, "name": "OID из JPERSONS"},
-        {"enabled": True, "name": "OID из лицензий"},
+        {"enabled": True, "name": "OID из обмена"},
+        {"enabled": True, "name": "ЮЛ по реестру OID"},
         {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
         {"enabled": False, "name": "Метод резолва JID"},
         {"enabled": True, "name": "Код СЭМД"},
         {"enabled": True, "name": "Наименование СЭМД"},
         {"enabled": True, "name": "localUid СЭМД"},
-        {"enabled": False, "name": "Расхождение источников JID"},
     ]
     viz["table.column_formatting"] = [
         {
@@ -1320,7 +1290,7 @@ def apply_quality_detail(card: dict) -> None:
         },
         {
             "color": QUALITY_DETAIL_VIOLATION_BG,
-            "columns": ["OID из XML", "OID из JPERSONS", "OID из лицензий"],
+            "columns": ["OID из обмена"],
             "operator": "starts-with",
             "type": "single",
             "value": QUALITY_DETAIL_MISMATCH_MARK,
@@ -2484,12 +2454,12 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
                 "name": "clinic_label",
                 "widget-type": "string/=",
             }
-        # Фильтр клиники — на грейне источника карточки: витрина лицензий несёт
+        # Фильтр клиники — на грейне источника карточки: витрина типов СЭМД в обмене несёт
         # собственный clinic_label; если запрос смешивает обе документные таблицы
         # (period_docs из rpt_documents + join rpt_error_breakdown), привязываем к
         # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
-        if "public.rpt_clinic_semd_licenses" in native["query"]:
-            source = "public.rpt_clinic_semd_licenses"
+        if "public.rpt_clinic_semd_activity" in native["query"]:
+            source = "public.rpt_clinic_semd_activity"
         elif "public.rpt_documents" in native["query"]:
             source = "public.rpt_documents"
         else:

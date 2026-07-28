@@ -842,11 +842,11 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     assert any(p["name"] == "Обработано IPS" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
     # Обзор/Документы читают rpt_documents, вкладка ошибок — rpt_error_breakdown (модель
-    # ошибок), вкладка доступных типов СЭМД — rpt_clinic_semd_licenses.
+    # ошибок), вкладка типов СЭМД в обмене — rpt_clinic_semd_activity.
     assert all(
         "public.rpt_documents" in query
         or "public.rpt_error_breakdown" in query
-        or "public.rpt_clinic_semd_licenses" in query
+        or "public.rpt_clinic_semd_activity" in query
         for query in queries
     )
     assert all(
@@ -891,12 +891,12 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
             query = card["dataset_query"]["native"]["query"]
             if "client_jid" not in tags:
                 continue
-            # Фильтры среза биндятся к грейну источника карточки: витрина лицензий несёт
-            # собственный clinic_label; если карточка смешивает обе документные витрины
+            # Фильтры среза биндятся к грейну источника карточки: витрина типов СЭМД
+            # в обмене несёт собственный clinic_label; если карточка смешивает обе документные витрины
             # (period_docs + join rpt_error_breakdown), клиника/период/тип идут
             # на rpt_documents; чисто-ошибочные карточки — на rpt_error_breakdown.
-            if "public.rpt_clinic_semd_licenses" in query:
-                source_view = "public.rpt_clinic_semd_licenses"
+            if "public.rpt_clinic_semd_activity" in query:
+                source_view = "public.rpt_clinic_semd_activity"
             elif "public.rpt_documents" in query:
                 source_view = "public.rpt_documents"
             else:
@@ -931,7 +931,7 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
 
 
 def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
-    """07: четыре вкладки (Обзор/Ошибки регистрации ЭМД/Документы/Доступные типы СЭМД),
+    """07: четыре вкладки (Обзор/Ошибки регистрации ЭМД/Документы/Типы СЭМД в обмене),
     аналитика ошибок и журнал."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     tabs = dashboard.get("tabs") or []
@@ -939,7 +939,7 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
         "Обзор",
         "Ошибки регистрации ЭМД",
         "Документы",
-        "Доступные типы СЭМД",
+        "Типы СЭМД в обмене",
     ]
 
     names = {c.get("name") for c in dashboard["cards"]}
@@ -1006,40 +1006,44 @@ def test_client_top_error_type_shows_processed_share() -> None:
     assert ff["client_error_category"]["table_ref"] == "public.rpt_error_breakdown"
 
 
-def test_client_service_licenses_tab_lists_available_semd_types() -> None:
-    """07: вкладка «Доступные типы СЭМД» — записи EGISZ_LICENSES на паре JID+KIND
-    (rpt_clinic_semd_licenses); наименование — dim_semd_types, фильтры клиники общие."""
+def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
+    """07: вкладка «Типы СЭМД в обмене» — факты документов на паре (клиника, код СЭМД).
+
+    Прежняя витрина строилась на EGISZ_LICENSES и выдавала за «актуальность» отметку
+    MODIFYDATE, которая тикает при повторной отправке типа. Ссылок на лицензии не осталось.
+    """
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" in sql
-    assert "FROM public.dim_licenses" in sql
-    assert "GROUP BY jid, kind" in sql
-    assert "LEFT JOIN public.dim_semd_types st ON st.code = l.kind" in sql
+    assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_activity" in sql
+    assert "MAX(r.first_sent_at) AS last_sent_at" in sql
+    assert "MAX(r.registered_at) AS last_registered_at" in sql
+    assert "FROM public.rpt_documents r" in sql
+    assert "LEFT JOIN public.dim_semd_types st ON st.code = f.semd_code" in sql
+    assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" not in sql
 
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
-    card = next(c for c in dashboard["cards"] if c.get("name") == "Доступные типы СЭМД — клиент")
-    assert card["tab"] == "licenses"
+    card = next(c for c in dashboard["cards"] if c.get("name") == "Типы СЭМД в обмене — клиент")
+    assert card["tab"] == "semd_types"
     assert card["display"] == "table"
     query = card["dataset_query"]["native"]["query"]
-    assert "public.rpt_clinic_semd_licenses" in query
+    assert "public.rpt_clinic_semd_activity" in query
     assert "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]]" in query
     assert card["metabase-field-filters"]["clinic_label"] == {
-        "table_ref": "public.rpt_clinic_semd_licenses",
+        "table_ref": "public.rpt_clinic_semd_activity",
         "field_name": "clinic_label",
     }
     columns = {c["name"] for c in card["visualization_settings"]["table.columns"]}
     assert {
         "Код СЭМД",
         "Наименование СЭМД",
-        "Дата начала использования",
-        "Последнее обновление",
+        "Последняя отправка",
+        "Последняя регистрация",
     } <= columns
-    # «Дата начала использования» = BDATE записи лицензии (в источнике пока пусто).
-    assert 'license_started_at AS "Дата начала использования"' in query
-    assert "MIN(bdate) AS license_started_at" in sql
+    assert "license_started_at" not in query
+    assert "license_modified_at" not in query
 
     text_card = next(
         c for c in dashboard["cards"]
-        if c.get("display") == "text" and c.get("tab") == "licenses"
+        if c.get("display") == "text" and c.get("tab") == "semd_types"
     )
     assert "{{clinic_label}}" in text_card["text"]
 
@@ -1759,12 +1763,15 @@ def test_archive_detail_uses_documents_model() -> None:
     assert not any("(emdrid)" in str(v) for v in column_settings.values())
 
 
-def test_service_quality_has_jid_mismatch_check() -> None:
+def test_service_quality_checks_oid_against_registry() -> None:
+    """Проверка качества — «OID вне реестра»: сравнение с одной выбранной лицензией давало
+    ложное расхождение там, где OID принадлежал другой лицензии того же ЮЛ."""
     dashboard = json.loads(INTEGRATION_DASHBOARD.read_text(encoding="utf-8"))
     card = next(c for c in dashboard["cards"] if c.get("name") == "Контроль качества данных")
     query = card["dataset_query"]["native"]["query"]
-    assert "Расхождение OID и JID" in query
-    assert "clinic_jid_mismatch = true" in query
+    assert "OID вне реестра медорганизаций" in query
+    assert "clinic_oid_unknown = true" in query
+    assert "clinic_jid_mismatch" not in query
     assert '"Расхождение источников JID" = \'да\'' not in query
 
 
@@ -1784,12 +1791,11 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert '"Текст сетевой ошибки"' not in network_sql
 
     detail_sql = by_name["Детализация контроля качества"]["dataset_query"]["native"]["query"]
-    assert 'clinic_jid_mismatch AS "Расхождение источников JID"' in detail_sql
+    assert "clinic_jid_mismatch" not in detail_sql
     assert "FROM public.rpt_documents r" not in detail_sql
     assert "rpt_document_lineage" in detail_sql
-    assert '"OID из XML"' in detail_sql
-    assert '"OID из JPERSONS"' in detail_sql
-    assert '"OID из лицензий"' in detail_sql
+    assert '"OID из обмена"' in detail_sql
+    assert '"ЮЛ по реестру OID"' in detail_sql
 
     for card_name in (
         "В обработке",
@@ -1828,7 +1834,7 @@ def test_service_quality_detail_lists_all_rule_violations() -> None:
     assert detail["sizeX"] == 24
     query = detail["dataset_query"]["native"]["query"]
     assert '"Нарушения"' in query
-    assert "расхождение OID/JID" in query
+    assert "OID вне реестра" in query
     assert "LIMIT 1000" in query
     enabled = {
         col["name"]
@@ -1836,7 +1842,8 @@ def test_service_quality_detail_lists_all_rule_violations() -> None:
         if col.get("enabled", True)
     }
     assert "Нарушения" in enabled
-    assert "OID из XML" in enabled
+    assert "OID из обмена" in enabled
+    assert "ЮЛ по реестру OID" in enabled
     assert "JID Клиники" in enabled
     formatting = detail["visualization_settings"].get("table.column_formatting") or []
     violation_rules = [

@@ -111,9 +111,9 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | Таблица | Grain | Поля |
 | ------- | ----- | ---- |
 | `EXCHANGELOG` | 1 строка = 1 SOAP-сообщение | `LOGID`, `LOGDATE`, `CREATEDATE`, `MSGID`, `LOGSTATE`, `LOGTEXT`, `MSGTEXT`, `URI` |
-| `EGISZ_MESSAGES` | 1 строка = 1 подача документа | `EGMID`, `MSGID`, `REPLYTO`, `DOCUMENTID`, `CREATEDATE` |
+| `EGISZ_MESSAGES` | 1 строка = 1 подача документа | `EGMID`, `MSGID`, `REPLYTO`, `DOCUMENTID`, `CREATEDATE` (момент внесения строки в таблицу прокси, не дата документа) |
 | `JPERSONS` | Организация | `JID` (`bigint`), `JNAME`, `JINN`, `FIR_OID` |
-| `EGISZ_LICENSES` | Лицензия МО | `mo_uid`, `JID` |
+| `EGISZ_LICENSES` | Лицензия МО | `mo_uid` (регистрационный OID), `JID`, `MO_DOMEN` (адрес обмена, он же `REPLYTO` подачи) |
 
 `MSGTEXT` — полный SOAP/XML (BLOB в источнике, `text` в DWH). Бизнес-поля извлекаются при transform; исходный журнал не меняется. `LOGDATE` — служебная метка строки журнала; дата документа — из payload (`creationDateTime`). `URI` — адрес вызова, по которому определяется подсистема ЕГИСЗ: `/emdr/callback` — РЭМД, `/ips/callback` — ИЭМК.
 
@@ -141,7 +141,6 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | `extract_registry` | `EGISZ_MESSAGES` → `dim_message_document` по курсору реестра |
 | `sync_dictionaries` | `JPERSONS` → `dim_organizations`, `EGISZ_LICENSES` → `dim_licenses` |
 | `transform` | Разбор транзакций в записи по документам |
-| `recompute_documents` | Обновление реквизитов документов при изменении справочника ЮЛ, пересчёт версий СЭМД |
 | `refresh_marts` | Обновление витрин |
 
 ### `egisz_maintenance_dag` — раз в сутки
@@ -157,7 +156,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 **Отметка идёт по непрерывному участку.** Журнал нумеруется подряд, поэтому пропуск в странице означает строку, которую источник ещё не закоммитил. Отметка выгрузки встаёт перед разрывом и переступает его, когда строка доедет; сами строки страницы грузятся целиком. Разбор ограничен отметкой выгрузки — фактами становится только то, про что известно, что журнал там вычитан без пропусков.
 
-**Полный пересчёт — по факту, а не по расписанию.** Свой батч `transform` сопровождает сам: реквизиты и версии затронутых документов он пересчитывает на месте. Полный проход по архиву нужен единственному входу за пределами батча — справочникам: переименование клиники или резолв ЮЛ меняют реквизиты документов, которых в батче нет. Поэтому `recompute_documents` запускается, когда справочник изменился, и пропускается иначе: холостой проход стоит десятки секунд блокировок ради нуля изменённых строк.
+**Пересчёт архива — только по фактам, не по справочнику.** Свой батч `transform` сопровождает сам: реквизиты и версии затронутых документов он пересчитывает на месте. Правка справочника полного прохода не требует — хранимые реквизиты документа справочников не читают: клиника подставляется живым соединением витрины с `dim_organizations`, реестр OID (`dim_clinic_oid`) тоже читается на чтении. Поэтому `sync_dictionaries` остаётся синхронизацией справочников и ничем больше.
 
 **Обрыв связи с источником не снимает запуск.** Задачи, ходящие в шлюз, повторяются дважды с минутной паузой. Всё, что ниже, запускается независимо от их исхода, а границы разбора берутся из состояния конвейера, а не от выгрузки: недоступный источник не мешает разобрать уже загруженное и обновить витрины.
 
@@ -211,7 +210,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 Код нефинального статуса задан один раз в `dim_document_status` и читается функцией `document_status_nonfinal()`; ветви `transform_raw_to_facts` литерал не повторяют.
 
-**JID:** `resolve_document_jid(org_oid, endpoint)`. Источники адреса — payload запроса и `reply_to` реестра подач. Флаг `clinic_jid_mismatch` — расхождение OID из XML, `JPERSONS.fir_oid`, `EGISZ_LICENSES.mo_uid`.
+**ЮЛ:** `resolve_document_jid(org_oid, endpoint)`. Основной путь — OID медорганизации из содержания обмена через реестр `dim_clinic_oid`; запасной — адрес обмена, где номер `gost-<N>` и есть JID владельца хоста (`REPLY_TO` подачи = `MO_DOMEN` лицензии). Отправка дочерней клиники с хоста головного ЮЛ разрешается в головное ЮЛ — приоритет остаётся за OID документа. Признак `clinic_oid_unknown` — OID из обмена не найден в реестре.
 
 ---
 
@@ -380,7 +379,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | `rpt_network_errors` | `status = network_error`; + `egisz_subsystem` — подсистема ЕГИСЗ (РЭМД/ИЭМК) из `document_attributes` |
 | `rpt_error_breakdown` | Split `error_types` по `·` → атомарный канонический вид (`error_type` + `error_category` + `responsibility` + `is_retryable` + `nsi_error_code` = `COALESCE(своя, зонтичная)` / `nsi_error_description`) |
 | `rpt_document_lineage` | OID / host / endpoint по документу |
-| `rpt_clinic_semd_licenses` | Доступные клинике типы СЭМД: грейн (`clinic_jid`, `semd_code` = `EGISZ_LICENSES.KIND`), наименование из `dim_semd_types`, актуальность `MAX(modifydate)`, начало использования `MIN(bdate)` (источником пока не заполняется) |
+| `rpt_clinic_semd_activity` | Типы СЭМД в обмене клиники: грейн (`clinic_jid`, `semd_code`) по фактам документов, наименование из `dim_semd_types`, последняя отправка `MAX(first_sent_at)`, последняя регистрация `MAX(registered_at)` |
 | `rpt_health_*` | Свежесть и состояние контура (в т.ч. `rpt_health_versions` — наблюдаемость слоя версий) |
 
 Имена колонок в Metabase Models:
@@ -388,7 +387,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | Префикс | Примеры |
 | ------- | ------- |
 | `semd_*` | `semd_code`, `semd_name`, `semd_local_uid`, `semd_emdr_id`, `semd_created_at` |
-| `clinic_*` | `clinic_jid` (`bigint`), `clinic_name`, `clinic_jid_mismatch` |
+| `clinic_*` | `clinic_jid` (`bigint`), `clinic_name`, `clinic_oid_unknown` |
 | транспорт | `request_logid`, `result_logid`, `request_msgid`, `result_msgid`, `relates_to_msgid`, `logid` (= `COALESCE(result_logid, request_logid)`) |
 | версии | `document_group_id`, `is_current_version`, `semd_version_number`, `supersedes_dwh_id` |
 | подачи | `attempt_count` (число подач документа в ЕГИСЗ), `is_resubmitted` |
@@ -441,7 +440,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 | Обзор | Объёмы и состояния регистрации, динамика, топ СЭМД | Исходы плюс «В обработке» |
 | Ошибки регистрации ЭМД | Категории, типы, динамика, топ СЭМД по ошибкам (`rpt_error_breakdown`) | Только корпус с ответом |
 | Документы | Журнал с финальным ответом РЭМД | Отдельная карточка «Отправленные — клиент» (`rpt_documents_sent`) |
-| Доступные типы СЭМД | Типы СЭМД, доступные клинике по лицензиям (`rpt_clinic_semd_licenses`, пара JID + KIND) | Не применяется (справочник) |
+| Типы СЭМД в обмене | Типы СЭМД, которые клиника фактически отправляет (`rpt_clinic_semd_activity`, пара клиника + код СЭМД) | Не применяется (весь обмен) |
 
 Дашборд `08_client_bianalytic.json`: карточка «Документов за период — BI» считает все строки `rpt_documents` (включая отправленные без ответа); доли «% успеха» — только по финальным статусам (`success`, `async_error`, `network_error`).
 

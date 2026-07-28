@@ -104,19 +104,18 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert 'get_int("registry_rows")' in src
     assert "def sync_dictionaries" in src
     assert "sync_directories" in src
-    assert (
-        "extracted >> registry >> dictionaries >> transformed >> recomputed >> refreshed"
-        in src
-    )
+    assert "extracted >> registry >> dictionaries >> transformed >> refreshed" in src
     # Ретраи на задачах, ходящих к источнику: шлюз и его DNS пропадают на минуты.
     assert src.count("retries=2") >= 5
 
-    # Полный пересчёт архива нужен только после правки справочника: свой батч
-    # сопровождает сам transform.
-    assert "def recompute_documents" in src
-    assert "recompute_document_attributes" in src
-    assert "recompute_document_versions" in src
-    assert "if not dictionaries_changed:" in src
+    # Пересчёт архива из-за справочников снят: хранимые реквизиты документа справочников
+    # не читают — клиника подставляется живым соединением витрины, реестр OID тоже
+    # читается на чтении. Свой батч сопровождает сам transform.
+    assert "def recompute_documents" not in src
+    assert "recompute_document_attributes" not in src
+    assert "recompute_document_versions" not in src
+    assert "affects_resolution" not in src
+    assert "xmax" not in src
     assert "AirflowSkipException" in src
 
     # Защитный запас снят: разбор ограничен отметкой выгрузки, а не хвостом минус запас.
@@ -317,7 +316,6 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
         "extract_registry",
         "sync_dictionaries",
         "transform",
-        "recompute_documents",
         "refresh_marts",
         "consistency_check",
         "maintain_partitions",
@@ -328,7 +326,6 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
         "extract_registry",
         "sync_dictionaries",
         "transform",
-        "recompute_documents",
         "refresh_marts",
     }
     assert {t.task_id for t in maintenance.tasks} == {
@@ -336,24 +333,16 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
         "maintain_partitions",
     }
 
-    # Реестр подач и справочники наполняются до transform; пересчёт архива и витрины —
-    # после него.
+    # Реестр подач и справочники наполняются до transform; витрины — после него.
+    # Пересчёта архива в цепочке нет: справочник не меняет хранимых реквизитов документа.
     assert etl.task_dict["extract_exchangelog"].downstream_task_ids == {"extract_registry"}
     assert etl.task_dict["extract_registry"].downstream_task_ids == {"sync_dictionaries"}
-    assert etl.task_dict["sync_dictionaries"].downstream_task_ids == {
-        "transform",
-        "recompute_documents",
-    }
-    assert etl.task_dict["transform"].downstream_task_ids == {
-        "recompute_documents",
-        "refresh_marts",
-    }
-    assert etl.task_dict["recompute_documents"].downstream_task_ids == {"refresh_marts"}
+    assert etl.task_dict["sync_dictionaries"].downstream_task_ids == {"transform"}
+    assert etl.task_dict["transform"].downstream_task_ids == {"refresh_marts"}
     assert etl.task_dict["refresh_marts"].downstream_task_ids == set()
 
     # Недоступный источник не снимает цепочку: всё, что ниже выгрузки, идёт по all_done.
-    for task_id in ("extract_registry", "sync_dictionaries", "transform",
-                    "recompute_documents", "refresh_marts"):
+    for task_id in ("extract_registry", "sync_dictionaries", "transform", "refresh_marts"):
         assert etl.task_dict[task_id].trigger_rule == "all_done", task_id
     # Задачи, ходящие к Firebird, переживают обрыв связи повтором.
     for task_id in ("extract_exchangelog", "extract_registry", "sync_dictionaries"):

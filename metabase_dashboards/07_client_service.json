@@ -1322,20 +1322,20 @@
     },
     {
       "display": "text",
-      "text": "## Доступные типы СЭМД {{clinic_label}}\nПеречень типов СЭМД, доступных вашей клинике для регистрации в ЕГИСЗ по условиям подключения: одна строка — один тип. Наименования — по справочнику СЭМД (НСИ); «Дата начала использования» — дата начала действия записи о доступе; «Последнее обновление» — дата её последнего изменения.",
+      "text": "## Типы СЭМД в обмене {{clinic_label}}\nТипы СЭМД, которые ваша клиника фактически отправляет в ЕГИСЗ: одна строка — один тип. Наименования — по справочнику СЭМД (НСИ); «Последняя отправка» — момент последнего запроса файла, «Последняя регистрация» — момент последнего подтверждения регистрации.",
       "sizeX": 24,
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "licenses"
+      "tab": "semd_types"
     },
     {
-      "name": "Доступные типы СЭМД — клиент",
-      "description": "Типы СЭМД, доступные клинике по лицензиям сервиса: одна строка — одна пара JID + KIND (EGISZ_LICENSES, витрина rpt_clinic_semd_licenses). Наименование — по справочнику типов СЭМД; «Дата начала использования» — BDATE записи (источником пока не заполняется); «Последнее обновление» — последняя правка записи.",
+      "name": "Типы СЭМД в обмене — клиент",
+      "description": "Типы СЭМД в обмене клиники: одна строка — одна пара «клиника + код СЭМД» по фактам документов (витрина rpt_clinic_semd_activity). Наименование — по справочнику типов СЭМД; «Последняя отправка» и «Последняя регистрация» — крайние моменты обмена, «Документов» — число документов этого типа.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT semd_code AS \"Код СЭМД\", COALESCE(semd_name, 'Наименование СЭМД отсутствует в справочнике СЭМД') AS \"Наименование СЭМД\", clinic_label AS \"Клиника\", license_started_at AS \"Дата начала использования\", license_modified_at AS \"Последнее обновление\" FROM public.rpt_clinic_semd_licenses WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] ORDER BY NULLIF(regexp_replace(semd_code, '\\D', '', 'g'), '')::bigint NULLS LAST, semd_code",
+          "query": "SELECT semd_code AS \"Код СЭМД\", COALESCE(semd_name, 'Наименование СЭМД отсутствует в справочнике СЭМД') AS \"Наименование СЭМД\", clinic_label AS \"Клиника\", last_sent_at AS \"Последняя отправка\", last_registered_at AS \"Последняя регистрация\", documents_total AS \"Документов\" FROM public.rpt_clinic_semd_activity WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] ORDER BY NULLIF(regexp_replace(semd_code, '\\D', '', 'g'), '')::bigint NULLS LAST, semd_code",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1373,11 +1373,15 @@
           },
           {
             "enabled": true,
-            "name": "Дата начала использования"
+            "name": "Последняя отправка"
           },
           {
             "enabled": true,
-            "name": "Последнее обновление"
+            "name": "Последняя регистрация"
+          },
+          {
+            "enabled": true,
+            "name": "Документов"
           }
         ],
         "table.cell_column": "Код СЭМД",
@@ -1386,10 +1390,10 @@
             "column_title": "Наименование СЭМД",
             "text_style": "wrap"
           },
-          "[\"name\",\"Дата начала использования\"]": {
+          "[\"name\",\"Последняя отправка\"]": {
             "date_style": "D MMMM, YYYY"
           },
-          "[\"name\",\"Последнее обновление\"]": {
+          "[\"name\",\"Последняя регистрация\"]": {
             "date_style": "D MMMM, YYYY"
           }
         }
@@ -1398,10 +1402,10 @@
       "sizeY": 10,
       "row": 1,
       "col": 0,
-      "tab": "licenses",
+      "tab": "semd_types",
       "metabase-field-filters": {
         "clinic_label": {
-          "table_ref": "public.rpt_clinic_semd_licenses",
+          "table_ref": "public.rpt_clinic_semd_activity",
           "field_name": "clinic_label"
         }
       }
@@ -1424,8 +1428,8 @@
       "position": 2
     },
     {
-      "id": "licenses",
-      "name": "Доступные типы СЭМД",
+      "id": "semd_types",
+      "name": "Типы СЭМД в обмене",
       "position": 3
     }
   ]

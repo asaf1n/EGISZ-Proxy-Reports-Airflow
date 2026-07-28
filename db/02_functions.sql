@@ -112,21 +112,63 @@ AS $$
     );
 $$;
 
--- Извлекает gost-endpoint (gost-<JID>.<host>...) из LOGTEXT/MSGTEXT для сопоставления
--- с dim_licenses.mo_domen. Число gost-<N> — часть endpoint, не отдельный путь резолва JID.
+-- Извлекает адрес обмена (gost-<JID>.<домен>:<порт>) из LOGTEXT/MSGTEXT и REPLY_TO реестра.
+-- Имя хоста бывает и числовым (gost-56571), и составным (gost-67136-1), и именованным
+-- (gost-sova) — шаблон покрывает все три, иначе адрес обрезается по первому дефису.
 CREATE OR REPLACE FUNCTION public.extract_gost_endpoint(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
     SELECT NULLIF(
-        (regexp_match(COALESCE(p_text, ''), '(gost-[0-9]+(?:\.[a-z0-9._-]+(?::[0-9]+)?)?)', 'i'))[1],
+        (regexp_match(
+            COALESCE(p_text, ''),
+            '(gost-[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9._-]+)?(?::[0-9]+)?)',
+            'i'
+        ))[1],
         ''
     );
 $$;
 
--- Primary: JID клиники по OID медорганизации (<organization>) через dim_licenses.mo_uid.
--- Один mo_uid может иметь несколько лицензий — берём последнюю по modifydate.
+-- Реестр OID медорганизаций. OID регистрационный, у ЮЛ он один; несколько OID на одном ЮЛ
+-- в EGISZ_LICENSES означают отправку дочерних клиник с хоста головного ЮЛ. Поэтому пара
+-- берётся по собственному хосту лицензии (gost-<N> адреса совпадает с её же JID), а не по
+-- отметке обмена MODIFYDATE, которая тикает при повторной отправке типа СЭМД.
+CREATE OR REPLACE VIEW public.dim_clinic_oid AS
+SELECT DISTINCT ON (oid) oid, jid
+FROM (
+    SELECT
+        NULLIF(btrim(dl.mo_uid), '') AS oid,
+        dl.jid,
+        ((regexp_match(COALESCE(dl.mo_domen, ''), 'gost-([0-9]+)'))[1] = dl.jid::text) AS own_host
+    FROM public.dim_licenses dl
+    WHERE dl.jid IS NOT NULL
+      AND NULLIF(btrim(dl.mo_uid), '') IS NOT NULL
+) t
+ORDER BY oid, own_host DESC NULLS LAST, jid;
+
+COMMENT ON VIEW public.dim_clinic_oid IS
+'Реестр OID медорганизаций: OID → ЮЛ. При нескольких кандидатах выигрывает ЮЛ с собственным хостом.';
+
+-- Адрес обмена → ЮЛ. MO_DOMEN лицензии и REPLY_TO реестра подач — один и тот же адрес,
+-- поэтому представление нужно только именованным хостам: числовые разбираются из адреса.
+CREATE OR REPLACE VIEW public.dim_clinic_endpoint AS
+SELECT DISTINCT ON (host) host, jid
+FROM (
+    SELECT
+        public.clean_host(dl.mo_domen) AS host,
+        dl.jid,
+        ((regexp_match(COALESCE(dl.mo_domen, ''), 'gost-([0-9]+)'))[1] = dl.jid::text) AS own_host
+    FROM public.dim_licenses dl
+    WHERE dl.jid IS NOT NULL
+      AND public.clean_host(dl.mo_domen) IS NOT NULL
+) t
+ORDER BY host, own_host DESC NULLS LAST, jid;
+
+COMMENT ON VIEW public.dim_clinic_endpoint IS
+'Адрес обмена → ЮЛ (MO_DOMEN = REPLY_TO): добор именованных хостов, у которых нет номера в имени.';
+
+-- Основной путь: ЮЛ по OID медорганизации из содержания обмена (<organization>).
 -- DROP перед CREATE: смена типа возврата integer→bigint несовместима с CREATE OR REPLACE (JID > int4).
 DROP FUNCTION IF EXISTS public.jid_from_mo_uid(text);
 CREATE OR REPLACE FUNCTION public.jid_from_mo_uid(p_org_oid text)
@@ -134,15 +176,15 @@ RETURNS bigint
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT dl.jid
-    FROM public.dim_licenses dl
-    WHERE dl.mo_uid = NULLIF(btrim(p_org_oid), '')
-      AND dl.jid IS NOT NULL
-    ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
-    LIMIT 1;
+    SELECT r.jid
+    FROM public.dim_clinic_oid r
+    WHERE r.oid = NULLIF(btrim(p_org_oid), '');
 $$;
 
--- Fallback: JID по адресу gost-endpoint через dim_licenses.mo_domen (host).
+-- Запасной путь: ЮЛ по адресу обмена. Номер в gost-<N> — JID владельца хоста; отправка
+-- дочерней клиники с хоста головного ЮЛ разрешается в головное ЮЛ, это допустимо —
+-- приоритет остаётся за OID из содержания документа. Номер принимается только как ЮЛ,
+-- известное справочнику: иначе адрес породил бы клинику, которой нет в JPERSONS.
 DROP FUNCTION IF EXISTS public.jid_from_host(text);
 CREATE OR REPLACE FUNCTION public.jid_from_host(p_text text)
 RETURNS bigint
@@ -152,58 +194,27 @@ AS $$
     WITH endpoint AS (
         SELECT public.extract_gost_endpoint(p_text) AS value
     )
-    SELECT dl.jid
-    FROM public.dim_licenses dl
-    CROSS JOIN endpoint e
-    WHERE e.value IS NOT NULL
-      AND public.clean_host(dl.mo_domen) = public.clean_host(e.value)
-      AND dl.jid IS NOT NULL
-    ORDER BY dl.modifydate DESC NULLS LAST, dl.id DESC
-    LIMIT 1;
+    SELECT COALESCE(
+        (
+            SELECT o.jid
+            FROM endpoint e
+            JOIN public.dim_organizations o
+              ON o.jid = (regexp_match(e.value, 'gost-([0-9]+)'))[1]::bigint
+        ),
+        (
+            SELECT r.jid
+            FROM public.dim_clinic_endpoint r
+            CROSS JOIN endpoint e
+            WHERE r.host = public.clean_host(e.value)
+        )
+    );
 $$;
 
--- Сверка реквизитов JID/OID между источниками (XML, JPERSONS, EGISZ_LICENSES).
-CREATE OR REPLACE FUNCTION public.document_source_mismatch(
-    p_jid_resolve_method text,
-    p_org_oid_xml text,
-    p_fir_oid_jpersons text,
-    p_mo_uid_license text
-)
-RETURNS boolean
-LANGUAGE sql
-IMMUTABLE
-AS $$
-    SELECT
-        (
-            NULLIF(btrim(p_org_oid_xml), '') IS NOT NULL
-            AND NULLIF(btrim(p_fir_oid_jpersons), '') IS NOT NULL
-            AND btrim(p_org_oid_xml) <> btrim(p_fir_oid_jpersons)
-        )
-        OR (
-            NULLIF(btrim(p_org_oid_xml), '') IS NOT NULL
-            AND NULLIF(btrim(p_mo_uid_license), '') IS NOT NULL
-            AND btrim(p_org_oid_xml) <> btrim(p_mo_uid_license)
-        )
-        OR (
-            NULLIF(btrim(p_fir_oid_jpersons), '') IS NOT NULL
-            AND NULLIF(btrim(p_mo_uid_license), '') IS NOT NULL
-            AND btrim(p_fir_oid_jpersons) <> btrim(p_mo_uid_license)
-        )
-        OR (
-            p_jid_resolve_method = 'host'
-            AND NULLIF(btrim(p_org_oid_xml), '') IS NOT NULL
-            AND (
-                (
-                    NULLIF(btrim(p_fir_oid_jpersons), '') IS NOT NULL
-                    AND btrim(p_org_oid_xml) <> btrim(p_fir_oid_jpersons)
-                )
-                OR (
-                    NULLIF(btrim(p_mo_uid_license), '') IS NOT NULL
-                    AND btrim(p_org_oid_xml) <> btrim(p_mo_uid_license)
-                )
-            )
-        );
-$$;
+-- Сверка OID документа с реестром ЮЛ ушла из хранимого слоя: сравнивать с JPERSONS.FIR_OID
+-- нечего (источник его не заполняет), а сравнение с одной выбранной лицензией давало ложное
+-- расхождение там, где OID принадлежал другой лицензии того же ЮЛ. Признак «OID не найден
+-- в реестре» считается в rpt_document_versions поверх dim_clinic_oid.
+DROP FUNCTION IF EXISTS public.document_source_mismatch(text, text, text, text);
 
 -- Единая цепочка резолва JID документа: mo_uid (primary) → host/gost-endpoint (fallback).
 DROP FUNCTION IF EXISTS public.resolve_document_jid(text, text);

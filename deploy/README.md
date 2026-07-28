@@ -221,13 +221,13 @@ airflow pools set dwh_postgres 1 "Exclusive DWH transform / marts / maintenance"
 
 | dag_id | Расписание | Задачи |
 | --- | --- | --- |
-| `egisz_etl_dag` | `*/5` | `extract_exchangelog → extract_registry → sync_dictionaries → transform → recompute_documents → refresh_marts` |
+| `egisz_etl_dag` | `*/5` | `extract_exchangelog → extract_registry → sync_dictionaries → transform → refresh_marts` |
 | `egisz_maintenance_dag` | `@daily` | `consistency_check`, `maintain_partitions` |
 
 Оба — `max_active_runs=1`, `catchup=False`. Курсоры `etl_state` двигает только DAG фактов
 (через `GREATEST`, без отката): `extract_logid_cursor` и `extract_egmid_cursor` — задачи
-выгрузки, `transform_logid_cursor` — разбор. `recompute_documents` и `refresh_marts`
-завершаются статусом `skipped`, когда менять нечего, — это штатный исход. Новые DAG
+выгрузки, `transform_logid_cursor` — разбор. `refresh_marts` завершается статусом
+`skipped`, когда менять нечего, — это штатный исход. Новые DAG
 появятся на паузе — снять после настройки Connections и пула.
 
 ### 2.7. Проверка

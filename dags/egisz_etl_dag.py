@@ -672,24 +672,6 @@ def sync_directories(
     return changed
 
 
-def recompute_documents_full(con: psycopg2.extensions.connection) -> dict[str, int]:
-    """Пересчёт атрибутов и версий по всему архиву документов.
-
-    Батч сопровождает себя сам: transform_raw_to_facts пересчитывает атрибуты по dwh_id
-    батча и версии по батчу с соседями по группе. Полный проход нужен единственному входу
-    за пределами батча — справочникам: переименование клиники и резолв JID меняют атрибуты
-    документов, которых в батче нет.
-    """
-    results: dict[str, int] = {}
-    with con.cursor() as cur:
-        cur.execute("SELECT public.recompute_document_attributes(NULL::text[])")
-        results["attributes"] = int(cur.fetchone()[0] or 0)
-        cur.execute("SELECT public.recompute_document_versions(NULL::text[])")
-        results["versions"] = int(cur.fetchone()[0] or 0)
-    con.commit()
-    return results
-
-
 def _analyze_exchangelog_raw(pg_conn: psycopg2.extensions.connection) -> None:
     run_analyze(pg_conn, "ANALYZE public.exchangelog_raw")
 
@@ -946,8 +928,9 @@ def egisz_etl_pipeline() -> None:
             fb_conn.close()
             pg_conn.close()
 
-    # Справочники читаются до transform: атрибуты документов батча резолвят по ним
-    # клинику и вид СЭМД.
+    # Справочники читаются до transform: клиника и вид СЭМД резолвятся по ним при разборе.
+    # Пересчёт архива задача не ведёт: хранимые реквизиты документа справочников не читают —
+    # клиника подставляется живым соединением витрины, реестр OID тоже читается на чтении.
     @task(
         pool=DWH_POOL,
         retries=2,
@@ -992,38 +975,6 @@ def egisz_etl_pipeline() -> None:
         finally:
             pg_conn.close()
 
-    # Полный проход по архиву нужен только после правки справочника: документы своего
-    # батча пересчитывает сам transform. Вне этого условия проход стоит десятки секунд
-    # и держит блокировки documents/document_attributes ради нуля изменённых строк.
-    @task(
-        pool=DWH_POOL,
-        retries=2,
-        retry_delay=timedelta(minutes=1),
-        trigger_rule="all_done",
-    )
-    def recompute_documents(dictionaries_changed: int | None) -> dict[str, int]:
-        if not dictionaries_changed:
-            raise AirflowSkipException(
-                "Справочники не менялись — атрибуты и версии вне батча пересчитывать не от чего."
-            )
-        pg_conn = _dwh_connection()
-        try:
-            results = recompute_documents_full(pg_conn)
-            if any(results.values()):
-                run_analyze(
-                    pg_conn,
-                    "ANALYZE public.document_attributes",
-                    "ANALYZE public.documents",
-                )
-            log.info(
-                "Recomputed %s attribute row(s) and %s version row(s).",
-                results["attributes"],
-                results["versions"],
-            )
-            return results
-        finally:
-            pg_conn.close()
-
     # Витрины обновляются там же, где меняется их основание, — иначе слой со «свежестью
     # фактов» отстаёт от фактов.
     @task(
@@ -1032,13 +983,9 @@ def egisz_etl_pipeline() -> None:
         retry_delay=timedelta(minutes=1),
         trigger_rule="all_done",
     )
-    def refresh_marts(
-        transformed: TransformResult | None,
-        recomputed: dict[str, int] | None,
-    ) -> None:
-        changed = int((transformed or {}).get("transformed", 0)) + sum((recomputed or {}).values())
-        if not changed:
-            raise AirflowSkipException("Ни факты, ни атрибуты не изменились — обновлять нечего.")
+    def refresh_marts(transformed: TransformResult | None) -> None:
+        if not int((transformed or {}).get("transformed", 0)):
+            raise AirflowSkipException("Факты не менялись — обновлять нечего.")
         pg_conn = _dwh_connection()
         try:
             for matview in REPORT_MARTS:
@@ -1051,10 +998,9 @@ def egisz_etl_pipeline() -> None:
     registry = extract_registry()
     dictionaries = sync_dictionaries()
     transformed = transform()
-    recomputed = recompute_documents(dictionaries)
-    refreshed = refresh_marts(transformed, recomputed)
+    refreshed = refresh_marts(transformed)
 
-    extracted >> registry >> dictionaries >> transformed >> recomputed >> refreshed
+    extracted >> registry >> dictionaries >> transformed >> refreshed
 
 
 egisz_etl_pipeline()
