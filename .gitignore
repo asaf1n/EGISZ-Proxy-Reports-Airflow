@@ -15,7 +15,7 @@ build/
 dist/
 *.egg-info/
 *.egg
-
+/deploy
 # IDE / OS
 .idea/
 .vscode/
