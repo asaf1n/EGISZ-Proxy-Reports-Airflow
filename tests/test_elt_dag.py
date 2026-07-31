@@ -96,7 +96,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     # задачи источника ретраятся, дальше цепочка идёт по all_done, а границы разбора
     # читаются из etl_state, а не приходят XCom-ом от выгрузки.
     assert 'trigger_rule="all_done"' in src
-    assert "def transform() ->" in src
+    assert "def transform(dictionary_changes" in src
 
     # Реестр подач и справочники читаются до transform: без реестра ответ ЕГИСЗ не с чем
     # связать, по справочникам резолвятся клиника и вид СЭМД.
@@ -104,15 +104,16 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert 'get_int("registry_rows")' in src
     assert "def sync_dictionaries" in src
     assert "sync_directories" in src
+    assert "recompute_document_jids(pg_conn)" in src
     assert "extracted >> registry >> dictionaries >> transformed >> refreshed" in src
     # Ретраи на задачах, ходящих к источнику: шлюз и его DNS пропадают на минуты.
     assert src.count("retries=2") >= 5
 
-    # Пересчёт архива из-за справочников снят: хранимые реквизиты документа справочников
-    # не читают — клиника подставляется живым соединением витрины, реестр OID тоже
-    # читается на чтении. Свой батч сопровождает сам transform.
-    assert "def recompute_documents" not in src
-    assert "recompute_document_attributes" not in src
+    # Смена справочников должна пересчитать сохранённый JID документов: первичный
+    # путь резолва идёт через dim_organizations.fir_oid, а витрины читают documents.jid.
+    assert "def recompute_document_jids" in src
+    assert "public.recompute_document_jids(NULL::text[])" in src
+    assert "dictionary_changes" in src
     assert "recompute_document_versions" not in src
     assert "affects_resolution" not in src
     assert "xmax" not in src

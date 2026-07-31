@@ -61,7 +61,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "Документов за период — клиент",
@@ -118,21 +118,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Успешно зарегистрирован",
@@ -183,21 +169,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 6,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Ошибка асинхронного ответа РЭМД",
@@ -248,21 +220,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 12,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Ошибка связи",
@@ -313,21 +271,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 18,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Динамика статусов по дням",
@@ -372,6 +316,14 @@
       },
       "display": "bar",
       "visualization_settings": {
+        "graph.y_axis.title_text": "% документов",
+        "graph.show_values": false,
+        "graph.x_axis.title_text": "День",
+        "graph.metrics": [
+          "Async ошибки, %",
+          "Сетевые ошибки, %",
+          "Успешно, %"
+        ],
         "column_settings": {
           "[\"name\",\"Async ошибки, %\"]": {
             "decimals": 1,
@@ -389,19 +341,6 @@
             "suffix": " %"
           }
         },
-        "graph.dimensions": [
-          "Дата"
-        ],
-        "graph.metrics": [
-          "Async ошибки, %",
-          "Сетевые ошибки, %",
-          "Успешно, %"
-        ],
-        "graph.x_axis.scale": "timeseries",
-        "graph.x_axis.title_text": "День",
-        "graph.y_axis.title_text": "% документов",
-        "graph.show_values": false,
-        "stackable.stack_type": "stacked",
         "series_settings": {
           "Async ошибки, %": {
             "axis": "left",
@@ -414,27 +353,18 @@
           "Успешно, %": {
             "color": "#689636"
           }
-        }
+        },
+        "graph.x_axis.scale": "timeseries",
+        "graph.dimensions": [
+          "Дата"
+        ],
+        "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
       "sizeY": 7,
       "row": 4,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Топ типов СЭМД — клиент",
@@ -503,21 +433,7 @@
       "sizeY": 7,
       "row": 4,
       "col": 12,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Топ-10 типов СЭМД по документам",
@@ -578,21 +494,7 @@
       "sizeY": 5,
       "row": 11,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -601,7 +503,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "errors"
+      "tab": "tab_1"
     },
     {
       "name": "Объёмы ошибок по категориям — клиент",
@@ -674,25 +576,7 @@
       "sizeY": 7,
       "row": 1,
       "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Структура ошибок по категориям — клиент",
@@ -768,25 +652,7 @@
       "sizeY": 7,
       "row": 1,
       "col": 12,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Топ типов ошибок — клиент",
@@ -891,25 +757,7 @@
       "sizeY": 7,
       "row": 8,
       "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Динамика ошибок по дням — клиент",
@@ -983,25 +831,7 @@
       "sizeY": 7,
       "row": 15,
       "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Топ СЭМД по ошибкам — клиент",
@@ -1074,25 +904,7 @@
       "sizeY": 7,
       "row": 15,
       "col": 12,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "display": "text",
@@ -1101,7 +913,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "documents"
+      "tab": "tab_2"
     },
     {
       "name": "Журнал документов — клиент",
@@ -1202,21 +1014,7 @@
       "sizeY": 12,
       "row": 1,
       "col": 0,
-      "tab": "documents",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "name": "Отправленные — клиент",
@@ -1304,21 +1102,7 @@
       "sizeY": 10,
       "row": 13,
       "col": 0,
-      "tab": "documents",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "display": "text",
@@ -1327,7 +1111,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "semd_types"
+      "tab": "tab_3"
     },
     {
       "name": "Типы СЭМД в обмене — клиент",
@@ -1402,33 +1186,27 @@
       "sizeY": 10,
       "row": 1,
       "col": 0,
-      "tab": "semd_types",
-      "metabase-field-filters": {
-        "clinic_label": {
-          "table_ref": "public.rpt_clinic_semd_activity",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_3"
     }
   ],
   "tabs": [
     {
-      "id": "overview",
+      "id": "tab_0",
       "name": "Обзор",
       "position": 0
     },
     {
-      "id": "errors",
+      "id": "tab_1",
       "name": "Ошибки регистрации ЭМД",
       "position": 1
     },
     {
-      "id": "documents",
+      "id": "tab_2",
       "name": "Документы",
       "position": 2
     },
     {
-      "id": "semd_types",
+      "id": "tab_3",
       "name": "Типы СЭМД в обмене",
       "position": 3
     }

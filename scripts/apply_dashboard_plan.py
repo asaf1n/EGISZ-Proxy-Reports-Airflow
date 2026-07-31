@@ -6,14 +6,13 @@ import json
 import re
 import sys
 from copy import deepcopy
+from contextlib import suppress
 from pathlib import Path
 
 # Запускается под PowerShell (cp1251-консоль); печатаем в UTF-8 во избежание падений
 # на символах вне cp1251 в именах карточек.
-try:
+with suppress(Exception):  # pragma: no cover
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:  # pragma: no cover
-    pass
 
 ROOT = Path(__file__).resolve().parents[1]
 DASH_01 = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
@@ -127,6 +126,10 @@ DEFAULT_DWH_PERIOD = "thismonth"
 SENT_STATE_NO_RESPONSE_LABEL = "Ответ не получен (утилизирован)"
 SENT_TABLE_NAME_PENDING = "Документы в обработке"
 SENT_TABLE_NAME_NO_RESPONSE = f"Документы: {SENT_STATE_NO_RESPONSE_LABEL.lower()}"
+SENT_UNDELIVERED_TO_CLINIC_NAME = "Недоставленные в клинику (ошибка связи шлюз-МО)"
+SENT_UNDELIVERED_TO_CLINIC_DETAIL_NAME = (
+    "Документы: недоставленные в клинику (ошибка связи шлюз-МО)"
+)
 
 SENT_STUCK_TOP_CLINICS_NAME = "Ожидание ответа по клиникам и ступеням"
 SENT_STUCK_TOP_SEMD_NAME = "Ожидание ответа по типам СЭМД и ступеням"
@@ -138,6 +141,7 @@ SENT_STUCK_TOP_SEMD_NAME = "Ожидание ответа по типам СЭМ
 RENAME_01 = {
     "Без ответа": SENT_STATE_NO_RESPONSE_LABEL,
     "Документы без ответа": SENT_TABLE_NAME_NO_RESPONSE,
+    "Объём документов по дням": "Динамика документов по дням",
 }
 
 # Переименования по остальным дашбордам — так же только не применённые. Пусто: всё,
@@ -316,11 +320,14 @@ DOCUMENT_FILTERS = (
 )
 
 DOCUMENT_VOLUME_BY_DAY_QUERY = (
-    "SELECT arrival_day AS \"Дата\", "
+    "SELECT first_sent_at::date AS \"Дата\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
     "FROM public.rpt_documents "
-    "WHERE arrival_day IS NOT NULL "
-    f"{DOCUMENT_FILTERS} GROUP BY arrival_day ORDER BY arrival_day ASC"
+    "WHERE first_sent_at::date IS NOT NULL "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "[[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] "
+    "[[AND {{status}}]] [[AND {{log_id}}]] "
+    "GROUP BY first_sent_at::date ORDER BY first_sent_at::date ASC"
 )
 
 # Распределение по статусам: три исхода плюс «В обработке». «Без ответа» исключено —
@@ -1005,6 +1012,97 @@ SENT_TAB_DESCRIPTIONS: dict[str, str] = {
     ),
 }
 
+UNDELIVERED_TO_CLINIC_FILTER_TAGS = {
+    key: deepcopy(SENT_FILTER_TEMPLATE_TAGS[key])
+    for key in ("ips_date", "semd_type", "jid", "local_uid")
+}
+UNDELIVERED_TO_CLINIC_FIELD_FILTERS = {
+    "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
+}
+UNDELIVERED_TO_CLINIC_LATEST_ERRORS = (
+    "WITH latest_errors AS ( "
+    "SELECT DISTINCT ON (tx.dwh_id) "
+    "tx.dwh_id, tx.logid, tx.log_date AS error_at, tx.message AS error_text "
+    "FROM public.transactions tx "
+    "JOIN public.documents d ON d.dwh_id = tx.dwh_id "
+    "WHERE tx.status = 'network_error' "
+    "AND d.result_logid IS NOT NULL "
+    "AND tx.logid > d.result_logid "
+    "ORDER BY tx.dwh_id, tx.logid DESC, tx.log_date DESC NULLS LAST ) "
+)
+UNDELIVERED_TO_CLINIC_QUERY = (
+    UNDELIVERED_TO_CLINIC_LATEST_ERRORS
+    + 'SELECT COUNT(DISTINCT public.rpt_documents.dwh_id)::bigint AS "Документов" '
+    "FROM latest_errors "
+    "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
+    "JOIN public.documents d ON d.dwh_id = latest_errors.dwh_id "
+    "WHERE public.rpt_documents.status IN ('success', 'async_error') "
+    "AND d.result_logid IS NOT NULL "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]"
+)
+UNDELIVERED_TO_CLINIC_DETAIL_QUERY = (
+    UNDELIVERED_TO_CLINIC_LATEST_ERRORS
+    + 'SELECT public.rpt_documents.semd_local_uid AS "localUid СЭМД", '
+    'public.rpt_documents.semd_code AS "Код СЭМД", '
+    'public.rpt_documents.semd_name AS "Наименование СЭМД", '
+    'public.rpt_documents.clinic_jid::text AS "JID Клиники", '
+    'public.rpt_documents.clinic_label AS "Клиника", '
+    'public.rpt_documents.first_sent_at AS "Дата отправки", '
+    'public.rpt_documents.ips_date AS "Дата ответа ЕГИСЗ", '
+    'public.rpt_documents.status_detail_label AS "Результат ЕГИСЗ", '
+    'd.result_logid::text AS "LOGID ответа ЕГИСЗ", '
+    'latest_errors.logid::text AS "LOGID ошибки доставки", '
+    'latest_errors.error_at AS "Дата ошибки доставки", '
+    'LEFT(COALESCE(latest_errors.error_text, \'\'), 180) AS "Текст ошибки доставки" '
+    "FROM latest_errors "
+    "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
+    "JOIN public.documents d ON d.dwh_id = latest_errors.dwh_id "
+    "WHERE public.rpt_documents.status IN ('success', 'async_error') "
+    "AND d.result_logid IS NOT NULL "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] "
+    "ORDER BY latest_errors.error_at DESC NULLS LAST, latest_errors.logid DESC "
+    "LIMIT 200"
+)
+
+
+def apply_undelivered_to_clinic(card: dict) -> None:
+    detail = card.get("name") == SENT_UNDELIVERED_TO_CLINIC_DETAIL_NAME
+    card["display"] = "table" if detail else "scalar"
+    card["description"] = (
+        "Сбой доставки результата в клинику после финального ответа ЕГИСЗ. "
+        "Источник — разобранные transactions; raw-слой после обработки не требуется."
+    )
+    card.pop("query_tier", None)
+    card.pop("source_model", None)
+    card["dataset_query"] = {
+        "type": "native",
+        "database": 1,
+        "native": {
+            "query": UNDELIVERED_TO_CLINIC_DETAIL_QUERY if detail else UNDELIVERED_TO_CLINIC_QUERY,
+            "template-tags": deepcopy(UNDELIVERED_TO_CLINIC_FILTER_TAGS),
+        },
+    }
+    card["metabase-field-filters"] = deepcopy(UNDELIVERED_TO_CLINIC_FIELD_FILTERS)
+    viz = card.setdefault("visualization_settings", {})
+    if detail:
+        viz["table.columns"] = [
+            {"enabled": True, "name": "localUid СЭМД"},
+            {"enabled": True, "name": "Код СЭМД"},
+            {"enabled": True, "name": "Наименование СЭМД"},
+            {"enabled": False, "name": "JID Клиники"},
+            {"enabled": True, "name": "Клиника"},
+            {"enabled": True, "name": "Дата отправки"},
+            {"enabled": True, "name": "Дата ответа ЕГИСЗ"},
+            {"enabled": True, "name": "Результат ЕГИСЗ"},
+            {"enabled": True, "name": "LOGID ответа ЕГИСЗ"},
+            {"enabled": True, "name": "LOGID ошибки доставки"},
+            {"enabled": True, "name": "Дата ошибки доставки"},
+            {"enabled": True, "name": "Текст ошибки доставки"},
+        ]
+
 # «Всего» — весь срез клиники, включая отправленные без ответа; «% успеха» считается
 # от корпуса с ответом, поэтому отправленные не размывают долю. Прежняя единая колонка
 # «Отправлено» разделена на два состояния: они требуют разных действий поддержки.
@@ -1042,6 +1140,7 @@ COUNT_COLUMN_SETTINGS = {
 
 def fix_sql(query: str) -> str:
     q = query
+    q = q.replace("result_msgid AS message_id", "msgid AS message_id")
     q = q.replace("semd_code_name", "semd_label")
     q = re.sub(r"END AS status_label,", 'END AS "Статус",', q)
     q = re.sub(
@@ -1192,11 +1291,18 @@ def apply_document_volume_by_day(card: dict) -> None:
     dq = card.setdefault("dataset_query", {})
     dq["native"]["query"] = DOCUMENT_VOLUME_BY_DAY_QUERY
     tags = dq["native"].setdefault("template-tags", {})
-    if "dwh_date" in tags:
-        tags["dwh_date"]["display-name"] = "По дате поступления"
-    card.setdefault("metabase-field-filters", {})["dwh_date"] = {
-        "table_ref": "public.rpt_documents",
-        "field_name": "arrival_day",
+    tags.pop("dwh_date", None)
+    if "ips_date" in tags:
+        tags["ips_date"]["display-name"] = "По дате поступления"
+    card["metabase-field-filters"] = {
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "first_sent_at"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+        "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
+        "relates_to": {"table_ref": "public.rpt_documents", "field_name": "relates_to_msgid"},
+        "emdr_id": {"table_ref": "public.rpt_documents", "field_name": "semd_emdr_id"},
+        "status": {"table_ref": "public.rpt_documents", "field_name": "status_detail_label"},
+        "log_id": {"table_ref": "public.rpt_documents", "field_name": "logid"},
     }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["Дата"]
@@ -2235,6 +2341,8 @@ def apply_01(dash: dict) -> None:
             apply_refusals_hourly(card)
         elif name == "Динамика документов по дням" and dq.get("type") == "native":
             apply_document_volume_by_day(card)
+        elif name in (SENT_UNDELIVERED_TO_CLINIC_NAME, SENT_UNDELIVERED_TO_CLINIC_DETAIL_NAME):
+            apply_undelivered_to_clinic(card)
         elif name == "Топ типов СЭМД по документам" and card.get("tab") == "archive":
             apply_semd_volume_table(card)
         elif name == "Детализация контроля качества":
@@ -2258,6 +2366,10 @@ def apply_01(dash: dict) -> None:
             card["click_behavior"] = build_drill(DRILL_BY_NAME[name])
         elif name in DRILL_BY_NAME:
             card.pop("click_behavior", None)
+
+        if card.get("tab") == "operational":
+            card.pop("click_behavior", None)
+            card.pop("metabase-model-drill-params", None)
 
         if name in SLIM_FILTERS and card.get("dataset_query", {}).get("type") == "native":
             nat = card["dataset_query"]["native"]

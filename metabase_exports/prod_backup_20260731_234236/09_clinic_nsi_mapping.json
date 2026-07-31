@@ -1,0 +1,124 @@
+{
+  "name": "Сопоставление клиник с НСИ",
+  "width": "full",
+  "description": "Аудит сопоставления клиник из CASH/JPERSONS со справочником НСИ организаций. Источник — `rpt_clinic_nsi_mapping`.",
+  "parameters": [],
+  "cards": [
+    {
+      "name": "Клиники с сопоставлением НСИ",
+      "description": "Клиники из JPERSONS, для которых заполнен OID НСИ. Наименование CASH берётся из JPERSONS; наименование НСИ — из отдельного поля сопоставления, если оно загружено.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped ORDER BY jid",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "JID"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование CASH"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование НСИ"
+          },
+          {
+            "enabled": true,
+            "name": "ИНН"
+          },
+          {
+            "enabled": true,
+            "name": "OID"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"JID\"]": {
+            "column_title": "JID"
+          },
+          "[\"name\",\"OID\"]": {
+            "column_title": "OID"
+          },
+          "[\"name\",\"ИНН\"]": {
+            "column_title": "ИНН"
+          },
+          "[\"name\",\"Наименование CASH\"]": {
+            "column_title": "Наименование CASH"
+          },
+          "[\"name\",\"Наименование НСИ\"]": {
+            "column_title": "Наименование НСИ"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 0,
+      "col": 0
+    },
+    {
+      "name": "Клиники без сопоставления НСИ",
+      "description": "Клиники из JPERSONS, для которых OID НСИ не заполнен.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped ORDER BY jid",
+          "template-tags": {}
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "JID"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование CASH"
+          },
+          {
+            "enabled": true,
+            "name": "Наименование НСИ"
+          },
+          {
+            "enabled": true,
+            "name": "ИНН"
+          },
+          {
+            "enabled": true,
+            "name": "OID"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"JID\"]": {
+            "column_title": "JID"
+          },
+          "[\"name\",\"OID\"]": {
+            "column_title": "OID"
+          },
+          "[\"name\",\"ИНН\"]": {
+            "column_title": "ИНН"
+          },
+          "[\"name\",\"Наименование CASH\"]": {
+            "column_title": "Наименование CASH"
+          },
+          "[\"name\",\"Наименование НСИ\"]": {
+            "column_title": "Наименование НСИ"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 10,
+      "row": 10,
+      "col": 0
+    }
+  ]
+}

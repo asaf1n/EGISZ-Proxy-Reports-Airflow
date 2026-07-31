@@ -40,7 +40,8 @@ REPORT_MARTS = (
 
 ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
 DIRECTORY_COLUMNS = {
-    "dim_organizations": ("jid", "name", "inn", "address", "fir_oid"),
+    # fir_oid intentionally stays out of the JPERSONS sync: it is filled from NSI.
+    "dim_organizations": ("jid", "name", "inn", "address"),
     "dim_licenses": ("id", "service_type", "jid", "mo_uid", "mo_domen", "bdate", "fdate", "kind", "modifydate"),
 }
 DIRECTORY_PK_COLUMNS = {
@@ -58,8 +59,7 @@ DEFAULTS: dict[str, str | int] = {
     "extract_raw_rounds": 3,
     "registry_rows": 5000,
     "registry_rounds": 3,
-    # Глубина приёма по CREATEDATE источника: строки старше окна не забираются.
-    # 0 снимает ограничение — разовый режим для полного заполнения с нуля.
+    # Глубина приёма по CREATEDATE источника; 0 отключает ограничение.
     "extract_depth_days": 30,
     "transform_rows": 3000,
     "transform_rounds": 6,
@@ -91,6 +91,7 @@ class TransformResult(TypedDict):
     unlinked: int
     sends_without_clinic: int
     transform_logid_cursor: int
+    dictionary_changes: int
 
 
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
@@ -178,16 +179,24 @@ def normalize_registry_key(value: Any) -> str | None:
     return text or None
 
 
+def is_iemk_reply_to(reply_to: Any) -> bool:
+    """ИЭМК endpoint: порт 9921."""
+    text = str(reply_to or "")
+    marker = ":9921"
+    pos = text.find(marker)
+    if pos < 0:
+        return False
+    end = pos + len(marker)
+    return end == len(text) or not text[end].isdigit()
+
+
 def contiguous_prefix_end(logids: list[int], *, after: int) -> int:
     """Последний LOGID непрерывного участка страницы источника, начинающегося за ``after``.
 
-    Отметка выгрузки не переступает разрыв: строка, которую шлюз закоммитил позже соседей,
-    иначе осталась бы ниже отметки навсегда. Пока идентификаторы идут подряд, отметка равна
-    последнему из них; на первом пропуске она останавливается, и строку подберёт обычный
-    прямой ход следующего запуска. Строки выше разрыва уже загружены в raw — их разберут,
-    когда отметка дойдёт.
+    Отметка выгрузки не переступает разрыв LOGID. Пока идентификаторы идут подряд,
+    отметка равна последнему из них; на первом пропуске она останавливается.
 
-    ``after <= 0`` — холодный старт: началом участка становится первая строка источника.
+    ``after <= 0`` задаёт первую строку источника как начало участка.
     """
     if not logids:
         return after
@@ -321,25 +330,17 @@ def load_message_registry(
 ) -> int:
     """Load EGISZ_MESSAGES rows into dim_message_document.
 
-    Ключ приводится к каноническому виду, идентификатор документа — к нижнему регистру,
-    чтобы он совпадал с documents.dwh_id без приведения на чтении.
+    EGMID задаёт строку реестра. ИЭМК не использует localUid, поэтому DOCUMENTID
+    не переносится в document_uid для endpoint :9921.
     """
-    # Один ключ реестра приходит в батче несколько раз: повторная подача документа и
-    # разные написания идентификатора сообщения дают ту же каноническую форму. ON CONFLICT
-    # DO UPDATE не может задеть строку дважды в одной команде, поэтому в батче остаётся
-    # запись с наибольшим EGMID — тот же исход, что и при загрузке этих строк по одной.
-    latest: dict[str, tuple[Any, ...]] = {}
+    values: list[tuple[Any, ...]] = []
     for egmid, msgid, reply_to, document_uid, created_at in rows:
-        key = normalize_registry_key(msgid)
-        uid = str(document_uid or "").strip().lower()
-        if not key or not uid:
+        if egmid is None:
             continue
-        candidate = (key, uid, reply_to, int(egmid), created_at)
-        current = latest.get(key)
-        if current is None or candidate[3] >= current[3]:
-            latest[key] = candidate
+        key = normalize_registry_key(msgid)
+        uid = None if is_iemk_reply_to(reply_to) else str(document_uid or "").strip().lower() or None
+        values.append((int(egmid), key, uid, reply_to, created_at))
 
-    values = list(latest.values())
     if not values:
         return 0
 
@@ -347,12 +348,12 @@ def load_message_registry(
         execute_values(
             cur,
             """
-            INSERT INTO dim_message_document (msgid, document_uid, reply_to, source_egmid, created_at)
+            INSERT INTO dim_message_document (source_egmid, msgid, document_uid, reply_to, created_at)
             VALUES %s
-            ON CONFLICT (msgid) DO UPDATE SET
+            ON CONFLICT (source_egmid) DO UPDATE SET
+                msgid = EXCLUDED.msgid,
                 document_uid = EXCLUDED.document_uid,
                 reply_to = EXCLUDED.reply_to,
-                source_egmid = EXCLUDED.source_egmid,
                 created_at = EXCLUDED.created_at,
                 loaded_at = now()
             """,
@@ -381,6 +382,15 @@ def transform_raw_to_facts(
         result = cur.fetchone()[0] or {}
     con.commit()
     return {str(key): int(value or 0) for key, value in dict(result).items()}
+
+
+def recompute_document_jids(con: psycopg2.extensions.connection) -> int:
+    """Re-resolve stored document JID after organization/endpoint dictionaries changed."""
+    with con.cursor() as cur:
+        cur.execute("SELECT public.recompute_document_jids(NULL::text[])")
+        row = cur.fetchone()
+    con.commit()
+    return int((row or [0])[0] or 0)
 
 
 def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
@@ -436,10 +446,8 @@ def _proxy_connection():
     return connect_fb(Connection.get(PROXY_CONN_ID))
 
 
-# Нижняя граница окна приёма по каждому источнику. Отбор по дате живёт здесь, а не в
-# постраничном запросе: keyset-пагинация идёт по идентификатору, и условие на дату
-# внутри страницы вернуло бы пустой результат на старом хвосте — цикл принял бы это за
-# конец данных и отметка встала бы навсегда.
+# Нижняя граница окна приёма по каждому источнику. Отбор по дате живёт здесь, а
+# постраничная keyset-пагинация идёт по идентификатору.
 #
 # `probe` — дата строки сразу за отметкой (чтение по индексу первичного ключа), `floor` —
 # граница окна (скан по диапазону дат). Тяжёлый запрос выполняется только когда проба
@@ -553,8 +561,6 @@ def fetch_message_registry_after_cursor(
                 CREATEDATE
             FROM EGISZ_MESSAGES
             WHERE EGMID > ?
-              AND MSGID IS NOT NULL
-              AND DOCUMENTID IS NOT NULL
             ORDER BY EGMID
             ROWS ?
             """,
@@ -575,8 +581,8 @@ def fetch_organizations(con: Any) -> list[tuple[Any, ...]]:
                 JID,
                 JNAME,
                 JINN,
-                JADDR,
-                FIR_OID
+                JADDR
+                -- FIR_OID is not selected here: NSI matching owns dim_organizations.fir_oid.
             FROM JPERSONS
             WHERE JID IS NOT NULL
             """
@@ -826,6 +832,7 @@ def transform_exchangelog_batch(
     *,
     transform_rows: int,
     transform_rounds: int,
+    dictionary_changes: int = 0,
 ) -> TransformResult:
     """exchangelog_raw → documents/transactions; двигает отметку разбора.
 
@@ -873,7 +880,7 @@ def transform_exchangelog_batch(
     if totals["transformed"] > 0:
         _analyze_exchangelog_documents(pg_conn)
 
-    return {**totals, "transform_logid_cursor": watermark}
+    return {**totals, "transform_logid_cursor": watermark, "dictionary_changes": int(dictionary_changes)}
 
 
 @dag(
@@ -949,8 +956,15 @@ def egisz_etl_pipeline() -> None:
                 len(license_rows),
             )
             changed = sync_directories(pg_conn, organization_rows, license_rows)
-            log.info("%s dictionary row(s) changed.", changed)
-            return changed
+            relinked = recompute_document_jids(pg_conn) if changed else 0
+            if relinked:
+                _analyze_exchangelog_documents(pg_conn)
+            log.info(
+                "%s dictionary row(s) changed; %s document row(s) re-resolved.",
+                changed,
+                relinked,
+            )
+            return changed + relinked
         finally:
             fb_conn.close()
             pg_conn.close()
@@ -964,13 +978,14 @@ def egisz_etl_pipeline() -> None:
         retry_delay=timedelta(minutes=1),
         trigger_rule="all_done",
     )
-    def transform() -> TransformResult:
+    def transform(dictionary_changes: int | None = None) -> TransformResult:
         pg_conn = _dwh_connection()
         try:
             return transform_exchangelog_batch(
                 pg_conn,
                 transform_rows=get_int("transform_rows"),
                 transform_rounds=get_int("transform_rounds"),
+                dictionary_changes=int(dictionary_changes or 0),
             )
         finally:
             pg_conn.close()
@@ -984,7 +999,9 @@ def egisz_etl_pipeline() -> None:
         trigger_rule="all_done",
     )
     def refresh_marts(transformed: TransformResult | None) -> None:
-        if not int((transformed or {}).get("transformed", 0)):
+        if not int((transformed or {}).get("transformed", 0)) and not int(
+            (transformed or {}).get("dictionary_changes", 0)
+        ):
             raise AirflowSkipException("Факты не менялись — обновлять нечего.")
         pg_conn = _dwh_connection()
         try:
@@ -997,7 +1014,7 @@ def egisz_etl_pipeline() -> None:
     extracted = extract_exchangelog()
     registry = extract_registry()
     dictionaries = sync_dictionaries()
-    transformed = transform()
+    transformed = transform(dictionaries)
     refreshed = refresh_marts(transformed)
 
     extracted >> registry >> dictionaries >> transformed >> refreshed

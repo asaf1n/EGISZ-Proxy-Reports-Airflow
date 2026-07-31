@@ -54,10 +54,7 @@ AS $$
 $$;
 
 -- Связка цепочки и реквизиты СЭМД читаются из transactions (xml_*, parse-once).
--- на LOGID), а не повторным разбором msgtext в exchangelog_raw. Функциональные индексы по
--- XML-выражениям над msgtext выполняли xml_text на КАЖДОЙ вставке в самый горячий
--- staging-слой и при этом не использовались ни одним запросом — это была чистая
--- write-amplification. JOIN'ы transform идут по PK-полосе logid и по индексам dim/fact ниже.
+-- JOIN'ы transform идут по PK-полосе logid и по индексам dim/fact ниже.
 DROP INDEX IF EXISTS idx_exchangelog_raw_msgid_norm_logid_desc;
 DROP INDEX IF EXISTS idx_exchangelog_raw_xml_message_id_norm;
 DROP INDEX IF EXISTS idx_exchangelog_raw_xml_relates_to_message_norm;
@@ -130,25 +127,23 @@ AS $$
     );
 $$;
 
--- Реестр OID медорганизаций. OID регистрационный, у ЮЛ он один; несколько OID на одном ЮЛ
--- в EGISZ_LICENSES означают отправку дочерних клиник с хоста головного ЮЛ. Поэтому пара
--- берётся по собственному хосту лицензии (gost-<N> адреса совпадает с её же JID), а не по
--- отметке обмена MODIFYDATE, которая тикает при повторной отправке типа СЭМД.
+-- Реестр OID медорганизаций. Первичный источник OID — справочник ЮЛ:
+-- dim_organizations.fir_oid наполняется из НСИ организаций. Лицензии остаются
+-- запасным источником для определения ЮЛ по хосту обмена, а не по OID документа.
 CREATE OR REPLACE VIEW public.dim_clinic_oid AS
 SELECT DISTINCT ON (oid) oid, jid
 FROM (
     SELECT
-        NULLIF(btrim(dl.mo_uid), '') AS oid,
-        dl.jid,
-        ((regexp_match(COALESCE(dl.mo_domen, ''), 'gost-([0-9]+)'))[1] = dl.jid::text) AS own_host
-    FROM public.dim_licenses dl
-    WHERE dl.jid IS NOT NULL
-      AND NULLIF(btrim(dl.mo_uid), '') IS NOT NULL
+        NULLIF(btrim(o.fir_oid), '') AS oid,
+        o.jid
+    FROM public.dim_organizations o
+    WHERE o.jid IS NOT NULL
+      AND NULLIF(btrim(o.fir_oid), '') IS NOT NULL
 ) t
-ORDER BY oid, own_host DESC NULLS LAST, jid;
+ORDER BY oid, jid;
 
 COMMENT ON VIEW public.dim_clinic_oid IS
-'Реестр OID медорганизаций: OID → ЮЛ. При нескольких кандидатах выигрывает ЮЛ с собственным хостом.';
+'Реестр OID медорганизаций: OID → ЮЛ из dim_organizations.fir_oid; host/лицензии используются только запасным резолвом.';
 
 -- Адрес обмена → ЮЛ. MO_DOMEN лицензии и REPLY_TO реестра подач — один и тот же адрес,
 -- поэтому представление нужно только именованным хостам: числовые разбираются из адреса.
@@ -279,7 +274,7 @@ $$;
 -- он ОБЯЗАН меняться при любой правке СЭМД и в ряде сценариев даже при повторной выгрузке
 -- без изменений (UpdateCase/UpdateMedRecord) — то есть НЕ стабилен на жизненном цикле
 -- документа: корректировка ошибок штатно порождает новый localUid ⇒ новый dwh_id (новый
--- экземпляр), а не переписывает прежний.
+-- экземпляр), без перезаписи существующего dwh_id.
 -- Стабильный ключ набора версий (CDA setId) в журнал не попадает: тело СЭМД (base64-CDA)
 -- шлюзом не сохраняется (см. README §«Версии и идентичность документа»). Поэтому
 -- группировка версий в один логический документ ведётся отдельным слоем document_group_id,
@@ -357,8 +352,8 @@ CREATE OR REPLACE FUNCTION public.parse_exchangelog_row(
 )
 RETURNS TABLE (
     action text,
-    exchange_msgid_norm text,
-    relates_to_id text,
+    msgid text,
+    relates_to_msgid text,
     local_uid text,
     emdr_id text,
     dwh_id text,
@@ -933,7 +928,7 @@ VALUES
     ('xds_pat_001_text', 3, NULL, NULL, NULL, '(?is)\yPAT-001\y', 'ИЭМК: пациент не определён', 'Ошибки ИЭМК'),
 
     -- ------------------------------------------------------------------
-    -- Ярус 4: широкий текстовый фолбэк. Применяется, только если ярусы 1–3 молчат.
+    -- Ярус 4: широкий текстовый фолбэк. Применяется при отсутствии совпадений на ярусах 1–3.
     -- Держим минимальным: маски вида «любое упоминание СНИЛС/организации» перехватывали
     -- тексты, которые информативнее показать как есть.
     -- ------------------------------------------------------------------
@@ -1101,8 +1096,7 @@ ON CONFLICT (error_type) DO UPDATE SET
     parent_nsi_error_code = EXCLUDED.parent_nsi_error_code,
     updated_at = now();
 
--- Прунинг: тип, переставший порождаться правилами, иначе остался бы в словаре
--- и продолжал раздавать категорию строкам витрины.
+-- Прунинг типов, не входящих в результат классификации.
 DELETE FROM dim_error_type_group g
 WHERE g.error_type <> 'Неизвестная ошибка'
   AND NOT EXISTS (

@@ -12,6 +12,7 @@
 
 DROP VIEW IF EXISTS public.rpt_health_by_clinic CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_signals CASCADE;
+DROP VIEW IF EXISTS public.rpt_health_message_registry_no_document CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_proxy_db CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_sync CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_versions CASCADE;
@@ -45,19 +46,18 @@ END $$;
 DROP VIEW IF EXISTS public.rpt_documents CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_versions CASCADE;
 DROP VIEW IF EXISTS public.rpt_documents_sent CASCADE;
--- Предшественник rpt_documents_sent: имя отражало наблюдателя («ждёт»), а не состояние
--- документа. Дроп нужен, пока в развёртываниях остаётся представление под старым именем.
+DROP VIEW IF EXISTS public.rpt_document_file_request CASCADE;
+-- Снятое имя представления отправленных документов.
 DROP VIEW IF EXISTS public.rpt_documents_waiting CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_lineage CASCADE;
--- Витрина доступных типов СЭМД строилась на EGISZ_LICENSES; её заменяет
--- rpt_clinic_semd_activity на фактах обмена.
+DROP VIEW IF EXISTS public.rpt_clinic_nsi_mapping CASCADE;
+-- Снятое имя витрины типов СЭМД по лицензиям.
 DROP VIEW IF EXISTS public.rpt_clinic_semd_licenses CASCADE;
 DROP VIEW IF EXISTS public.rpt_clinic_semd_activity CASCADE;
 
 -- Классификация даёт документу два поля: error_types (канонические типы,
 -- error_classify) и error_text (исходные <message>, error_messages_row).
--- Прочие интерпретаторы и канонизация на чтении вне контракта; их дроп и снятие
--- error_summary идут ПОСЛЕ дропа витрин выше — rpt-слой на них ссылается.
+-- Объекты вне текущего контракта классификации.
 DROP FUNCTION IF EXISTS public.error_interpretation_schematron_chunk(text);
 DROP FUNCTION IF EXISTS public.error_interpretation_item(text, text);
 DROP FUNCTION IF EXISTS public.error_interpretation_row(jsonb);
@@ -67,8 +67,7 @@ DROP FUNCTION IF EXISTS public.canonical_error_list(text);
 DROP FUNCTION IF EXISTS public.error_category(text);
 ALTER TABLE public.documents DROP COLUMN IF EXISTS error_summary;
 ALTER TABLE public.transactions DROP COLUMN IF EXISTS error_summary;
--- Мёртвый предшественник dim_error_rules: жил только в старых развёртываниях,
--- ни одна функция его не читает.
+-- Снятая таблица правил классификации.
 DROP TABLE IF EXISTS public.error_interpretation_rules;
 
 -- ---------------------------------------------------------------- section: document_attributes
@@ -87,18 +86,12 @@ CREATE TABLE IF NOT EXISTS public.document_attributes (
     doctor_name text,
     patient_hash text,
     doctor_hash text,
-    request_msgid text,
     updated_at timestamptz DEFAULT now()
 );
 
--- request_msgid — MSGID строки getDocumentFile (request_logid), нормализованный source MSGID.
--- На грейне документа его нет: documents.result_msgid — это MSGID ответа ЕГИСЗ, а для
--- «Отправлено» нужен идентификатор запроса файла.
-ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS request_msgid text;
+ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS request_msgid;
 
--- egisz_subsystem — подсистема ЕГИСЗ документа (РЭМД/ИЭМК, transactions.egisz_subsystem).
--- Отчётный слой (rpt_network_errors) не читает message-грейн transactions напрямую,
--- поэтому подсистема фиксируется здесь: последнее непустое значение по строкам документа.
+-- egisz_subsystem — подсистема ЕГИСЗ документа.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -155,24 +148,23 @@ BEGIN
         doctor_name,
         patient_hash,
         doctor_hash,
-        request_msgid,
         egisz_subsystem,
         updated_at
     )
     SELECT
         d.dwh_id,
         public.clean_text_value(d.org_oid) AS clinic_oid_xml,
-        public.clean_host(COALESCE(ep.endpoint, reg.reply_to)) AS clinic_host,
+        public.clean_host(COALESCE(attrs.clinic_host, ep.endpoint, reg.reply_to)) AS clinic_host,
         d.jid_resolve_method AS clinic_jid_resolve_method,
         tx.patient_name_masked,
         tx.snils_masked,
         tx.doctor_name,
         COALESCE(tx.patient_hash, d.patient_hash) AS patient_hash,
         COALESCE(tx.doctor_hash, d.doctor_hash) AS doctor_hash,
-        req.request_msgid,
         sub.egisz_subsystem,
         now() AS updated_at
     FROM public.documents d
+    LEFT JOIN public.document_attributes attrs ON attrs.dwh_id = d.dwh_id
     LEFT JOIN LATERAL (
         SELECT
             t.patient_name_masked,
@@ -185,14 +177,13 @@ BEGIN
         ORDER BY t.log_date DESC NULLS LAST, t.logid DESC
         LIMIT 1
     ) tx ON TRUE
-    -- Адрес обмена — реквизит самой отправки: он лежит в строке запроса файла, а если её
-    -- текста нет — в REPLY_TO реестра подач (тот же адрес, что MO_DOMEN лицензии).
+    -- Источники host: сохранённый атрибут, текст транзакции, REPLY_TO реестра.
     LEFT JOIN LATERAL (
         SELECT public.extract_gost_endpoint(
-            COALESCE(r.logtext, '') || ' ' || COALESCE(r.msgtext, '')
+            COALESCE(t.message, '')
         ) AS endpoint
-        FROM public.exchangelog_raw r
-        WHERE r.logid = d.request_logid
+        FROM public.transactions t
+        WHERE t.logid = d.request_logid
         LIMIT 1
     ) ep ON TRUE
     LEFT JOIN LATERAL (
@@ -202,13 +193,6 @@ BEGIN
         ORDER BY m.source_egmid DESC
         LIMIT 1
     ) reg ON TRUE
-    LEFT JOIN LATERAL (
-        SELECT t.source_message_id_norm AS request_msgid
-        FROM public.transactions t
-        WHERE t.logid = d.request_logid
-          AND t.source_message_id_norm IS NOT NULL
-        LIMIT 1
-    ) req ON TRUE
     LEFT JOIN LATERAL (
         SELECT t.egisz_subsystem
         FROM public.transactions t
@@ -227,7 +211,6 @@ BEGIN
         doctor_name = EXCLUDED.doctor_name,
         patient_hash = EXCLUDED.patient_hash,
         doctor_hash = EXCLUDED.doctor_hash,
-        request_msgid = EXCLUDED.request_msgid,
         egisz_subsystem = EXCLUDED.egisz_subsystem,
         updated_at = now()
     -- Change-guard: переписываем строку (и двигаем updated_at) только при реальном
@@ -242,7 +225,6 @@ BEGIN
      OR public.document_attributes.doctor_name IS DISTINCT FROM EXCLUDED.doctor_name
      OR public.document_attributes.patient_hash IS DISTINCT FROM EXCLUDED.patient_hash
      OR public.document_attributes.doctor_hash IS DISTINCT FROM EXCLUDED.doctor_hash
-     OR public.document_attributes.request_msgid IS DISTINCT FROM EXCLUDED.request_msgid
      OR public.document_attributes.egisz_subsystem IS DISTINCT FROM EXCLUDED.egisz_subsystem;
 
     GET DIAGNOSTICS refreshed = ROW_COUNT;
@@ -250,14 +232,82 @@ BEGIN
 END;
 $$;
 
--- Параметр по умолчанию покрывает полный проход, поэтому обёртки без аргументов нет.
+CREATE OR REPLACE FUNCTION public.recompute_document_jids(p_dwh_ids text[] DEFAULT NULL)
+RETURNS bigint
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    affected_dwh_ids text[] := ARRAY[]::text[];
+    refreshed bigint := 0;
+BEGIN
+    WITH target_documents AS (
+        SELECT
+            d.dwh_id,
+            d.jid,
+            d.jid_resolve_method,
+            d.org_oid,
+            COALESCE(attrs.clinic_host, '') || ' ' || COALESCE(ep.endpoint, '') || ' ' || COALESCE(reg.reply_to, '') AS endpoint_text
+        FROM public.documents d
+        LEFT JOIN public.document_attributes attrs ON attrs.dwh_id = d.dwh_id
+        LEFT JOIN LATERAL (
+            SELECT public.extract_gost_endpoint(
+                COALESCE(t.message, '')
+            ) AS endpoint
+            FROM public.transactions t
+            WHERE t.logid = d.request_logid
+            LIMIT 1
+        ) ep ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT m.reply_to
+            FROM public.dim_message_document m
+            WHERE m.document_uid = d.dwh_id
+            ORDER BY m.source_egmid DESC
+            LIMIT 1
+        ) reg ON TRUE
+        WHERE d.dwh_id IS NOT NULL
+          AND (p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids))
+    ),
+    resolved AS (
+        SELECT
+            d.dwh_id,
+            r.jid,
+            r.resolve_method
+        FROM target_documents d
+        JOIN LATERAL public.resolve_document_jid(d.org_oid, d.endpoint_text) r ON TRUE
+    ),
+    updated AS (
+        UPDATE public.documents d
+        SET
+            jid = r.jid,
+            jid_resolve_method = r.resolve_method,
+            updated_at = now()
+        FROM resolved r
+        WHERE d.dwh_id = r.dwh_id
+          AND (
+              d.jid IS DISTINCT FROM r.jid
+           OR d.jid_resolve_method IS DISTINCT FROM r.resolve_method
+          )
+        RETURNING d.dwh_id
+    )
+    SELECT COALESCE(array_agg(dwh_id), ARRAY[]::text[])
+    INTO affected_dwh_ids
+    FROM updated;
+
+    refreshed := COALESCE(cardinality(affected_dwh_ids), 0);
+    IF refreshed > 0 THEN
+        PERFORM public.recompute_document_attributes(affected_dwh_ids);
+    END IF;
+
+    RETURN refreshed;
+END;
+$$;
+
+-- Параметр по умолчанию покрывает полный проход.
 DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui();
 DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[]);
 
 -- error_text на грейне документа принадлежит последнему ответу и проставляется
--- в transform вместе со статусом. Отдельная сверка по архиву здесь не нужна и вредна:
--- выбирая последнее сообщение С текстом, она возвращала текст отказа на документы,
--- которые прошли со второй попытки.
+-- в transform вместе со статусом.
 DROP FUNCTION IF EXISTS public.repair_document_error_text();
 
 -- ---------------------------------------------------------------- section: rpt_documents
@@ -315,15 +365,14 @@ SELECT
     -- пришла с OID, которого нет ни в одной лицензии. Признак живой — реестр меняется
     -- справочником, а не фактами документа.
     (NULLIF(btrim(d.org_oid), '') IS NOT NULL AND oid_ref.jid IS NULL) AS clinic_oid_unknown,
-    -- Транспорт СЭМД (README §«Парсинг»): отправка = request_*, исход = result_*.
-    -- relates_to_msgid (relatesToMessage ответа) = request_msgid у склеенных — ключ корреляции.
+    -- msgid — собственный MSGID текущего события документа; relates_to_msgid —
+    -- корреляционный MSGID из XML relatesToMessage/relatesTo.
+    public.clean_text_value(d.msgid) AS msgid,
     public.clean_text_value(d.relates_to_msgid) AS relates_to_msgid,
     -- LOGID состояния: исход если есть, иначе LOGID отправки («Отправлено» несёт LOGID отправки).
     COALESCE(d.result_logid, d.request_logid)::text AS logid,
     d.request_logid::text AS request_logid,
     d.result_logid::text AS result_logid,
-    a.request_msgid,
-    d.result_msgid,
     -- Время отклика ЕГИСЗ: от запроса файла (шаг 6 схемы регистрации) до ответа.
     -- Считается по журналу, а не по дате создания CDA: document_created_at приходит далеко
     -- не во всех отправках, и метрика на его основе покрывала доли процента корпуса.
@@ -422,9 +471,8 @@ SELECT
     r.clinic_jid,
     r.clinic_name,
     r.clinic_label,
+    r.msgid,
     r.relates_to_msgid,
-    r.request_msgid,
-    r.result_msgid,
     r.clinic_host,
     r.attempt_count,
     r.is_resubmitted
@@ -434,12 +482,62 @@ WHERE r.sent_state IS NOT NULL;
 COMMENT ON VIEW public.rpt_documents_sent IS
 'Отправленные документы без ответа ЕГИСЗ: ступень возраста обработки (dim_pending_segments) и состояние отправки («В обработке» / «Без ответа»).';
 
+-- ---------------------------------------------------------------- section: document_file_request
+
+CREATE OR REPLACE VIEW public.rpt_document_file_request AS
+SELECT
+    tx.log_date AS request_at,
+    tx.logid::text AS request_logid,
+    tx.msgid,
+    public.clean_text_value(tx.xml_local_uid) AS semd_local_uid,
+    public.clean_text_value(tx.xml_dwh_id) AS dwh_id,
+    public.clean_text_value(tx.xml_emdr_id) AS emdr_id,
+    public.normalize_semd_code(tx.xml_semd_code) AS semd_code,
+    st.name AS semd_name,
+    COALESCE(NULLIF(btrim(st.name), ''), public.normalize_semd_code(tx.xml_semd_code), '(неизвестно)') AS semd_label,
+    tx.jid::text AS clinic_jid,
+    o.name AS clinic_name,
+    COALESCE(NULLIF(btrim(o.name), ''), 'Клиника JID: ' || tx.jid::text, '(неизвестно)') AS clinic_label,
+    public.clean_text_value(tx.xml_org_oid) AS clinic_oid,
+    tx.egisz_subsystem,
+    tx.link_method,
+    next_tx.logid::text AS next_logid,
+    next_tx.source_action AS next_action,
+    next_tx.egisz_subsystem AS next_egisz_subsystem,
+    next_tx.link_method AS next_link_method,
+    existing_doc.dwh_id AS existing_document_dwh_id,
+    existing_doc.status AS existing_document_status,
+    existing_doc.registered_at AS existing_document_registered_at
+FROM public.transactions tx
+LEFT JOIN public.transactions next_tx ON next_tx.logid = tx.logid + 1
+LEFT JOIN public.dim_organizations o ON o.jid = tx.jid
+LEFT JOIN LATERAL (
+    SELECT dst.*
+    FROM public.dim_semd_types dst
+    WHERE dst.oid = public.normalize_semd_code(tx.xml_semd_code)
+    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
+    LIMIT 1
+) st ON TRUE
+LEFT JOIN LATERAL (
+    SELECT d.dwh_id, d.status, d.registered_at
+    FROM public.documents d
+    WHERE lower(NULLIF(btrim(d.emdr_id), '')) = lower(NULLIF(btrim(tx.xml_emdr_id), ''))
+    ORDER BY d.registered_at DESC NULLS LAST, d.last_callback_at DESC NULLS LAST, d.result_logid DESC NULLS LAST
+    LIMIT 1
+) existing_doc ON TRUE
+WHERE tx.source_action = 'getDocumentFile'
+  AND NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL;
+
+COMMENT ON VIEW public.rpt_document_file_request IS
+'История запросов файлов уже зарегистрированных ЭМД: getDocumentFile с emdrId. Это не подача документа и не источник состояния documents.status=sent.';
+
+-- ---------------------------------------------------------------- section: transport
+
 CREATE OR REPLACE VIEW public.rpt_network_errors AS
 SELECT
     r.ips_date,
     r.logid,
-    r.result_msgid,
-    r.request_msgid,
+    r.msgid,
     r.dwh_id,
     r.semd_local_uid,
     r.relates_to_msgid,
@@ -472,8 +570,7 @@ COMMENT ON VIEW public.rpt_network_errors IS
 --      (один LEFT JOIN к dim_error_type_group);
 --   2) JOIN rpt_documents 1:1 по dwh_id — display-колонки добавляются ПОСЛЕ дедупа.
 -- Атом вне словаря — это формулировка отказа, не покрытая правилом: пропускаем её
--- как есть в категорию «Прочие». Подмена такой строки заглушкой скрывала бы от
--- аналитика ровно то, ради чего он открывает разбор.
+-- как есть в категорию «Прочие».
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
 WITH atom_types AS (
     SELECT DISTINCT
@@ -560,9 +657,23 @@ WHERE d.dwh_id IS NOT NULL;
 COMMENT ON VIEW public.rpt_document_lineage IS
 'Lineage документа: OID и адрес обмена из журнала рядом с ЮЛ, к которому их относит реестр OID.';
 
--- Типы СЭМД, которые клиника фактически отправляет: грейн (clinic_jid, semd_code) по
--- документам, а не по лицензиям. Прежняя витрина строилась на EGISZ_LICENSES и выдавала
--- за «актуальность» отметку MODIFYDATE — маркер повторной отправки, а не свойство лицензии.
+CREATE OR REPLACE VIEW public.rpt_clinic_nsi_mapping AS
+SELECT
+    o.jid,
+    o.name AS cash_name,
+    COALESCE(NULLIF(btrim(o.nsi_name), ''), NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), '')) AS nsi_name,
+    o.inn,
+    public.clean_text_value(o.fir_oid) AS oid,
+    (NULLIF(btrim(o.fir_oid), '') IS NOT NULL) AS is_mapped
+FROM public.dim_organizations o
+LEFT JOIN public.dim_nsi_organization n ON n.oid = public.clean_text_value(o.fir_oid)
+WHERE o.jid IS NOT NULL;
+
+COMMENT ON VIEW public.rpt_clinic_nsi_mapping IS
+'Аудит сопоставления клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID и признак сопоставления.';
+
+-- Типы СЭМД, которые клиника фактически отправляет: грейн (clinic_jid, semd_code)
+-- по документам.
 -- clinic_label собирается идентично rpt_documents, чтобы общий дашборд-фильтр «Клиника»
 -- привязывался одним значением к обеим витринам.
 CREATE OR REPLACE VIEW public.rpt_clinic_semd_activity AS
@@ -814,6 +925,43 @@ SELECT
     (SELECT MAX(COALESCE(result_logid, request_logid)) FROM public.documents) AS "DWH max LOGID fact",
     (SELECT COUNT(DISTINCT dwh_id) FROM public.documents)::bigint AS "Всего документов";
 
+CREATE OR REPLACE VIEW public.rpt_health_message_registry_no_document AS
+SELECT
+    tx.log_date AS "Дата события",
+    tx.logid::text AS "LOGID",
+    tx.source_action AS "Метод",
+    tx.status AS "Статус ответа",
+    tx.link_method AS "Метод связки",
+    tx.egisz_subsystem AS "Подсистема ЕГИСЗ",
+    tx.msgid AS "MSGID сообщения",
+    tx.relates_to_msgid AS "relatesTo MSGID",
+    reg.source_egmid::text AS "EGMID EGISZ_MESSAGES",
+    reg.created_at AS "Дата EGISZ_MESSAGES",
+    tx.dwh_id AS "dwh_id",
+    tx.local_uid_semd AS "localUid",
+    tx.emdr_id AS "emdrId",
+    tx.semd_code AS "Код СЭМД",
+    tx.jid::text AS "JID Клиники",
+    COALESCE(NULLIF(btrim(o.name), ''), 'Клиника JID: ' || tx.jid::text, '(неизвестно)') AS "Клиника",
+    LEFT(COALESCE(tx.message, ''), 240) AS "Сообщение",
+    reg.reply_to AS "replyTo EGISZ_MESSAGES"
+FROM public.transactions tx
+JOIN LATERAL (
+    SELECT m.source_egmid, m.created_at, m.reply_to
+    FROM public.dim_message_document m
+    WHERE tx.relates_to_msgid IS NOT NULL
+      AND m.msgid = public.message_registry_key(tx.relates_to_msgid)
+      AND m.document_uid IS NULL
+    ORDER BY m.source_egmid DESC NULLS LAST
+    LIMIT 1
+) reg ON TRUE
+LEFT JOIN public.dim_organizations o ON o.jid = tx.jid
+WHERE tx.relates_to_msgid IS NOT NULL
+  AND tx.egisz_subsystem IS DISTINCT FROM 'ИЭМК';
+
+COMMENT ON VIEW public.rpt_health_message_registry_no_document IS
+'Health-детализация РЭМД: relatesToMessage найден в EGISZ_MESSAGES, DOCUMENTID пустой. ИЭМК не использует DOCUMENTID.';
+
 CREATE OR REPLACE VIEW public.rpt_health_signals AS
 WITH anchor AS (
     SELECT MAX(COALESCE(last_callback_at, first_sent_at, document_created_at)) AS last_fact_ts
@@ -824,12 +972,8 @@ WITH anchor AS (
 -- что реестр отстал от журнала или подача в него не попала, — исход отправки при этом
 -- теряется, а документ остаётся в статусе «Отправлено».
 --
--- Доля считается по последним ответам журнала — скользящей выборкой по LOGID, а не по
--- временному окну. Окно по log_date брало бы строки, размеченные прежней версией правила
--- (link_method пуст): они попадали в знаменатель как связанные и занижали долю. Окно по
--- времени приёма эту ошибку снимает, но вводит другую — когда конвейер отстал и за час не
--- разобрано ничего, пустая выборка даёт 0% и сигнал зеленеет ровно в момент поломки.
--- Порядок журнала свободен от обеих: выборка не пустеет, пока есть хоть один размеченный
+-- Доля считается по последним ответам журнала — скользящей выборкой по LOGID.
+-- Выборка не пустеет, пока есть хотя бы один размеченный
 -- ответ, не зависит от темпа приёма и не тянет дату разбора в отчётность.
 unlinked_recent AS (
     SELECT ROUND(
@@ -841,8 +985,17 @@ unlinked_recent AS (
         SELECT link_method
         FROM public.transactions
         WHERE link_method IS NOT NULL
-          AND xml_relates_to_id IS NOT NULL
+          AND relates_to_msgid IS NOT NULL
         ORDER BY logid DESC
+        LIMIT 500
+    ) recent
+),
+registry_no_document_recent AS (
+    SELECT COUNT(*)::numeric AS cnt
+    FROM (
+        SELECT "LOGID"
+        FROM public.rpt_health_message_registry_no_document
+        ORDER BY "LOGID"::bigint DESC
         LIMIT 500
     ) recent
 ),
@@ -867,8 +1020,14 @@ uncovered_types AS (
 -- по непрерывному участку, значит ненулевое значение означает и недостачу строк, и
 -- остановку разбора на этом месте.
 journal_gaps AS (
-    SELECT COALESCE(MAX(logid) - MIN(logid) + 1 - COUNT(*), 0) AS missing
-    FROM public.exchangelog_raw
+    SELECT CASE
+        WHEN MAX(r.logid) IS NULL THEN 0
+        ELSE MAX(r.logid) - COALESCE(MAX(s.transform_logid_cursor), 0) - COUNT(*)
+    END AS missing
+    FROM public.etl_state s
+    LEFT JOIN public.exchangelog_raw r
+      ON r.logid > COALESCE(s.transform_logid_cursor, 0)
+    WHERE s.pipeline = 'egisz'
 ),
 -- Клиники, документы которых есть, а записи в справочнике организаций нет: подпись
 -- вырождается в «<jid> · —» во всех срезах. Наполнение справочника — задача выгрузки
@@ -928,8 +1087,8 @@ SELECT * FROM (
          END,
          (SELECT missing FROM journal_gaps)::numeric,
          'LOGID',
-         'разрывы LOGID в exchangelog_raw',
-         'Строки журнала не доехали: отметка выгрузки стоит перед разрывом, разбор дальше не идёт. Проверить доступ к Firebird и прогон consistency_check'),
+         'разрывы LOGID в необработанном хвосте exchangelog_raw',
+         'Проверить Firebird и consistency_check. Разобранный raw можно архивировать'),
         ('unlinked_responses',
          'Доля несвязанных ответов ЕГИСЗ',
          CASE
@@ -940,7 +1099,18 @@ SELECT * FROM (
          COALESCE((SELECT pct FROM unlinked_recent), 0)::numeric,
          '% последних ответов',
          'transactions.link_method=unlinked, последние 500 по LOGID',
-         'Проверить наполнение dim_message_document: подача документа не попала в реестр шлюза'),
+        'Проверить dim_message_document: в реестре нет строки по msgid из relatesToMessage'),
+        ('message_registry_no_document',
+         'РЭМД: EGISZ_MESSAGES без DOCUMENTID',
+         CASE
+             WHEN COALESCE((SELECT cnt FROM registry_no_document_recent), 0) >= 100 THEN 'red'
+             WHEN COALESCE((SELECT cnt FROM registry_no_document_recent), 0) >= 10 THEN 'yellow'
+             ELSE 'green'
+        END,
+         COALESCE((SELECT cnt FROM registry_no_document_recent), 0)::numeric,
+         'ответов в последних 500',
+         'РЭМД: relatesToMessage найден в EGISZ_MESSAGES, DOCUMENTID пустой',
+         'Проверить заполнение DOCUMENTID в EGISZ_MESSAGES РЭМД'),
         ('data_freshness',
          'Свежесть данных (последний факт)',
          CASE
@@ -1056,7 +1226,7 @@ BEGIN
         PERFORM public.recompute_document_versions(NULL::text[]);
         -- Матпредставления созданы в 80/85/86 с данными; пересобираем после сборки
         -- атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
-        -- Порядок обязателен: разбивка ошибок раньше периодических витрин.
+        -- Порядок обязателен: разбивка ошибок перед периодическими витринами.
         REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
         REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
         REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;

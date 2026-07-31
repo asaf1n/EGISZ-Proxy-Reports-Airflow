@@ -114,12 +114,12 @@ BEGIN
         SELECT
             k.*,
             count(*) OVER (PARTITION BY k.grp_key) AS grp_size,
-            -- Порядок версий: старейшая отправка = 1.
+            -- Порядок версий: первая отправка = 1.
             row_number() OVER (
                 PARTITION BY k.grp_key
                 ORDER BY COALESCE(k.first_sent_at, '-infinity'::timestamptz), k.request_logid, k.dwh_id
             ) AS vnum,
-            -- Текущая версия: зарегистрированный success приоритетнее, иначе последнее событие.
+            -- Текущая версия: success; при его отсутствии последнее событие.
             row_number() OVER (
                 PARTITION BY k.grp_key
                 ORDER BY
@@ -163,13 +163,11 @@ $$;
 
 -- Разбор окна журнала (from_logid, to_logid] в факты.
 --
--- Классы сообщений и правила привязки к документу (README §«Связывание сообщений»):
---   getDocumentFile          — localUid лежит в самом payload;
---   ответ РЭМД/ИЭМК        — localUid в ответе нет, есть relatesToMessage; документ
---                              находится через реестр подач dim_message_document;
---   повторный ответ        — подтверждающий путь по emdrId уже собранных документов.
--- Применённое правило пишется в transactions.link_method, непривязанные ответы
--- помечаются 'unlinked' и попадают в сигналы здоровья, а не теряются молча.
+-- Правила связки (README §«Связывание сообщений»):
+--   getDocumentFile — документ РЭМД по localUid из payload;
+--   ответ РЭМД — relatesToMessage -> dim_message_document.document_uid;
+--   ответ ИЭМК — relatesToMessage без document_uid;
+--   повторный ответ РЭМД — dwh_id по emdrId.
 --
 -- Окно строго ограничено (from_logid, to_logid]: связывание не зависит от префикса
 -- журнала, поэтому отсечение партиций по createdate работает на каждом батче.
@@ -185,6 +183,7 @@ AS $$
 DECLARE
     affected integer := 0;
     inserted_rows integer := 0;
+    registry_no_document_rows integer := 0;
     unlinked_rows integer := 0;
     skipped_no_clinic integer := 0;
     raw_cd_min timestamptz;
@@ -222,9 +221,9 @@ BEGIN
     )
     INSERT INTO public.transactions (
         logid, log_date,
-        source_msgid, source_message_id_norm,
+        msgid, relates_to_msgid,
         xml_dwh_id, xml_local_uid, xml_emdr_id,
-        source_action, egisz_subsystem, jid, xml_relates_to_id, xml_semd_code, xml_doc_number, xml_org_oid,
+        source_action, egisz_subsystem, jid, xml_semd_code, xml_doc_number, xml_org_oid,
         xml_error_code, xml_message, xml_raw_status, xml_document_status,
         xml_creation_date,
         xml_patient_name, xml_snils, xml_doctor_name,
@@ -235,15 +234,14 @@ BEGIN
     SELECT
         t.logid,
         COALESCE(t.createdate, t.loaded_at, now()) AS log_date,
-        t.msgid,
-        p.exchange_msgid_norm,
+        p.msgid,
+        p.relates_to_msgid,
         p.dwh_id,
         p.local_uid,
         p.emdr_id,
         p.action,
         public.egisz_subsystem(t.uri, p.action, t.logtext),
         rj.jid,
-        p.relates_to_id,
         p.kind_xml,
         p.doc_number,
         p.org_oid,
@@ -275,22 +273,21 @@ BEGIN
         WHERE COALESCE(p.action, '') = 'getDocumentFile'
     ) rj ON TRUE
     WHERE (
-          p.exchange_msgid_norm IS NOT NULL
+          p.msgid IS NOT NULL
           OR NULLIF(btrim(t.msgid), '') IS NOT NULL
           OR NULLIF(btrim(p.local_uid), '') IS NOT NULL
           OR NULLIF(btrim(p.emdr_id), '') IS NOT NULL
           OR COALESCE(p.action, '') = 'getDocumentFile'
       )
     ON CONFLICT (logid, log_date) DO UPDATE SET
-        source_msgid = COALESCE(EXCLUDED.source_msgid, public.transactions.source_msgid),
-        source_message_id_norm = COALESCE(EXCLUDED.source_message_id_norm, public.transactions.source_message_id_norm),
+        msgid = COALESCE(EXCLUDED.msgid, public.transactions.msgid),
+        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, public.transactions.relates_to_msgid),
         xml_dwh_id = COALESCE(EXCLUDED.xml_dwh_id, public.transactions.xml_dwh_id),
         xml_local_uid = COALESCE(EXCLUDED.xml_local_uid, public.transactions.xml_local_uid),
         xml_emdr_id = COALESCE(EXCLUDED.xml_emdr_id, public.transactions.xml_emdr_id),
         source_action = COALESCE(EXCLUDED.source_action, public.transactions.source_action),
         egisz_subsystem = COALESCE(EXCLUDED.egisz_subsystem, public.transactions.egisz_subsystem),
         jid = COALESCE(public.transactions.jid, EXCLUDED.jid),
-        xml_relates_to_id = COALESCE(EXCLUDED.xml_relates_to_id, public.transactions.xml_relates_to_id),
         xml_semd_code = COALESCE(EXCLUDED.xml_semd_code, public.transactions.xml_semd_code),
         xml_doc_number = COALESCE(EXCLUDED.xml_doc_number, public.transactions.xml_doc_number),
         xml_org_oid = COALESCE(EXCLUDED.xml_org_oid, public.transactions.xml_org_oid),
@@ -328,9 +325,8 @@ BEGIN
     ON CONFLICT (logid) DO NOTHING;
 
     -- ------------------------------------------------------------------
-    -- Ветка запроса: getDocumentFile создаёт экземпляр документа.
-    -- localUid лежит в payload, клиника — из OID организации, gost-endpoint запроса
-    -- или, если то и другое не разрешилось, из reply_to реестра подач.
+    -- Ветка запроса: getDocumentFile создаёт документ РЭМД при наличии localUid
+    -- и записи EGISZ_MESSAGES по тому же document_uid.
     -- ------------------------------------------------------------------
     WITH batch_document_ids AS (
         SELECT DISTINCT tx.xml_dwh_id
@@ -339,11 +335,15 @@ BEGIN
           AND tx.logid > from_logid
           AND tx.logid <= to_logid
           AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
+          AND NULLIF(btrim(tx.xml_emdr_id), '') IS NULL
           AND tx.xml_dwh_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1
+              FROM public.dim_message_document m
+              WHERE m.document_uid = tx.xml_dwh_id
+          )
     ),
-    -- Минимальный набор реквизитов (localUid + JID + KIND) может приходить разными
-    -- сообщениями одного документа: недостающие поля дозагружаются последующими
-    -- батчами через COALESCE в ON CONFLICT.
+    -- Реквизиты документа агрегируются по getDocumentFile текущего батча.
     document_attributes AS (
         SELECT
             tx.xml_dwh_id AS dwh_id,
@@ -362,7 +362,9 @@ BEGIN
                 WHERE NULLIF(btrim(COALESCE(gr.logtext, '') || COALESCE(gr.msgtext, '')), '') IS NOT NULL
             ))[1] AS endpoint_text,
             min(COALESCE(gr.createdate, gr.logdate)) AS sent_at,
-            max(gr.logid) AS request_logid,
+            (array_agg(gr.logid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid))[1] AS request_logid,
+            (array_agg(tx.msgid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid)
+                FILTER (WHERE tx.msgid IS NOT NULL))[1] AS sent_msgid,
             bool_or(gr.logstate = 3) AS has_network_error,
             max(gr.logid) FILTER (WHERE gr.logstate = 3) AS network_logid,
             max(COALESCE(gr.createdate, gr.logdate)) FILTER (WHERE gr.logstate = 3) AS network_at,
@@ -377,6 +379,7 @@ BEGIN
           AND gr.logid > from_logid
           AND gr.logid <= to_logid
           AND NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
+          AND NULLIF(btrim(tx.xml_emdr_id), '') IS NULL
         GROUP BY tx.xml_dwh_id
     ),
     document_resolved AS (
@@ -385,9 +388,8 @@ BEGIN
             r.jid AS resolved_jid,
             r.resolve_method
         FROM document_attributes a
-        -- reply_to реестра подач содержит endpoint клиники (gost-<jid>) и остаётся
-        -- единственным источником клиники, когда в payload нет ни OID, ни адреса.
-        LEFT JOIN LATERAL (
+        -- reply_to реестра подач содержит endpoint клиники.
+        JOIN LATERAL (
             SELECT m.reply_to
             FROM public.dim_message_document m
             WHERE m.document_uid = a.dwh_id
@@ -401,7 +403,7 @@ BEGIN
     )
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
-        status, first_sent_at, request_logid,
+        status, first_sent_at, request_logid, msgid,
         result_logid, last_callback_at, jid, org_oid, jid_resolve_method,
         error_types, error_text,
         updated_at
@@ -413,6 +415,7 @@ BEGIN
         CASE WHEN a.has_network_error THEN 'network_error' ELSE public.document_status_nonfinal() END,
         a.sent_at,
         a.request_logid,
+        a.sent_msgid,
         CASE WHEN a.has_network_error THEN a.network_logid END,
         CASE WHEN a.has_network_error THEN a.network_at END,
         a.resolved_jid,
@@ -450,12 +453,21 @@ BEGIN
         END,
         error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
-        -- request_logid — LOGID отправки; наибольший из известных. Ветка ответа эту
-        -- колонку не трогает, поэтому пара request_msgid ↔ relates_to_msgid остаётся целой.
-        request_logid = GREATEST(
-            COALESCE(public.documents.request_logid, 0),
-            COALESCE(EXCLUDED.request_logid, 0)
-        ),
+        msgid = CASE
+            WHEN public.documents.status IN (SELECT public.document_status_final())
+            THEN public.documents.msgid
+            ELSE COALESCE(EXCLUDED.msgid, public.documents.msgid)
+        END,
+        request_logid = CASE
+            WHEN public.documents.first_sent_at IS NULL THEN EXCLUDED.request_logid
+            WHEN EXCLUDED.first_sent_at IS NULL THEN public.documents.request_logid
+            WHEN EXCLUDED.first_sent_at < public.documents.first_sent_at THEN EXCLUDED.request_logid
+            WHEN EXCLUDED.first_sent_at = public.documents.first_sent_at THEN LEAST(
+                COALESCE(public.documents.request_logid, EXCLUDED.request_logid),
+                COALESCE(EXCLUDED.request_logid, public.documents.request_logid)
+            )
+            ELSE public.documents.request_logid
+        END,
         updated_at = now();
 
     -- Отправки, по которым клиника не разрешилась ни payload'ом, ни реестром: в documents
@@ -484,12 +496,11 @@ BEGIN
             r.logid,
             r.logdate,
             r.createdate,
-            r.msgid,
             r.logstate,
             r.logtext,
             r.msgtext,
-            tx.source_message_id_norm AS message_id,
-            tx.xml_relates_to_id AS relates_to_id,
+            tx.msgid AS msgid,
+            tx.relates_to_msgid,
             tx.xml_local_uid AS local_uid_xml,
             tx.xml_dwh_id AS dwh_id_xml,
             tx.xml_semd_code AS kind_xml,
@@ -524,8 +535,8 @@ BEGIN
           AND (
               r.logstate = 3
               OR public.normalize_message_id(r.msgid) IS NOT NULL
-              OR tx.source_message_id_norm IS NOT NULL
-              OR tx.xml_relates_to_id IS NOT NULL
+              OR tx.msgid IS NOT NULL
+              OR tx.relates_to_msgid IS NOT NULL
               OR NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
               OR NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL
               OR NULLIF(btrim(tx.xml_doc_number), '') IS NOT NULL
@@ -539,12 +550,11 @@ BEGIN
         SELECT
             r.logid,
             r.createdate AS logdate,
-            r.msgid,
             r.logstate,
             r.logtext,
             r.msgtext,
-            r.message_id,
-            r.relates_to_id,
+            r.msgid,
+            r.relates_to_msgid,
             COALESCE(
                 r.dwh_id_xml,
                 msg_ref.dwh_id,
@@ -553,6 +563,7 @@ BEGIN
             CASE
                 WHEN r.dwh_id_xml IS NOT NULL THEN 'payload_local_uid'
                 WHEN msg_ref.dwh_id IS NOT NULL THEN 'message_registry'
+                WHEN msg_ref.has_registry THEN 'message_registry_no_document'
                 WHEN emdr_ref.dwh_id IS NOT NULL THEN 'emdr_id'
                 ELSE 'unlinked'
             END AS link_method,
@@ -580,18 +591,20 @@ BEGIN
             r.has_error_ilike,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
-        -- Штатный ключ: relatesToMessage ответа → идентификатор подачи → localUid.
+        -- Ответ РЭМД: relatesToMessage -> document_uid реестра подач.
         LEFT JOIN LATERAL (
             SELECT
                 public.dwh_id(m.document_uid) AS dwh_id,
                 m.document_uid AS local_uid,
-                m.reply_to
+                m.reply_to,
+                true AS has_registry
             FROM public.dim_message_document m
-            WHERE r.relates_to_id IS NOT NULL
-              AND m.msgid = public.message_registry_key(r.relates_to_id)
+            WHERE r.relates_to_msgid IS NOT NULL
+              AND m.msgid = public.message_registry_key(r.relates_to_msgid)
+            ORDER BY (m.document_uid IS NOT NULL) DESC, m.source_egmid DESC NULLS LAST
             LIMIT 1
         ) msg_ref ON TRUE
-        -- Подтверждающий путь: повторный или поздний ответ по уже известному emdrId.
+        -- Повторный ответ РЭМД: dwh_id по emdrId.
         LEFT JOIN LATERAL (
             SELECT fd.dwh_id
             FROM public.documents fd
@@ -671,14 +684,14 @@ BEGIN
         LEFT JOIN error_interp ei ON ei.built_errors_json = e.built_errors_json
     )
     INSERT INTO transactions (
-        logid, dwh_id, log_date, message_id, relates_to_id, local_uid_semd, emdr_id,
+        logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
         error_code, creation_date, loaded_at, link_method,
         error_type, error_json_text,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
     SELECT
-        e.logid, e.dwh_id, e.logdate, e.message_id, e.relates_to_id, e.local_uid_semd, e.emdr_id,
+        e.logid, e.dwh_id, e.logdate, e.msgid, e.relates_to_msgid, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.final_status, e.event_message,
         e.resolved_jid, e.resolved_method, e.resolved_semd_code, e.error_code,
         e.creation_date, now(), e.link_method,
@@ -715,8 +728,8 @@ BEGIN
     ON CONFLICT (logid, log_date) DO UPDATE SET
         log_date = EXCLUDED.log_date,
         dwh_id = EXCLUDED.dwh_id,
-        message_id = EXCLUDED.message_id,
-        relates_to_id = EXCLUDED.relates_to_id,
+        msgid = EXCLUDED.msgid,
+        relates_to_msgid = EXCLUDED.relates_to_msgid,
         local_uid_semd = EXCLUDED.local_uid_semd,
         emdr_id = EXCLUDED.emdr_id,
         doc_number = EXCLUDED.doc_number,
@@ -740,25 +753,76 @@ BEGIN
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
-    -- Ответы, не связавшиеся ни одним правилом, помечаются явно: без метки они
-    -- неотличимы от неразобранных строк и деградация привязки остаётся незаметной.
+    -- РЭМД-ответ с MSGID в EGISZ_MESSAGES и пустым DOCUMENTID.
+    WITH registry_match AS (
+        SELECT
+            tx.logid,
+            tx.log_date,
+            reg.reply_to
+        FROM public.transactions tx
+        JOIN LATERAL (
+            SELECT
+                m.document_uid,
+                m.reply_to
+            FROM public.dim_message_document m
+            WHERE m.msgid = public.message_registry_key(tx.relates_to_msgid)
+            ORDER BY (m.document_uid IS NOT NULL) DESC, m.source_egmid DESC NULLS LAST
+            LIMIT 1
+        ) reg ON TRUE
+        WHERE tx.logid > from_logid
+          AND tx.logid <= to_logid
+          AND tx.log_date >= raw_cd_min
+          AND tx.log_date < raw_cd_max
+          AND tx.dwh_id IS NULL
+          AND tx.relates_to_msgid IS NOT NULL
+          AND tx.egisz_subsystem IS DISTINCT FROM 'ИЭМК'
+          AND tx.link_method IS DISTINCT FROM 'message_registry_no_document'
+          AND reg.document_uid IS NULL
+    ),
+    registry_no_document AS (
+        SELECT
+            rm.logid,
+            rm.log_date,
+            r.jid,
+            r.resolve_method
+        FROM registry_match rm
+        LEFT JOIN LATERAL public.resolve_document_jid(NULL::text, COALESCE(rm.reply_to, '')) r ON TRUE
+    )
+    UPDATE public.transactions tx
+    SET
+        link_method = 'message_registry_no_document',
+        jid = reg.jid,
+        jid_resolve_method = reg.resolve_method,
+        loaded_at = now()
+    FROM registry_no_document reg
+    WHERE tx.logid = reg.logid
+      AND tx.log_date = reg.log_date;
+    GET DIAGNOSTICS registry_no_document_rows = ROW_COUNT;
+    affected := affected + registry_no_document_rows;
+
+    -- Ответы без связи по payload, EGISZ_MESSAGES и emdrId.
     UPDATE public.transactions tx
     SET link_method = 'unlinked'
     WHERE tx.logid > from_logid
       AND tx.logid <= to_logid
+      AND tx.log_date >= raw_cd_min
+      AND tx.log_date < raw_cd_max
       AND tx.dwh_id IS NULL
-      AND tx.xml_relates_to_id IS NOT NULL
+      AND tx.relates_to_msgid IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM public.dim_message_document m
+          WHERE m.msgid = public.message_registry_key(tx.relates_to_msgid)
+      )
       AND tx.link_method IS DISTINCT FROM 'unlinked';
     GET DIAGNOSTICS unlinked_rows = ROW_COUNT;
 
     -- ------------------------------------------------------------------
-    -- Перенос исхода на грейн документа. Ветка создаёт запись, если отправки в журнале
-    -- не было: ЕГИСЗ отклоняет часть документов до запроса файла, и единственный след
-    -- такого документа — сам ответ.
+    -- Перенос исхода на грейн документа.
     -- ------------------------------------------------------------------
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
-        status, result_msgid, relates_to_msgid,
+        status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
         last_callback_at, last_status, jid, org_oid, jid_resolve_method,
         error_types, error_text,
@@ -775,8 +839,8 @@ BEGIN
             WHEN f.status = 'error' THEN 'async_error'
             ELSE public.document_status_nonfinal()
         END,
-        public.clean_text_value(f.message_id),
-        public.clean_text_value(f.relates_to_id),
+        public.clean_text_value(f.msgid),
+        public.clean_text_value(f.relates_to_msgid),
         f.logid,
         f.creation_date,
         CASE WHEN f.status = 'success' THEN f.log_date ELSE NULL::timestamptz END,
@@ -805,7 +869,7 @@ BEGIN
             THEN EXCLUDED.status
             ELSE public.documents.status
         END,
-        result_msgid = COALESCE(EXCLUDED.result_msgid, public.documents.result_msgid),
+        msgid = COALESCE(EXCLUDED.msgid, public.documents.msgid),
         relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, public.documents.relates_to_msgid),
         result_logid = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)

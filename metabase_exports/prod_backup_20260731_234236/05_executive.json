@@ -27,7 +27,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "Успешных СЭМД (NSM)",
@@ -69,17 +69,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Документов за период",
@@ -121,17 +111,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 8,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Доля успеха с первой попытки, %",
@@ -179,17 +159,7 @@
       "sizeY": 3,
       "row": 1,
       "col": 16,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -198,7 +168,7 @@
       "sizeY": 2,
       "row": 4,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "MRR (30 дн.), ₽",
@@ -234,13 +204,7 @@
       "sizeY": 3,
       "row": 6,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "ARR (год.), ₽",
@@ -276,13 +240,7 @@
       "sizeY": 3,
       "row": 6,
       "col": 6,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Активных JID (30 дн)",
@@ -317,13 +275,7 @@
       "sizeY": 3,
       "row": 6,
       "col": 12,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Эфф. цена успешного СЭМД, ₽",
@@ -359,13 +311,7 @@
       "sizeY": 3,
       "row": 6,
       "col": 18,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -374,7 +320,7 @@
       "sizeY": 1,
       "row": 9,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "Динамика MRR (30 дн.), ₽",
@@ -430,13 +376,7 @@
       "sizeY": 6,
       "row": 10,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Динамика активных JID (30 дн.)",
@@ -491,13 +431,7 @@
       "sizeY": 6,
       "row": 10,
       "col": 12,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -506,7 +440,7 @@
       "sizeY": 2,
       "row": 16,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "Зависших >7 дн., %",
@@ -549,17 +483,7 @@
       "sizeY": 3,
       "row": 18,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Отказов РЭМД, %",
@@ -602,17 +526,7 @@
       "sizeY": 3,
       "row": 18,
       "col": 8,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Ошибок связи, %",
@@ -655,17 +569,7 @@
       "sizeY": 3,
       "row": 18,
       "col": 16,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -674,7 +578,7 @@
       "sizeY": 2,
       "row": 21,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "name": "Сегменты ценности (MRR × ₽/успех)",
@@ -729,17 +633,7 @@
       "sizeY": 5,
       "row": 23,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Выручка под риском «ноль ценности», ₽",
@@ -782,17 +676,7 @@
       "sizeY": 3,
       "row": 28,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Выручка под риском «затык канала», ₽",
@@ -835,17 +719,7 @@
       "sizeY": 3,
       "row": 28,
       "col": 8,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Клиник без единого успеха",
@@ -887,17 +761,7 @@
       "sizeY": 3,
       "row": 28,
       "col": 16,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "name": "Очередь оттока: JID с нулём успехов",
@@ -953,17 +817,7 @@
       "sizeY": 7,
       "row": 31,
       "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -972,7 +826,7 @@
       "sizeY": 2,
       "row": 38,
       "col": 0,
-      "tab": "overview"
+      "tab": "tab_0"
     },
     {
       "display": "text",
@@ -981,7 +835,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "weekly"
+      "tab": "tab_1"
     },
     {
       "name": "Статусы по неделям",
@@ -1057,17 +911,7 @@
       "sizeY": 6,
       "row": 1,
       "col": 0,
-      "tab": "weekly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "week_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Объём документов по неделям",
@@ -1135,17 +979,7 @@
       "sizeY": 6,
       "row": 1,
       "col": 12,
-      "tab": "weekly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "week_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Контрольная p-карта: доля ошибок по неделям",
@@ -1235,17 +1069,7 @@
       "sizeY": 6,
       "row": 7,
       "col": 0,
-      "tab": "weekly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "week_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "display": "text",
@@ -1254,7 +1078,7 @@
       "sizeY": 1,
       "row": 13,
       "col": 0,
-      "tab": "weekly"
+      "tab": "tab_1"
     },
     {
       "name": "Категории ошибок по неделям",
@@ -1341,17 +1165,7 @@
       "sizeY": 6,
       "row": 14,
       "col": 0,
-      "tab": "weekly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown_weekly",
-          "field_name": "week_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown_weekly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "name": "Сводка по неделям",
@@ -1410,17 +1224,7 @@
       "sizeY": 7,
       "row": 20,
       "col": 0,
-      "tab": "weekly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "week_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_weekly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_1"
     },
     {
       "display": "text",
@@ -1429,7 +1233,7 @@
       "sizeY": 1,
       "row": 0,
       "col": 0,
-      "tab": "monthly"
+      "tab": "tab_2"
     },
     {
       "name": "Статусы по месяцам",
@@ -1505,17 +1309,7 @@
       "sizeY": 6,
       "row": 1,
       "col": 0,
-      "tab": "monthly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "month_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "name": "Объём документов по месяцам",
@@ -1583,17 +1377,7 @@
       "sizeY": 6,
       "row": 1,
       "col": 12,
-      "tab": "monthly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "month_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "name": "Контрольная p-карта: доля ошибок по месяцам",
@@ -1683,17 +1467,7 @@
       "sizeY": 6,
       "row": 7,
       "col": 0,
-      "tab": "monthly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "month_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "display": "text",
@@ -1702,7 +1476,7 @@
       "sizeY": 1,
       "row": 13,
       "col": 0,
-      "tab": "monthly"
+      "tab": "tab_2"
     },
     {
       "name": "Категории ошибок по месяцам",
@@ -1789,17 +1563,7 @@
       "sizeY": 6,
       "row": 14,
       "col": 0,
-      "tab": "monthly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown_monthly",
-          "field_name": "month_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_error_breakdown_monthly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     },
     {
       "name": "Сводка по месяцам",
@@ -1858,32 +1622,22 @@
       "sizeY": 7,
       "row": 20,
       "col": 0,
-      "tab": "monthly",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "month_start"
-        },
-        "jid": {
-          "table_ref": "public.rpt_documents_monthly",
-          "field_name": "clinic_label"
-        }
-      }
+      "tab": "tab_2"
     }
   ],
   "tabs": [
     {
-      "id": "overview",
+      "id": "tab_0",
       "name": "Обзор",
       "position": 0
     },
     {
-      "id": "weekly",
+      "id": "tab_1",
       "name": "Динамика по неделям",
       "position": 1
     },
     {
-      "id": "monthly",
+      "id": "tab_2",
       "name": "Динамика по месяцам",
       "position": 2
     }

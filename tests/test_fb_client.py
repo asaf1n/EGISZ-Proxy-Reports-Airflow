@@ -115,13 +115,15 @@ def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
 
 def test_fetch_message_registry_uses_keyset_pagination_by_egmid() -> None:
     """Реестр подач читается тем же keyset-курсором, что и журнал."""
-    con = FakeConnection([(7, "MSG", "http://gost-1.lan:9945", "UID", None)])
+    con = FakeConnection([(7, None, "http://gost-1.lan:9945", None, None)])
 
     rows = fetch_message_registry_after_cursor(con, after_egmid=5, limit=100)
 
-    assert rows == [(7, "MSG", "http://gost-1.lan:9945", "UID", None)]
+    assert rows == [(7, None, "http://gost-1.lan:9945", None, None)]
     assert "FROM EGISZ_MESSAGES" in con.cursor_instance.executed_sql
     assert "WHERE EGMID > ?" in con.cursor_instance.executed_sql
+    assert "MSGID IS NOT NULL" not in con.cursor_instance.executed_sql
+    assert "DOCUMENTID IS NOT NULL" not in con.cursor_instance.executed_sql
     assert "ROWS ?" in con.cursor_instance.executed_sql
     assert con.cursor_instance.params == (5, 100)
 

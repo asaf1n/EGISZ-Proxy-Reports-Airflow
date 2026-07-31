@@ -3,14 +3,13 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 # up.ps1 запускает скрипт под PowerShell с cp1251-консолью; имена карточек содержат
 # символы вне cp1251 (например «×»). Печатаем в UTF-8, иначе print() падает.
-try:
+with suppress(Exception):  # pragma: no cover
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-except Exception:  # pragma: no cover - reconfigure доступен с Python 3.7+
-    pass
 
 ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION = ROOT / "metabase_dashboards" / "01_integration_egisz.json"

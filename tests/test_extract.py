@@ -44,8 +44,7 @@ def test_extract_cursor_counts_the_proxy_not_raw(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Отметка выгрузки считает по журналу шлюза и стартует от себя, а не от отметки
-    разбора: объекты разные, и общий курсор заставлял перечитывать прокси."""
+    """Отметка выгрузки считается по журналу шлюза отдельно от отметки разбора."""
     rows = [_raw_row(101)]
 
     with (
@@ -163,26 +162,28 @@ def test_normalize_registry_key_matches_sql_canonical_form() -> None:
     assert normalize_registry_key("  ") is None
 
 
-def test_load_message_registry_keeps_last_row_per_key(pg_conn: MagicMock) -> None:
-    """Повторная подача и разные написания идентификатора дают один ключ реестра.
+def test_load_message_registry_keeps_source_rows_by_egmid(pg_conn: MagicMock) -> None:
+    """EGISZ_MESSAGES хранится как реестр по EGMID, без раннего отбора по DOCUMENTID."""
+    assert extract_dag.is_iemk_reply_to("http://gost-2.lan:9921")
+    assert not extract_dag.is_iemk_reply_to("http://gost-1.lan:9945")
 
-    Строки с одинаковым ключом в одной команде INSERT ... ON CONFLICT дают
-    CardinalityViolation, поэтому в батче остаётся запись с наибольшим EGMID.
-    """
     rows = [
         (1, "a0716795-5fa1-49d1-bf53-2efad47efa46", "http://gost-1.lan:9945", "UID-OLD", None),
-        (2, "urn:uuid:A0716795-5FA1-49D1-BF53-2EFAD47EFA46", "http://gost-2.lan:9945", "UID-NEW", None),
-        (3, "MSG-OTHER", None, "UID-OTHER", None),
+        (2, "urn:uuid:A0716795-5FA1-49D1-BF53-2EFAD47EFA46", "http://gost-2.lan:9921", "IEMK-UID", None),
+        (3, None, "http://gost-3.lan:9945", "UID-ONLY", None),
+        (4, None, None, None, None),
     ]
 
     with patch("egisz_etl_dag.execute_values") as execute_values:
         loaded = extract_dag.load_message_registry(pg_conn, rows)
 
     values = execute_values.call_args.args[2]
-    assert loaded == 2
+    assert loaded == 4
     assert values == [
-        ("A07167955FA149D1BF532EFAD47EFA46", "uid-new", "http://gost-2.lan:9945", 2, None),
-        ("MSGOTHER", "uid-other", None, 3, None),
+        (1, "A07167955FA149D1BF532EFAD47EFA46", "uid-old", "http://gost-1.lan:9945", None),
+        (2, "A07167955FA149D1BF532EFAD47EFA46", None, "http://gost-2.lan:9921", None),
+        (3, None, "uid-only", "http://gost-3.lan:9945", None),
+        (4, None, None, None, None),
     ]
 
 
@@ -217,7 +218,7 @@ def test_extract_message_registry_advances_its_own_cursor(
 def test_depth_floor_skips_source_prefix_outside_window(fb_conn: MagicMock) -> None:
     """Глубина отдаёт отметку ПЕРЕД первой строкой окна: keyset читает её включительно."""
     cursor = fb_conn.cursor.return_value
-    # Проба: строка за отметкой старше окна → считаем границу.
+    # Проба: строка за отметкой вне окна → считаем границу.
     cursor.fetchone.side_effect = [(datetime.now() - timedelta(days=400),), (10_500_000,)]
 
     floor = fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=5)
@@ -267,11 +268,7 @@ def test_extract_message_registry_lifts_cursor_to_depth_floor(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Отметка ниже окна поднимается к его границе — иначе приём ползёт по архиву.
-
-    Реестр подач наполнялся с начала таблицы и до живого диапазона не доходил, поэтому
-    асинхронный ответ не с чем было связать.
-    """
+    """Отметка ниже окна поднимается к его границе."""
     rows = [(10_500_100, "MSG-1", "http://gost-1.lan:9945", "UID-1", None)]
 
     with (

@@ -1,7 +1,7 @@
 {
   "name": "Документы",
   "table_ref": "public.rpt_documents",
-  "description": "Единая модель документов (grain: 1 строка = 1 текущая версия логического документа, rpt_documents.is_current_version). Полный аудит всех версий — витрина rpt_document_versions. Транспорт СЭМД: request_* — отправка (getDocumentFile), result_* — исход (ответ РЭМД или сбой связи); пара MSGID запроса ↔ Связанное сообщение — ключ корреляции. Учёт: «Отправлено» (status «Отправлено») — объём отправки; статус-распределение и рейтинги (доля успеха/ошибок) считаются только на документах с ответом РЭМД (status ≠ «Отправлено»). Отбор по типу ошибки — через модель «Разбивка ошибок».",
+  "description": "Единая модель документов (grain: 1 строка = 1 текущая версия логического документа, rpt_documents.is_current_version). Полный аудит всех версий — витрина rpt_document_versions. Транспорт СЭМД: msgid — собственный MSGID текущего события, relates_to_msgid — связанный MSGID из relatesToMessage/relatesTo; EGISZ_MESSAGES используется как реестр связки relates_to_msgid → документ. Учёт: «Отправлено» (status «Отправлено») — объём подтверждённых реестром подач без ответа; статус-распределение и рейтинги считаются только на документах с ответом РЭМД (status ≠ «Отправлено»). Отбор по типу ошибки — через модель «Разбивка ошибок».",
   "fields": {
     "dwh_id": { "semantic_type": "type/PK" },
     "ips_date": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
@@ -16,8 +16,7 @@
     "error_types": { "semantic_type": "type/Category", "display_name": "Типы ошибки" },
     "error_text": { "semantic_type": "type/Description", "display_name": "Исходный текст ошибки" },
     "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
-    "request_msgid": { "semantic_type": "type/Category", "display_name": "MSGID запроса" },
-    "result_msgid": { "semantic_type": "type/Category", "display_name": "MSGID ответа" },
+    "msgid": { "semantic_type": "type/Category", "display_name": "MSGID" },
     "relates_to_msgid": { "semantic_type": "type/Category", "display_name": "Связанное сообщение (relatesTo)" },
     "semd_emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" },
     "semd_created_at": { "semantic_type": "type/CreationTimestamp", "display_name": "СЭМД CreateDate" },

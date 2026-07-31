@@ -1,0 +1,27 @@
+{
+  "name": "История запроса документов",
+  "table_ref": "public.rpt_document_file_request",
+  "description": "Запросы getDocumentFile по уже зарегистрированным ЭМД (payload содержит emdrId). Grain: одно сообщение getDocumentFile.",
+  "fields": {
+    "request_logid": { "semantic_type": "type/PK", "display_name": "LOGID запроса" },
+    "request_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата запроса" },
+    "msgid": { "semantic_type": "type/Category", "display_name": "MSGID" },
+    "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
+    "dwh_id": { "semantic_type": "type/Category", "display_name": "dwh_id" },
+    "emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" },
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_label": { "semantic_type": "type/Category", "display_name": "Тип СЭМД" },
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+    "egisz_subsystem": { "semantic_type": "type/Category", "display_name": "Подсистема ЕГИСЗ" },
+    "next_logid": { "semantic_type": "type/Category", "display_name": "Следующий LOGID" },
+    "next_action": { "semantic_type": "type/Category", "display_name": "Следующий метод" },
+    "existing_document_status": { "semantic_type": "type/Category", "display_name": "Статус найденного документа" }
+  },
+  "hidden_fields": ["dwh_id", "clinic_name", "clinic_oid", "next_link_method", "next_egisz_subsystem"],
+  "metrics": {
+    "Запросов документов": {
+      "aggregation": ["distinct", ["field", "request_logid", null]]
+    }
+  }
+}
