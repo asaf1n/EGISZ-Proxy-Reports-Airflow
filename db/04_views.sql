@@ -1029,6 +1029,32 @@ journal_gaps AS (
       ON r.logid > COALESCE(s.transform_logid_cursor, 0)
     WHERE s.pipeline = 'egisz'
 ),
+-- Стык месячной сетки партиций: нижняя граница каждой партиции обязана совпадать с верхней
+-- границей предыдущей. Расхождение означает смену якоря сетки — зазор, в который строка не
+-- вставится вовсе, либо перекрытие, которое ломает создание следующего месяца. Проверка по
+-- имени партиции этого не видит, поэтому сигнал считается по фактическим границам каталога.
+partition_grid AS (
+    SELECT COUNT(*) AS breaks
+    FROM (
+        SELECT lag(upper_bound) OVER (PARTITION BY parent_name ORDER BY lower_bound) AS prev_upper,
+               lower_bound
+        FROM (
+            SELECT parent.relname AS parent_name,
+                   (regexp_match(pg_get_expr(child.relpartbound, child.oid), 'FROM \(''([^'']+)''\)'))[1]::timestamptz AS lower_bound,
+                   (regexp_match(pg_get_expr(child.relpartbound, child.oid), 'TO \(''([^'']+)''\)'))[1]::timestamptz AS upper_bound
+            FROM pg_inherits i
+            JOIN pg_class child ON child.oid = i.inhrelid
+            JOIN pg_class parent ON parent.oid = i.inhparent
+            JOIN pg_namespace n ON n.oid = parent.relnamespace
+            JOIN pg_partitioned_table p ON p.partrelid = parent.oid
+            WHERE n.nspname = 'public'
+              AND p.partstrat = 'r'
+              AND p.partnatts = 1
+              AND pg_get_expr(child.relpartbound, child.oid) <> 'DEFAULT'
+        ) bounds
+    ) ordered
+    WHERE prev_upper IS NOT NULL AND prev_upper <> lower_bound
+),
 -- Клиники, документы которых есть, а записи в справочнике организаций нет: подпись
 -- вырождается в «<jid> · —» во всех срезах. Наполнение справочника — задача выгрузки
 -- (JPERSONS выгружается целиком), поэтому в отчётном слое это только сигнал.
@@ -1089,6 +1115,13 @@ SELECT * FROM (
          'LOGID',
          'разрывы LOGID в необработанном хвосте exchangelog_raw',
          'Проверить Firebird и consistency_check. Разобранный raw можно архивировать'),
+        ('partition_grid',
+         'Разрывы в сетке партиций',
+         CASE WHEN (SELECT breaks FROM partition_grid) >= 1 THEN 'red' ELSE 'green' END,
+         (SELECT breaks FROM partition_grid)::numeric,
+         'стыков',
+         'границы партиций pg_inherits: нижняя граница ≠ верхней границе предыдущей',
+         'Сетка потеряла общий якорь: партиции созданы при разных часовых поясах сессии. Строка в зазор не вставится, следующий месяц не создастся'),
         ('unlinked_responses',
          'Доля несвязанных ответов ЕГИСЗ',
          CASE

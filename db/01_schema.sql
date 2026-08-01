@@ -1161,46 +1161,55 @@ $$;
 -- создание партиции своего месяца, и накат схемы падает. Вместо неё — расчёт границ по
 -- фактическому содержимому таблицы, чтобы окно всегда покрывало имеющиеся данные.
 -- Вызывается накатом схемы и суточной задачей maintain_partitions.
+--
+-- Сетка месяцев считается в наивном UTC и приводится к timestamptz только в момент
+-- выпуска границы: якорь сетки обязан быть константой. Неявное приведение наивного
+-- значения к timestamptz берёт часовой пояс сессии, и один и тот же месяц получает
+-- разную границу в зависимости от того, кто и откуда вызвал функцию, — соседние месяцы
+-- перестают стыковаться (перекрытие ломает CREATE, зазор ломает вставку).
+--
+-- Перечень обслуживаемых таблиц берётся из системного каталога, а не задаётся списком:
+-- каталог уже знает, что партиционировано по диапазону времени, и второй перечень
+-- расходился бы с ним молча.
+DROP FUNCTION IF EXISTS public.ensure_time_partitions(integer, integer);
 CREATE OR REPLACE FUNCTION public.ensure_time_partitions(
-    p_months_back integer DEFAULT 12,
-    p_months_ahead integer DEFAULT 24
+    p_grid_months_back integer DEFAULT 12,
+    p_grid_months_ahead integer DEFAULT 24
 )
 RETURNS integer
 LANGUAGE plpgsql
 AS $$
 DECLARE
     spec record;
-    part_start timestamptz;
-    part_end timestamptz;
+    part_start timestamp;
+    part_end timestamp;
     part_name text;
-    window_start timestamptz;
-    window_end timestamptz;
-    data_start timestamptz;
-    data_end timestamptz;
+    window_start timestamp;
+    window_end timestamp;
+    data_start timestamp;
+    data_end timestamp;
     created integer := 0;
 BEGIN
     FOR spec IN
-        SELECT * FROM (VALUES
-            ('exchangelog_raw', 'createdate'),
-            ('transactions', 'log_date')
-        ) AS t(table_name, key_column)
+        SELECT c.relname AS table_name, a.attname AS key_column
+        FROM pg_partitioned_table p
+        JOIN pg_class c ON c.oid = p.partrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_attribute a ON a.attrelid = p.partrelid AND a.attnum = p.partattrs[0]
+        WHERE n.nspname = 'public'
+          AND p.partstrat = 'r'
+          AND p.partnatts = 1
+          AND a.atttypid IN ('timestamptz'::regtype, 'timestamp'::regtype)
+        ORDER BY c.relname
     LOOP
-        CONTINUE WHEN NOT EXISTS (
-            SELECT 1
-            FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public'
-              AND c.relname = spec.table_name
-              AND c.relkind = 'p'
-        );
-
-        window_start := date_trunc('month', timezone('UTC', now())) - (p_months_back || ' months')::interval;
-        window_end := date_trunc('month', timezone('UTC', now())) + (p_months_ahead || ' months')::interval;
+        window_start := date_trunc('month', timezone('UTC', now())) - (p_grid_months_back || ' months')::interval;
+        window_end := date_trunc('month', timezone('UTC', now())) + (p_grid_months_ahead || ' months')::interval;
 
         -- Данные могут выходить за окно: без покрывающей партиции такая строка
         -- не вставится вовсе, поэтому окно расширяется до фактического диапазона.
         EXECUTE format(
-            'SELECT date_trunc(''month'', min(%I)), date_trunc(''month'', max(%I)) FROM public.%I',
+            'SELECT date_trunc(''month'', timezone(''UTC'', min(%I))),'
+            ' date_trunc(''month'', timezone(''UTC'', max(%I))) FROM public.%I',
             spec.key_column, spec.key_column, spec.table_name
         ) INTO data_start, data_end;
 
@@ -1219,7 +1228,8 @@ BEGIN
             ) THEN
                 EXECUTE format(
                     'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
-                    part_name, spec.table_name, part_start, part_end
+                    part_name, spec.table_name,
+                    part_start AT TIME ZONE 'UTC', part_end AT TIME ZONE 'UTC'
                 );
                 created := created + 1;
             END IF;
@@ -1231,32 +1241,44 @@ BEGIN
 END;
 $$;
 
+COMMENT ON FUNCTION public.ensure_time_partitions(integer, integer) IS
+'Достраивает месячную сетку партиций всех таблиц public, партиционированных по диапазону '
+'одного временного столбца. Границы месяцев считаются в наивном UTC: якорь сетки не должен '
+'зависеть от часового пояса сессии. Параметры задают глубину подготовленной сетки назад и '
+'вперёд от текущего месяца; функция только создаёт партиции — хранение не ограничивает '
+'и ничего не удаляет.';
+
 -- DEFAULT-партиции не используются: строки переносятся в месячные партиции,
--- DEFAULT-партиция отцепляется и удаляется после переноса строк.
+-- DEFAULT-партиция отцепляется и удаляется после переноса строк. Отбор идёт по каталогу:
+-- DEFAULT-партиция опознаётся своей границей, а не соглашением об имени.
 DO $$
 DECLARE
     spec record;
     moved bigint;
-    data_start timestamptz;
-    data_end timestamptz;
-    part_start timestamptz;
-    part_end timestamptz;
+    data_start timestamp;
+    data_end timestamp;
+    part_start timestamp;
+    part_end timestamp;
     part_name text;
 BEGIN
     FOR spec IN
-        SELECT * FROM (VALUES
-            ('exchangelog_raw', 'exchangelog_raw_default', 'createdate'),
-            ('transactions', 'transactions_default', 'log_date')
-        ) AS t(table_name, default_name, key_column)
+        SELECT parent.relname AS table_name,
+               child.relname AS default_name,
+               a.attname AS key_column
+        FROM pg_inherits i
+        JOIN pg_class child ON child.oid = i.inhrelid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        JOIN pg_namespace n ON n.oid = parent.relnamespace
+        JOIN pg_partitioned_table p ON p.partrelid = parent.oid
+        JOIN pg_attribute a ON a.attrelid = parent.oid AND a.attnum = p.partattrs[0]
+        WHERE n.nspname = 'public'
+          AND p.partstrat = 'r'
+          AND p.partnatts = 1
+          AND pg_get_expr(child.relpartbound, child.oid) = 'DEFAULT'
     LOOP
-        CONTINUE WHEN NOT EXISTS (
-            SELECT 1 FROM pg_class c
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname = 'public' AND c.relname = spec.default_name
-        );
-
         EXECUTE format(
-            'SELECT count(*), date_trunc(''month'', min(%I)), date_trunc(''month'', max(%I)) FROM public.%I',
+            'SELECT count(*), date_trunc(''month'', timezone(''UTC'', min(%I))),'
+            ' date_trunc(''month'', timezone(''UTC'', max(%I))) FROM public.%I',
             spec.key_column, spec.key_column, spec.default_name
         ) INTO moved, data_start, data_end;
 
@@ -1278,7 +1300,8 @@ BEGIN
                 ) THEN
                     EXECUTE format(
                         'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
-                        part_name, spec.table_name, part_start, part_end
+                        part_name, spec.table_name,
+                        part_start AT TIME ZONE 'UTC', part_end AT TIME ZONE 'UTC'
                     );
                 END IF;
                 part_start := part_end;

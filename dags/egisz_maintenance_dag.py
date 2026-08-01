@@ -447,7 +447,9 @@ def egisz_maintenance_pipeline() -> None:
         finally:
             pg_conn.close()
 
-    @task(pool=DWH_POOL)
+    # Ретраи по той же причине, что и у сверки: CREATE TABLE ... PARTITION OF берёт
+    # AccessExclusiveLock на родителя и сталкивается с приёмом. Создание идемпотентно.
+    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1))
     def maintain_partitions() -> int:
         """Создание месячных партиций на предстоящий период.
 
