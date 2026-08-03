@@ -6,6 +6,11 @@ Usage:
       Export every dashboard JSON in metabase_dashboards/ by matching dashboard
       name against the configured Metabase collection.
 
+  python scripts/export_dashboard.py --backup [dir]
+      Snapshot every dashboard of the collection into metabase_exports/
+      prod_backup_<timestamp>/ (or the given dir) without touching the working
+      copies. Mandatory step before importing to a live contour.
+
   python scripts/export_dashboard.py <dashboard_id> <output_file>
       Export a single dashboard by Metabase id into the given path.
 
@@ -17,11 +22,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from mb_api import api, login
 
 DASHBOARDS_DIR = Path(__file__).resolve().parents[1] / "metabase_dashboards"
+EXPORTS_DIR = Path(__file__).resolve().parents[1] / "metabase_exports"
 COLLECTION_NAME = os.environ.get("METABASE_COLLECTION_NAME", "Интеграция с ЕГИСЗ")
 
 PROVISIONING_KEYS = (
@@ -409,7 +416,13 @@ def write_dashboard(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def export_all(token: str) -> int:
+def export_all(token: str, target_dir: Path | None = None) -> int:
+    """Выгрузить все дашборды коллекции.
+
+    Без target_dir выгрузка идёт в рабочие копии metabase_dashboards/ (сверка живого
+    состояния с репозиторием). С target_dir — в отдельный каталог: это снимок состояния
+    контура перед импортом, и рабочие копии он не трогает.
+    """
     by_name = collection_dashboard_ids(token)
     failures: list[str] = []
 
@@ -426,10 +439,13 @@ def export_all(token: str) -> int:
             print(f"[MISSING] {name} ({path.name})", file=sys.stderr)
             continue
 
-        print(f"Exporting {name} (id={dash_id}) -> {path.name}...", file=sys.stderr)
-        payload = export_dashboard(token, dash_id, keep_params_from=path)
-        write_dashboard(path, payload)
-        print(f"[OK] {path.name}: {len(payload['cards'])} cards", file=sys.stderr)
+        output = path if target_dir is None else target_dir / path.name
+        print(f"Exporting {name} (id={dash_id}) -> {output}...", file=sys.stderr)
+        # Параметры дашборда берём из живого контура: снимок обязан описывать то, что
+        # на нём стоит сейчас, а не то, что лежит в репозитории.
+        payload = export_dashboard(token, dash_id, keep_params_from=path if target_dir is None else None)
+        write_dashboard(output, payload)
+        print(f"[OK] {output.name}: {len(payload['cards'])} cards", file=sys.stderr)
 
     if failures:
         print("=== FAILURES ===", file=sys.stderr)
@@ -438,6 +454,20 @@ def export_all(token: str) -> int:
         return 1
 
     return 0
+
+
+def backup_all(token: str, target_dir: Path | None = None) -> int:
+    """Снимок всех дашбордов контура перед импортом — метка времени в имени каталога.
+
+    Импорт переписывает карточки целиком, поэтому ручные правки на контуре (колонка,
+    ширины, закрепление) переживают его только через такой снимок.
+    """
+    if target_dir is None:
+        target_dir = EXPORTS_DIR / f"prod_backup_{time.strftime('%Y%m%d_%H%M%S')}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    status = export_all(token, target_dir=target_dir)
+    print(f"Backup written to {target_dir}", file=sys.stderr)
+    return status
 
 
 def export_one(token: str, dash_id: int, output: Path) -> int:
@@ -452,6 +482,10 @@ def export_one(token: str, dash_id: int, output: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     token = login()
+
+    if args and args[0] == "--backup":
+        target = Path(args[1]) if len(args) > 1 else None
+        return backup_all(token, target)
 
     if not args:
         return export_all(token)

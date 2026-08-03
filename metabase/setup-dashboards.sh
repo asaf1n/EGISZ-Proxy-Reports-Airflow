@@ -98,15 +98,36 @@ mb_auth_header() {
 
 # Ретраи только фазы соединения (--retry-connrefused/timeout): запрос ещё не отправлен,
 # поэтому повтор безопасен и для POST; переживает кратковременные обрывы сети до инстанса.
+#
+# GET дополнительно повторяется при обрыве УЖЕ НАЧАТОГО ответа (--retry-all-errors, curl 56
+# «unexpected eof while reading»): канал до внешнего инстанса рвёт длинные чтения — метаданные
+# базы и выгрузка дашборда со всеми карточками измеряются мегабайтами, а наблюдаемая скорость
+# на узком канале падала до единиц КБ/с. Чтение идемпотентно, поэтому повтор не может задвоить
+# изменение; для методов записи набор флагов остаётся прежним.
+#
+# Потолок времени задан на порядок выше наблюдаемого худшего случая: он страхует от зависшего
+# соединения, но не должен обрывать медленную, идущую передачу.
+MB_GET_MAX_TIME="${MB_GET_MAX_TIME:-1800}"
+
+mb_curl_retry_opts() {
+  local method="$1"
+  printf '%s\n' --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20
+  if [ "${method}" = "GET" ]; then
+    printf '%s\n' --retry-all-errors --max-time "${MB_GET_MAX_TIME}"
+  fi
+}
+
 api_request() {
   local method="$1" path="$2" payload="${3:-}"
   local response code body
+  local -a retry_opts
+  mapfile -t retry_opts < <(mb_curl_retry_opts "${method}")
   if [ -z "${payload}" ]; then
-    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+    response=$(curl -sS "${retry_opts[@]}" \
       -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "$(mb_auth_header)")
   else
-    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+    response=$(curl -sS "${retry_opts[@]}" \
       -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "Content-Type: application/json" \
       -H "$(mb_auth_header)" \
@@ -122,12 +143,14 @@ api_request() {
 # которые в разных версиях Metabase бывают read-only или называются иначе.
 api_request_optional() {
   local method="$1" path="$2" payload="${3:-}" response code body
+  local -a retry_opts
+  mapfile -t retry_opts < <(mb_curl_retry_opts "${method}")
   if [ -z "${payload}" ]; then
-    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+    response=$(curl -sS "${retry_opts[@]}" \
       -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "$(mb_auth_header)")
   else
-    response=$(curl -sS --retry 5 --retry-delay 3 --retry-connrefused --connect-timeout 20 \
+    response=$(curl -sS "${retry_opts[@]}" \
       -w "\n%{http_code}" -X "${method}" "${METABASE_URL}${path}" \
       -H "Content-Type: application/json" \
       -H "$(mb_auth_header)" \
@@ -361,8 +384,7 @@ validate_dwh_contract() {
 sync_metabase_schema() {
   log_info "Requesting Metabase schema sync for ${APP_DB_NAME} (database id ${APP_DB_ID})"
   api_request POST "/api/database/${APP_DB_ID}/sync_schema" "{}" >/dev/null
-  DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
-  api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+  fetch_db_metadata
 }
 
 required_field_filters() {
@@ -414,10 +436,59 @@ resolve_filter_table_ref() {
   printf '\n'
 }
 
+# Таблицы DWH, которые адресует наша коллекция: приёмники field filters дашбордов и
+# table_ref моделей. Всё остальное в базе (сотня с лишним таблиц) провижинингу не нужно.
+collection_table_names() {
+  local ref resolved
+  {
+    required_field_filters | cut -f1
+    jq -r '.table_ref // empty' "${MODELS_DIR}"/*.json 2>/dev/null || true
+  } | while IFS= read -r ref; do
+    [ -n "${ref}" ] || continue
+    case "${ref}" in
+      public.*) printf '%s\n' "${ref#public.}" ;;
+      *)
+        resolved="$(resolve_filter_table_ref "${ref}")"
+        [ -n "${resolved}" ] && printf '%s\n' "${resolved#public.}"
+        ;;
+    esac
+  done | sort -u
+}
+
+# Метаданные собираются постранично, по одной таблице, а не одним запросом
+# /api/database/:id/metadata: тот отдаёт поля ВСЕХ таблиц базы (в dwh_egisz их 114,
+# ответ измеряется мегабайтами) и на узком канале не доходит целиком — обрыв в середине,
+# а следом падение jq на обрезанном JSON. Постраничные ответы небольшие и проходят.
+#
+# Берутся только таблицы нашей коллекции: провижининг не должен ни читать, ни трогать
+# метаданные объектов чужих сервисов на общем инстансе.
+fetch_db_metadata() {
+  DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
+  local parts schema_json table_name table_id count=0
+  parts="${DB_METADATA_FILE}.parts"
+  : > "${parts}"
+  schema_json="$(api_request GET "/api/database/${APP_DB_ID}/schema/public")"
+  while IFS= read -r table_name; do
+    [ -n "${table_name}" ] || continue
+    table_id="$(printf '%s' "${schema_json}" |
+      jq -r --arg n "${table_name}" 'first(.[]? | select(.name == $n) | .id) // empty')"
+    # Таблицы может ещё не быть в каталоге Metabase (витрина накатана, синхронизация
+    # не дошла) — это штатно разбирает wait_for_metabase_metadata своими повторами.
+    [ -n "${table_id}" ] || continue
+    api_request GET "/api/table/${table_id}/query_metadata" |
+      jq -c '{schema: (.schema // "public"), name: .name,
+              fields: [.fields[]? | {id, name, display_name}]}' >> "${parts}"
+    count=$((count + 1))
+  done < <(collection_table_names)
+  jq -s '{tables: .}' "${parts}" > "${DB_METADATA_FILE}"
+  rm -f "${parts}"
+  log_info "DB metadata collected for ${count} table(s) of collection '${COLLECTION_NAME}'"
+}
+
 wait_for_metabase_metadata() {
   local attempt table_ref field_name missing sample
   for attempt in $(seq 1 30); do
-    api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+    fetch_db_metadata
     missing=0
     sample=""
     while IFS=$'\t' read -r table_ref field_name; do
@@ -1435,7 +1506,7 @@ wait_for_metabase_metadata
 maybe_skip_dashboard_import
 
 log_info "Importing dashboards to collection '${COLLECTION_NAME}' from ${DASHBOARDS_DIR}"
-api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+fetch_db_metadata
 if declare -F build_model_registry >/dev/null; then
   build_model_registry
 fi

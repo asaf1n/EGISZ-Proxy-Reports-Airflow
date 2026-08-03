@@ -1220,11 +1220,11 @@
     },
     {
       "name": "Отправленные — клиент",
-      "description": "Документы клиники, отправленные в РЭМД и пока без финального ответа (статус «Отправлено»). Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. До 500 строк по дате отправки.",
+      "description": "Документы клиники, отправленные в РЭМД и пока без финального ответа (статус «Отправлено»). Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. Возраст ожидания и ступень — из отчётного слоя (единый якорь, README §«Учёт отправленных»). До 500 строк, самые давние сверху.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", ROUND(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400.0, 1) AS \"Дней в ожидании\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status = 'sent' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "SELECT first_sent_at AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", pending_days AS \"Дней в ожидании\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY first_sent_at ASC LIMIT 500",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1265,7 +1265,8 @@
           200,
           320,
           240,
-          160
+          160,
+          180
         ],
         "table.columns": [
           {
@@ -1283,6 +1284,10 @@
           {
             "enabled": true,
             "name": "Дней в ожидании"
+          },
+          {
+            "enabled": true,
+            "name": "Ступень обработки"
           }
         ],
         "column_settings": {
@@ -1307,15 +1312,15 @@
       "tab": "documents",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
+          "table_ref": "public.rpt_documents_sent",
+          "field_name": "first_sent_at"
         },
         "client_document_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "semd_label"
         },
         "clinic_label": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "public.rpt_documents_sent",
           "field_name": "clinic_label"
         }
       }

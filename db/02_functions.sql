@@ -314,6 +314,55 @@ AS $$
     SELECT code FROM public.dim_document_status WHERE is_final;
 $$;
 
+-- Очередь обработки на момент времени (README §«Учёт отправленных»). Обе функции —
+-- единственное определение членства и возраста: отчётный слой подставляет now(),
+-- срез на прошлый момент — правую границу периода.
+--
+-- Членство: документ отправлен не позже момента, а ответ к этому моменту ещё не пришёл —
+-- либо его нет вовсе, либо он наступил позже. Границей служит отметка ПЕРВОГО ответа:
+-- last_callback_at перезаписывается каждым повторным коллбэком, и документ, отвеченный
+-- за секунды, числился бы в очереди до последнего повтора.
+DROP FUNCTION IF EXISTS public.is_pending_at(timestamptz, numeric, timestamptz);
+CREATE OR REPLACE FUNCTION public.is_pending_at(
+    p_first_sent_at timestamptz,
+    p_first_callback_at timestamptz,
+    p_anchor timestamptz
+) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT p_first_sent_at IS NOT NULL
+       AND p_anchor IS NOT NULL
+       AND p_first_sent_at <= p_anchor
+       AND (
+           p_first_callback_at IS NULL
+           OR p_first_callback_at > p_anchor
+       );
+$$;
+
+-- Ступень — первая по sort_order, чья граница покрывает возраст ожидания; терминальная
+-- (max_age_minutes IS NULL) замыкает лестницу и ловит в том числе отправки без
+-- first_sent_at: без известного момента запроса файла возраст не определён. Пороги
+-- остаются данными справочника — функция читает dim_pending_segments, поэтому STABLE.
+CREATE OR REPLACE FUNCTION public.pending_segment_code_at(
+    p_first_sent_at timestamptz,
+    p_anchor timestamptz
+) RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.code
+    FROM public.dim_pending_segments s
+    WHERE s.max_age_minutes IS NULL
+       OR (
+           p_first_sent_at IS NOT NULL
+           AND p_anchor IS NOT NULL
+           AND EXTRACT(EPOCH FROM (p_anchor - p_first_sent_at)) / 60.0 <= s.max_age_minutes
+       )
+    ORDER BY s.sort_order
+    LIMIT 1;
+$$;
+
 -- Подсистема ЕГИСЗ, к которой относится строка журнала.
 -- Первичный признак — URI вызова, который шлюз пишет в саму запись журнала:
 -- /emdr/callback — РЭМД, /ips/callback — ИЭМК. Это реквизит транспорта, он не зависит

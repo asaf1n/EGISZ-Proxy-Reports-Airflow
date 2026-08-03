@@ -404,7 +404,7 @@ BEGIN
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
         status, first_sent_at, request_logid, msgid,
-        result_logid, last_callback_at, jid, org_oid, jid_resolve_method,
+        result_logid, first_callback_at, last_callback_at, jid, org_oid, jid_resolve_method,
         error_types, error_text,
         updated_at
     )
@@ -417,6 +417,7 @@ BEGIN
         a.request_logid,
         a.sent_msgid,
         CASE WHEN a.has_network_error THEN a.network_logid END,
+        CASE WHEN a.has_network_error THEN a.network_at END,
         CASE WHEN a.has_network_error THEN a.network_at END,
         a.resolved_jid,
         a.org_oid,
@@ -443,6 +444,10 @@ BEGIN
             ELSE EXCLUDED.status
         END,
         result_logid = COALESCE(EXCLUDED.result_logid, public.documents.result_logid),
+        first_callback_at = LEAST(
+            COALESCE(public.documents.first_callback_at, EXCLUDED.first_callback_at),
+            COALESCE(EXCLUDED.first_callback_at, public.documents.first_callback_at)
+        ),
         last_callback_at = COALESCE(EXCLUDED.last_callback_at, public.documents.last_callback_at),
         jid = COALESCE(EXCLUDED.jid, public.documents.jid),
         org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
@@ -824,7 +829,7 @@ BEGIN
         dwh_id, local_uid, emdr_id, semd_code,
         status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
-        last_callback_at, last_status, jid, org_oid, jid_resolve_method,
+        first_callback_at, last_callback_at, last_status, jid, org_oid, jid_resolve_method,
         error_types, error_text,
         patient_hash, doctor_hash, updated_at
     )
@@ -844,6 +849,9 @@ BEGIN
         f.logid,
         f.creation_date,
         CASE WHEN f.status = 'success' THEN f.log_date ELSE NULL::timestamptz END,
+        -- DISTINCT ON оставляет последний ответ документа, поэтому первый берётся окном:
+        -- оконные функции считаются до отбора строки.
+        MIN(f.log_date) OVER (PARTITION BY f.dwh_id),
         f.log_date,
         f.status,
         f.jid,
@@ -879,6 +887,10 @@ BEGIN
         END,
         document_created_at = COALESCE(EXCLUDED.document_created_at, public.documents.document_created_at),
         registered_at = COALESCE(EXCLUDED.registered_at, public.documents.registered_at),
+        first_callback_at = LEAST(
+            COALESCE(public.documents.first_callback_at, EXCLUDED.first_callback_at),
+            COALESCE(EXCLUDED.first_callback_at, public.documents.first_callback_at)
+        ),
         last_callback_at = GREATEST(COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
         last_status = COALESCE(EXCLUDED.last_status, public.documents.last_status),
         jid = COALESCE(public.documents.jid, EXCLUDED.jid),

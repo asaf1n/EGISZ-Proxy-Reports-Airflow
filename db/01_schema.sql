@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS documents (
     doctor_hash text,
     request_logid bigint,
     first_sent_at timestamptz,
+    first_callback_at timestamptz,
     last_callback_at timestamptz,
     last_status text,
     jid bigint,
@@ -215,6 +216,11 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS doctor_hash text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS request_logid bigint;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
+-- Отметка первого ответа ЕГИСЗ. Выход документа из очереди обработки определяет именно
+-- она: last_callback_at несёт последний ответ и перезаписывается каждым повторным
+-- коллбэком, поэтому документ, отвеченный за секунды, числился бы в очереди до последнего
+-- повтора (README §«Учёт отправленных»).
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_callback_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid bigint;
@@ -1333,6 +1339,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_emdr_id_norm
     ON documents (lower(NULLIF(btrim(emdr_id), '')))
     WHERE NULLIF(btrim(emdr_id), '') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON documents (last_callback_at);
+-- Членство в очереди обработки читает отметку первого ответа на любом моменте времени.
+CREATE INDEX IF NOT EXISTS idx_documents_first_callback_at ON documents (first_callback_at);
 -- Инкрементальное сопровождение document_attributes читает документы по updated_at.
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status);
@@ -1434,6 +1442,32 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_dim_message_document_uid
     ON dim_message_document (document_uid)
     WHERE document_uid IS NOT NULL;
+
+-- Инициализация отметки первого ответа по журналу ответов. Предикат самоограничен:
+-- документ с ответом всегда несёт last_callback_at, поэтому после первого прогона строк
+-- для заполнения не остаётся, а ожидающие ответа под него не подпадают. Документы,
+-- ответы которых старше глубины хранения transactions, получают last_callback_at —
+-- единственную известную отметку ответа.
+UPDATE documents d
+SET first_callback_at = LEAST(
+        COALESCE(cb.first_callback_at, d.last_callback_at),
+        COALESCE(d.last_callback_at, cb.first_callback_at)
+    )
+FROM (
+    SELECT dwh_id, min(log_date) AS first_callback_at
+    FROM transactions
+    WHERE status IN ('success', 'error')
+      AND NULLIF(btrim(dwh_id), '') IS NOT NULL
+    GROUP BY dwh_id
+) cb
+WHERE cb.dwh_id = d.dwh_id
+  AND d.first_callback_at IS NULL
+  AND d.last_callback_at IS NOT NULL;
+
+UPDATE documents
+SET first_callback_at = last_callback_at
+WHERE first_callback_at IS NULL
+  AND last_callback_at IS NOT NULL;
 
 -- Инициализация маркера попытки парсинга по распарсенным строкам transactions.
 INSERT INTO exchangelog_parse_attempts (logid)

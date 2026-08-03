@@ -75,6 +75,26 @@ def error_type_color_map() -> dict[str, str]:
     return colors
 
 
+def pending_segments() -> tuple[tuple[str, str, int | None, bool], ...]:
+    """Лестница ступеней обработки из сида `dim_pending_segments` в db/01_schema.sql.
+
+    Возвращает кортежи (код, наименование, граница в минутах, признак последней ступени)
+    в порядке лестницы. Карточки берут перечень колонок и подписи отсюда, поэтому
+    переименование или добавление ступени в справочнике доходит до дашборда следующей
+    пересборкой и не требует правки SQL.
+    """
+    schema_sql = (ROOT / "db" / "01_schema.sql").read_text(encoding="utf-8")
+    start = schema_sql.index("INSERT INTO dim_pending_segments")
+    block = schema_sql[start : schema_sql.index("ON CONFLICT", start)]
+    rows = re.findall(
+        r"\('(\w+)',\s*'((?:[^']|'')+)',\s*(\d+|NULL),\s*(\d+),\s*(true|false)\)", block
+    )
+    return tuple(
+        (code, label.replace("''", "'"), None if bound == "NULL" else int(bound), terminal == "true")
+        for code, label, bound, _sort, terminal in sorted(rows, key=lambda row: int(row[3]))
+    )
+
+
 def write_json_if_changed(path: Path, data: dict) -> bool:
     text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     if path.exists() and path.read_text(encoding="utf-8") == text:
@@ -88,6 +108,11 @@ PARAM_IDS = {
     "status_filter": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
     "error_type_filter": "f1a2b3c4-d5e6-4789-a01b-0123456789c0",
 }
+
+# Фильтр «Очередь на дату» снят: очередь — состояние на текущий момент, второй даты
+# на вкладке нет. Слаг и идентификатор остаются здесь, чтобы прогон убирал параметр
+# и его привязки с уже опубликованных дашбордов.
+RETIRED_PARAM_IDS = {"period_end_filter": "f1a2b3c4-d5e6-4789-a01b-0123456789c1"}
 
 MOVE_TO_ERRORS = {
     "Ошибки по типу",
@@ -108,6 +133,17 @@ RETIRED_CARD_NAMES = frozenset({
     # а доля утилизированных считалась от того же корпуса — обе плитки сняты.
     "Отправлено без ответа",
     "Доля без ответа, %",
+    # Воронка читалась как конверсия, хотя ступени — вложенные подмножества одного
+    # набора: проценты считались от первой ступени, а спад отражал профиль поступления.
+    # Кумулятивный взгляд остался кривой дожития, распределение — гистограммой.
+    "В обработке на конец периода",
+    # Полосы «объект × ступень» заменены сводными таблицами: концентрация и профиль
+    # ожидания читаются в одной сетке, а не в двух графиках с топ-15 и топ-20.
+    "Ожидание ответа по клиникам и ступеням",
+    "Ожидание ответа по типам СЭМД и ступеням",
+    # Распределение очереди осталось одной карточкой — «Текущая очередь по ступеням»
+    # на оперативном мониторинге; вторая была тем же графиком под другим якорем.
+    "Возраст очереди по ступеням",
 })
 
 # Модели, выведенные из обращения: импорт находит модель по имени, поэтому переименование
@@ -131,22 +167,87 @@ SENT_UNDELIVERED_TO_CLINIC_DETAIL_NAME = (
     "Документы: недоставленные в клинику (ошибка связи шлюз-МО)"
 )
 
-SENT_STUCK_TOP_CLINICS_NAME = "Ожидание ответа по клиникам и ступеням"
-SENT_STUCK_TOP_SEMD_NAME = "Ожидание ответа по типам СЭМД и ступеням"
+# Лестница ступеней — данные справочника. Рабочие ступени несут очередь, последняя
+# замыкает лестницу и означает, что ответа уже не ждут (README §«Учёт отправленных»).
+PENDING_SEGMENTS = pending_segments()
+WORKING_SEGMENTS = tuple(row for row in PENDING_SEGMENTS if not row[3])
+
+# Вкладка «Отправленные»: состояние очереди → распределение возраста → локализация
+# причины → движение. Имена карточек — подписи на дашборде, поэтому объявлены здесь.
+#
+# Очередь считается на текущий момент и фильтру периода не подчиняется: период режет
+# выборку по дате обработки, а очередь — состояние на момент, и документ, отправленный
+# до начала периода, из неё выпадал бы. Оговорка вынесена в наименование, чтобы читатель
+# не искал причину, почему карточка не отзывается на фильтр вкладки.
+NO_PERIOD_SUFFIX = " (без фильтра периода)"
+
+
+def _queue_rescue_range() -> str:
+    """Диапазон последней рабочей ступени из справочника: «7–15 суток».
+
+    Подписи ступеней — «до 7 суток» / «до 15 суток»; общая единица измерения у соседних
+    границ схлопывается в одну, чтобы имя читалось как интервал, а не как два срока.
+    """
+    bounds = [label.removeprefix("до ") for _code, label, _minutes, _terminal in WORKING_SEGMENTS[-2:]]
+    lower, upper = bounds[0], bounds[-1]
+    unit = upper.split(" ", 1)[-1]
+    return f"{lower.removesuffix(' ' + unit)}–{upper}"
+
+
+QUEUE_SIZE_NAME = f"Документов в очереди{NO_PERIOD_SUFFIX}"
+QUEUE_OVER_24H_NAME = f"Ожидают > 24 часов{NO_PERIOD_SUFFIX}"
+QUEUE_RESCUE_NAME = f"Ждут {_queue_rescue_range()}{NO_PERIOD_SUFFIX}"
+QUEUE_MAX_AGE_NAME = f"Максимальный возраст в очереди{NO_PERIOD_SUFFIX}"
+# Распределение очереди по ступеням — одна карточка на оперативном мониторинге.
+# Срез профиля ожидания разбирается кривой долей и матрицами на вкладке «Отправленные».
+QUEUE_NOW_NAME = f"Текущая очередь по ступеням{NO_PERIOD_SUFFIX}"
+QUEUE_SURVIVAL_NAME = f"Доля ожидающих дольше срока{NO_PERIOD_SUFFIX}"
+QUEUE_PIVOT_CLINIC_NAME = f"Клиника × ступень{NO_PERIOD_SUFFIX}"
+QUEUE_PIVOT_SEMD_NAME = f"Тип СЭМД × ступень{NO_PERIOD_SUFFIX}"
+QUEUE_FLOW_DAYS = 7
+QUEUE_FLOW_NAME = f"Движение очереди за {QUEUE_FLOW_DAYS} суток{NO_PERIOD_SUFFIX}"
+QUEUE_TAIL_NAME = f"Доля хвоста по неделям{NO_PERIOD_SUFFIX}"
 
 # Переименования, ещё НЕ применённые на целевых контурах. Карта не архив: как только
 # прогон импорта прошёл везде, запись отсюда убирается — прежнее имя уже не встретится,
 # а копить цепочки «имя → имя → имя» значит хранить историю в рабочем коде.
 # Снятые с дашборда карточки живут не здесь, а в RETIRED_CARD_NAMES.
 RENAME_01 = {
+    # Окно движения объявлено в имени: «за период» путалось с фильтром вкладки.
+    "Движение очереди за период": QUEUE_FLOW_NAME,
     "Без ответа": SENT_STATE_NO_RESPONSE_LABEL,
     "Документы без ответа": SENT_TABLE_NAME_NO_RESPONSE,
     "Объём документов по дням": "Динамика документов по дням",
+    # Карточки очереди: оговорка о фильтре периода в наименовании, внутренние слова
+    # («якорь», «дожитие», «окно спасения») заменены на язык предметной области.
+    "Документов в очереди": QUEUE_SIZE_NAME,
+    "Ожидают > 24 часов": QUEUE_OVER_24H_NAME,
+    "Окно спасения (7–15 суток)": QUEUE_RESCUE_NAME,
+    "Максимальный возраст в очереди": QUEUE_MAX_AGE_NAME,
+    "Текущая очередь по ступеням": QUEUE_NOW_NAME,
+    "Кривая дожития очереди": QUEUE_SURVIVAL_NAME,
+    "Клиника × ступень": QUEUE_PIVOT_CLINIC_NAME,
+    "Тип СЭМД × ступень": QUEUE_PIVOT_SEMD_NAME,
+    "Движение очереди за 7 суток": QUEUE_FLOW_NAME,
+    "Доля хвоста по неделям": QUEUE_TAIL_NAME,
 }
 
-# Переименования по остальным дашбордам — так же только не применённые. Пусто: всё,
-# что было, уже разошлось по контурам.
-RENAME_OTHER: dict[str, dict[str, str]] = {}
+# Переименования по остальным дашбордам — так же только не применённые.
+RENAME_OTHER: dict[str, dict[str, str]] = {
+    # Имя и порог «>7 дн.» пережили лестницу ступеней: терминальная граница живёт в
+    # dim_pending_segments (сейчас 15 суток), а состояние называется «Ответ не получен».
+    "05_executive.json": {"Зависших >7 дн., %": "Ответ не получен, %"},
+}
+
+EXECUTIVE_NO_RESPONSE_NAME = "Ответ не получен, %"
+
+# Доля документов, по которым ответа уже не ждут. Порог не объявляется — состояние
+# приходит из справочника (README §«Учёт отправленных»), ужесточение делается UPDATE'ом.
+EXECUTIVE_NO_RESPONSE_QUERY = (
+    "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') "
+    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ответ не получен, %\" "
+    "FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]"
+)
 
 # Канонические цвета состояний документа. «В обработке» — светло-синий (документ ещё в
 # работе), «Без ответа» — светло-серый (ответа уже не ожидается; выводится только на
@@ -177,7 +278,6 @@ ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
 MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Последние операции": [("clinic_label", "Клиника")],
     "Статусы за период": [("status_detail_label", "Статус")],
-    "Транзакции по дням и статусам": [("status_detail_label", "Статус")],
     "РЭМД vs связь": [("status_detail_label", "Статус")],
     "Объём по клиникам": [("clinic_jid", "JID Клиники")],
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
@@ -186,16 +286,10 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Успешность по типам СЭМД": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
-    # Сегмент полосы — это пара «объект × ступень», поэтому в модель уносится и ступень:
-    # без неё клик по хвосту лестницы открывал бы весь корпус клиники.
-    SENT_STUCK_TOP_CLINICS_NAME: [
-        ("clinic_jid", "JID Клиники"),
-        ("pending_segment_label", "Ступень обработки"),
-    ],
-    SENT_STUCK_TOP_SEMD_NAME: [
-        ("semd_code", "Код СЭМД"),
-        ("pending_segment_label", "Ступень обработки"),
-    ],
+    # Строка матрицы — объект целиком (ступени разложены по колонкам), поэтому дрилл
+    # уносит в модель объект строки; разрез по ступени задаётся фильтром вкладки.
+    QUEUE_PIVOT_CLINIC_NAME: [("clinic_label", "Клиника")],
+    QUEUE_PIVOT_SEMD_NAME: [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
         ("error_types", "Тип ошибки", "contains"),
         ("clinic_jid", "JID Клиники"),
@@ -206,15 +300,14 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
 MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {
     "Топ типов СЭМД по ошибкам": ERROR_BREAKDOWN_MODEL_REF,
     "Топ типов СЭМД по видам ошибки": ERROR_BREAKDOWN_MODEL_REF,
-    SENT_STUCK_TOP_CLINICS_NAME: SENT_MODEL_REF,
-    SENT_STUCK_TOP_SEMD_NAME: SENT_MODEL_REF,
+    QUEUE_PIVOT_CLINIC_NAME: SENT_MODEL_REF,
+    QUEUE_PIVOT_SEMD_NAME: SENT_MODEL_REF,
 }
 
 # Активные фильтры дашборда, переносимые в модель (без измерения-грейна самой строки).
 MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Последние операции": ["ips_date", "semd_type", "status"],
     "Статусы за период": ["ips_date", "semd_type", "jid"],
-    "Транзакции по дням и статусам": ["ips_date", "semd_type", "jid"],
     "РЭМД vs связь": ["ips_date", "semd_type", "jid"],
     "Объём по клиникам": ["ips_date", "semd_type", "status"],
     "Успешность по клиникам": ["ips_date", "semd_type", "status"],
@@ -223,9 +316,10 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
     "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
     "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
-    # pending_segment не переносится: ступень теперь измерение самой строки (см. MODEL_DRILL_BY_NAME).
-    SENT_STUCK_TOP_CLINICS_NAME: ["ips_date", "semd_type"],
-    SENT_STUCK_TOP_SEMD_NAME: ["ips_date", "jid"],
+    # pending_segment не переносится: ступень — измерение самой ячейки (см. MODEL_DRILL_BY_NAME).
+    # Период тоже: очередь — состояние на якорь, а не выборка за период.
+    QUEUE_PIVOT_CLINIC_NAME: ["semd_type"],
+    QUEUE_PIVOT_SEMD_NAME: ["jid"],
     "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid", "status"],
 }
 
@@ -283,6 +377,7 @@ LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "СЭМД"},
     {"enabled": True, "name": "Типы ошибки"},
+    {"enabled": True, "name": "ns2_error"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
@@ -310,6 +405,7 @@ LATEST_OPERATIONS_COLUMN_SETTINGS = {
     '["name","Клиника"]': {"column_title": "Клиника"},
     '["name","localUid СЭМД"]': {"column_title": "localUid"},
     '["name","Типы ошибки"]': {"column_title": "Типы ошибки", "text_style": "wrap"},
+    '["name","ns2_error"]': {"column_title": "ns2_error", "text_style": "wrap"},
     '["name","Host Клиники (ГОСТ VPN)"]': {"column_title": "Host"},
 }
 
@@ -333,13 +429,13 @@ DOCUMENT_VOLUME_BY_DAY_QUERY = (
 # Распределение по статусам: три исхода плюс «В обработке». «Без ответа» исключено —
 # ответа по этим документам уже не ожидается, они разбираются на вкладке «Отправленные»
 # (см. README §«Учёт отправленных»).
-TRANSACTIONS_BY_DAY_STATUS_QUERY = (
-    "SELECT processed_day AS \"Дата\", status_detail_label AS \"Статус\", "
+STATUS_BY_DAY_QUERY = (
+    "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
     "FROM public.rpt_documents WHERE status_detail <> 'no_response' "
-    "[[AND {{dwh_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-    "GROUP BY processed_day, status_detail_label, status_detail_sort "
-    "ORDER BY processed_day, status_detail_sort"
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "GROUP BY ips_date::date, status_detail_label, status_detail_sort "
+    "ORDER BY ips_date::date, status_detail_sort"
 )
 
 # Стэк долей состояний за день (сумма = 100%): три исхода плюс «В обработке». Знаменатель —
@@ -377,11 +473,15 @@ SERVICE_REFUSALS_BY_HOUR_QUERY = (
     "GROUP BY 1 ORDER BY 1"
 )
 
+# «ns2_error» — исходный текст <message> ответа РЭМД (documents.error_text) рядом с
+# каноническими типами: типы отвечают «что это за отказ», текст — «что именно ответил
+# РЭМД по этому документу», и при разборе инцидента нужен именно он.
 LATEST_OPERATIONS_QUERY = (
     "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", "
     "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
     "semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", "
-    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\" "
+    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\", "
+    "error_text AS \"ns2_error\" "
     "FROM public.rpt_documents WHERE 1=1 "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] "
     "ORDER BY ips_date DESC LIMIT 50"
@@ -775,10 +875,31 @@ def _sent_table_query(state: str, order: str) -> str:
     )
 
 
-# «В обработке» читают от свежих: интерес — что происходит сейчас. «Без ответа» —
-# от самых старых: там разбирают давно застрявшее.
-SENT_TABLE_PENDING_QUERY = _sent_table_query("pending", "first_sent_at DESC NULLS LAST")
+# Обе таблицы читают от самых старых: наверху списка то, что ждёт дольше всех и требует
+# разбора. Свежие отправки в верхних строках вытесняли застрявшие — ровно тот случай,
+# ради которого таблицы и разделены по состоянию.
+SENT_TABLE_PENDING_QUERY = _sent_table_query("pending", "first_sent_at ASC NULLS LAST")
 SENT_TABLE_NO_RESPONSE_QUERY = _sent_table_query("no_response", "first_sent_at ASC NULLS LAST")
+
+# Формат колонок таблиц разбора: только для колонок, которые запрос действительно отдаёт.
+SENT_TABLE_COLUMN_SETTINGS = {
+    '["name","Подач в ЕГИСЗ"]': {
+        "column_title": "Подач в ЕГИСЗ",
+        "decimals": 0,
+        "number_separators": ", ",
+    },
+    '["name","Суток с отправки"]': {
+        "column_title": "Суток с отправки",
+        "decimals": 1,
+        "number_separators": ", ",
+    },
+    '["name","Дата отправки"]': {
+        "column_title": "Дата отправки",
+        "date_abbreviate": True,
+        "date_style": "D MMMM, YYYY",
+        "time_style": "HH:mm",
+    },
+}
 
 # Вкладка «Отправленные» целиком строится на rpt_documents_sent: состояние отправки и
 # ступень обработки приходят из справочников (dim_sent_state, dim_pending_segments),
@@ -842,47 +963,313 @@ SENT_FIELD_FILTERS = {
 }
 
 
-def _sent_scalar_query(where: str) -> str:
+SENT_NO_RESPONSE_QUERY = (
+    'SELECT COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
+    "FROM public.rpt_documents_sent "
+    f"WHERE sent_state = 'no_response' {SENT_FILTERS}"
+)
+
+# Очередь — состояние на текущий момент, а не выборка за период: границы периода к ней
+# неприменимы. Документ, отправленный до начала периода и не получивший ответа, в очереди
+# стоит — отбор по дате отправки выбрасывал бы его и занижал очередь. Остальные срезы
+# очередь по времени не режут и остаются. Ступень биндится к справочнику: колонка ступени
+# в rpt_documents посчитана от того же момента.
+SENT_QUEUE_FIELD_FILTERS = {
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "pending_segment": {"table_ref": "public.dim_pending_segments", "field_name": "label"},
+}
+
+# Набор фильтров у карточек очереди один и тот же; ось-лестница у распределений — не
+# фильтр, поэтому у кривой доли, движения и хвоста ступень не биндится (справочник там
+# второй экземпляр, разрез по одной ступени ломал бы кумулятивный ряд и баланс потока).
+SENT_QUEUE_FILTERS = "[[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]]"
+SENT_QUEUE_SLICE_FILTERS = "[[AND {{semd_type}}]] [[AND {{jid}}]]"
+
+# Набор документов очереди — один на все карточки блока: отправлен, первого ответа на
+# момент ещё нет, ступень рабочая. Последняя ступень («ответа уже не ждут») в очередь не
+# входит нигде: у неё своя пара карточек на этой же вкладке. now() в пределах запроса
+# неизменен, поэтому отдельного якоря карточкам не нужно.
+#
+# Таблицы остаются в FROM без алиасов: field filters Metabase разворачиваются
+# в "public"."<таблица>"."<колонка>".
+QUEUE_MEMBERSHIP = (
+    "public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, now())"
+)
+
+SENT_QUEUE_CORPUS = (
+    "WITH queue AS ( SELECT public.rpt_documents.dwh_id, "
+    "public.rpt_documents.clinic_label, "
+    "COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, "
+    "public.dim_pending_segments.code AS segment_code, "
+    "public.dim_pending_segments.sort_order AS segment_sort, "
+    "public.dim_pending_segments.label AS segment_label, "
+    "EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM public.rpt_documents "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) "
+    f"WHERE {QUEUE_MEMBERSHIP} "
+    "AND NOT public.dim_pending_segments.is_no_response "
+    f"{SENT_QUEUE_FILTERS} )"
+)
+
+# Ступени в порядке лестницы: светло-синий → фиолетовый → жёлтый → оранжевый → красный.
+# Цвет несёт то же, что и позиция сегмента, — чем дольше ожидание, тем «горячее» полоса.
+# Терминальная ступень отделена серым: это не работа, а исход (README §«Учёт отправленных»).
+SENT_STATE_COLORS: dict[str, str] = {
+    "pending": STATUS_DETAIL_COLORS["В обработке"]["color"],
+    "no_response": STATUS_DETAIL_COLORS["Без ответа"]["color"],
+}
+
+# Лестница цветов идёт по позиции ступени, а не по её подписи: переименование ступени
+# в справочнике не должно перекрашивать график. Ступеней в справочнике может стать больше,
+# чем оттенков, — хвост донашивает последний.
+SEGMENT_COLOR_LADDER = (
+    "#A6C8E8", "#7FB0DF", "#B79AD3", "#A989C5", "#EDC948", "#F2B056", "#F28E2B", "#E15759",
+)
+
+SEGMENT_COLOR_BY_CODE: dict[str, str] = {
+    code: SEGMENT_COLOR_LADDER[min(index, len(SEGMENT_COLOR_LADDER) - 1)]
+    for index, (code, _label, _minutes, _terminal) in enumerate(WORKING_SEGMENTS)
+}
+
+# Подпись ступени приходит из справочника, цвет — из лестницы позиций.
+SENT_SEGMENT_COLORS: dict[str, str] = {
+    label: SEGMENT_COLOR_BY_CODE[code] for code, label, _minutes, _terminal in WORKING_SEGMENTS
+}
+
+QUEUE_TAIL_COLORS = tuple(
+    SEGMENT_COLOR_BY_CODE[code] for code in ("p_24h", "p_72h", "p_15d")
+)
+
+
+def _column_key(name: str) -> str:
+    """Ключ настроек колонки в visualization_settings."""
+    return json.dumps(["name", name], ensure_ascii=False, separators=(",", ":"))
+
+# Пороговая ступень «окна спасения» — последняя рабочая: дальше только терминальная.
+# Значение порога берётся из справочника, в карточке его нет.
+QUEUE_LAST_WORKING_SEGMENT = (
+    "(SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response)"
+)
+
+# Ряд 1 — состояние очереди. Тренд-плитки читают ряд по дням: Metabase сравнивает
+# последнюю точку с предыдущей, поэтому ряд обязан заканчиваться текущим моментом.
+QUEUE_TREND_DAYS = 14
+
+QUEUE_TREND_CORPUS = (
+    f"WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '{QUEUE_TREND_DAYS - 1} days' AS start_ts, "
+    "now() AS end_ts ), "
+    "points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts "
+    "FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), "
+    # Кандидат — документ, который мог стоять в очереди хотя бы в одной точке окна:
+    # либо он в ней уже стоял на левой границе, либо отправлен внутри окна.
+    "candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at "
+    "FROM public.rpt_documents CROSS JOIN win w "
+    "WHERE public.rpt_documents.first_sent_at <= w.end_ts "
+    "AND (public.rpt_documents.first_sent_at >= w.start_ts "
+    "OR public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts)) "
+    f"{SENT_QUEUE_SLICE_FILTERS} )"
+)
+
+# Очередь в точке ряда — тот же набор документов, что и в блоке: членство плюс рабочая
+# ступень. Ступень считается на СВОЙ момент ряда, поэтому справочник соединяется внутри
+# бокового подзапроса; LEFT JOIN LATERAL сохраняет дни с пустой очередью нулями.
+QUEUE_TREND_POINT_QUEUE = (
+    "LEFT JOIN LATERAL ( SELECT c.dwh_id, "
+    "EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM candidates c "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(c.first_sent_at, p.ts) "
+    "WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) "
+    "AND NOT public.dim_pending_segments.is_no_response "
+    "[[AND {{pending_segment}}]] ) q ON TRUE"
+)
+
+QUEUE_SIZE_QUERY = (
+    QUEUE_TREND_CORPUS
+    + ' SELECT p.day_start::date AS "Дата", '
+    'COUNT(DISTINCT q.dwh_id)::bigint AS "Документов в очереди" '
+    f"FROM points p {QUEUE_TREND_POINT_QUEUE} GROUP BY 1 ORDER BY 1"
+)
+
+QUEUE_OVER_24H_QUERY = (
+    QUEUE_TREND_CORPUS
+    + ", threshold AS ( SELECT max_age_minutes AS minutes "
+    "FROM public.dim_pending_segments WHERE code = 'p_24h' ) "
+    'SELECT p.day_start::date AS "Дата", '
+    "COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)"
+    '::bigint AS "Ожидают > 24 часов" '
+    f"FROM points p CROSS JOIN threshold t {QUEUE_TREND_POINT_QUEUE} "
+    "GROUP BY 1 ORDER BY 1"
+)
+
+QUEUE_RESCUE_QUERY = (
+    SENT_QUEUE_CORPUS
+    + ' SELECT COUNT(DISTINCT dwh_id)::bigint AS "Документов" FROM queue '
+    f"WHERE segment_sort = {QUEUE_LAST_WORKING_SEGMENT}"
+)
+
+QUEUE_MAX_AGE_QUERY = (
+    SENT_QUEUE_CORPUS
+    + ' SELECT ROUND(MAX(age_minutes) / 1440.0, 1) AS "Суток в очереди" FROM queue'
+)
+
+# Распределение возраста. Ступени взаимоисключающие: документ попадает ровно в одну,
+# сумма столбцов равна размеру очереди.
+QUEUE_NOW_QUERY = (
+    SENT_QUEUE_CORPUS
+    + ' SELECT segment_label AS "Ступень обработки", '
+    'COUNT(DISTINCT dwh_id)::bigint AS "Документов" '
+    "FROM queue GROUP BY segment_label, segment_sort ORDER BY segment_sort"
+)
+
+# Кумулятивный взгляд на тот же набор документов: доля очереди, которая ждёт дольше
+# границы ступени. Подпись оси называет то, что под ней стоит: справочник даёт «до N»,
+# ряд же считает документы старше N. Второй ряд — та же кривая неделю назад:
+# сравнивается форма ожидания, а не размер очереди.
+QUEUE_SURVIVAL_SLICE_NOW = "Сейчас"
+QUEUE_SURVIVAL_SLICE_WEEK_AGO = "Неделю назад"
+
+QUEUE_SURVIVAL_QUERY = (
+    f"WITH slices AS ( SELECT '{QUEUE_SURVIVAL_SLICE_NOW}' AS slice, 1 AS slice_sort, now() AS ts "
+    f"UNION ALL SELECT '{QUEUE_SURVIVAL_SLICE_WEEK_AGO}', 2, now() - INTERVAL '7 days' ), "
+    "queue AS ( SELECT s.slice, s.slice_sort, public.rpt_documents.dwh_id, "
+    "EXTRACT(EPOCH FROM (s.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM public.rpt_documents CROSS JOIN slices s "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(public.rpt_documents.first_sent_at, s.ts) "
+    "WHERE public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, s.ts) "
+    "AND NOT public.dim_pending_segments.is_no_response "
+    f"{SENT_QUEUE_SLICE_FILTERS} ), "
+    "totals AS ( SELECT slice, COUNT(DISTINCT dwh_id) AS total FROM queue GROUP BY 1 ) "
+    "SELECT regexp_replace(g.label, '^до ', 'дольше ') AS \"Срок ожидания\", "
+    'q.slice AS "Срез", '
+    "ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > g.max_age_minutes) "
+    '/ NULLIF(MAX(t.total), 0), 1) AS "Ещё ждут, %" '
+    "FROM public.dim_pending_segments g CROSS JOIN queue q JOIN totals t ON t.slice = q.slice "
+    "WHERE NOT g.is_no_response "
+    "GROUP BY g.sort_order, g.label, q.slice, q.slice_sort "
+    "ORDER BY q.slice_sort, g.sort_order"
+)
+
+# Ряд 3 — локализация причины. Сводная таблица «объект × ступень» с условным
+# форматированием: концентрация и профиль ожидания видны в одной сетке.
+QUEUE_TOTAL_COLUMN = "Всего"
+
+
+def _queue_matrix_query(dimension: str, label: str) -> str:
+    """Матрица «объект × ступень»: ступени — колонками, значение — документы очереди.
+
+    Сводная таблица Metabase доступна только вопросам конструктора запросов, поэтому
+    разворот делает сам запрос, а тепловую карту даёт условное форматирование колонок.
+    Перечень колонок и их подписи берутся из лестницы справочника, порогов в карточке нет.
+    Отбор идёт по коду ступени, а не по подписи: переименование ступени в справочнике
+    меняет заголовок колонки и не обнуляет её значения.
+    """
+    columns = "".join(
+        f"COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = '{code}')::bigint "
+        f'AS "{label}", '
+        for code, label, _minutes, _terminal in WORKING_SEGMENTS
+    )
     return (
-        'SELECT COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
-        "FROM public.rpt_documents_sent "
-        f"WHERE {where} {SENT_FILTERS}"
+        SENT_QUEUE_CORPUS
+        + f' SELECT {dimension} AS "{label}", {columns}'
+        + f'COUNT(DISTINCT dwh_id)::bigint AS "{QUEUE_TOTAL_COLUMN}" '
+        + f'FROM queue GROUP BY 1 ORDER BY "{QUEUE_TOTAL_COLUMN}" DESC, 1'
     )
 
 
-SENT_PENDING_QUERY = _sent_scalar_query("sent_state = 'pending'")
-SENT_NO_RESPONSE_QUERY = _sent_scalar_query("sent_state = 'no_response'")
+QUEUE_PIVOT_CLINIC_QUERY = _queue_matrix_query("clinic_label", "Клиника")
+QUEUE_PIVOT_SEMD_QUERY = _queue_matrix_query("semd_code", "Код СЭМД")
 
-# Ранжирование срезов — по числу документов в состоянии «Без ответа»: это терминальная
-# ступень справочника, ответа по ним уже не ждут. Порог в карточке не объявляется —
-# ужесточение лестницы делается правкой dim_pending_segments и подхватывается само.
-SENT_STALE_RANK = (
-    "COUNT(DISTINCT semd_local_uid) FILTER ("
-    "WHERE pending_segment_sort = ("
-    "SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response"
-    ")) AS stale_docs, "
-    "COUNT(DISTINCT semd_local_uid) AS total_docs"
+# Ряд 4 — движение очереди. Очередь рабочих ступеней как поток: что было, что пришло,
+# что ушло ответом и что ушло по возрасту. Окно объявлено в имени карточки: фильтр
+# периода вкладки к состоянию на момент неприменим, и «за период» в заголовке читалось бы
+# как выбранный период.
+QUEUE_FLOW_QUERY = (
+    f"WITH win AS ( SELECT now() - INTERVAL '{QUEUE_FLOW_DAYS} days' AS start_ts, "
+    "now() AS end_ts ), "
+    "scope AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts, w.end_ts "
+    "FROM public.rpt_documents CROSS JOIN win w "
+    "WHERE public.rpt_documents.first_sent_at <= w.end_ts "
+    "AND (public.rpt_documents.first_sent_at > w.start_ts "
+    "OR public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts)) "
+    f"{SENT_QUEUE_SLICE_FILTERS} ), "
+    "flags AS ( SELECT s.dwh_id, "
+    "public.is_pending_at(s.first_sent_at, s.first_callback_at, s.start_ts) AS in_start, "
+    "public.is_pending_at(s.first_sent_at, s.first_callback_at, s.end_ts) AS in_end, "
+    "(s.first_sent_at > s.start_ts) AS arrived, "
+    "g_start.is_no_response AS terminal_start, g_end.is_no_response AS terminal_end "
+    "FROM scope s "
+    "JOIN public.dim_pending_segments g_start "
+    "ON g_start.code = public.pending_segment_code_at(s.first_sent_at, s.start_ts) "
+    "JOIN public.dim_pending_segments g_end "
+    "ON g_end.code = public.pending_segment_code_at(s.first_sent_at, s.end_ts) ), "
+    "moves AS ( SELECT "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE in_start AND NOT terminal_start AND NOT arrived) AS opening, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE arrived) AS arrived, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) "
+    "AND NOT in_end) AS answered, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) "
+    "AND in_end AND terminal_end) AS utilized "
+    "FROM flags ) "
+    "SELECT 1 AS step_sort, 'Очередь на начало' AS \"Этап\", "
+    'opening::bigint AS "Документов" FROM moves '
+    "UNION ALL SELECT 2, 'Поступило', arrived::bigint FROM moves "
+    "UNION ALL SELECT 3, 'Получили ответ', -answered::bigint FROM moves "
+    "UNION ALL SELECT 4, 'Утилизировано', -utilized::bigint FROM moves "
+    "ORDER BY 1"
 )
 
-# Срез клиник разложен по ступеням обработки: одна полоса на клинику, сегменты — возраст
-# ожидания. Разрез отвечает на вопрос поддержки не «у кого много отправлено», а «у кого
-# ожидание перевалило за лестницу»; прежний порог «дольше суток» этого не показывал —
-# под него попадало 90% корпуса.
-SENT_STUCK_TOP_CLINICS_QUERY = (
-    "WITH sent AS ( SELECT clinic_jid, clinic_label, semd_local_uid, sent_state, "
-    "pending_segment_label, pending_segment_sort "
-    "FROM public.rpt_documents_sent "
-    # Утилизированные выведены из аналитики: ответа по ним не будет, и в срезе
-    # ожидания они изображали бы очередь, которой нет.
-    f"WHERE sent_state = 'pending' {SENT_FILTERS} ), "
-    f"ranked AS ( SELECT clinic_jid, clinic_label, {SENT_STALE_RANK} "
-    "FROM sent GROUP BY 1, 2 ORDER BY stale_docs DESC, total_docs DESC LIMIT 15 ) "
-    'SELECT r.clinic_jid::text AS "JID Клиники", r.clinic_label AS "Клиника", '
-    's.pending_segment_label AS "Ступень обработки", '
-    'COUNT(DISTINCT s.semd_local_uid)::bigint AS "Документов" '
-    "FROM ranked r JOIN sent s ON s.clinic_jid = r.clinic_jid "
-    "GROUP BY 1, 2, 3, s.pending_segment_sort, r.stale_docs, r.total_docs "
-    "ORDER BY r.stale_docs DESC, r.total_docs DESC, s.pending_segment_sort"
+# Доля хвоста по неделям: очередь на конец каждой недели и её части старше порогов
+# справочника. Считается тем же предикатом на недельных якорях — недельная витрина
+# разреза по ступеням не несёт, а фильтры вкладки должны действовать полностью.
+QUEUE_TAIL_WEEKS = 12
+
+QUEUE_TAIL_QUERY = (
+    "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') "
+    f"- INTERVAL '{QUEUE_TAIL_WEEKS - 1} weeks' AS start_wall, "
+    "date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') AS last_wall, now() AS end_ts ), "
+    "points AS ( SELECT gs::date AS week_start, "
+    "LEAST((gs + INTERVAL '7 days') AT TIME ZONE 'Europe/Moscow', w.end_ts) AS ts "
+    "FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), "
+    "candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at "
+    "FROM public.rpt_documents CROSS JOIN win w "
+    "WHERE public.rpt_documents.first_sent_at <= w.end_ts "
+    "AND (public.rpt_documents.first_sent_at >= w.start_wall AT TIME ZONE 'Europe/Moscow' "
+    "OR public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_wall AT TIME ZONE 'Europe/Moscow')) "
+    f"{SENT_QUEUE_SLICE_FILTERS} ), "
+    "thresholds AS ( SELECT "
+    "MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, "
+    "MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, "
+    "MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d "
+    "FROM public.dim_pending_segments ), "
+    # Очередь недели — тот же набор документов, что и в остальном блоке: членство плюс
+    # рабочая ступень, посчитанная на конец своей недели.
+    "per_point AS ( SELECT p.week_start, c.dwh_id, "
+    "public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) "
+    "AND NOT seg.is_no_response AS pending, "
+    "EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM points p LEFT JOIN candidates c ON TRUE "
+    "LEFT JOIN public.dim_pending_segments seg "
+    "ON seg.code = public.pending_segment_code_at(c.first_sent_at, p.ts) ) "
+    'SELECT week_start AS "Неделя", '
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_24h) "
+    '/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS "> 24 часов, %", '
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_72h) "
+    '/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS "> 3 суток, %", '
+    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_7d) "
+    '/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS "> 7 суток, %" '
+    "FROM per_point CROSS JOIN thresholds t GROUP BY week_start ORDER BY week_start"
 )
 
 # Воронка процесса живёт на полном корпусе (rpt_documents), поэтому фильтры вкладки
@@ -897,36 +1284,47 @@ SENT_REGISTRATION_FIELD_FILTERS = {
 }
 
 SENT_REGISTRATION_FUNNEL_NAME = "Скорость регистрации в РЭМД"
-SENT_PENDING_FUNNEL_NAME = "В обработке на конец периода"
 
-# Срез очереди на момент, а не «сейчас»: якорь — правая граница выбранного периода,
-# то есть последняя активность, попавшая в фильтр. Документ считается ожидающим на этот
-# момент, если он к нему уже отправлен и ответа на него ещё не было: либо ответа нет
-# вовсе, либо он пришёл позже якоря. Возраст ожидания тоже отсчитывается от якоря —
-# иначе смена периода двигала бы ступени, оставляя состав корпуса прежним.
-SENT_PENDING_FUNNEL_QUERY = (
-    "WITH anchor AS ( SELECT MAX(ips_date) AS ts FROM public.rpt_documents "
-    "WHERE 1=1 [[AND {{ips_date}}]] ), "
-    "pending AS ( SELECT d.dwh_id, "
-    "EXTRACT(EPOCH FROM (a.ts - d.first_sent_at)) / 60.0 AS age_minutes "
-    "FROM public.rpt_documents d CROSS JOIN anchor a "
-    "WHERE a.ts IS NOT NULL AND d.first_sent_at IS NOT NULL AND d.first_sent_at <= a.ts "
-    "AND ( d.delivery_seconds IS NULL "
-    "OR d.first_sent_at + make_interval(secs => d.delivery_seconds) > a.ts ) "
-    # Утилизированные выведены из аналитики целиком: на якорную дату они формально ещё
-    # ждали, но ответа по ним не будет, и в очереди они изображали бы работу, которой нет.
-    "AND COALESCE(d.sent_state, '') <> 'no_response' "
-    "[[AND {{semd_type}}]] [[AND {{jid}}]] ) "
-    "SELECT -1000 AS step_sort, 'В обработке' AS \"Этап\", "
-    'COUNT(DISTINCT dwh_id)::bigint AS "Документов" FROM pending '
-    "UNION ALL "
-    "SELECT g.sort_order::int, 'ждали > ' || regexp_replace(g.label, '^до ', ''), "
-    "COUNT(DISTINCT p.dwh_id) FILTER (WHERE p.age_minutes > g.max_age_minutes)::bigint "
-    "FROM public.dim_pending_segments g CROSS JOIN pending p "
-    "WHERE NOT g.is_no_response "
-    "GROUP BY g.sort_order, g.label "
-    "ORDER BY 1"
+# Карточки очереди: один набор документов, один момент, разная подача.
+SENT_QUEUE_CARDS = frozenset(
+    {
+        QUEUE_SIZE_NAME,
+        QUEUE_OVER_24H_NAME,
+        QUEUE_RESCUE_NAME,
+        QUEUE_MAX_AGE_NAME,
+        QUEUE_NOW_NAME,
+        QUEUE_SURVIVAL_NAME,
+        QUEUE_PIVOT_CLINIC_NAME,
+        QUEUE_PIVOT_SEMD_NAME,
+        QUEUE_FLOW_NAME,
+        QUEUE_TAIL_NAME,
+    }
 )
+
+# Ступень — ось самой карточки, а не срез: кумулятивный ряд долей, баланс потока и доли
+# хвоста по неделям разбирают лестницу целиком, и отбор одной ступени лишил бы их смысла.
+# Остальные карточки очереди несут полный набор фильтров.
+SENT_QUEUE_AXIS_CARDS = frozenset({QUEUE_SURVIVAL_NAME, QUEUE_FLOW_NAME, QUEUE_TAIL_NAME})
+SENT_QUEUE_TREND_CARDS = frozenset({QUEUE_SIZE_NAME, QUEUE_OVER_24H_NAME})
+
+# Состав вкладки: имя, подача, вкладка. Распределение возраста показывается дважды —
+# на мониторинге это очередь «прямо сейчас», на «Отправленных» — часть разбора.
+SENT_TAB_CARD_PLAN: tuple[tuple[str, str, str], ...] = (
+    (SENT_TABLE_NAME_NO_RESPONSE, "table", "sent"),
+    (SENT_REGISTRATION_FUNNEL_NAME, "funnel", "sent"),
+    (QUEUE_SIZE_NAME, "smartscalar", "sent"),
+    (QUEUE_OVER_24H_NAME, "smartscalar", "sent"),
+    (QUEUE_RESCUE_NAME, "progress", "sent"),
+    (QUEUE_MAX_AGE_NAME, "scalar", "sent"),
+    (QUEUE_SURVIVAL_NAME, "line", "sent"),
+    (QUEUE_PIVOT_CLINIC_NAME, "pivot", "sent"),
+    (QUEUE_PIVOT_SEMD_NAME, "pivot", "sent"),
+    (QUEUE_FLOW_NAME, "waterfall", "sent"),
+    (QUEUE_TAIL_NAME, "line", "sent"),
+    (QUEUE_NOW_NAME, "bar", "operational"),
+)
+
+QUEUE_TAIL_METRICS = ("> 24 часов, %", "> 3 суток, %", "> 7 суток, %")
 
 # Воронка процесса: весь отправленный корпус, а не только ожидающие. Шаг — сколько
 # документов УЛОЖИЛИСЬ в срок, а лестница идёт от самого мягкого срока к самому жёсткому.
@@ -964,51 +1362,97 @@ SENT_REGISTRATION_FUNNEL_QUERY = (
     "ORDER BY 1"
 )
 
-SENT_STUCK_TOP_SEMD_QUERY = (
-    "WITH sent AS ( SELECT semd_code, semd_local_uid, sent_state, "
-    "pending_segment_label, pending_segment_sort "
-    "FROM public.rpt_documents_sent "
-    f"WHERE sent_state = 'pending' {SENT_FILTERS} ), "
-    "typed AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), '(неизвестно)') AS semd_code, "
-    "semd_local_uid, sent_state, pending_segment_label, pending_segment_sort FROM sent ), "
-    f"ranked AS ( SELECT semd_code, {SENT_STALE_RANK} "
-    "FROM typed GROUP BY 1 ORDER BY stale_docs DESC, total_docs DESC LIMIT 20 ) "
-    'SELECT r.semd_code AS "Код СЭМД", '
-    't.pending_segment_label AS "Ступень обработки", '
-    'COUNT(DISTINCT t.semd_local_uid)::bigint AS "Документов" '
-    "FROM ranked r JOIN typed t ON t.semd_code = r.semd_code "
-    "GROUP BY 1, 2, t.pending_segment_sort, r.stale_docs, r.total_docs "
-    "ORDER BY r.stale_docs DESC, r.total_docs DESC, t.pending_segment_sort"
-)
-
 SENT_TAB_QUERIES: dict[str, str] = {
-    "В обработке": SENT_PENDING_QUERY,
     SENT_STATE_NO_RESPONSE_LABEL: SENT_NO_RESPONSE_QUERY,
     SENT_TABLE_NAME_PENDING: SENT_TABLE_PENDING_QUERY,
     SENT_TABLE_NAME_NO_RESPONSE: SENT_TABLE_NO_RESPONSE_QUERY,
-    SENT_STUCK_TOP_CLINICS_NAME: SENT_STUCK_TOP_CLINICS_QUERY,
-    SENT_STUCK_TOP_SEMD_NAME: SENT_STUCK_TOP_SEMD_QUERY,
     SENT_REGISTRATION_FUNNEL_NAME: SENT_REGISTRATION_FUNNEL_QUERY,
-    SENT_PENDING_FUNNEL_NAME: SENT_PENDING_FUNNEL_QUERY,
+    QUEUE_SIZE_NAME: QUEUE_SIZE_QUERY,
+    QUEUE_OVER_24H_NAME: QUEUE_OVER_24H_QUERY,
+    QUEUE_RESCUE_NAME: QUEUE_RESCUE_QUERY,
+    QUEUE_MAX_AGE_NAME: QUEUE_MAX_AGE_QUERY,
+    QUEUE_NOW_NAME: QUEUE_NOW_QUERY,
+    QUEUE_SURVIVAL_NAME: QUEUE_SURVIVAL_QUERY,
+    QUEUE_PIVOT_CLINIC_NAME: QUEUE_PIVOT_CLINIC_QUERY,
+    QUEUE_PIVOT_SEMD_NAME: QUEUE_PIVOT_SEMD_QUERY,
+    QUEUE_FLOW_NAME: QUEUE_FLOW_QUERY,
+    QUEUE_TAIL_NAME: QUEUE_TAIL_QUERY,
 }
 
+# Единое правило набора документов очереди — повторяется в описании каждой карточки
+# блока: расхождение между ними и было причиной несходящихся итогов.
+_QUEUE_SCOPE = (
+    "Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл "
+    "первый ответ, и возраст которых не вышел за последнюю ступень справочника; "
+    "документы последней ступени разбираются отдельной парой карточек внизу вкладки. "
+    "Фильтр периода карточку не двигает: очередь — состояние на текущий момент."
+)
+
 SENT_TAB_DESCRIPTIONS: dict[str, str] = {
-    "В обработке": "Отправленные в пределах ожидаемого времени ответа (ступени до последней, dim_pending_segments).",
     SENT_STATE_NO_RESPONSE_LABEL: "Отправленные, по которым ожидаемое время истекло: ответа не будет. Из остальных карточек такие документы исключены и подлежат очистке.",
-    SENT_TABLE_NAME_PENDING: "Отправленные, по которым ответ ещё ожидается; новые сверху. Ступень обработки, число подач.",
+    SENT_TABLE_NAME_PENDING: "Отправленные, по которым ответ ещё ожидается; самые давние сверху. Ступень обработки, число подач.",
     SENT_TABLE_NAME_NO_RESPONSE: "Отправленные, по которым ожидаемое время истекло и ответа уже не будет; самые давние сверху.",
-    SENT_STUCK_TOP_CLINICS_NAME: "Отправленные без ответа по клиникам, разложенные по ступеням ожидания; клиники — по числу документов «Без ответа».",
-    SENT_STUCK_TOP_SEMD_NAME: "Отправленные без ответа по типам СЭМД, разложенные по ступеням ожидания; типы — по числу документов «Без ответа».",
     SENT_REGISTRATION_FUNNEL_NAME: (
         "Документы, по которым ответ уже получен: сколько из них уложилось в срок. "
         "Сроки ужесточаются слева направо, поэтому воронка сужается. Разрыв между базой "
         "и первой ступенью — регистрации дольше самой мягкой границы справочника. "
-        "Ожидающие и «Без ответа» в корпус не входят: срока регистрации у них нет."
+        "Ожидающие и «Ответ не получен» в набор документов не входят: срока регистрации "
+        "у них нет."
     ),
-    SENT_PENDING_FUNNEL_NAME: (
-        "Очередь ожидания на правую границу выбранного периода: документ отправлен "
-        "до неё, а ответ либо не пришёл вовсе, либо пришёл позже. Возраст ожидания "
-        "отсчитывается от той же границы, поэтому срез не зависит от момента просмотра."
+    QUEUE_SIZE_NAME: (
+        "Строка — день; значение — сколько документов стояло в очереди на его конец, "
+        f"последняя точка — на текущий момент. {_QUEUE_SCOPE} "
+        "Сравнение — с предыдущим днём ряда."
+    ),
+    QUEUE_OVER_24H_NAME: (
+        "Строка — день; значение — часть очереди на его конец с возрастом больше границы "
+        "ступени «до 24 часов» из справочника. Последняя точка — на текущий момент. "
+        f"{_QUEUE_SCOPE} Штатный ответ РЭМД приходит за минуты-часы, поэтому рост ряда — "
+        "аномалия, а не сезонность."
+    ),
+    QUEUE_RESCUE_NAME: (
+        "Документы очереди на последней рабочей ступени справочника: после 15 суток "
+        f"ответ уже не придёт. Цель — ноль. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_MAX_AGE_NAME: (
+        "Возраст самого давнего документа очереди на текущий момент, в сутках. Возраст "
+        f"считается от первой отправки. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_NOW_NAME: (
+        "Строка — ступень возраста; значение — сколько документов очереди попало ровно "
+        "в неё на текущий момент. Ступени взаимоисключающие, сумма столбцов равна размеру "
+        f"очереди. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_SURVIVAL_NAME: (
+        "Строка — срок ожидания; значение — доля очереди, которая на текущий момент ждёт "
+        "дольше этого срока. Ряд кумулятивный — в отличие от взаимоисключающих ступеней "
+        "гистограммы «Текущая очередь по ступеням» на вкладке «Оперативный мониторинг». "
+        "Второй ряд — та же кривая неделю назад: сравнивается форма ожидания, а не размер "
+        f"очереди. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_PIVOT_CLINIC_NAME: (
+        "Строка — клиника, колонка — ступень возраста, значение — документы очереди "
+        "на текущий момент; ступени взаимоисключающие. Концентрация хвоста в одной "
+        "клинике указывает на транспорт на её стороне; ровный хвост по многим клиникам "
+        f"разбирается на соседней сводной по типам СЭМД. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_PIVOT_SEMD_NAME: (
+        "Строка — код СЭМД, колонка — ступень возраста, значение — документы очереди "
+        "на текущий момент; ступени взаимоисключающие. Хвост, размазанный по клиникам, "
+        "но собранный в одном коде СЭМД, указывает на обработку этого типа документа "
+        f"на стороне РЭМД. {_QUEUE_SCOPE}"
+    ),
+    QUEUE_FLOW_NAME: (
+        f"Окно — {QUEUE_FLOW_DAYS} суток до текущего момента. Строка — событие очереди: "
+        "что стояло на начало окна, что отправлено внутри него, что ушло полученным "
+        "ответом и что ушло по возрасту. Сумма шагов — очередь на конец окна. Оба оттока "
+        "окрашены одинаково: у водопада один цвет убыли, шаги различаются подписью. "
+        f"{_QUEUE_SCOPE}"
+    ),
+    QUEUE_TAIL_NAME: (
+        "Строка — неделя (МСК); значения — доли очереди на конец недели, которые ждали "
+        "дольше 24 часов, 3 и 7 суток. Границы берутся из справочника ступеней. "
+        f"Последняя точка — на текущий момент. {_QUEUE_SCOPE}"
     ),
 }
 
@@ -1410,18 +1854,18 @@ def apply_quality_detail(card: dict) -> None:
     strip_chart_keys(viz, "table")
 
 
-def apply_transactions_trend(card: dict) -> None:
+def apply_status_by_day(card: dict) -> None:
     card["display"] = "bar"
     card["description"] = (
         "Документы по дням и состоянию: три исхода РЭМД плюс «В обработке» (stacked). "
         "«Без ответа» — на вкладке «Отправленные». Клик по сегменту — архив с фильтром по статусу."
     )
     dq = card.setdefault("dataset_query", {})
-    dq["native"]["query"] = TRANSACTIONS_BY_DAY_STATUS_QUERY
+    dq["native"]["query"] = STATUS_BY_DAY_QUERY
     card["metabase-field-filters"] = {
-        "dwh_date": {"table_ref": "public.rpt_documents", "field_name": "processed_at"},
-        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_code"},
-        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_jid"},
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
     }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["Дата", "Статус"]
@@ -1731,19 +2175,20 @@ def apply_success_slice_tables(card: dict) -> None:
 
 
 def apply_sent_tab(dash: dict) -> None:
-    """Вкладка «Отправленные»: единый источник (rpt_documents_sent), единый блок фильтров.
+    """Карточки очереди и разбора отправленных: единый якорь, единый блок фильтров.
 
-    KPI-плитки заменяют прежние пороговые счётчики («Зависших > N дней»): пороги теперь
-    живут в dim_pending_segments, а карточка отбирает по состоянию, а не по числу дней.
+    Пороги нигде не объявляются: и ступень, и её граница приходят из dim_pending_segments
+    (README §«Учёт отправленных»), карточка отбирает по состоянию, а не по числу дней.
     """
     dash["cards"] = [
         card for card in dash.get("cards", []) if card.get("name") not in RETIRED_CARD_NAMES
     ]
-    # Воронка скорости — про весь корпус регистрации, а не про очередь ожидания,
-    # поэтому её место на оперативном мониторинге.
+    # Скорость регистрации описывает судьбу уже отправленного и разбирается вместе с
+    # остальными срезами отправки; распределение очереди дополнительно стоит на
+    # мониторинге — там вопрос «что стоит прямо сейчас».
     for card in dash.get("cards", []):
         if card.get("name") == SENT_REGISTRATION_FUNNEL_NAME:
-            card["tab"] = "operational"
+            card["tab"] = "sent"
 
     # Карточка могла прийти и переименованием прежней, и созданием новой — оставляем одну.
     # Ключ включает вкладку: одна и та же карточка намеренно стоит на нескольких вкладках
@@ -1760,19 +2205,29 @@ def apply_sent_tab(dash: dict) -> None:
         deduped.append(card)
     dash["cards"] = deduped
 
-    existing = {card.get("name") for card in dash.get("cards", [])}
-    for new_name, new_display, new_tab in (
-        (SENT_TABLE_NAME_NO_RESPONSE, "table", "sent"),
-        (SENT_PENDING_FUNNEL_NAME, "funnel", "sent"),
-        (SENT_REGISTRATION_FUNNEL_NAME, "funnel", "operational"),
-    ):
-        if new_name not in existing:
+    # План — источник правды по размещению: карточка, переехавшая на другую вкладку,
+    # не должна оставаться показом на прежней.
+    planned_tabs: dict[str, set[str]] = {}
+    for planned_name, _display, planned_tab in SENT_TAB_CARD_PLAN:
+        planned_tabs.setdefault(planned_name, set()).add(planned_tab)
+    dash["cards"] = [
+        card
+        for card in dash.get("cards", [])
+        if card.get("name") not in planned_tabs
+        or card.get("tab") in planned_tabs[card.get("name")]
+    ]
+
+    existing = {(card.get("name"), card.get("tab")) for card in dash.get("cards", [])}
+    for new_name, new_display, new_tab in SENT_TAB_CARD_PLAN:
+        if (new_name, new_tab) not in existing:
             dash.setdefault("cards", []).append(
                 {"name": new_name, "display": new_display, "tab": new_tab}
             )
 
+    # Отбор по имени, а не по вкладке: карточки этого блока живут на двух вкладках, и
+    # привязка к вкладке оставляла бы переехавшую карточку без обновления запроса.
     for card in dash.get("cards", []):
-        if card.get("tab") != "sent" or card.get("display") == "text":
+        if card.get("display") == "text":
             continue
         name = card.get("name", "")
         query = SENT_TAB_QUERIES.get(name)
@@ -1792,48 +2247,165 @@ def apply_sent_tab(dash: dict) -> None:
         }
         card["metabase-field-filters"] = deepcopy(SENT_FIELD_FILTERS)
         viz = card.setdefault("visualization_settings", {})
-        if name in (SENT_REGISTRATION_FUNNEL_NAME, SENT_PENDING_FUNNEL_NAME):
-            # Карточка построена на rpt_documents, а не на срезе ожидающих: свои привязки
-            # фильтров и свой набор тегов.
+        if name in SENT_QUEUE_CARDS:
+            # Набор документов очереди — rpt_documents на текущем моменте; период
+            # к состоянию на момент неприменим, поэтому даты в карточке нет вовсе.
+            # Перечень тегов равен перечню привязок: тег, которого нет в SQL карточки,
+            # не объявляется — иначе фильтр «двигает» одни карточки и молчит на других.
+            bindings = {
+                key: deepcopy(binding)
+                for key, binding in SENT_QUEUE_FIELD_FILTERS.items()
+                if key != "pending_segment" or name not in SENT_QUEUE_AXIS_CARDS
+            }
+            card["metabase-field-filters"] = bindings
+            card["dataset_query"]["native"]["template-tags"] = {
+                key: deepcopy(SENT_FILTER_TEMPLATE_TAGS[key]) for key in bindings
+            }
+        elif name == SENT_REGISTRATION_FUNNEL_NAME:
+            # Воронка процесса читает полный корпус регистрации: свои привязки фильтров
+            # и свой набор тегов.
             card["metabase-field-filters"] = deepcopy(SENT_REGISTRATION_FIELD_FILTERS)
             tags = card["dataset_query"]["native"]["template-tags"]
             for tag in list(tags):
                 if tag not in SENT_REGISTRATION_FIELD_FILTERS:
                     tags.pop(tag)
-            card["display"] = "funnel"
-            for key in [k for k in viz if k.startswith("graph.") or k.startswith("stackable.")]:
-                del viz[key]
-            viz["funnel.dimension"] = "Этап"
-            viz["funnel.metric"] = "Документов"
-        elif name in (SENT_STUCK_TOP_CLINICS_NAME, SENT_STUCK_TOP_SEMD_NAME):
-            card["display"] = "row"
-            viz["graph.dimensions"] = [
-                "Клиника" if name == SENT_STUCK_TOP_CLINICS_NAME else "Код СЭМД",
-                "Ступень обработки",
-            ]
-            viz["graph.metrics"] = ["Документов"]
-            viz["stackable.stack_type"] = "stacked"
-        if name in (SENT_TABLE_NAME_PENDING, SENT_TABLE_NAME_NO_RESPONSE):
-            viz["table.columns"] = deepcopy(SENT_TABLE_COLUMNS)
-            viz["table.cell_column"] = "Состояние отправки"
-            viz.setdefault("column_settings", {})['["name","Подач в ЕГИСЗ"]'] = {
-                "column_title": "Подач в ЕГИСЗ",
-                "decimals": 0,
-                "number_separators": ", ",
-            }
-        elif name == "Доля без ответа, %":
-            viz.setdefault("column_settings", {})['["name","%"]'] = {
-                "column_title": "%",
+        apply_sent_card_visualization(card, name, viz)
+
+
+def apply_sent_card_visualization(card: dict, name: str, viz: dict) -> None:
+    """Подача карточки задаётся здесь, а не приходит из выгрузки: тип, оси, цвета."""
+    for key in [
+        k
+        for k in viz
+        if k.startswith("graph.")
+        or k.startswith("funnel.")
+        or k.startswith("pivot")
+        or k.startswith("waterfall.")
+        or k.startswith("progress.")
+        or k in ("stackable.stack_type", "series_settings", "scalar.field")
+    ]:
+        del viz[key]
+
+    if name == SENT_REGISTRATION_FUNNEL_NAME:
+        card["display"] = "funnel"
+        viz["funnel.dimension"] = "Этап"
+        viz["funnel.metric"] = "Документов"
+    elif name in SENT_QUEUE_TREND_CARDS:
+        card["display"] = "smartscalar"
+        viz["scalar.field"] = name
+        viz["column_settings"] = {
+            _column_key(name): {"decimals": 0, "number_separators": ", "}
+        }
+    elif name == QUEUE_RESCUE_NAME:
+        # Цель карточки — ноль, а полоса прогресса считает долю от цели: при нулевой цели
+        # Metabase делит на ноль. Числу «сколько документов вот-вот перестанут ждать»
+        # шкала и не нужна — оно читается как счётчик.
+        card["display"] = "scalar"
+        viz["column_settings"] = {
+            _column_key("Документов"): {"decimals": 0, "number_separators": ", "}
+        }
+    elif name == QUEUE_MAX_AGE_NAME:
+        card["display"] = "scalar"
+        viz["column_settings"] = {
+            _column_key("Суток в очереди"): {"decimals": 1, "number_separators": ", "}
+        }
+    elif name == QUEUE_NOW_NAME:
+        card["display"] = "bar"
+        viz["graph.dimensions"] = ["Ступень обработки"]
+        viz["graph.metrics"] = ["Документов"]
+        viz["graph.x_axis.scale"] = "ordinal"
+        viz["graph.x_axis.title_text"] = "Ступень обработки"
+        viz["graph.y_axis.title_text"] = "Документов"
+        viz["graph.show_values"] = True
+        viz["series_settings"] = {
+            label: {"color": color} for label, color in SENT_SEGMENT_COLORS.items()
+        }
+        viz["column_settings"] = {
+            _column_key("Документов"): {"decimals": 0, "number_separators": ", "}
+        }
+    elif name == QUEUE_SURVIVAL_NAME:
+        card["display"] = "line"
+        viz["graph.dimensions"] = ["Срок ожидания", "Срез"]
+        viz["graph.metrics"] = ["Ещё ждут, %"]
+        viz["graph.x_axis.scale"] = "ordinal"
+        viz["graph.x_axis.title_text"] = "Срок ожидания"
+        viz["graph.y_axis.title_text"] = "Ещё ждут, %"
+        viz["series_settings"] = {
+            QUEUE_SURVIVAL_SLICE_NOW: {"color": SENT_STATE_COLORS["pending"]},
+            QUEUE_SURVIVAL_SLICE_WEEK_AGO: {"color": SENT_STATE_COLORS["no_response"]},
+        }
+        viz["column_settings"] = {
+            _column_key("Ещё ждут, %"): {
                 "decimals": 1,
                 "number_separators": ", ",
                 "suffix": " %",
             }
-        elif card.get("display") in ("row", "bar"):
-            viz.setdefault("column_settings", {})['["name","Документов"]'] = {
-                "column_title": "Документов",
-                "decimals": 0,
-                "number_separators": ", ",
+        }
+    elif name in (QUEUE_PIVOT_CLINIC_NAME, QUEUE_PIVOT_SEMD_NAME):
+        row_field = "Клиника" if name == QUEUE_PIVOT_CLINIC_NAME else "Код СЭМД"
+        card["display"] = "table"
+        segments = list(SENT_SEGMENT_COLORS)
+        viz["table.columns"] = [
+            {"enabled": True, "name": column}
+            for column in (row_field, *segments, QUEUE_TOTAL_COLUMN)
+        ]
+        viz["table.cell_column"] = QUEUE_TOTAL_COLUMN
+        # Отдельного типа «тепловая карта» в Metabase нет: градиент по значению задаётся
+        # условным форматированием, общий для всех ступеней — иначе колонки несравнимы.
+        viz["table.column_formatting"] = [
+            {
+                "type": "range",
+                "columns": segments,
+                "colors": ["#FFFFFF", SENT_SEGMENT_COLORS["до 15 суток"]],
+                "min_type": "all",
+                "max_type": "all",
             }
+        ]
+        viz["column_settings"] = {
+            _column_key(column): {"decimals": 0, "number_separators": ", "}
+            for column in (*segments, QUEUE_TOTAL_COLUMN)
+        }
+    elif name == QUEUE_FLOW_NAME:
+        card["display"] = "waterfall"
+        viz["graph.dimensions"] = ["Этап"]
+        viz["graph.metrics"] = ["Документов"]
+        viz["graph.x_axis.scale"] = "ordinal"
+        viz["graph.show_values"] = True
+        viz["waterfall.show_total"] = True
+        viz["waterfall.increase_color"] = SENT_STATE_COLORS["pending"]
+        # Цвет убыли у водопада один на все шаги вниз, а уходят из очереди по двум разным
+        # поводам — ответ и возраст. Зелёный «успех» на обоих подписывал утилизацию
+        # достижением, поэтому убыль нейтральна: смысл шага несёт его подпись.
+        viz["waterfall.decrease_color"] = SENT_STATE_COLORS["no_response"]
+        viz["waterfall.total_color"] = SEGMENT_COLOR_BY_CODE["p_1h"]
+        viz["column_settings"] = {
+            _column_key("Документов"): {"decimals": 0, "number_separators": ", "}
+        }
+    elif name == QUEUE_TAIL_NAME:
+        card["display"] = "line"
+        viz["graph.dimensions"] = ["Неделя"]
+        viz["graph.metrics"] = list(QUEUE_TAIL_METRICS)
+        viz["graph.x_axis.scale"] = "timeseries"
+        viz["graph.y_axis.title_text"] = "Доля очереди, %"
+        viz["series_settings"] = {
+            metric: {"color": color}
+            for metric, color in zip(QUEUE_TAIL_METRICS, QUEUE_TAIL_COLORS)
+        }
+        viz["column_settings"] = {
+            _column_key(metric): {
+                "decimals": 1,
+                "number_separators": ", ",
+                "suffix": " %",
+            }
+            for metric in QUEUE_TAIL_METRICS
+        }
+    elif name in (SENT_TABLE_NAME_PENDING, SENT_TABLE_NAME_NO_RESPONSE):
+        viz["table.columns"] = deepcopy(SENT_TABLE_COLUMNS)
+        viz["table.cell_column"] = "Состояние отправки"
+        viz["column_settings"] = deepcopy(SENT_TABLE_COLUMN_SETTINGS)
+        # Подсветка строк держалась на снятой колонке «Сегмент ожидания» и порогах
+        # прежней лестницы; ступень пришла из справочника и подписывает себя сама.
+        viz.pop("table.column_formatting", None)
 
 
 def apply_latest_operations(card: dict) -> None:
@@ -1857,8 +2429,11 @@ def apply_latest_operations(card: dict) -> None:
     viz.pop("table", None)
     viz["table.columns"] = deepcopy(LATEST_OPERATIONS_TABLE_COLUMNS)
     viz["table.cell_column"] = "Клиника"
-    # Ширины с прода: первые две колонки авто (null), явные — только у «Клиника»/«СЭМД».
-    viz["table.column_widths"] = [None, None, 220, 342]
+    # Ширины и закрепление первых колонок сведены с живого прода: строка длинная, и без
+    # закрепления даты, статуса и клиники горизонтальная прокрутка теряет контекст.
+    viz["table.column_widths"] = [None, 198, None, 325, 551]
+    viz["table.freeze_columns"] = True
+    viz["table.freeze_columns_count"] = 3
     viz["column_settings"] = deepcopy(LATEST_OPERATIONS_COLUMN_SETTINGS)
     strip_chart_keys(viz, card.get("display", "table"))
 
@@ -2050,6 +2625,16 @@ def ensure_dashboard_parameters(dash: dict) -> None:
                 "sectionId": "string",
             }
         )
+    # Второй даты на вкладке нет: очередь считается на текущий момент. Параметр снимается
+    # с уже опубликованных дашбордов вместе со своими привязками в карточках.
+    dash["parameters"] = [p for p in params if p.get("slug") not in RETIRED_PARAM_IDS]
+    retired_ids = set(RETIRED_PARAM_IDS.values())
+    for card in dash.get("cards", []):
+        mappings = card.get("parameter_mappings")
+        if mappings:
+            card["parameter_mappings"] = [
+                m for m in mappings if m.get("parameter_id") not in retired_ids
+            ]
 
 
 # --- Единая модель имён дат + label-поиск + конфайн фильтров ----------------------
@@ -2335,8 +2920,8 @@ def apply_01(dash: dict) -> None:
             apply_top_semd_by_errors(card)
         elif name in ("Успешность по клиникам", "Успешность по типам СЭМД"):
             apply_success_slice_tables(card)
-        elif name == "Транзакции по дням и статусам" and dq.get("type") == "native":
-            apply_transactions_trend(card)
+        elif name == "Статусы регистрации СЭМД" and dq.get("type") == "native":
+            apply_status_by_day(card)
         elif name == "Отказы по часам: связь и асинхронный ответ" and dq.get("type") == "native":
             apply_refusals_hourly(card)
         elif name == "Динамика документов по дням" and dq.get("type") == "native":
@@ -2399,6 +2984,25 @@ def apply_01(dash: dict) -> None:
     apply_sent_tab(dash)
 
 
+def apply_executive_no_response(card: dict) -> None:
+    """Плитка утилизированных: состояние из справочника вместо порога «>7 дн.» в тексте."""
+    card["description"] = (
+        "Доля документов, по которым ответ ЕГИСЗ уже не ожидается (состояние отправки "
+        "«Ответ не получен», dim_pending_segments), от всех документов периода."
+    )
+    card["dataset_query"]["native"]["query"] = EXECUTIVE_NO_RESPONSE_QUERY
+    viz = card.setdefault("visualization_settings", {})
+    viz.pop("scalar.field", None)
+    viz["column_settings"] = {
+        f'["name","{EXECUTIVE_NO_RESPONSE_NAME}"]': {
+            "column_title": EXECUTIVE_NO_RESPONSE_NAME,
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %",
+        }
+    }
+
+
 def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
     if not path.exists():
         return False
@@ -2413,6 +3017,8 @@ def apply_renames(path: Path, mapping: dict[str, str]) -> bool:
         if card.get("name") == "Очередь оттока: JID с нулём успехов":
             cs = card.setdefault("visualization_settings", {}).setdefault("column_settings", {})
             cs['["name","Клиника"]'] = {"column_title": "Клиника"}
+        if card.get("name") == EXECUTIVE_NO_RESPONSE_NAME:
+            apply_executive_no_response(card)
     normalize_dashboard(dash)
     return write_json_if_changed(path, dash)
 
@@ -2572,6 +3178,8 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
         # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
         if "public.rpt_clinic_semd_activity" in native["query"]:
             source = "public.rpt_clinic_semd_activity"
+        elif "public.rpt_documents_sent" in native["query"]:
+            source = "public.rpt_documents_sent"
         elif "public.rpt_documents" in native["query"]:
             source = "public.rpt_documents"
         else:

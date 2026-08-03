@@ -373,9 +373,11 @@ SELECT
     COALESCE(d.result_logid, d.request_logid)::text AS logid,
     d.request_logid::text AS request_logid,
     d.result_logid::text AS result_logid,
-    -- Время отклика ЕГИСЗ: от запроса файла (шаг 6 схемы регистрации) до ответа.
+    -- Время отклика ЕГИСЗ: от запроса файла (шаг 6 схемы регистрации) до ПОСЛЕДНЕГО ответа.
     -- Считается по журналу, а не по дате создания CDA: document_created_at приходит далеко
-    -- не во всех отправках, и метрика на его основе покрывала доли процента корпуса.
+    -- не во всех отправках, и метрика на его основе покрывала доли процента набора
+    -- документов. Выход из очереди обработки определяет не эта величина, а
+    -- first_callback_at — отметка первого ответа (README §«Учёт отправленных»).
     CASE
         WHEN d.first_sent_at IS NOT NULL
          AND d.last_callback_at IS NOT NULL
@@ -390,6 +392,7 @@ SELECT
     a.doctor_hash,
     d.registered_at,
     d.first_sent_at,
+    d.first_callback_at,
     d.error_types,
     -- Число подач документа в ЕГИСЗ по реестру шлюза: повторная подача не меняет localUid,
     -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
@@ -408,23 +411,13 @@ LEFT JOIN public.document_attributes a ON a.dwh_id = d.dwh_id
 -- документа пересобирал бы представление реестра на каждую строку.
 LEFT JOIN public.dim_clinic_oid oid_ref ON oid_ref.oid = btrim(public.clean_text_value(d.org_oid))
 LEFT JOIN public.dim_document_status ds ON ds.code = d.status
--- Ступень — первая по sort_order, чья граница покрывает возраст обработки; терминальная
--- (max_age_minutes IS NULL) замыкает лестницу и ловит в том числе отправки без first_sent_at:
--- без известного момента запроса файла документ не может считаться находящимся в обработке.
-LEFT JOIN LATERAL (
-    SELECT s.code, s.label, s.sort_order, s.is_no_response
-    FROM public.dim_pending_segments s
-    WHERE NOT ds.is_final
-      AND (
-          s.max_age_minutes IS NULL
-          OR (
-              d.first_sent_at IS NOT NULL
-              AND EXTRACT(EPOCH FROM (now() - d.first_sent_at)) / 60.0 <= s.max_age_minutes
-          )
-      )
-    ORDER BY s.sort_order
-    LIMIT 1
-) ps ON TRUE
+-- Ступень подбирает pending_segment_code_at от якоря представления — текущего момента.
+-- CASE оставляет вызов только нефинальным статусам: у документа с исходом ожидания нет.
+LEFT JOIN public.dim_pending_segments ps
+    ON ps.code = CASE
+        WHEN ds.is_final THEN NULL
+        ELSE public.pending_segment_code_at(d.first_sent_at, now())
+    END
 LEFT JOIN public.dim_sent_state ss
     ON ss.code = CASE
         WHEN ps.code IS NULL THEN NULL          -- финальный статус: состояния отправки нет
@@ -453,17 +446,19 @@ WHERE is_current_version;
 COMMENT ON VIEW public.rpt_documents IS
 'Документная витрина (текущие версии, is_current_version): одна строка на логический документ. Полный аудит версий — rpt_document_versions.';
 
+-- Якорь объявлен один раз и обслуживает и ступень, и возраст: разные якоря у соседних
+-- колонок давали бы «до 5 минут» рядом с ненулевым числом суток.
 CREATE OR REPLACE VIEW public.rpt_documents_sent AS
 SELECT
     r.dwh_id,
     r.first_sent_at,
-    EXTRACT(EPOCH FROM (now() - r.first_sent_at)) / 3600.0 AS pending_hours,
-    ROUND(EXTRACT(EPOCH FROM (now() - r.first_sent_at)) / 86400.0, 1) AS pending_days,
-    r.pending_segment,
-    r.pending_segment_label,
-    r.pending_segment_sort,
-    r.sent_state,
-    r.sent_state_label,
+    EXTRACT(EPOCH FROM (anchor.ts - r.first_sent_at)) / 3600.0 AS pending_hours,
+    ROUND(EXTRACT(EPOCH FROM (anchor.ts - r.first_sent_at)) / 86400.0, 1) AS pending_days,
+    seg.code AS pending_segment,
+    seg.label AS pending_segment_label,
+    seg.sort_order AS pending_segment_sort,
+    st.code AS sent_state,
+    st.label AS sent_state_label,
     r.semd_local_uid,
     r.semd_code,
     r.semd_name,
@@ -477,10 +472,15 @@ SELECT
     r.attempt_count,
     r.is_resubmitted
 FROM public.rpt_documents r
+CROSS JOIN LATERAL (SELECT now() AS ts) anchor
+LEFT JOIN public.dim_pending_segments seg
+    ON seg.code = public.pending_segment_code_at(r.first_sent_at, anchor.ts)
+LEFT JOIN public.dim_sent_state st
+    ON st.code = CASE WHEN seg.is_no_response THEN 'no_response' ELSE 'pending' END
 WHERE r.sent_state IS NOT NULL;
 
 COMMENT ON VIEW public.rpt_documents_sent IS
-'Отправленные документы без ответа ЕГИСЗ: ступень возраста обработки (dim_pending_segments) и состояние отправки («В обработке» / «Без ответа»).';
+'Отправленные документы без ответа ЕГИСЗ: ступень возраста обработки (dim_pending_segments), возраст и состояние отправки («В обработке» / «Без ответа») на текущий момент. Срез на прошлый момент строится теми же функциями от своего якоря (is_pending_at, pending_segment_code_at).';
 
 -- ---------------------------------------------------------------- section: document_file_request
 
@@ -732,25 +732,47 @@ COMMENT ON VIEW public.rpt_clinic_semd_activity IS
 -- Уникальный ключ — clinic_label, а не clinic_jid: jid nullable, а label
 -- NOT NULL по построению ('— · —' при пустом jid), и REFRESH CONCURRENTLY
 -- требует уникальный btree без выражений.
+-- Состояния отправки считаются на конец своей недели, а не на момент обновления витрины:
+-- иначе строки давно закрытой недели меняли бы значения при каждом refresh_report_marts().
+-- Открытая справа неделя берёт якорем текущий момент.
 CREATE MATERIALIZED VIEW public.rpt_documents_weekly AS
 SELECT
-    date_trunc('week', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS week_start,
-    r.clinic_jid,
-    MAX(r.clinic_name) AS clinic_name,
-    r.clinic_label,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status <> 'sent')::bigint AS docs_total,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'success')::bigint AS docs_success,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status IN ('async_error', 'network_error'))::bigint AS docs_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'async_error')::bigint AS docs_async_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'network_error')::bigint AS docs_network_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'sent')::bigint AS docs_sent,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.sent_state = 'pending')::bigint AS docs_pending,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.sent_state = 'no_response')::bigint AS docs_no_response,
-    (date_trunc('week', r.ips_date AT TIME ZONE 'Europe/Moscow')::date
-        < date_trunc('week', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_week
-FROM public.rpt_documents r
-WHERE r.ips_date IS NOT NULL
-GROUP BY 1, r.clinic_jid, r.clinic_label
+    d.week_start,
+    d.clinic_jid,
+    MAX(d.clinic_name) AS clinic_name,
+    d.clinic_label,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status <> 'sent')::bigint AS docs_total,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'success')::bigint AS docs_success,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS docs_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_async_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'network_error')::bigint AS docs_network_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
+    (d.week_start < date_trunc('week', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_week
+FROM (
+    SELECT
+        r.dwh_id,
+        r.clinic_jid,
+        r.clinic_name,
+        r.clinic_label,
+        r.status,
+        r.first_sent_at,
+        date_trunc('week', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS week_start
+    FROM public.rpt_documents r
+    WHERE r.ips_date IS NOT NULL
+) d
+CROSS JOIN LATERAL (
+    SELECT LEAST(
+        ((d.week_start + 7)::timestamp AT TIME ZONE 'Europe/Moscow'),
+        now()
+    ) AS ts
+) anchor
+LEFT JOIN public.dim_pending_segments seg
+    ON seg.code = CASE
+        WHEN d.status = 'sent' THEN public.pending_segment_code_at(d.first_sent_at, anchor.ts)
+    END
+GROUP BY d.week_start, d.clinic_jid, d.clinic_label
 WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_documents_weekly
@@ -759,7 +781,7 @@ CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_week ON public.rpt_documents_week
 CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_clinic_jid ON public.rpt_documents_weekly (clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_documents_weekly IS
-'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Обновляется refresh_report_marts() после transform.';
+'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своей недели (МСК), для открытой недели — на текущий момент: строки закрытых недель не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
 
 -- Недельная структура ошибок по категориям (уровень сообщений): документ с
 -- несколькими категориями учитывается в каждой — сумма долей категорий может
@@ -807,25 +829,46 @@ COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_weekly IS
 -- Уникальный ключ — clinic_label, а не clinic_jid: jid nullable, а label
 -- NOT NULL по построению ('— · —' при пустом jid), и REFRESH CONCURRENTLY
 -- требует уникальный btree без выражений.
+-- Якорь состояний отправки — конец своего месяца (для открытого справа месяца текущий
+-- момент), см. недельный слой.
 CREATE MATERIALIZED VIEW public.rpt_documents_monthly AS
 SELECT
-    date_trunc('month', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS month_start,
-    r.clinic_jid,
-    MAX(r.clinic_name) AS clinic_name,
-    r.clinic_label,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status <> 'sent')::bigint AS docs_total,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'success')::bigint AS docs_success,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status IN ('async_error', 'network_error'))::bigint AS docs_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'async_error')::bigint AS docs_async_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'network_error')::bigint AS docs_network_error,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.status = 'sent')::bigint AS docs_sent,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.sent_state = 'pending')::bigint AS docs_pending,
-    COUNT(DISTINCT r.dwh_id) FILTER (WHERE r.sent_state = 'no_response')::bigint AS docs_no_response,
-    (date_trunc('month', r.ips_date AT TIME ZONE 'Europe/Moscow')::date
-        < date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_month
-FROM public.rpt_documents r
-WHERE r.ips_date IS NOT NULL
-GROUP BY 1, r.clinic_jid, r.clinic_label
+    d.month_start,
+    d.clinic_jid,
+    MAX(d.clinic_name) AS clinic_name,
+    d.clinic_label,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status <> 'sent')::bigint AS docs_total,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'success')::bigint AS docs_success,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS docs_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_async_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'network_error')::bigint AS docs_network_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
+    (d.month_start < date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_month
+FROM (
+    SELECT
+        r.dwh_id,
+        r.clinic_jid,
+        r.clinic_name,
+        r.clinic_label,
+        r.status,
+        r.first_sent_at,
+        date_trunc('month', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS month_start
+    FROM public.rpt_documents r
+    WHERE r.ips_date IS NOT NULL
+) d
+CROSS JOIN LATERAL (
+    SELECT LEAST(
+        ((d.month_start + INTERVAL '1 month')::timestamp AT TIME ZONE 'Europe/Moscow'),
+        now()
+    ) AS ts
+) anchor
+LEFT JOIN public.dim_pending_segments seg
+    ON seg.code = CASE
+        WHEN d.status = 'sent' THEN public.pending_segment_code_at(d.first_sent_at, anchor.ts)
+    END
+GROUP BY d.month_start, d.clinic_jid, d.clinic_label
 WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_documents_monthly
@@ -834,7 +877,7 @@ CREATE INDEX IF NOT EXISTS idx_rpt_docs_monthly_month ON public.rpt_documents_mo
 CREATE INDEX IF NOT EXISTS idx_rpt_docs_monthly_clinic_jid ON public.rpt_documents_monthly (clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_documents_monthly IS
-'Месячная витрина документов: грейн (month_start = первое число месяца МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Обновляется refresh_report_marts() после transform.';
+'Месячная витрина документов: грейн (month_start = первое число месяца МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своего месяца (МСК), для открытого месяца — на текущий момент: строки закрытых месяцев не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
 
 -- Месячная структура ошибок по категориям (уровень сообщений): документ с
 -- несколькими категориями учитывается в каждой — сумма долей категорий может
@@ -861,6 +904,24 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_monthly_category ON public.rpt_error_break
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_monthly IS
 'Месячная структура ошибок: грейн (month_start, клиника, error_category); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после rpt_error_breakdown.';
+
+-- Обновление отчётных витрин одним вызовом — контракт, на который ссылаются COMMENT'ы
+-- витрин. Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
+-- Внутри функции обновление неконкурентное — REFRESH ... CONCURRENTLY запрещён в
+-- транзакционном блоке; штатный приём обновляет витрины задачей refresh_marts, которая
+-- идёт CONCURRENTLY и не блокирует чтение дашбордов.
+CREATE OR REPLACE FUNCTION public.refresh_report_marts()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
+    REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
+    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
+    REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
+    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
+END;
+$$;
 
 -- ---------------------------------------------------------------- section: health
 -- ============================================================================

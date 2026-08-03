@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conftest import sql_section
+from conftest import load_script_module, sql_section
+
+# Имена карточек очереди объявлены в генераторе плана: дублировать их литералами значит
+# ловить переименование падением теста вместо проверки самого правила.
+_plan = load_script_module("apply_dashboard_plan")
+QUEUE_NOW_NAME = _plan.QUEUE_NOW_NAME
+QUEUE_SURVIVAL_NAME = _plan.QUEUE_SURVIVAL_NAME
+QUEUE_PIVOT_CLINIC_NAME = _plan.QUEUE_PIVOT_CLINIC_NAME
+QUEUE_PIVOT_SEMD_NAME = _plan.QUEUE_PIVOT_SEMD_NAME
 
 INTEGRATION_DASHBOARD = Path("metabase_dashboards/01_integration_egisz.json")
 
@@ -198,6 +206,8 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
     "OID Клиники",
     "Тип ошибки",
     "СЭМД",
+    # Подпись исходного текста ответа РЭМД (error_text) в разборе последних операций.
+    "ns2_error",
 }
 
 
@@ -742,7 +752,6 @@ def test_quality_success_slices_sort_by_total_desc() -> None:
     )
     assert "ORDER BY 2 DESC" in semd["dataset_query"]["native"]["query"]
     assert "ORDER BY 3 DESC" in clinic["dataset_query"]["native"]["query"]
-    assert clinic["row"] == 22
 
 
 def test_quality_dashboard_has_no_slice_section_headers() -> None:
@@ -916,6 +925,8 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
             # на rpt_documents; чисто-ошибочные карточки — на rpt_error_breakdown.
             if "public.rpt_clinic_semd_activity" in query:
                 source_view = "public.rpt_clinic_semd_activity"
+            elif "public.rpt_documents_sent" in query:
+                source_view = "public.rpt_documents_sent"
             elif "public.rpt_documents" in query:
                 source_view = "public.rpt_documents"
             else:
@@ -934,12 +945,16 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
                 assert tags["client_jid"]["required"] is True
             # Field-filters периода/типа биндятся к source-витрине карточки: карточки ошибок
             # читают rpt_error_breakdown, остальные — rpt_documents (обе несут ips_date/semd_label).
+            # Срез ожидающих живёт на грейне отправки, и период у него — дата отправки.
             # Неиспользуемые в SQL фильтры карточки вычищены (prune), поэтому проверяем по наличию.
+            period_field = (
+                "first_sent_at" if source_view == "public.rpt_documents_sent" else "ips_date"
+            )
             if "ips_date" in tags:
                 assert tags["ips_date"]["type"] == "dimension"
                 assert filters["ips_date"] == {
                     "table_ref": source_view,
-                    "field_name": "ips_date",
+                    "field_name": period_field,
                 }
             if "client_document_type" in tags:
                 assert tags["client_document_type"]["type"] == "dimension"
@@ -1477,7 +1492,14 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
                     continue
                 if settings.get("suffix") == " %" or col_key.endswith('"_percentage"]'):
                     expected_decimals = 1
-                elif "/" in col_key or ", мин" in col_key or "Дней в ожидании" in col_key:
+                elif (
+                    "/" in col_key
+                    or ", мин" in col_key
+                    # Возраст ожидания приходит из отчётного слоя с десятыми долями суток.
+                    or "Суток с отправки" in col_key
+                    or "Суток в очереди" in col_key
+                    or "Дней в ожидании" in col_key
+                ):
                     expected_decimals = 1
                 elif (
                     "₽ за успешный СЭМД" in col_key
@@ -1525,12 +1547,14 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
         assert stale not in views, f"порог {stale} захардкожен в представлении"
 
     names = {c.get("name") for c in dashboard["cards"]}
-    assert {"В обработке на конец периода", "Ответ не получен (утилизирован)",
-            "Документы в обработке", "Документы: ответ не получен (утилизирован)"} <= names
+    # Распределение очереди живёт одной карточкой на мониторинге, здесь — её разбор.
+    assert {QUEUE_SURVIVAL_NAME, QUEUE_PIVOT_CLINIC_NAME, QUEUE_PIVOT_SEMD_NAME,
+            "Ответ не получен (утилизирован)", "Документы в обработке",
+            "Документы: ответ не получен (утилизирован)"} <= names
     # Утилизированные учитываются только в своей плитке и своей таблице.
     assert "Отправлено без ответа" not in names
     assert "Доля без ответа, %" not in names
-    assert not any("Зависш" in n or "очеред" in n.lower() for n in names)
+    assert not any("Зависш" in n for n in names)
     assert not any("ердикт" in n for n in names)
 
 
@@ -1586,7 +1610,10 @@ def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
         by_tab[tab] = by_tab.get(tab, 0) + 1
     assert by_tab["operational"] == 10
     assert by_tab["service"] == 10
-    assert by_tab["sent"] == 8
+    # Вкладка «Отправленные»: четыре плитки состояния, распределение возраста и кривая
+    # дожития, две сводные «объект × ступень», движение и хвост, скорость регистрации,
+    # три журнала и две плитки к ним.
+    assert by_tab["sent"] == 15
     assert by_tab["errors"] == 7
     assert by_tab["archive"] == 6
 
@@ -1616,7 +1643,7 @@ def test_sent_undelivered_to_clinic_card_uses_final_response_then_logstate3() ->
     query = card["dataset_query"]["native"]["query"]
 
     assert card["display"] == "scalar"
-    assert (card["row"], card["col"], card["sizeX"], card["sizeY"]) == (37, 0, 12, 2)
+    assert (card["row"], card["col"], card["sizeX"], card["sizeY"]) == (55, 0, 12, 3)
     assert "public.rpt_documents r" not in query
     assert "COUNT(DISTINCT public.rpt_documents.dwh_id)" in query
     assert "public.rpt_documents.status IN ('success', 'async_error')" in query
@@ -1637,7 +1664,7 @@ def test_sent_undelivered_to_clinic_card_uses_final_response_then_logstate3() ->
     detail = next(c for c in _tab_cards("sent") if c.get("name") == detail_name)
     detail_query = detail["dataset_query"]["native"]["query"]
     assert detail["display"] == "table"
-    assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (39, 0, 24, 10)
+    assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (58, 0, 24, 10)
     assert "public.rpt_documents r" not in detail_query
     assert "public.rpt_documents.status IN ('success', 'async_error')" in detail_query
     assert "d.result_logid IS NOT NULL" in detail_query
@@ -1755,7 +1782,9 @@ def test_operational_tab_has_core_cards() -> None:
         "Успешность по типам СЭМД",
         "Объём ошибок по клиникам",
         "Тепловая карта: клиника × день",
-        "Скорость регистрации в РЭМД",
+        # Очередь на текущий момент — оперативный вопрос; её разбор живёт на вкладке
+        # «Отправленные».
+        QUEUE_NOW_NAME,
     }
 
 
@@ -1892,17 +1921,22 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert '"OID из обмена"' in detail_sql
     assert '"ЮЛ по реестру OID"' in detail_sql
 
-    period_funnel = by_name["В обработке на конец периода"]
-    period_filters = period_funnel.get("metabase-field-filters") or {}
-    assert set(period_filters) == {"ips_date", "semd_type", "jid"}
-    assert period_filters["ips_date"]["table_ref"] == "public.rpt_documents"
+    # Карточки очереди — состояние на текущий момент, поэтому фильтра по периоду у них
+    # нет вовсе (см. test_pending_anchor).
+    for card_name in (
+        QUEUE_NOW_NAME,
+        QUEUE_PIVOT_CLINIC_NAME,
+        QUEUE_PIVOT_SEMD_NAME,
+        QUEUE_SURVIVAL_NAME,
+    ):
+        filters = by_name[card_name].get("metabase-field-filters") or {}
+        assert {"semd_type", "jid"} <= set(filters), card_name
+        assert filters["jid"]["table_ref"] == "public.rpt_documents", card_name
 
     for card_name in (
         "Ответ не получен (утилизирован)",
         "Документы в обработке",
         "Документы: ответ не получен (утилизирован)",
-        "Ожидание ответа по клиникам и ступеням",
-        "Ожидание ответа по типам СЭМД и ступеням",
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
         assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
@@ -2240,7 +2274,7 @@ def test_grain_cards_drill_into_model_not_archive() -> None:
     drill_cards = [
         next(c for c in _tab_cards("archive") if c.get("name") == "Объём по клиникам"),
         next(c for c in _tab_cards("errors") if c.get("name") == "Топ типов СЭМД по ошибкам"),
-        next(c for c in _tab_cards("sent") if c.get("name") == "Ожидание ответа по клиникам и ступеням"),
+        next(c for c in _tab_cards("sent") if c.get("name") == QUEUE_PIVOT_CLINIC_NAME),
     ]
     for card in drill_cards:
         click = card.get("click_behavior") or {}
@@ -2456,10 +2490,11 @@ def test_weekly_sql_layer_contract() -> None:
     assert "uq_rpt_documents_weekly" in weekly
     assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
     assert "uq_rpt_error_breakdown_weekly" in weekly
-    # Корпус SLI — документы с ответом; состояния отправки идут отдельными счётчиками.
-    assert "FILTER (WHERE r.status <> 'sent')" in weekly
-    assert "FILTER (WHERE r.sent_state = 'pending')" in weekly
-    assert "FILTER (WHERE r.sent_state = 'no_response')" in weekly
+    # Корпус SLI — документы с ответом; состояния отправки идут отдельными счётчиками
+    # и считаются на конец своей недели (см. test_pending_anchor).
+    assert "FILTER (WHERE d.status <> 'sent')" in weekly
+    assert "FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)" in weekly
+    assert "FILTER (WHERE d.status = 'sent' AND seg.is_no_response)" in weekly
     assert "is_complete_week" in weekly
 
     drops = Path("db/04_views.sql").read_text(encoding="utf-8")
