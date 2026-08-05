@@ -1564,11 +1564,11 @@
     },
     {
       "name": "Контроль качества данных",
-      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; OID вне реестра медорганизаций (OID из обмена не найден ни в одной лицензии); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
+      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; OID вне реестра медорганизаций (считаются уникальные OID из обмена, не найденные ни в одной лицензии); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
+          "query": "SELECT \"Проверка\", \"Количество\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Количество\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT NULLIF(BTRIM(clinic_oid::text), '')) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1605,7 +1605,7 @@
               "#DC2626"
             ],
             "columns": [
-              "Документов"
+              "Количество"
             ],
             "max_type": "custom",
             "max_value": 100,
@@ -1621,11 +1621,12 @@
           },
           {
             "enabled": true,
-            "name": "Документов"
+            "name": "Количество"
           }
         ],
         "column_settings": {
-          "[\"name\",\"Документов\"]": {
+          "[\"name\",\"Количество\"]": {
+            "column_title": "Количество",
             "decimals": 0,
             "number_separators": ", "
           },

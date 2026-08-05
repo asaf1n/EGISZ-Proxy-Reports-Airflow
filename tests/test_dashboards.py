@@ -1889,8 +1889,14 @@ def test_service_quality_checks_oid_against_registry() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "OID вне реестра медорганизаций" in query
     assert "clinic_oid_unknown = true" in query
+    assert "COUNT(DISTINCT NULLIF(BTRIM(clinic_oid::text), ''))" in query
+    assert 'AS "Количество"' in query
+    assert '"Документов" FROM' not in query
     assert "clinic_jid_mismatch" not in query
     assert '"Расхождение источников JID" = \'да\'' not in query
+    viz = card["visualization_settings"]
+    assert viz["table.column_formatting"][0]["columns"] == ["Количество"]
+    assert {"enabled": True, "name": "Количество"} in viz["table.columns"]
 
 
 def test_integration_native_sql_uses_real_column_names() -> None:
