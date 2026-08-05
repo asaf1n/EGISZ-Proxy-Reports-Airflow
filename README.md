@@ -364,7 +364,7 @@ exchangelog_raw  ──transform──►  transactions  ──►  documents
 
 | Уровень | Смысл | Источник в обёртке | Поле DWH |
 | ------- | ----- | ------------------ | -------- |
-| Экземпляр / версия | UUID конкретной выгрузки СЭМД; меняется при правке и ре-выгрузке | `localUid` | `dwh_id` (PK) |
+| Экземпляр / версия | UUID конкретной выгрузки СЭМД; меняется при правке и перевыгрузке | `localUid` | `dwh_id` (PK) |
 | Логический документ | Цепочка версий одного документа в МИС | `jid` + `semd_code` + `doc_number` | `document_group_id` |
 
 `doc_number` — номер протокола/ИБ (`PROTOCOLID` / тег `documentNumber`), подтягивается из `transactions` в `documents` на шаге группировки. Экземпляры без `documentNumber` остаются одиночными группами (`singleton`).
