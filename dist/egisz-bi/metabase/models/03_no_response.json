@@ -1,0 +1,24 @@
+{
+  "name": "Отправленные",
+  "table_ref": "public.rpt_documents_sent",
+  "description": "Документы, отправленные в ЕГИСЗ без ответа (grain: semd_local_uid). Состояние отправки и ступень обработки — из справочников dim_sent_state и dim_pending_segments.",
+  "fields": {
+    "semd_local_uid": { "semantic_type": "type/PK", "display_name": "localUid СЭМД" },
+    "first_sent_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Первая отправка" },
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
+    "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+    "sent_state_label": { "semantic_type": "type/Category", "display_name": "Состояние отправки" },
+    "pending_segment_label": { "semantic_type": "type/Category", "display_name": "Ступень обработки" },
+    "pending_days": { "semantic_type": "type/Quantity", "display_name": "Суток с отправки" }
+  },
+  "hidden_fields": ["clinic_name"],
+  "metrics": {
+    "Отправленных документов": {
+      "aggregation": ["distinct", ["field", "semd_local_uid", null]]
+    }
+  }
+}

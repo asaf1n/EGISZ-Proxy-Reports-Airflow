@@ -1,0 +1,25 @@
+{
+  "name": "Разбивка ошибок",
+  "table_ref": "public.rpt_error_breakdown",
+  "description": "Grain: 1 строка = 1 атомарный вид ошибки на документ.",
+  "fields": {
+    "ips_date": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
+    "dwh_id": { "semantic_type": "type/FK" },
+    "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
+    "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
+    "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+    "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
+    "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" }
+  },
+  "hidden_fields": ["dwh_id", "clinic_name"],
+  "metrics": {
+    "Вхождений ошибки": {
+      "aggregation": ["count"]
+    },
+    "Документов с видом": {
+      "aggregation": ["distinct", ["field", "dwh_id", null]]
+    }
+  }
+}
