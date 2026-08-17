@@ -145,10 +145,11 @@ def test_queue_distribution_lives_in_a_single_card() -> None:
     dimensions = [
         c["visualization_settings"].get("graph.dimensions")
         for c in dash["cards"]
-        if c.get("display") == "bar" and c.get("tab") == "sent"
+        if c.get("display") in ("bar", "row") and c.get("tab") == "sent"
     ]
-    assert ["Ступень обработки"] not in dimensions
-    assert card["display"] == "bar"
+    assert [plan.WAIT_DIMENSION_LABEL] not in dimensions
+    # Горизонтальные полосы: подписи сроков читаются строкой и не режутся.
+    assert card["display"] == "row"
 
 
 def test_queue_cards_are_pinned_to_the_current_moment() -> None:
@@ -227,10 +228,11 @@ def test_age_distribution_is_not_a_funnel() -> None:
     assert "В обработке на конец периода" not in by_name
     histogram = by_name[QUEUE_NOW]
     viz = histogram["visualization_settings"]
-    assert viz["graph.dimensions"] == ["Ступень обработки"]
+    assert viz["graph.dimensions"] == [plan.WAIT_DIMENSION_LABEL]
     assert viz["graph.x_axis.scale"] == "ordinal"
-    # Подписи рядов — ровно рабочие ступени справочника: последняя сюда не попадает.
-    assert list(viz["series_settings"]) == SEGMENT_LABELS
+    # Ряд один — счётчик документов, и цвет у него один: величину несёт длина полосы,
+    # а срок ожидания подписан самой строкой.
+    assert list(viz["series_settings"]) == ["Документов"]
     sql = card_sql(histogram)
     assert "GROUP BY segment_label, segment_sort" in sql
     assert "age_minutes >" not in sql
@@ -286,6 +288,9 @@ def test_queue_matrices_are_heatmaps_with_model_drill() -> None:
         formatting = viz["table.column_formatting"]
         assert formatting[0]["type"] == "range", name
         assert formatting[0]["columns"] == SEGMENT_LABELS, name
+        # В ячейке счётчик документов, а не оценка: градиент бело-синий. Красный здесь
+        # читался бы как «плохо» на любом заполненном сроке ожидания.
+        assert formatting[0]["colors"] == plan.COUNT_HEATMAP_COLORS, name
         sql = card_sql(card)
         # Отбор — по коду ступени: переименование в справочнике меняет заголовок колонки
         # и не обнуляет её значения.

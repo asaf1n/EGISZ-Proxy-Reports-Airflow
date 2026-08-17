@@ -1220,11 +1220,11 @@
     },
     {
       "name": "Отправленные — клиент",
-      "description": "Документы клиники, отправленные в РЭМД и пока без финального ответа (статус «Отправлено»). Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. Возраст ожидания и ступень — из отчётного слоя (единый якорь, README §«Учёт отправленных»). До 500 строк, самые давние сверху.",
+      "description": "Документы клиники, отправленные в РЭМД и пока без ответа. Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. Реквизиты: дата отправки, тип СЭМД, localUid, дней в ожидании, срок ожидания. До 500 строк, самые давние сверху.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT first_sent_at AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", pending_days AS \"Дней в ожидании\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY first_sent_at ASC LIMIT 500",
+          "query": "SELECT first_sent_at AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", pending_days AS \"Дней в ожидании\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY first_sent_at ASC LIMIT 500",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1287,7 +1287,7 @@
           },
           {
             "enabled": true,
-            "name": "Ступень обработки"
+            "name": "Срок ожидания"
           }
         ],
         "column_settings": {

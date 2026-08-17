@@ -1643,7 +1643,7 @@ def test_sent_undelivered_to_clinic_card_uses_final_response_then_logstate3() ->
     query = card["dataset_query"]["native"]["query"]
 
     assert card["display"] == "scalar"
-    assert (card["row"], card["col"], card["sizeX"], card["sizeY"]) == (55, 0, 12, 3)
+    assert (card["row"], card["col"], card["sizeX"], card["sizeY"]) == (48, 0, 12, 3)
     assert "public.rpt_documents r" not in query
     assert "COUNT(DISTINCT public.rpt_documents.dwh_id)" in query
     assert "public.rpt_documents.status IN ('success', 'async_error')" in query
@@ -1664,7 +1664,7 @@ def test_sent_undelivered_to_clinic_card_uses_final_response_then_logstate3() ->
     detail = next(c for c in _tab_cards("sent") if c.get("name") == detail_name)
     detail_query = detail["dataset_query"]["native"]["query"]
     assert detail["display"] == "table"
-    assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (58, 0, 24, 10)
+    assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (51, 0, 24, 10)
     assert "public.rpt_documents r" not in detail_query
     assert "public.rpt_documents.status IN ('success', 'async_error')" in detail_query
     assert "d.result_logid IS NOT NULL" in detail_query
@@ -1907,7 +1907,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert 'first_sent_at AS "Дата отправки"' in sent_sql
     assert 'pending_days AS "Суток с отправки"' in sent_sql
     assert 'sent_state_label AS "Состояние отправки"' in sent_sql
-    assert 'pending_segment_label AS "Ступень обработки"' in sent_sql
+    assert 'pending_segment_label AS "Срок ожидания"' in sent_sql
     assert ', "Дата отправки"' not in sent_sql
 
     network_sql = by_name["Последние сбои транспорта"]["dataset_query"]["native"]["query"]
@@ -1948,7 +1948,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
         assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
         assert filters.get("ips_date", {}).get("table_ref") == "public.rpt_documents_sent", card_name
 
-    # Воронка процесса живёт на полном корпусе, а не на срезе ожидающих: ступень ожидания
+    # Воронка процесса живёт на полном корпусе, а не на срезе ожидающих: срок ожидания
     # и localUid к нему неприменимы, поэтому в неё не переносятся.
     funnel = by_name["Скорость регистрации в РЭМД"]
     filters = funnel.get("metabase-field-filters") or {}
@@ -1958,8 +1958,14 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     # Корпус — только документы с полученным ответом: у ожидающих и у «Без ответа»
     # срока регистрации нет, и в знаменателе они притворялись бы медленными.
     query = funnel["dataset_query"]["native"]["query"]
-    assert "delivery_seconds IS NOT NULL" in query
-    # База обязательна: часть документов регистрируется дольше самой мягкой ступени.
+    assert "first_callback_at IS NOT NULL" in query
+    # Срок меряется тем же событием, которым документ выходит из очереди, — первым
+    # ответом. delivery_seconds считает до последнего повтора и держал бы отвеченный
+    # за секунды документ на дальних шагах воронки.
+    assert "delivery_seconds" not in query
+    assert "EXTRACT(EPOCH FROM (first_callback_at - first_sent_at))" in query
+    assert "first_callback_at >= first_sent_at" in query
+    # База обязательна: часть документов регистрируется дольше самого мягкого срока.
     assert "'Получен ответ'" in query
 
 
@@ -2074,8 +2080,12 @@ def test_clinic_error_volume_chart_uses_clinic_name_not_jid_label() -> None:
     assert card["visualization_settings"]["series_settings"]["Документов"]["display"] == "line"
     assert card["visualization_settings"]["graph.dimensions"] == ["Клиника"]
     assert card["visualization_settings"].get("graph.max_categories") == 20
-    # Перенесён на вкладку «Оперативный мониторинг» (полная ширина).
-    assert card["tab"] == "operational" and card["col"] == 0 and card["sizeX"] == 24
+    # Вкладка «Оперативный мониторинг», левая часть ряда: справа стоит очередь на текущий
+    # момент, и вместе они занимают полную ширину сетки.
+    assert card["tab"] == "operational" and card["col"] == 0 and card["sizeX"] == 15
+    # Подписи клиник обрезаны и наклонены: в этой ширине горизонтальные не помещаются.
+    assert "LEFT(COALESCE(NULLIF(BTRIM(clinic_name)" in query
+    assert card["visualization_settings"]["graph.x_axis.axis_enabled"] == "rotate-45"
 
 
 def test_success_slice_tables_have_default_column_widths() -> None:
