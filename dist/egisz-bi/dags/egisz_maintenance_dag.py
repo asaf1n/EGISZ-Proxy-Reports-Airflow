@@ -55,16 +55,22 @@ def get_int(key: str) -> int:
     return int(_setting(key))
 
 
+PG_SESSION_OPTIONS = "-c search_path=public"
+
+
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
     try:
+        # Схема задаётся явно: настройка search_path на уровне базы (чужие схемы в той же
+        # БД) иначе подменяет неквалифицированные имена таблиц и функций конвейера.
         if isinstance(conn_params, str):
-            return psycopg2.connect(conn_params)
+            return psycopg2.connect(conn_params, options=PG_SESSION_OPTIONS)
         return psycopg2.connect(
             host=conn_params.host,
             port=conn_params.port,
             user=conn_params.login,
             password=conn_params.password,
             database=conn_params.schema,
+            options=PG_SESSION_OPTIONS,
         )
     except UnicodeDecodeError as exc:
         # Русифицированный PostgreSQL на Windows отвечает на отказ подключения текстом

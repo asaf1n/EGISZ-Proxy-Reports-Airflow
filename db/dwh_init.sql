@@ -14,6 +14,9 @@
 
 SET lock_timeout = '30s';
 SET statement_timeout = '60min';
+-- Явная схема: search_path на уровне базы (чужие схемы в той же БД) иначе уводит
+-- CREATE TABLE IF NOT EXISTS и неквалифицированные имена в чужую схему.
+SET search_path = public;
 
 DO $$
 BEGIN
