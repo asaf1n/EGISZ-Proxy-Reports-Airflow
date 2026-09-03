@@ -998,26 +998,25 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
 
 
 def test_client_service_status_by_day_is_stacked_status_shares() -> None:
-    """07: «Динамика статусов по дням» — стэк долей исходов (успех/async/сетевые, % от
-    документов с ответом, сумма 100%); абсолютная серия «Всего» не смешивается с
-    процентной осью."""
+    """07: «Динамика статусов по дням» — нормированный стэк по метке состояния из витрины
+    (та же, что на дашборде интеграции); доли считает визуализация, не запрос. Состояние
+    «Без ответа» в стэк не входит — оно разбирается на вкладке «Отправленные»."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     card = next(c for c in dashboard["cards"] if c.get("name") == "Динамика статусов по дням")
     query = card["dataset_query"]["native"]["query"]
     viz = card["visualization_settings"]
 
     assert card["display"] == "bar"
-    assert "FILTER (WHERE status = 'success')" in query
-    assert "FILTER (WHERE status = 'async_error')" in query
-    assert "FILTER (WHERE status = 'network_error')" in query
-    assert 'AS "Успешно, %"' in query
-    assert 'AS "Async ошибки, %"' in query
-    assert 'AS "Сетевые ошибки, %"' in query
-    assert 'AS "Всего"' not in query
-    assert sorted(viz["graph.metrics"]) == ["Async ошибки, %", "Сетевые ошибки, %", "Успешно, %"]
-    assert "Всего" not in viz["series_settings"]
-    assert viz["stackable.stack_type"] == "stacked"
+    assert 'status_detail_label AS "Статус"' in query
+    assert "status_detail <> 'no_response'" in query
+    assert "FILTER (WHERE status" not in query
+    assert viz["graph.dimensions"] == ["Дата", "Статус"]
+    assert viz["graph.metrics"] == ["Документов"]
+    assert viz["stackable.stack_type"] == "normalized"
     assert viz["graph.y_axis.title_text"] == "% документов"
+    assert "Без ответа" not in viz["series_settings"]
+    assert viz["series_settings"]["Успешно зарегистрирован"]["color"] == "#84BB4C"
+    assert viz["series_settings"]["В обработке"]["color"] == "#A6C8E8"
 
 
 def test_client_top_error_type_shows_processed_share() -> None:

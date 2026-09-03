@@ -114,7 +114,7 @@
           }
         }
       },
-      "sizeX": 6,
+      "sizeX": 5,
       "sizeY": 3,
       "row": 1,
       "col": 0,
@@ -179,10 +179,10 @@
       "visualization_settings": {
         "scalar.field": "Успешно"
       },
-      "sizeX": 6,
+      "sizeX": 5,
       "sizeY": 3,
       "row": 1,
-      "col": 6,
+      "col": 5,
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
@@ -244,10 +244,10 @@
       "visualization_settings": {
         "scalar.field": "Ошибка асинхронного ответа РЭМД"
       },
-      "sizeX": 6,
+      "sizeX": 5,
       "sizeY": 3,
       "row": 1,
-      "col": 12,
+      "col": 10,
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
@@ -309,10 +309,75 @@
       "visualization_settings": {
         "scalar.field": "Ошибка связи"
       },
-      "sizeX": 6,
+      "sizeX": 5,
       "sizeY": 3,
       "row": 1,
-      "col": 18,
+      "col": 15,
+      "tab": "overview",
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "client_document_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "clinic_label": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "В обработке",
+      "description": "Документы, отправленные в РЭМД и ожидающие ответа. Доля — от всех документов клиники за период (то же основание, что у карточки «Документов за период — клиент»); у соседних карточек исходов знаменатель — документы с ответом РЭМД.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail = 'pending')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail = 'pending') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1), 0)::text, '%)') AS \"В обработке\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "template-tags": {
+            "clinic_label": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "07c000f0000-0000-4000-8000-00000000000f",
+              "name": "clinic_label",
+              "type": "dimension"
+            },
+            "client_document_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип документа",
+              "id": "07cf0000-0000-4000-8000-000000000002",
+              "name": "client_document_type",
+              "type": "dimension"
+            },
+            "client_jid": {
+              "type": "text",
+              "display-name": "JID Клиники",
+              "id": "07cf0000-0000-4000-8000-000000000003",
+              "name": "client_jid",
+              "required": false,
+              "widget-type": "string/="
+            },
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "Период",
+              "id": "07cf0000-0000-4000-8000-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "scalar.field": "В обработке"
+      },
+      "sizeX": 4,
+      "sizeY": 3,
+      "row": 1,
+      "col": 20,
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
@@ -335,7 +400,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Успешно, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Async ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Сетевые ошибки, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail = 'pending') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"В обработке, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date ORDER BY ips_date::date",
+          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -372,51 +437,40 @@
       },
       "display": "bar",
       "visualization_settings": {
-        "column_settings": {
-          "[\"name\",\"Async ошибки, %\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Сетевые ошибки, %\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"Успешно, %\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          }
-        },
         "graph.dimensions": [
-          "Дата"
+          "Дата",
+          "Статус"
         ],
         "graph.metrics": [
-          "Async ошибки, %",
-          "Сетевые ошибки, %",
-          "Успешно, %"
+          "Документов"
         ],
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "День",
         "graph.y_axis.title_text": "% документов",
         "graph.show_values": false,
-        "stackable.stack_type": "stacked",
+        "stackable.stack_type": "normalized",
         "series_settings": {
-          "Async ошибки, %": {
-            "axis": "left",
+          "Успешно зарегистрирован": {
+            "color": "#84BB4C"
+          },
+          "Ошибка асинхронного ответа РЭМД": {
             "color": "#A989C5"
           },
-          "Сетевые ошибки, %": {
-            "axis": "left",
+          "Ошибка связи": {
             "color": "#F2994A"
           },
-          "Успешно, %": {
-            "color": "#689636"
+          "В обработке": {
+            "color": "#A6C8E8"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Документов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
           }
         }
       },
-      "sizeX": 12,
+      "sizeX": 24,
       "sizeY": 7,
       "row": 4,
       "col": 0,
@@ -433,89 +487,6 @@
         "client_document_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
-        }
-      }
-    },
-    {
-      "name": "Топ типов СЭМД — клиент",
-      "description": "Pie по типам документов: на что приходится основная доля отправок.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип документа\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
-          "template-tags": {
-            "clinic_label": {
-              "widget-type": "string/=",
-              "display-name": "Клиника",
-              "id": "07c00060000-0000-4000-8000-000000000006",
-              "name": "clinic_label",
-              "type": "dimension"
-            },
-            "client_document_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип документа",
-              "id": "07c60000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
-            },
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07c60000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": false,
-              "widget-type": "string/="
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07c60000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "pie",
-      "visualization_settings": {
-        "pie.decimal_places": 1,
-        "pie.dimension": [
-          "Тип документа"
-        ],
-        "pie.metric": "Документов",
-        "pie.percent_visibility": "inside",
-        "pie.show_legend": true,
-        "pie.show_total": true,
-        "pie.slice_threshold": 0,
-        "column_settings": {
-          "[\"name\",\"_percentage\"]": {
-            "decimals": 1,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 4,
-      "col": 12,
-      "tab": "overview",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "semd_label"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
         }
       }
     },
@@ -605,11 +576,11 @@
     },
     {
       "name": "Объёмы ошибок по категориям — клиент",
-      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию).",
+      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию) и какую долю от всех ошибочных документов клиники за период это составляет.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF(SUM(COUNT(DISTINCT dwh_id)) OVER (), 0), 1) AS \"% ошибок\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -651,7 +622,7 @@
         },
         "database": 1
       },
-      "display": "row",
+      "display": "combo",
       "visualization_settings": {
         "graph.dimensions": [
           "Категория ошибки"
@@ -659,115 +630,44 @@
         "graph.label_value_formatting": "compact",
         "graph.show_values": true,
         "graph.x_axis.title_text": "",
-        "graph.y_axis.title_text": "",
+        "graph.y_axis.title_text": "Документов",
         "column_settings": {
           "[\"name\",\"Документов\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"% ошибок\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
           }
         },
         "graph.metrics": [
-          "Документов"
-        ]
+          "Документов",
+          "% ошибок"
+        ],
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "graph.x_axis.scale": "ordinal",
+        "series_settings": {
+          "Документов": {
+            "axis": "left",
+            "color": "#DC2626",
+            "display": "bar"
+          },
+          "% ошибок": {
+            "axis": "right",
+            "color": "#F2994A",
+            "display": "line",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        }
       },
-      "sizeX": 12,
+      "sizeX": 24,
       "sizeY": 7,
       "row": 1,
       "col": 0,
-      "tab": "errors",
-      "metabase-field-filters": {
-        "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "ips_date"
-        },
-        "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "semd_label"
-        },
-        "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "error_category"
-        },
-        "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
-          "field_name": "clinic_label"
-        }
-      }
-    },
-    {
-      "name": "Структура ошибок по категориям — клиент",
-      "description": "Доля категорий ошибок в общем объёме ошибочных документов клиники.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
-          "template-tags": {
-            "clinic_label": {
-              "widget-type": "string/=",
-              "display-name": "Клиника",
-              "id": "07c00090000-0000-4000-8000-000000000009",
-              "name": "clinic_label",
-              "type": "dimension"
-            },
-            "client_document_type": {
-              "widget-type": "string/=",
-              "display-name": "Тип документа",
-              "id": "07e20000-0000-4000-8000-000000000002",
-              "name": "client_document_type",
-              "type": "dimension"
-            },
-            "client_error_category": {
-              "widget-type": "string/=",
-              "display-name": "Категория ошибки",
-              "id": "07e20000-0000-4000-8000-000000000004",
-              "name": "client_error_category",
-              "type": "dimension"
-            },
-            "client_jid": {
-              "type": "text",
-              "display-name": "JID Клиники",
-              "id": "07e20000-0000-4000-8000-000000000003",
-              "name": "client_jid",
-              "required": false,
-              "widget-type": "string/="
-            },
-            "ips_date": {
-              "widget-type": "date/all-options",
-              "display-name": "Период",
-              "id": "07e20000-0000-4000-8000-000000000001",
-              "name": "ips_date",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "pie",
-      "visualization_settings": {
-        "pie.decimal_places": 1,
-        "pie.dimension": [
-          "Категория ошибки"
-        ],
-        "pie.metric": "Документов",
-        "pie.percent_visibility": "inside",
-        "pie.show_legend": true,
-        "pie.show_total": true,
-        "pie.slice_threshold": 0,
-        "column_settings": {
-          "[\"name\",\"_percentage\"]": {
-            "decimals": 1,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 12,
-      "sizeY": 7,
-      "row": 1,
-      "col": 12,
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
@@ -977,7 +877,48 @@
         },
         "graph.metrics": [
           "Документов"
-        ]
+        ],
+        "series_settings": {
+          "Данные пациента": {
+            "color": "#4E79A7"
+          },
+          "Данные медработника": {
+            "color": "#59A14F"
+          },
+          "Ошибки структуры и валидации": {
+            "color": "#B07AA1"
+          },
+          "Ошибки справочника НСИ": {
+            "color": "#EDC948"
+          },
+          "Ошибки регистрации в РЭМД": {
+            "color": "#E15759"
+          },
+          "Ошибки организации / ИС": {
+            "color": "#76B7B2"
+          },
+          "Ошибки получения файла ЭМД": {
+            "color": "#FF9DA7"
+          },
+          "Ошибки ЭП и сертификатов": {
+            "color": "#F28E2B"
+          },
+          "Технические ошибки РЭМД": {
+            "color": "#9C755F"
+          },
+          "Ошибки связи": {
+            "color": "#499894"
+          },
+          "Ошибки ИЭМК": {
+            "color": "#8CD17D"
+          },
+          "Ошибки ФРЛЛО": {
+            "color": "#D7B5A6"
+          },
+          "Прочие": {
+            "color": "#BAB0AC"
+          }
+        }
       },
       "sizeX": 12,
       "sizeY": 7,
@@ -1220,11 +1161,11 @@
     },
     {
       "name": "Отправленные — клиент",
-      "description": "Документы клиники, отправленные в РЭМД и пока без финального ответа (статус «Отправлено»). Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. Возраст ожидания и ступень — из отчётного слоя (единый якорь, README §«Учёт отправленных»). До 500 строк, самые давние сверху.",
+      "description": "Документы клиники, отправленные в РЭМД и пока без ответа. Показаны отдельно, чтобы не смешивать с реальными статусами регистрации. Реквизиты: дата отправки, тип СЭМД, localUid, дней в ожидании, срок ожидания. До 500 строк, самые давние сверху.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT first_sent_at AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", pending_days AS \"Дней в ожидании\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY first_sent_at ASC LIMIT 500",
+          "query": "SELECT first_sent_at AS \"Дата отправки\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", pending_days AS \"Дней в ожидании\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY first_sent_at ASC LIMIT 500",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1287,7 +1228,7 @@
           },
           {
             "enabled": true,
-            "name": "Ступень обработки"
+            "name": "Срок ожидания"
           }
         ],
         "column_settings": {

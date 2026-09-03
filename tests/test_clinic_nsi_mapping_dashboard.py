@@ -9,6 +9,13 @@ from conftest import load_script_module
 
 DASHBOARD = Path("metabase_dashboards/09_clinic_nsi_mapping.json")
 EXPECTED_COLUMNS = ["JID", "Наименование CASH", "Наименование НСИ", "ИНН", "OID"]
+EXPECTED_FILTER_TAGS = {
+    "clinic_jid": "jid",
+    "cash_name": "cash_name",
+    "nsi_name": "nsi_name",
+    "inn": "inn",
+    "oid": "oid",
+}
 
 
 def test_clinic_nsi_mapping_view_contract() -> None:
@@ -76,9 +83,11 @@ def test_load_nsi_organization_1461_maps_source_fields() -> None:
 def test_clinic_nsi_mapping_dashboard_has_two_tables() -> None:
     dashboard = json.loads(DASHBOARD.read_text(encoding="utf-8"))
 
-    assert dashboard["name"] == "Сопоставление клиник с НСИ"
+    assert dashboard["name"] == "Список клиник"
     assert dashboard["width"] == "full"
-    assert dashboard["parameters"] == []
+    assert {p["slug"] for p in dashboard["parameters"]} == {
+        f"{tag}_filter" for tag in EXPECTED_FILTER_TAGS
+    }
     assert [card["name"] for card in dashboard["cards"]] == [
         "Клиники с сопоставлением НСИ",
         "Клиники без сопоставления НСИ",
@@ -95,3 +104,13 @@ def test_clinic_nsi_mapping_dashboard_has_two_tables() -> None:
             for column in card["visualization_settings"]["table.columns"]
             if column.get("enabled", True)
         ] == EXPECTED_COLUMNS
+
+        tags = card["dataset_query"]["native"]["template-tags"]
+        filters = card["metabase-field-filters"]
+        for tag_name, field_name in EXPECTED_FILTER_TAGS.items():
+            assert f"[[AND {{{{{tag_name}}}}}]]" in query
+            assert tags[tag_name]["type"] == "dimension"
+            assert filters[tag_name] == {
+                "table_ref": "public.rpt_clinic_nsi_mapping",
+                "field_name": field_name,
+            }

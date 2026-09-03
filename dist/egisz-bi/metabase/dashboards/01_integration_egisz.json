@@ -34,7 +34,7 @@
     },
     {
       "id": "e4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f0a5",
-      "name": "Ступень обработки",
+      "name": "Срок ожидания",
       "slug": "pending_segment_filter",
       "type": "string/=",
       "sectionId": "string"
@@ -604,7 +604,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 19,
+      "row": 14,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -736,7 +736,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 19,
+      "row": 14,
       "col": 12,
       "tab": "operational",
       "metabase-field-filters": {
@@ -858,7 +858,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 27,
+      "row": 22,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1001,7 +1001,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 27,
+      "row": 22,
       "col": 12,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1029,7 +1029,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), 35) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
           "template-tags": {
             "semd_type": {
               "id": "fc000004-0004-4004-8004-000000000010",
@@ -1069,7 +1069,6 @@
       "display": "combo",
       "visualization_settings": {
         "graph.show_values": true,
-        "graph.x_axis.labels_enabled": false,
         "graph.max_categories": 20,
         "graph.metrics": [
           "Документов",
@@ -1118,11 +1117,13 @@
         "graph.x_axis.scale": "ordinal",
         "graph.dimensions": [
           "Клиника"
-        ]
+        ],
+        "graph.x_axis.axis_enabled": "rotate-45",
+        "graph.label_value_formatting": "compact"
       },
-      "sizeX": 24,
+      "sizeX": 15,
       "sizeY": 7,
-      "row": 35,
+      "row": 30,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1211,7 +1212,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 42,
+      "row": 37,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1231,12 +1232,12 @@
     },
     {
       "name": "Скорость регистрации в РЭМД",
-      "description": "Документы, по которым ответ уже получен: сколько из них уложилось в срок. Сроки ужесточаются слева направо, поэтому воронка сужается. Разрыв между базой и первой ступенью — регистрации дольше самой мягкой границы справочника. Ожидающие и «Ответ не получен» в набор документов не входят: срока регистрации у них нет.",
+      "description": "Как быстро ЕГИСЗ отвечает по документам, ответ на которые уже получен. Первый шаг — весь такой корпус за период, дальше — сколько документов уложилось в срок; сроки ужесточаются слева направо, поэтому воронка сужается. Срок считается от запроса файла до первого ответа ЕГИСЗ. Реквизиты: этап (срок), количество документов, доля от корпуса. Ожидающие и «Ответ не получен» не входят: срока регистрации у них ещё нет.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH sent AS ( SELECT dwh_id, delivery_seconds FROM public.rpt_documents WHERE first_sent_at IS NOT NULL AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'Получен ответ' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM sent UNION ALL SELECT -g.sort_order::int, regexp_replace(g.label, '^до ', '< '), COUNT(DISTINCT s.dwh_id) FILTER (WHERE s.delivery_seconds IS NOT NULL AND s.delivery_seconds <= g.max_age_minutes * 60)::bigint FROM public.dim_pending_segments g CROSS JOIN sent s WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
+          "query": "WITH sent AS ( SELECT dwh_id, EXTRACT(EPOCH FROM (first_callback_at - first_sent_at)) AS answer_seconds FROM public.rpt_documents WHERE first_sent_at IS NOT NULL AND first_callback_at IS NOT NULL AND first_callback_at >= first_sent_at [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'Получен ответ' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM sent UNION ALL SELECT -g.sort_order::int, regexp_replace(g.label, '^до ', '< '), COUNT(DISTINCT s.dwh_id) FILTER (WHERE s.answer_seconds <= g.max_age_minutes * 60)::bigint FROM public.dim_pending_segments g CROSS JOIN sent s WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1269,9 +1270,9 @@
         "funnel.dimension": "Этап",
         "funnel.metric": "Документов"
       },
-      "sizeX": 24,
+      "sizeX": 16,
       "sizeY": 6,
-      "row": 26,
+      "row": 3,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -1564,11 +1565,11 @@
     },
     {
       "name": "Контроль качества данных",
-      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; OID вне реестра медорганизаций (OID из обмена не найден ни в одной лицензии); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
+      "description": "Сводный контроль полноты и целостности по финализированным документам за период: без JID Клиники; OID вне реестра медорганизаций (считаются уникальные OID из обмена, не найденные ни в одной лицензии); без localUid СЭМД; без кода вида ЭМД; успешные ответы РЭМД без даты обработки. Ненулевые значения — сигнал для Data Ops. Детализация — карточка ниже. Фильтры — общий период **«Обработано IPS»**, **JID Клиники**, **Код СЭМД**.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Проверка\", \"Документов\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Документов\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
+          "query": "SELECT \"Проверка\", \"Количество\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Количество\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT NULLIF(BTRIM(clinic_oid::text), '')) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error', 'network_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1605,7 +1606,7 @@
               "#DC2626"
             ],
             "columns": [
-              "Документов"
+              "Количество"
             ],
             "max_type": "custom",
             "max_value": 100,
@@ -1621,11 +1622,12 @@
           },
           {
             "enabled": true,
-            "name": "Документов"
+            "name": "Количество"
           }
         ],
         "column_settings": {
-          "[\"name\",\"Документов\"]": {
+          "[\"name\",\"Количество\"]": {
+            "column_title": "Документов",
             "decimals": 0,
             "number_separators": ", "
           },
@@ -1911,7 +1913,7 @@
     },
     {
       "name": "Топ клиник по сбоям транспорта",
-      "description": "Топ-8 клиник по числу транспортных сбоев за период; хвост свёрнут в «Остальные».",
+      "description": "Топ-8 клиник по числу транспортных сбоев за период; остальные собраны в строку «Остальные».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -1985,7 +1987,7 @@
     },
     {
       "name": "Типы сетевых ошибок (за период)",
-      "description": "Топ-8 нормализованных типов транспортных ошибок за период; хвост свёрнут. Сырой текст — «Последние сбои транспорта».",
+      "description": "Топ-8 нормализованных типов транспортных ошибок за период; остальные собраны в одну строку. Исходный текст ошибки — в карточке «Последние сбои транспорта».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -2121,12 +2123,12 @@
     },
     {
       "name": "Документы в обработке",
-      "description": "Отправленные, по которым ответ ещё ожидается; самые давние сверху. Ступень обработки, число подач.",
+      "description": "Журнал документов, ожидающих ответа ЕГИСЗ; самые давние сверху, до 200 строк. Реквизиты строки: состояние отправки, срок ожидания, суток с отправки, число подач в ЕГИСЗ, дата отправки, клиника, код и наименование СЭМД, localUid.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2161,7 +2163,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -2180,7 +2182,7 @@
           },
           {
             "enabled": true,
-            "name": "Ступень обработки"
+            "name": "Срок ожидания"
           },
           {
             "enabled": true,
@@ -2236,7 +2238,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 32,
+      "row": 25,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2264,7 +2266,7 @@
     },
     {
       "name": "Ответ не получен (утилизирован)",
-      "description": "Отправленные, по которым ожидаемое время истекло: ответа не будет. Из остальных карточек такие документы исключены и подлежат очистке.",
+      "description": "Сколько отправленных документов перешагнуло 15 суток без ответа: ответа по ним уже не будет. Реквизиты: количество документов. Из карточек очереди такие документы исключены; список — в таблице ниже.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -2304,7 +2306,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -2324,7 +2326,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 42,
+      "row": 35,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2352,12 +2354,12 @@
     },
     {
       "name": "Документы: ответ не получен (утилизирован)",
-      "description": "Отправленные, по которым ожидаемое время истекло и ответа уже не будет; самые давние сверху.",
+      "description": "Журнал документов, по которым ответа уже не ждут (старше 15 суток); самые давние сверху, до 200 строк. Реквизиты строки те же, что и у журнала ожидающих: состояние отправки, срок ожидания, суток с отправки, число подач, дата отправки, клиника, код и наименование СЭМД, localUid.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Ступень обработки\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2392,7 +2394,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -2411,7 +2413,7 @@
           },
           {
             "enabled": true,
-            "name": "Ступень обработки"
+            "name": "Срок ожидания"
           },
           {
             "enabled": true,
@@ -2467,7 +2469,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 45,
+      "row": 38,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2548,7 +2550,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 55,
+      "row": 48,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2677,7 +2679,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 58,
+      "row": 51,
       "col": 0,
       "tab": "sent",
       "metabase-field-filters": {
@@ -2739,19 +2741,19 @@
         "table.cell_column": "Документов",
         "table.column_formatting": [
           {
-            "colors": [
-              "hsla(358, 71%, 62%, 1)",
-              "hsla(46, 81%,  52%, 1)",
-              "hsla(89, 48%, 40%, 1)"
-            ],
             "columns": [
               "%"
             ],
+            "type": "range",
+            "colors": [
+              "#84BB4C",
+              "#FBBF24",
+              "#DC2626"
+            ],
+            "min_type": "custom",
             "max_type": "custom",
-            "max_value": 50,
-            "min_type": null,
             "min_value": 0,
-            "type": "range"
+            "max_value": 50
           }
         ],
         "table.column_widths": [
@@ -5154,7 +5156,7 @@
       "name": "Документов в очереди (без фильтра периода)",
       "display": "smartscalar",
       "tab": "sent",
-      "description": "Строка — день; значение — сколько документов стояло в очереди на его конец, последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент. Сравнение — с предыдущим днём ряда.",
+      "description": "Сколько документов ждёт ответа прямо сейчас. Реквизиты: количество документов и сравнение с предыдущим днём. Ряд строится по дням за две недели, значение дня — очередь на его конец, последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5179,7 +5181,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5220,7 +5222,7 @@
       "name": "Ожидают > 24 часов (без фильтра периода)",
       "display": "smartscalar",
       "tab": "sent",
-      "description": "Строка — день; значение — часть очереди на его конец с возрастом больше границы ступени «до 24 часов» из справочника. Последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент. Штатный ответ РЭМД приходит за минуты-часы, поэтому рост ряда — аномалия, а не сезонность.",
+      "description": "Часть очереди, которая ждёт дольше 24 часов. Реквизиты: количество документов и сравнение с предыдущим днём. Штатный ответ ЕГИСЗ приходит за минуты-часы, поэтому рост ряда — аномалия, а не сезонность. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5245,7 +5247,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5283,10 +5285,10 @@
       "sizeY": 3
     },
     {
-      "name": "Ждут 7–15 суток (без фильтра периода)",
+      "name": "Ожидают 7–15 суток (без фильтра периода)",
       "display": "scalar",
       "tab": "sent",
-      "description": "Документы очереди на последней рабочей ступени справочника: после 15 суток ответ уже не придёт. Цель — ноль. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Документы, которые ждут ответа от 7 до 15 суток, — последний срок, когда ещё есть смысл разбираться: после 15 суток ответ не приходит. Реквизиты: количество документов. Целевое значение — ноль. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5311,7 +5313,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5348,10 +5350,10 @@
       "sizeY": 3
     },
     {
-      "name": "Максимальный возраст в очереди (без фильтра периода)",
+      "name": "Самый давний в очереди, суток (без фильтра периода)",
       "display": "scalar",
       "tab": "sent",
-      "description": "Возраст самого давнего документа очереди на текущий момент, в сутках. Возраст считается от первой отправки. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Сколько суток ждёт самый давний документ очереди. Возраст считается от запроса файла ЕГИСЗ. Реквизиты: срок ожидания в сутках. Значение упирается в 15 суток — дальше документ уходит в «Ответ не получен» и в очереди не числится, поэтому 15,0 означает «на верхнем сроке есть документы». Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5376,7 +5378,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5413,10 +5415,10 @@
       "sizeY": 3
     },
     {
-      "name": "Доля ожидающих дольше срока (без фильтра периода)",
+      "name": "Время ожидания ответа: сейчас и неделю назад (без фильтра периода)",
       "display": "line",
       "tab": "sent",
-      "description": "Строка — срок ожидания; значение — доля очереди, которая на текущий момент ждёт дольше этого срока. Ряд кумулятивный — в отличие от взаимоисключающих ступеней гистограммы «Текущая очередь по ступеням» на вкладке «Оперативный мониторинг». Второй ряд — та же кривая неделю назад: сравнивается форма ожидания, а не размер очереди. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Насколько затянулось ожидание: точка — доля очереди, которая ждёт дольше указанного срока. Реквизиты: срок ожидания, срез (сейчас / неделю назад), доля очереди в процентах. Ряд накопительный — в отличие от взаимоисключающих сроков карточки «Документы в обработке» на вкладке «Оперативный мониторинг». Второй ряд показывает ту же картину неделю назад: сравнивается форма ожидания, а не размер очереди. Крайняя правая точка всегда нулевая: документ старше 15 суток из очереди уже вышел. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5479,16 +5481,16 @@
           }
         }
       },
-      "row": 3,
+      "row": 9,
       "col": 0,
-      "sizeX": 24,
+      "sizeX": 12,
       "sizeY": 7
     },
     {
-      "name": "Клиника × ступень (без фильтра периода)",
+      "name": "Клиника × срок ожидания (без фильтра периода)",
       "display": "table",
       "tab": "sent",
-      "description": "Строка — клиника, колонка — ступень возраста, значение — документы очереди на текущий момент; ступени взаимоисключающие. Концентрация хвоста в одной клинике указывает на транспорт на её стороне; ровный хвост по многим клиникам разбирается на соседней сводной по типам СЭМД. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Где стоит очередь: строка — клиника, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: клиника, сроки ожидания, итог по строке. Заливка ячейки показывает величину, а не оценку. Скопление на дальних сроках у одной клиники указывает на транспорт с её стороны; ровное распределение по многим клиникам разбирается соседней таблицей по типам СЭМД. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5513,7 +5515,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5552,7 +5554,7 @@
             ],
             "colors": [
               "#FFFFFF",
-              "#E15759"
+              "#2D7DD2"
             ],
             "min_type": "all",
             "max_type": "all"
@@ -5661,16 +5663,16 @@
       "metabase-model-drill-params": {
         "semd_type": "semd_label"
       },
-      "row": 10,
+      "row": 16,
       "col": 0,
       "sizeX": 12,
       "sizeY": 9
     },
     {
-      "name": "Тип СЭМД × ступень (без фильтра периода)",
+      "name": "Тип СЭМД × срок ожидания (без фильтра периода)",
       "display": "table",
       "tab": "sent",
-      "description": "Строка — код СЭМД, колонка — ступень возраста, значение — документы очереди на текущий момент; ступени взаимоисключающие. Хвост, размазанный по клиникам, но собранный в одном коде СЭМД, указывает на обработку этого типа документа на стороне РЭМД. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Что стоит в очереди: строка — код СЭМД, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: код СЭМД, сроки ожидания, итог по строке. Скопление по одному коду при ровном распределении по клиникам указывает на обработку этого типа документа на стороне ЕГИСЗ. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5695,7 +5697,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -5734,7 +5736,7 @@
             ],
             "colors": [
               "#FFFFFF",
-              "#E15759"
+              "#2D7DD2"
             ],
             "min_type": "all",
             "max_type": "all"
@@ -5843,7 +5845,7 @@
       "metabase-model-drill-params": {
         "jid": "clinic_label"
       },
-      "row": 10,
+      "row": 16,
       "col": 12,
       "sizeX": 12,
       "sizeY": 9
@@ -5852,7 +5854,7 @@
       "name": "Движение очереди за 7 суток (без фильтра периода)",
       "display": "waterfall",
       "tab": "sent",
-      "description": "Окно — 7 суток до текущего момента. Строка — событие очереди: что стояло на начало окна, что отправлено внутри него, что ушло полученным ответом и что ушло по возрасту. Сумма шагов — очередь на конец окна. Оба оттока окрашены одинаково: у водопада один цвет убыли, шаги различаются подписью. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Баланс очереди за 7 суток: что стояло на начало окна, что отправлено внутри него, что ушло полученным ответом и что списано по сроку. Реквизиты: этап, количество документов, итог. Сумма шагов равна очереди на конец окна. Оба оттока окрашены одинаково: у водопада один цвет убыли, шаги различаются подписью. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5908,21 +5910,21 @@
         "waterfall.decrease_color": "#C8CDD5",
         "waterfall.total_color": "#7FB0DF"
       },
-      "row": 19,
-      "col": 0,
-      "sizeX": 12,
-      "sizeY": 7
+      "row": 3,
+      "col": 16,
+      "sizeX": 8,
+      "sizeY": 6
     },
     {
-      "name": "Доля хвоста по неделям (без фильтра периода)",
+      "name": "Доля долгого ожидания по неделям (без фильтра периода)",
       "display": "line",
       "tab": "sent",
-      "description": "Строка — неделя (МСК); значения — доли очереди на конец недели, которые ждали дольше 24 часов, 3 и 7 суток. Границы берутся из справочника ступеней. Последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Тянется ли ожидание из недели в неделю: точка — доля очереди на конец недели, которая ждала дольше 24 часов, 3 и 7 суток. Реквизиты: неделя (МСК), три доли в процентах. Последняя точка — на текущий момент. Недели левее начала накопления истории пустые: журнал обмена выгружается на ограниченную глубину, и очередь на более ранний момент восстанавливать не из чего. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') - INTERVAL '11 weeks' AS start_wall, date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') AS last_wall, now() AS end_ts ), points AS ( SELECT gs::date AS week_start, LEAST((gs + INTERVAL '7 days') AT TIME ZONE 'Europe/Moscow', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_wall AT TIME ZONE 'Europe/Moscow' OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_wall AT TIME ZONE 'Europe/Moscow')) [[AND {{semd_type}}]] [[AND {{jid}}]] ), thresholds AS ( SELECT MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d FROM public.dim_pending_segments ), per_point AS ( SELECT p.week_start, c.dwh_id, public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT seg.is_no_response AS pending, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM points p LEFT JOIN candidates c ON TRUE LEFT JOIN public.dim_pending_segments seg ON seg.code = public.pending_segment_code_at(c.first_sent_at, p.ts) ) SELECT week_start AS \"Неделя\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_24h) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS \"> 24 часов, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_72h) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS \"> 3 суток, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE pending AND age_minutes > t.m_7d) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE pending), 0), 1) AS \"> 7 суток, %\" FROM per_point CROSS JOIN thresholds t GROUP BY week_start ORDER BY week_start",
+          "query": "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') - INTERVAL '11 weeks' AS start_wall, date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') AS last_wall, now() AS end_ts ), points AS ( SELECT gs::date AS week_start, LEAST((gs + INTERVAL '7 days') AT TIME ZONE 'Europe/Moscow', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), thresholds AS ( SELECT MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d, MAX(max_age_minutes) FILTER (WHERE NOT is_no_response) AS m_open FROM public.dim_pending_segments ) SELECT p.week_start AS \"Неделя\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_24h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 24 часов, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_72h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 3 суток, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_7d) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 7 суток, %\" FROM points p CROSS JOIN thresholds t LEFT JOIN LATERAL ( SELECT public.rpt_documents.dwh_id, EXTRACT(EPOCH FROM (p.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents WHERE public.rpt_documents.first_sent_at <= p.ts AND public.rpt_documents.first_sent_at >= p.ts - (t.m_open * INTERVAL '1 minute') AND (public.rpt_documents.first_callback_at IS NULL OR public.rpt_documents.first_callback_at > p.ts) [[AND {{semd_type}}]] [[AND {{jid}}]] ) q ON TRUE GROUP BY p.week_start ORDER BY p.week_start",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5993,21 +5995,21 @@
           }
         }
       },
-      "row": 19,
+      "row": 9,
       "col": 12,
       "sizeX": 12,
       "sizeY": 7
     },
     {
-      "name": "Текущая очередь по ступеням (без фильтра периода)",
-      "display": "bar",
+      "name": "Документы в обработке (без фильтра периода)",
+      "display": "row",
       "tab": "operational",
-      "description": "Строка — ступень возраста; значение — сколько документов очереди попало ровно в неё на текущий момент. Ступени взаимоисключающие, сумма столбцов равна размеру очереди. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ, и возраст которых не вышел за последнюю ступень справочника; документы последней ступени разбираются отдельной парой карточек внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Из чего складывается очередь прямо сейчас: строка — срок ожидания, длина полосы — сколько документов ждёт ровно столько. Реквизиты: срок ожидания, количество документов. Сроки взаимоисключающие, сумма полос равна размеру очереди. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT segment_label AS \"Ступень обработки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue GROUP BY segment_label, segment_sort ORDER BY segment_sort",
+          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT segment_label AS \"Срок ожидания\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue GROUP BY segment_label, segment_sort ORDER BY segment_sort",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6027,7 +6029,7 @@
             },
             "pending_segment": {
               "widget-type": "string/=",
-              "display-name": "Ступень обработки",
+              "display-name": "Срок ожидания",
               "id": "f2000099-0099-4099-8099-000000000014",
               "name": "pending_segment",
               "required": false,
@@ -6058,46 +6060,26 @@
           }
         },
         "graph.dimensions": [
-          "Ступень обработки"
+          "Срок ожидания"
         ],
         "graph.metrics": [
           "Документов"
         ],
         "graph.x_axis.scale": "ordinal",
-        "graph.x_axis.title_text": "Ступень обработки",
+        "graph.x_axis.title_text": "",
+        "graph.x_axis.labels_enabled": false,
         "graph.y_axis.title_text": "Документов",
         "graph.show_values": true,
         "series_settings": {
-          "до 5 минут": {
+          "Документов": {
             "color": "#A6C8E8"
-          },
-          "до 1 часа": {
-            "color": "#7FB0DF"
-          },
-          "до 6 часов": {
-            "color": "#B79AD3"
-          },
-          "до 12 часов": {
-            "color": "#A989C5"
-          },
-          "до 24 часов": {
-            "color": "#EDC948"
-          },
-          "до 3 суток": {
-            "color": "#F2B056"
-          },
-          "до 7 суток": {
-            "color": "#F28E2B"
-          },
-          "до 15 суток": {
-            "color": "#E15759"
           }
         }
       },
-      "row": 14,
-      "col": 0,
-      "sizeX": 16,
-      "sizeY": 5
+      "row": 30,
+      "col": 15,
+      "sizeX": 9,
+      "sizeY": 7
     }
   ],
   "tabs": [

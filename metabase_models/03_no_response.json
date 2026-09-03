@@ -12,7 +12,7 @@
     "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
     "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
     "sent_state_label": { "semantic_type": "type/Category", "display_name": "Состояние отправки" },
-    "pending_segment_label": { "semantic_type": "type/Category", "display_name": "Ступень обработки" },
+    "pending_segment_label": { "semantic_type": "type/Category", "display_name": "Срок ожидания" },
     "pending_days": { "semantic_type": "type/Quantity", "display_name": "Суток с отправки" }
   },
   "hidden_fields": ["clinic_name"],

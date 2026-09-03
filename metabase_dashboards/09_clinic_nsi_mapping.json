@@ -1,8 +1,44 @@
 {
-  "name": "Сопоставление клиник с НСИ",
+  "name": "Список клиник",
   "width": "full",
   "description": "Аудит сопоставления клиник из CASH/JPERSONS со справочником НСИ организаций. Источник — `rpt_clinic_nsi_mapping`.",
-  "parameters": [],
+  "parameters": [
+    {
+      "id": "09c00000-0000-4000-8000-000000000001",
+      "name": "JID",
+      "slug": "clinic_jid_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "09c00000-0000-4000-8000-000000000002",
+      "name": "Наименование CASH",
+      "slug": "cash_name_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "09c00000-0000-4000-8000-000000000003",
+      "name": "Наименование НСИ",
+      "slug": "nsi_name_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "09c00000-0000-4000-8000-000000000004",
+      "name": "ИНН",
+      "slug": "inn_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    },
+    {
+      "id": "09c00000-0000-4000-8000-000000000005",
+      "name": "OID",
+      "slug": "oid_filter",
+      "type": "string/=",
+      "sectionId": "string"
+    }
+  ],
   "cards": [
     {
       "name": "Клиники с сопоставлением НСИ",
@@ -10,10 +46,68 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped ORDER BY jid",
-          "template-tags": {}
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "template-tags": {
+            "clinic_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID",
+              "id": "09c10000-0000-4000-8000-000000000001",
+              "name": "clinic_jid",
+              "type": "dimension"
+            },
+            "cash_name": {
+              "widget-type": "string/=",
+              "display-name": "Наименование CASH",
+              "id": "09c10000-0000-4000-8000-000000000002",
+              "name": "cash_name",
+              "type": "dimension"
+            },
+            "nsi_name": {
+              "widget-type": "string/=",
+              "display-name": "Наименование НСИ",
+              "id": "09c10000-0000-4000-8000-000000000003",
+              "name": "nsi_name",
+              "type": "dimension"
+            },
+            "inn": {
+              "widget-type": "string/=",
+              "display-name": "ИНН",
+              "id": "09c10000-0000-4000-8000-000000000004",
+              "name": "inn",
+              "type": "dimension"
+            },
+            "oid": {
+              "widget-type": "string/=",
+              "display-name": "OID",
+              "id": "09c10000-0000-4000-8000-000000000005",
+              "name": "oid",
+              "type": "dimension"
+            }
+          }
         },
         "database": 1
+      },
+      "metabase-field-filters": {
+        "clinic_jid": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "jid"
+        },
+        "cash_name": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "cash_name"
+        },
+        "nsi_name": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "nsi_name"
+        },
+        "inn": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "inn"
+        },
+        "oid": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "oid"
+        }
       },
       "display": "table",
       "visualization_settings": {
@@ -68,10 +162,68 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped ORDER BY jid",
-          "template-tags": {}
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "template-tags": {
+            "clinic_jid": {
+              "widget-type": "string/=",
+              "display-name": "JID",
+              "id": "09c10000-0000-4000-8000-000000000006",
+              "name": "clinic_jid",
+              "type": "dimension"
+            },
+            "cash_name": {
+              "widget-type": "string/=",
+              "display-name": "Наименование CASH",
+              "id": "09c10000-0000-4000-8000-000000000007",
+              "name": "cash_name",
+              "type": "dimension"
+            },
+            "nsi_name": {
+              "widget-type": "string/=",
+              "display-name": "Наименование НСИ",
+              "id": "09c10000-0000-4000-8000-000000000008",
+              "name": "nsi_name",
+              "type": "dimension"
+            },
+            "inn": {
+              "widget-type": "string/=",
+              "display-name": "ИНН",
+              "id": "09c10000-0000-4000-8000-000000000009",
+              "name": "inn",
+              "type": "dimension"
+            },
+            "oid": {
+              "widget-type": "string/=",
+              "display-name": "OID",
+              "id": "09c10000-0000-4000-8000-000000000010",
+              "name": "oid",
+              "type": "dimension"
+            }
+          }
         },
         "database": 1
+      },
+      "metabase-field-filters": {
+        "clinic_jid": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "jid"
+        },
+        "cash_name": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "cash_name"
+        },
+        "nsi_name": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "nsi_name"
+        },
+        "inn": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "inn"
+        },
+        "oid": {
+          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "field_name": "oid"
+        }
       },
       "display": "table",
       "visualization_settings": {
