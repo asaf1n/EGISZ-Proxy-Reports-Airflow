@@ -46,7 +46,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
           "template-tags": {
             "clinic_jid": {
               "widget-type": "string/=",
@@ -131,6 +131,10 @@
           {
             "enabled": true,
             "name": "OID"
+          },
+          {
+            "enabled": true,
+            "name": "Дата последней успешной регистрации ЭМД"
           }
         ],
         "column_settings": {
@@ -148,6 +152,9 @@
           },
           "[\"name\",\"OID\"]": {
             "column_title": "OID"
+          },
+          "[\"name\",\"Дата последней успешной регистрации ЭМД\"]": {
+            "column_title": "Дата последней успешной регистрации ЭМД"
           }
         }
       },
@@ -162,7 +169,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
           "template-tags": {
             "clinic_jid": {
               "widget-type": "string/=",
@@ -247,6 +254,10 @@
           {
             "enabled": true,
             "name": "OID"
+          },
+          {
+            "enabled": true,
+            "name": "Дата последней успешной регистрации ЭМД"
           }
         ],
         "column_settings": {
@@ -264,6 +275,9 @@
           },
           "[\"name\",\"OID\"]": {
             "column_title": "OID"
+          },
+          "[\"name\",\"Дата последней успешной регистрации ЭМД\"]": {
+            "column_title": "Дата последней успешной регистрации ЭМД"
           }
         }
       },

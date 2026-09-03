@@ -8,7 +8,14 @@ from conftest import load_script_module
 
 
 DASHBOARD = Path("metabase_dashboards/09_clinic_nsi_mapping.json")
-EXPECTED_COLUMNS = ["JID", "Наименование CASH", "Наименование НСИ", "ИНН", "OID"]
+EXPECTED_COLUMNS = [
+    "JID",
+    "Наименование CASH",
+    "Наименование НСИ",
+    "ИНН",
+    "OID",
+    "Дата последней успешной регистрации ЭМД",
+]
 EXPECTED_FILTER_TAGS = {
     "clinic_jid": "jid",
     "cash_name": "cash_name",
@@ -35,6 +42,8 @@ def test_clinic_nsi_mapping_view_contract() -> None:
     assert "NULLIF(btrim(n.name_short), '')" in views_sql
     assert "public.clean_text_value(o.fir_oid) AS oid" in views_sql
     assert "AS is_mapped" in views_sql
+    assert "doc.last_success_registered_at" in views_sql
+    assert "WHERE r.clinic_jid = o.jid AND r.status = 'success'" in views_sql
 
 
 def test_load_nsi_organization_1461_maps_source_fields() -> None:

@@ -664,13 +664,19 @@ SELECT
     COALESCE(NULLIF(btrim(o.nsi_name), ''), NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), '')) AS nsi_name,
     o.inn,
     public.clean_text_value(o.fir_oid) AS oid,
-    (NULLIF(btrim(o.fir_oid), '') IS NOT NULL) AS is_mapped
+    (NULLIF(btrim(o.fir_oid), '') IS NOT NULL) AS is_mapped,
+    doc.last_success_registered_at
 FROM public.dim_organizations o
 LEFT JOIN public.dim_nsi_organization n ON n.oid = public.clean_text_value(o.fir_oid)
+LEFT JOIN LATERAL (
+    SELECT MAX(r.registered_at) AS last_success_registered_at
+    FROM public.rpt_documents r
+    WHERE r.clinic_jid = o.jid AND r.status = 'success'
+) doc ON true
 WHERE o.jid IS NOT NULL;
 
 COMMENT ON VIEW public.rpt_clinic_nsi_mapping IS
-'Аудит сопоставления клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID и признак сопоставления.';
+'Аудит сопоставления клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID, признак сопоставления и дата последней успешной регистрации ЭМД.';
 
 -- Типы СЭМД, которые клиника фактически отправляет: грейн (clinic_jid, semd_code)
 -- по документам.
