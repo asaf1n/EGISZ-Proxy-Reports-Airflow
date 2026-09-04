@@ -1287,7 +1287,10 @@ def test_operational_error_period_card_uses_atomic_error_types() -> None:
     cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
     assert "Сводка ошибки" not in cols
     assert "Код отказа" in cols
-    assert "Справочник" in cols
+    # Классификатор кода (code_namespace) с карточки снят: в 99 % строк он показывал
+    # «НСИ 305», а рядом с подписью типа слово «справочник» означало бы уже справочник
+    # данных — МКБ-10 или номенклатуру услуг.
+    assert "Справочник" not in cols
     assert "% ошибок" in cols
 
 
@@ -1303,13 +1306,11 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
     assert 'AS "Клиника"' in query
     assert 'AS "JID Клиники"' in query
     assert 'AS "Код отказа"' in query
-    assert 'AS "Справочник"' in query
     assert 'AS "% ошибок"' in query
     # Код отказа берётся из витрины: словарь правил в клиентском дриле не нужен, а сырой
-    # regex правила в таблице для клиники был нечитаем. Мнемоника ФНСИ 305 приоритетнее
-    # кода контура — у регистрационного пути это одно и то же значение.
+    # regex правила в таблице для клиники был нечитаем.
     assert "nsi_error_code" in query
-    assert "code_namespace" in query
+    assert "code_namespace" not in query
     assert "dim_error_rules" not in query
     assert "match_pattern" not in query
 
@@ -2550,3 +2551,29 @@ def test_periodic_sli_is_ratio_of_sums() -> None:
         summary_name = "Сводка по неделям" if suffix == "неделям" else "Сводка по месяцам"
         summary_query = by_name[summary_name]["dataset_query"]["native"]["query"]
         assert f"LAG(sli_pct) OVER (ORDER BY {period_field})" in summary_query
+
+
+def test_error_type_drill_uses_canonical_type() -> None:
+    """Подпись типа несёт справочник, а documents.error_types хранит канонический тип.
+    Проваливание обязано отбирать по каноническому: подпись со справочником даёт
+    пустой результат, и это молчаливая потеря, а не ошибка."""
+    card = next(c for c in _tab_cards("errors") if c["name"] == "Ошибки: тип × клиника")
+    query = card["dataset_query"]["native"]["query"]
+    assert "base_error_type" in query
+
+    mapping = (card.get("click_behavior") or {}).get("parameterMapping") or {}
+    spec = next(v for v in mapping.values()
+                if (v.get("target") or {}).get("field_name") == "error_types")
+    assert spec["source"]["name"] == "Тип ошибки (канонический)"
+
+    # Справочник уточняет отбор: он не хранится в error_types, и без второго условия
+    # клик по строке со справочником вернул бы документы по всем справочникам типа.
+    refine = next(v for v in mapping.values()
+                  if (v.get("target") or {}).get("field_name") == "error_text")
+    assert refine["source"]["name"] == "OID справочника"
+    assert refine["target"]["operator"] == "contains"
+
+    # Служебные столбцы в таблицу не выводятся.
+    cols = {c["name"]: c for c in card["visualization_settings"]["table.columns"]}
+    assert cols["Тип ошибки (канонический)"]["enabled"] is False
+    assert cols["OID справочника"]["enabled"] is False

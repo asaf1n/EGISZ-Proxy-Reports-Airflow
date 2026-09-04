@@ -551,3 +551,78 @@ def test_no_nested_patterns_within_tier(con):
             AND (position(a.match_pattern IN b.match_pattern) > 0
                  OR position(b.match_pattern IN a.match_pattern) > 0)
     """) == 0
+
+
+# --- Справочник НСИ как признак разбивки ----------------------------------------------
+# Тип ошибки очищен от значений в скобках, поэтому отказы по разным справочникам
+# в нём неразличимы. Справочник извлекается из формулировки шаблоном
+# dim_error_rules.nsi_dictionary_pattern и становится признаком rpt_error_breakdown.
+
+DICTIONARY_MESSAGES = [
+    ("Справочник OID [1.2.643.5.1.13.13.99.2.197]. Версия [4.45] недопустима для документа"
+     " вида [227]. Требуется использовать версии: [4.46]", "1.2.643.5.1.13.13.99.2.197"),
+    # Другой случай того же справочника — значение обязано совпасть: это признак класса.
+    ("Справочник OID [1.2.643.5.1.13.13.99.2.197]. Версия [4.38] недопустима для документа"
+     " вида [227]. Требуется использовать версии: [4.45]", "1.2.643.5.1.13.13.99.2.197"),
+    # Захватывается справочник, а НЕ код элемента: код принадлежит отдельному документу.
+    ("Справочник OID [1.2.643.5.1.13.13.11.1005], версия [2.27]. Элемент с кодом [M51.1+] отсутствует.",
+     "1.2.643.5.1.13.13.11.1005"),
+    ("Справочник OID [1.2.643.5.1.13.13.11.1070]. Элемент с кодом [A04.20.001.001] отсутствует.",
+     "1.2.643.5.1.13.13.11.1070"),
+    # Вторая формулировка того же класса.
+    ("Запись справочника [1.2.643.5.1.13.13.11.1066] с идентификатором [114] не найдена",
+     "1.2.643.5.1.13.13.11.1066"),
+    # Отказы вне класса: шаблон обязан молчать, иначе признак поехал бы на чужие типы.
+    ("Подписант из сертификата не найден в ФРМР", None),
+    ("Подразделение с идентификатором [1.2.643.5.1.13.13.12.2.36.20192.0.704432]"
+     " не существовало на дату создания документа", None),
+    ("Ошибка валидации Schematron: У1-21.1.5: Элемент medService:serviceCond", None),
+]
+
+
+@pytest.mark.parametrize("message,expected", DICTIONARY_MESSAGES)
+def test_dictionary_pattern_extracts_dictionary_oid(con, message, expected):
+    """Из формулировки берётся справочник, а не значение конкретного документа."""
+    # Скалярный подзапрос: у чужой формулировки совпадения нет и признак пуст — так же,
+    # как LEFT JOIN в rpt_error_breakdown.
+    assert one(con, """
+        SELECT (
+            SELECT (regexp_match(%s, p.nsi_dictionary_pattern))[1]
+            FROM (SELECT DISTINCT nsi_dictionary_pattern FROM dim_error_rules
+                  WHERE is_active AND nsi_dictionary_pattern IS NOT NULL) p
+            WHERE %s ~ p.nsi_dictionary_pattern
+            LIMIT 1
+        )
+    """, message, message) == expected
+
+
+def test_dictionary_pattern_consistent_within_type(con):
+    """Шаблон — свойство класса, а не отдельного правила: правила одной формулировки
+    обязаны объявлять один шаблон, иначе признак зависел бы от того, чьё правило сработало."""
+    assert one(con, """
+        SELECT count(*) FROM (
+            SELECT interpretation FROM dim_error_rules WHERE is_active
+            GROUP BY interpretation
+            HAVING count(DISTINCT COALESCE(nsi_dictionary_pattern, '')) > 1
+        ) x
+    """) == 0
+
+
+def test_dictionary_pattern_has_single_capture_group(con):
+    """Справочник читается первой группой захвата: лишние группы сдвинули бы значение,
+    а отсутствие группы молча дало бы NULL."""
+    assert one(con, """
+        SELECT count(*) FROM dim_error_rules
+        WHERE is_active AND nsi_dictionary_pattern IS NOT NULL
+          AND length(nsi_dictionary_pattern) - length(replace(nsi_dictionary_pattern, '([', '')) <> 2
+    """) == 0
+
+
+def test_dictionary_pattern_declared_for_dictionary_class(con):
+    """Класс отказов справочника НСИ обязан объявлять шаблон: без него разбивка снова
+    схлопывается в «какой-то справочник»."""
+    assert one(con, """
+        SELECT count(*) FROM dim_error_rules
+        WHERE is_active AND error_category = 'Ошибки справочника НСИ'
+          AND nsi_dictionary_pattern IS NULL
+    """) == 0

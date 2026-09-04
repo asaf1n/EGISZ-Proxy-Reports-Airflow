@@ -121,6 +121,37 @@ apply_field_metadata() {
   fail "field not found for model metadata: ${table_ref}.${field_name} (run db/dwh_init.sql and retry)"
 }
 
+# Наименования полей модели. apply_field_metadata правит поля ТАБЛИЦЫ, но модель держит
+# собственный снимок result_metadata, снятый при её создании: без обновления снимка
+# интерфейс продолжает показывать служебные имена столбцов («Error Text» вместо
+# «Исходный текст ошибки»), а по ним оператор и ищет.
+sync_model_result_metadata() {
+  local model_id="$1" table_ref="$2"
+  local table_name="${table_ref#public.}"
+  local current updated
+
+  current="$(api_request GET "/api/card/${model_id}" | jq -c '.result_metadata // []')"
+  [ "${current}" = "[]" ] && return 0
+
+  updated="$(jq -nc \
+    --argjson meta "${current}" \
+    --arg table "${table_name}" \
+    --slurpfile db "${DB_METADATA_FILE}" \
+    '
+    ($db[0].tables[]? | select((.schema // "public") == "public" and .name == $table) | .fields) as $fields
+    | [ $meta[]
+        | . as $f
+        | ([$fields[]? | select(.name == $f.name) | .display_name]
+           | map(select(. != null and . != "")) | first) as $dn
+        | if $dn then .display_name = $dn else . end
+      ]
+    ')"
+
+  if [ "${updated}" != "${current}" ]; then
+    api_request PUT "/api/card/${model_id}" "$(jq -nc --argjson m "${updated}" '{result_metadata: $m}')" >/dev/null
+  fi
+}
+
 create_or_update_model() {
   local model_file="$1"
   local model_name table_ref description table_id model_id payload
@@ -180,6 +211,10 @@ create_or_update_model() {
     [ -n "${field_name}" ] || continue
     apply_field_metadata "${table_ref}" "${field_name}" "type/Category" "details-only"
   done < <(jq -r '.hidden_fields[]? // empty' "${model_file}")
+
+  # Снимок метаданных модели обновляется ПОСЛЕ полей таблицы: он с них и считывается.
+  refresh_db_metadata
+  sync_model_result_metadata "${model_id}" "${table_ref}"
 
   printf '%s\n' "${model_id}"
 }

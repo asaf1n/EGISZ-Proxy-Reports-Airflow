@@ -933,6 +933,32 @@ ON CONFLICT (alias) DO UPDATE SET
     nsi_error_code = EXCLUDED.nsi_error_code,
     updated_at = now();
 
+-- Наименования справочников ФНСИ по OID. Нужен только для подписи предмета отказа:
+-- РЭМД называет справочник одним OID, и без расшифровки разбивка нечитаема. Реестр
+-- заведомо неполон и присоединяется внешним соединением — OID без наименования
+-- показывается как есть, а не прячется из разбивки.
+--
+-- Заводить наименование можно, только когда принадлежность справочника подтверждена
+-- содержанием отказов (коды элементов в сообщениях), а не догадкой по номеру ветви.
+CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
+    oid text PRIMARY KEY,
+    name text NOT NULL,
+    updated_at timestamptz DEFAULT now()
+);
+
+COMMENT ON TABLE dim_nsi_dictionary IS
+    'Наименования справочников ФНСИ по OID для подписи предмета отказа (rpt_error_messages.subject_label). Реестр неполон по построению: недостающий OID показывается без расшифровки.';
+
+INSERT INTO dim_nsi_dictionary (oid, name)
+VALUES
+    -- Отказы несут коды вида M51.1+, K07.20, I10, J00 — это МКБ-10.
+    ('1.2.643.5.1.13.13.11.1005', 'МКБ-10'),
+    -- Отказы несут коды вида A04.20.001.001, A05.10.006 — номенклатура медицинских услуг.
+    ('1.2.643.5.1.13.13.11.1070', 'Номенклатура медицинских услуг')
+ON CONFLICT (oid) DO UPDATE SET
+    name = EXCLUDED.name,
+    updated_at = now();
+
 CREATE TABLE IF NOT EXISTS transactions (
     logid bigint PRIMARY KEY,
     dwh_id text,

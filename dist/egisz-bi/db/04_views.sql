@@ -340,7 +340,11 @@ SELECT
         WHEN ds.is_final THEN ds.sort_order
         ELSE ds.sort_order + ss.sort_order - 1
     END AS status_detail_sort,
-    d.error_text,
+    -- Коллация задана явно: база развёрнута с lc_ctype = C, где ILIKE складывает регистр
+    -- только для латиницы, и отбор «содержит» по кириллице молча терял строки
+    -- («справочник» находил 364 документа вместо 10 325). Корневая коллация выбрана
+    -- вместо русской: текст отказа смешанный — кириллица, латиница, пути XPath.
+    d.error_text COLLATE "und-x-icu" AS error_text,
     public.normalize_semd_code(d.semd_code) AS semd_code,
     st.name AS semd_name,
     CASE
@@ -393,7 +397,7 @@ SELECT
     d.registered_at,
     d.first_sent_at,
     d.first_callback_at,
-    d.error_types,
+    d.error_types COLLATE "und-x-icu" AS error_types,
     -- Число подач документа в ЕГИСЗ по реестру шлюза: повторная подача не меняет localUid,
     -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
     COALESCE(d.attempt_count, 1) AS attempt_count,
@@ -572,10 +576,42 @@ COMMENT ON VIEW public.rpt_network_errors IS
 -- Атом вне словаря — это формулировка отказа, не покрытая правилом: пропускаем её
 -- как есть в категорию «Прочие».
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
-WITH atom_types AS (
+-- Детализация типа справочником НСИ. Тип очищен от значений в скобках, поэтому отказы
+-- по разным справочникам сливаются в одну строку: «Значение с указанным кодом
+-- отсутствует в справочнике» одинаково закрывает и МКБ-10, и номенклатуру услуг.
+-- Подпись типа дополняется справочником там, где класс объявил шаблон
+-- (dim_error_rules.nsi_dictionary_pattern).
+--
+-- Справочник ищется шаблоном СВОЕГО класса: у отказа по справочнику и у отказа
+-- Schematron разные написания, общий шаблон смешал бы их признаки.
+--
+-- Грейн остаётся уникальным: документ с двумя справочниками одного типа даёт две строки
+-- с разными подписями, и это разные отказы. При нескольких справочниках в одном типе
+-- подпись говорит об этом прямо.
+WITH type_pattern AS (
+    SELECT DISTINCT r.interpretation, r.nsi_dictionary_pattern AS pattern
+    FROM public.dim_error_rules r
+    WHERE r.is_active AND r.nsi_dictionary_pattern IS NOT NULL
+),
+doc_dictionary AS (
+    SELECT
+        doc.dwh_id,
+        p.pattern,
+        CASE WHEN count(DISTINCT d.oid) = 1 THEN min(d.oid) END AS nsi_dictionary_oid,
+        count(DISTINCT d.oid) AS oid_count
+    FROM public.documents doc
+    CROSS JOIN (SELECT DISTINCT pattern FROM type_pattern) p
+    CROSS JOIN LATERAL unnest(string_to_array(doc.error_text, ' · ')) AS a(message)
+    CROSS JOIN LATERAL (SELECT (regexp_match(a.message, p.pattern))[1] AS oid) d
+    WHERE doc.status IN ('async_error', 'network_error')
+      AND doc.error_text IS NOT NULL
+      AND d.oid IS NOT NULL
+    GROUP BY doc.dwh_id, p.pattern
+),
+atom_types AS (
     SELECT DISTINCT
         doc.dwh_id,
-        n.norm AS error_type,
+        n.norm COLLATE "und-x-icu" AS base_error_type,
         COALESCE(g.error_category, 'Прочие') AS error_category,
         -- Для непокрытых формулировок зона ответственности и повторяемость неизвестны.
         COALESCE(g.responsibility, 'смешанная') AS responsibility,
@@ -610,16 +646,30 @@ SELECT
     r.clinic_label,
     r.semd_code,
     r.semd_label,
-    a.error_type,
+    -- Подпись типа: класс плюс справочник, если класс его объявил.
+    (a.base_error_type || CASE
+        WHEN dd.oid_count > 1 THEN ' · несколько справочников'
+        WHEN dd.nsi_dictionary_oid IS NOT NULL
+            THEN ' · ' || COALESCE(nd.name, 'OID ' || dd.nsi_dictionary_oid)
+        ELSE ''
+    END) COLLATE "und-x-icu" AS error_type,
+    a.base_error_type,
     a.error_category,
     a.responsibility,
     a.is_retryable,
     a.nsi_error_code,
     a.nsi_error_description,
     a.error_code,
-    a.code_namespace
+    a.code_namespace,
+    dd.nsi_dictionary_oid,
+    nd.name AS nsi_dictionary_name
 FROM atom_types a
 INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
+LEFT JOIN type_pattern tp ON tp.interpretation = a.base_error_type
+LEFT JOIN doc_dictionary dd
+       ON dd.dwh_id = a.dwh_id AND dd.pattern = tp.pattern
+-- Реестр наименований неполон по построению: OID без расшифровки идёт в подпись как есть.
+LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = dd.nsi_dictionary_oid
 WITH DATA;
 
 -- UNIQUE индекс нужен для REFRESH ... CONCURRENTLY; грейн = (dwh_id, error_type).
@@ -633,9 +683,11 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_semd_code ON public.rpt_error_breakdown (s
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_responsibility ON public.rpt_error_breakdown (responsibility);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_nsi_error_code ON public.rpt_error_breakdown (nsi_error_code);
 CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_code ON public.rpt_error_breakdown (error_code);
+CREATE INDEX IF NOT EXISTS idx_rpt_eb_base_error_type
+    ON public.rpt_error_breakdown (base_error_type);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
-'Разбивка ошибок (matview): один ряд = один канонический тип на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform.';
+'Разбивка ошибок (matview): один ряд = один канонический тип на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform. error_type — подпись типа со справочником НСИ там, где класс объявил шаблон (dim_error_rules.nsi_dictionary_pattern): без справочника отказы по разным справочникам неразличимы. base_error_type — канонический тип для связей со словарями.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT
@@ -1328,7 +1380,7 @@ BEGIN
         -- атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
         -- Порядок обязателен: разбивка ошибок перед периодическими витринами.
         REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
-        REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
+            REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
         REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
         REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
         REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;

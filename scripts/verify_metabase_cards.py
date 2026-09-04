@@ -32,7 +32,7 @@ SAMPLE_CLIENT_JID_SQL = (
 DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 ERROR_TYPE_CLINIC_CARD = "Ошибки: тип × клиника"
-ERROR_TYPE_CLINIC_DRILL_COLUMNS = frozenset({"Тип ошибки", "JID Клиники"})
+ERROR_TYPE_CLINIC_DRILL_COLUMNS = frozenset({"Тип ошибки (канонический)", "JID Клиники"})
 ERROR_TYPE_CLINIC_DASHBOARD_PARAMS = frozenset(
     {"ips_date_filter", "semd_type_filter"}
 )
@@ -131,14 +131,21 @@ def model_drill_dashboard_param_slugs(click: dict, dash_params: dict[str, dict])
     return slugs
 
 
+ERROR_TYPE_DRILL_COLUMN = "Тип ошибки (канонический)"
+
+
 def model_drill_contains_error_types(click: dict) -> bool:
-    """«Тип ошибки» must map to the Документы model's error_types list with operator
+    """Канонический тип must map to the Документы model's error_types list with operator
     'contains' — a document with several errors is matched by element containment and
-    not missed."""
+    not missed.
+
+    Источником служит «Тип ошибки (канонический)»: отображаемая подпись типа несёт ещё и
+    справочник НСИ, а documents.error_types хранит канонический тип, и подпись со
+    справочником не дала бы совпадения."""
     mapping = click.get("parameterMapping") or {}
     for spec in mapping.values():
         source = spec.get("source") or {}
-        if source.get("type") != "column" or source.get("name") != "Тип ошибки":
+        if source.get("type") != "column" or source.get("name") != ERROR_TYPE_DRILL_COLUMN:
             continue
         target = spec.get("target") or {}
         return target.get("operator") == "contains"
@@ -170,7 +177,7 @@ def error_type_clinic_model_drill_issues(
     if missing:
         issues.append(f"click missing column mappings: {sorted(missing)}")
     if not model_drill_contains_error_types(click):
-        issues.append("click must map «Тип ошибки» with operator=contains on error_types (Документы model)")
+        issues.append(f"click must map «{ERROR_TYPE_DRILL_COLUMN}» with operator=contains on error_types (Документы model)")
     if dash_params is not None:
         missing_params = ERROR_TYPE_CLINIC_DASHBOARD_PARAMS - model_drill_dashboard_param_slugs(
             click, dash_params
