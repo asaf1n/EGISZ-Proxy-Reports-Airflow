@@ -37,7 +37,6 @@
     "clinic_name",
     "clinic_inn",
     "clinic_oid",
-    "error_text",
     "patient_name_masked",
     "snils_masked",
     "doctor_name",

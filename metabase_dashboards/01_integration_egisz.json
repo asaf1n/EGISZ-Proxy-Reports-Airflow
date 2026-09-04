@@ -3789,7 +3789,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), NULLIF(TRIM(rpt_error_breakdown.error_code), ''), '—') AS error_code, COALESCE(NULLIF(TRIM(rpt_error_breakdown.code_namespace), ''), '—') AS code_namespace, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, error_code, code_namespace, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4, 5 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.clinic_label AS \"Клиника\", ec.error_code AS \"Код отказа\", ec.code_namespace AS \"Справочник\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, COALESCE(NULLIF(TRIM(rpt_error_breakdown.base_error_type), ''), 'Неизвестная ошибка') AS base_error_type, rpt_error_breakdown.nsi_dictionary_oid AS nsi_dictionary_oid, COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), NULLIF(TRIM(rpt_error_breakdown.error_code), ''), '—') AS error_code, rpt_error_breakdown.clinic_label AS clinic_label, rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, base_error_type, nsi_dictionary_oid, error_code, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4, 5, 6 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.base_error_type AS \"Тип ошибки (канонический)\", ec.nsi_dictionary_oid AS \"OID справочника\", ec.clinic_label AS \"Клиника\", ec.error_code AS \"Код отказа\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3825,19 +3825,18 @@
       "display": "table",
       "visualization_settings": {
         "table.cell_column": "Документов",
-        "table.column_widths": [
-          360,
-          200,
-          280,
-          120,
-          88,
-          96,
-          104
-        ],
         "table.columns": [
           {
             "enabled": true,
             "name": "Тип ошибки"
+          },
+          {
+            "enabled": false,
+            "name": "Тип ошибки (канонический)"
+          },
+          {
+            "enabled": false,
+            "name": "OID справочника"
           },
           {
             "enabled": true,
@@ -3846,10 +3845,6 @@
           {
             "enabled": true,
             "name": "Код отказа"
-          },
-          {
-            "enabled": true,
-            "name": "Справочник"
           },
           {
             "enabled": false,
@@ -3938,7 +3933,7 @@
           "error_types": {
             "source": {
               "type": "column",
-              "name": "Тип ошибки"
+              "name": "Тип ошибки (канонический)"
             },
             "target": {
               "type": "dimension",
@@ -3956,6 +3951,18 @@
               "type": "dimension",
               "model_ref": "Документы",
               "field_name": "clinic_jid"
+            }
+          },
+          "error_text": {
+            "source": {
+              "type": "column",
+              "name": "OID справочника"
+            },
+            "target": {
+              "type": "dimension",
+              "model_ref": "Документы",
+              "field_name": "error_text",
+              "operator": "contains"
             }
           }
         }
