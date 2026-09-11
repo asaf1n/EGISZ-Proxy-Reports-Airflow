@@ -8,12 +8,11 @@
 -- 50_transform.sql — transform_raw_to_facts
 -- Loaded by db/dwh_init.sql via \i db/03_transform.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 -- recompute_document_attributes — в 70_views_core.sql
 
--- Слой версий/логического документа (README §«Версии и идентичность документа»).
+-- Слой версий/логического документа.
 -- Пересобирает document_group_id / version / цепочку / is_current_version для групп,
 -- затронутых батчем (p_dwh_ids); p_dwh_ids = NULL — полный пересчёт (обслуживание).
 --
@@ -163,7 +162,7 @@ $$;
 
 -- Разбор окна журнала (from_logid, to_logid] в факты.
 --
--- Правила связки (README §«Связывание сообщений»):
+-- Правила связки ответа с документом:
 --   getDocumentFile — документ РЭМД по localUid из payload;
 --   ответ РЭМД — relatesToMessage -> dim_message_document.document_uid;
 --   ответ ИЭМК — relatesToMessage без document_uid;

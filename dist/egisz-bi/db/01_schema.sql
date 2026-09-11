@@ -8,7 +8,6 @@
 -- 00_bootstrap.sql — заголовок, пояс роли, гранты.
 -- Подключается из db/dwh_init.sql через \i db/01_schema.sql.
 -- Идемпотентно; выполняется под ролью egisz (владелец dwh_egisz).
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 \encoding UTF8
@@ -22,9 +21,15 @@
 -- Usage:
 --   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
--- Пин пояса роли на МСК: наивное Firebird-время (EXCHANGELOG.CREATEDATE, лицензии) пишется
--- как timestamptz; без фиксированного пояса сессии сутки «уехали» бы на границе. Роль вправе
--- менять собственные параметры сессии, поэтому egisz выполняет это сам.
+-- Пояс отчётности задаётся здесь и только здесь. Наивное Firebird-время
+-- (EXCHANGELOG.CREATEDATE, лицензии) пишется как timestamptz; без фиксированного пояса
+-- сессии сутки «уехали» бы на границе. Роль вправе менять собственные параметры сессии,
+-- поэтому egisz выполняет это сам.
+--
+-- Отчётный слой не повторяет это значение литералом: границы недель и месяцев считает
+-- report_timezone(), которая читает пояс текущей сессии. Конвейер работает под ролью egisz
+-- и получает пояс отсюда; Metabase выставляет пояс сессии из своей настройки
+-- report-timezone. Смена пояса выполняется в этих двух точках, правки SQL не требует.
 ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 
 -- egisz — владелец dwh_egisz и public (через pg_database_owner), права уже есть; GRANT
@@ -37,7 +42,6 @@ GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 -- 10_tables.sql — Tables, dim_semd_types seed, fact + indexes
 -- Loaded by db/dwh_init.sql via \i db/01_schema.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 -- Конвейер по существу ETL (выгрузка → загрузка → разбор в факты), поэтому таблица
@@ -219,7 +223,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
 -- Отметка первого ответа ЕГИСЗ. Выход документа из очереди обработки определяет именно
 -- она: last_callback_at несёт последний ответ и перезаписывается каждым повторным
 -- коллбэком, поэтому документ, отвеченный за секунды, числился бы в очереди до последнего
--- повтора (README §«Учёт отправленных»).
+-- повтора.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_callback_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
@@ -233,7 +237,7 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT no
 -- status_category удалён: полностью выводится из status, downstream-потребителей нет.
 ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
 
--- Слой версий/логического документа (README §«Версии и идентичность документа»).
+-- Слой версий/логического документа.
 -- dwh_id (PK) — ЭКЗЕМПЛЯР/ВЕРСИЯ (localUid), меняется при каждой правке/ре-выгрузке.
 -- Логический документ собирается по (clinic jid + тип СЭМД + documentNumber=PROTOCOLID).
 -- Проверено на базе: пара (jid, doc_number) всегда несёт ровно ОДИН semd_code (это ключ
@@ -268,7 +272,7 @@ ALTER TABLE dim_organizations ADD COLUMN IF NOT EXISTS nsi_name text;
 COMMENT ON COLUMN dim_organizations.name IS
 'Наименование организации из CASH/JPERSONS.';
 COMMENT ON COLUMN dim_organizations.fir_oid IS
-'OID медицинской организации из НСИ; sync_dictionaries не заполняет это поле из JPERSONS.';
+'OID медицинской организации. Ведущий источник — справочник ФРМО (НСИ 1461); синхронизация справочников добирает значение из JPERSONS.FIR_OID только там, где OID ещё не известен, и никогда не затирает его пустым.';
 COMMENT ON COLUMN dim_organizations.nsi_name IS
 'Наименование медицинской организации из НСИ для аудита сопоставления с CASH.';
 
@@ -419,6 +423,29 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
 -- Parsed MSGTEXT и метаданные строки журнала хранятся в transactions (xml_* / source_*).
 -- grain transaction: PK (logid, log_date).
 
+-- ФНСИ выгружает НСИ 1520 с переставленными полями: GIT_LINK несёт OID руководства по реализации,
+-- а IMPLEMENTATION_GUIDE — ссылку на портал ЕГИСЗ. Колонка названа по содержанию, иначе соединение
+-- с реестром руководств выглядит соединением по ссылке и «исправляется» обратно первым же читателем.
+DO $$
+BEGIN
+    IF to_regclass('public.dim_semd_types') IS NOT NULL
+       AND EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'dim_semd_types'
+             AND column_name = 'git_link'
+       )
+       AND NOT EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'dim_semd_types'
+             AND column_name = 'ig_oid'
+       )
+    THEN
+        EXECUTE 'ALTER TABLE public.dim_semd_types RENAME COLUMN git_link TO ig_oid';
+    END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS dim_semd_types (
     code text PRIMARY KEY,
     type_code text,
@@ -428,13 +455,13 @@ CREATE TABLE IF NOT EXISTS dim_semd_types (
     start_date date,
     end_date date,
     implementation_guide text,
-    git_link text,
+    ig_oid text,
     oid text,
     version text,
     updated_at timestamptz DEFAULT now()
 );
 
-INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)
+INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, ig_oid)
 VALUES
     ('4', '8', 'Медицинская справка о допуске к управлению транспортными средствами (CDA) Редакция 1', '3', '2', DATE '2018-10-16', NULL, 'https://portal.egisz.rosminzdrav.ru/materials/2927', '1.2.643.5.1.13.13.15.43.1'),
     ('5', '6', 'Протокол инструментального исследования (PDF/A-1)', '0', '1', DATE '2018-07-04', DATE '2024-01-01', NULL, NULL),
@@ -745,7 +772,7 @@ ON CONFLICT (code) DO UPDATE SET
     start_date = EXCLUDED.start_date,
     end_date = EXCLUDED.end_date,
     implementation_guide = EXCLUDED.implementation_guide,
-    git_link = EXCLUDED.git_link,
+    ig_oid = EXCLUDED.ig_oid,
     oid = EXCLUDED.code,
     updated_at = now();
 
@@ -754,6 +781,82 @@ SET oid = code
 WHERE oid IS DISTINCT FROM code;
 
 CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid ON dim_semd_types (oid) WHERE oid IS NOT NULL;
+
+COMMENT ON COLUMN dim_semd_types.ig_oid IS
+    'OID руководства по реализации СЭМД: ключ соединения с dim_nsi_semd_guide. В выгрузке ФНСИ лежит в поле GIT_LINK.';
+COMMENT ON COLUMN dim_semd_types.implementation_guide IS
+    'Ссылка на материалы портала ЕГИСЗ. В выгрузке ФНСИ поля GIT_LINK и IMPLEMENTATION_GUIDE переставлены относительно содержания.';
+
+-- Схемой не наполняется: снимок кладёт scripts/load_nsi_semd_guides.py, поэтому на свежем
+-- контуре таблица пуста до первого запуска загрузчика.
+CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide (
+    oid text PRIMARY KEY,
+    semd_id integer,
+    full_name text NOT NULL,
+    release_number smallint,
+    format text,
+    git_pub_date date,
+    git_link text,
+    source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.638',
+    source_version text NOT NULL,
+    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    loaded_at timestamptz DEFAULT now()
+);
+
+COMMENT ON TABLE dim_nsi_semd_guide IS
+    'НСИ 1.2.643.5.1.13.13.99.2.638 «Реестр руководств по реализации структурированных электронных медицинских документов и протоколов информационного взаимодействия»; полный снимок версии источника.';
+COMMENT ON COLUMN dim_nsi_semd_guide.semd_id IS
+    'SEMD_ID источника — номер ветви в собственном OID руководства, а не код вида медицинской документации из НСИ 1520. Ключом соединения не является.';
+COMMENT ON COLUMN dim_nsi_semd_guide.git_link IS
+    'Ссылка на git.minzdrav.gov.ru. Здесь поле источника названо по содержанию — в отличие от одноимённого поля НСИ 1520, где лежит OID (см. dim_semd_types.ig_oid).';
+
+-- Поле OID_SYNONYM из НСИ 638: дополнительные OID, под которыми выгрузка публикует то же
+-- руководство. Ни порядка их появления, ни признака, что синоним больше не принимается РЭМД,
+-- выгрузка не несёт, поэтому реестр синонимы только разрешает и ничего о них не утверждает.
+-- Соединение с dim_semd_types закрывается основными OID; синонимы нужны на случай, когда
+-- очередной выпуск НСИ 1520 сошлётся на синоним: без них вид документации потерял бы набор
+-- справочников молча. Так же устроен dim_nsi_error_code_alias.
+CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_alias (
+    alias_oid text PRIMARY KEY,
+    guide_oid text NOT NULL REFERENCES dim_nsi_semd_guide (oid) ON DELETE CASCADE,
+    loaded_at timestamptz DEFAULT now()
+);
+
+COMMENT ON TABLE dim_nsi_semd_guide_alias IS
+    'OID_SYNONYM из НСИ 638: дополнительные OID того же руководства. Разрешаются в основной OID представлением dim_semd_guide_oid.';
+
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_alias_guide
+    ON dim_nsi_semd_guide_alias (guide_oid);
+
+-- Наименование, редакция и синонимы OID руководства здесь не повторяются: в источнике они
+-- выводятся из OID руководства и дословно совпадают с реестром руководств.
+CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_dictionary (
+    guide_oid text NOT NULL REFERENCES dim_nsi_semd_guide (oid) ON DELETE CASCADE,
+    dict_oid text NOT NULL,
+    source_id text NOT NULL,
+    dict_name text NOT NULL,
+    dict_version text,
+    dict_ids_systemname text,
+    source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.805',
+    source_version text NOT NULL,
+    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    loaded_at timestamptz DEFAULT now(),
+    PRIMARY KEY (guide_oid, dict_oid)
+);
+
+COMMENT ON TABLE dim_nsi_semd_guide_dictionary IS
+    'НСИ 1.2.643.5.1.13.13.99.2.805 «Реестр справочников, использующихся в руководствах по реализации структурированных электронных медицинских документов»; грейн — пара (руководство, справочник).';
+COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.dict_version IS
+    'Версия справочника из источника. Значение «*» означает «любая версия», а не «версия неизвестна», и сохраняется дословно.';
+COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.dict_ids_systemname IS
+    'Имя поля-идентификатора внутри справочника (ID, CODE, MKB_CODE, oid): им СЭМД ссылается на запись справочника.';
+COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.raw_json IS
+    'Запись источника целиком. Разрешённые подмножества значений (COLLECTION) отдельной таблицей не разворачиваются и доступны только здесь.';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_nsi_semd_guide_dictionary_source_id
+    ON dim_nsi_semd_guide_dictionary (source_id);
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_dictionary_dict_oid
+    ON dim_nsi_semd_guide_dictionary (dict_oid);
 
 -- Справочник «РЭМД. Классификатор кодов сообщений» — источник истины для кодов и
 -- наименований ошибок регистрационного пути. Наполнение — выгрузка ФНСИ, описания
@@ -933,13 +1036,13 @@ ON CONFLICT (alias) DO UPDATE SET
     nsi_error_code = EXCLUDED.nsi_error_code,
     updated_at = now();
 
--- Наименования справочников ФНСИ по OID. Нужен только для подписи предмета отказа:
--- РЭМД называет справочник одним OID, и без расшифровки разбивка нечитаема. Реестр
--- заведомо неполон и присоединяется внешним соединением — OID без наименования
--- показывается как есть, а не прячется из разбивки.
+-- a/dist/egisz-bi/db/01_schema.sql
+-- a/dist/egisz-bi/db/01_schema.sql
+-- a/dist/egisz-bi/db/01_schema.sql
+-- a/dist/egisz-bi/db/01_schema.sql
 --
--- Заводить наименование можно, только когда принадлежность справочника подтверждена
--- содержанием отказов (коды элементов в сообщениях), а не догадкой по номеру ветви.
+-- a/dist/egisz-bi/db/01_schema.sql
+-- a/dist/egisz-bi/db/01_schema.sql
 CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
     oid text PRIMARY KEY,
     name text NOT NULL,

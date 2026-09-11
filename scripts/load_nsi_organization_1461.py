@@ -98,7 +98,7 @@ COMMENT ON COLUMN public.dim_nsi_organization.parent_id IS
 COMMENT ON COLUMN public.dim_organizations.name IS
 'Наименование организации из CASH/JPERSONS.';
 COMMENT ON COLUMN public.dim_organizations.fir_oid IS
-'OID медицинской организации из НСИ; sync_dictionaries не заполняет это поле из JPERSONS.';
+'OID медицинской организации. Ведущий источник — справочник ФРМО (НСИ 1461); синхронизация справочников добирает значение из JPERSONS.FIR_OID только там, где OID ещё не известен, и никогда не затирает его пустым.';
 COMMENT ON COLUMN public.dim_organizations.nsi_name IS
 'Наименование медицинской организации из НСИ для аудита сопоставления с CASH.';
 COMMENT ON VIEW public.rpt_clinic_nsi_mapping IS

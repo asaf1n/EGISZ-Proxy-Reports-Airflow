@@ -40,13 +40,29 @@ REPORT_MARTS = (
 
 ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
 DIRECTORY_COLUMNS = {
-    # fir_oid intentionally stays out of the JPERSONS sync: it is filled from NSI.
-    "dim_organizations": ("jid", "name", "inn", "address"),
+    "dim_organizations": ("jid", "name", "inn", "address", "fir_oid"),
     "dim_licenses": ("id", "service_type", "jid", "mo_uid", "mo_domen", "bdate", "fdate", "kind", "modifydate"),
 }
 DIRECTORY_PK_COLUMNS = {
     "dim_organizations": ("jid",),
     "dim_licenses": ("id",),
+}
+# Колонки с двумя источниками: обычный UPSERT затёр бы значение, которого нет в текущем
+# источнике. Ключ — (таблица, колонка), значение — SQL нового состояния строки.
+#
+# fir_oid определяет ЮЛ документа (dim_clinic_oid → resolve_document_jid), поэтому потеря
+# значения обесценивает клинику во всей отчётности. Источников два: справочник ФРМО
+# (НСИ 1461, scripts/load_nsi_organization_1461.py) и база ЮЛ компании (JPERSONS.FIR_OID).
+# ФРМО — ведущий источник и пишет значение прямо; синхронизация справочников только
+# закрывает пробелы, поэтому пустой OID из JPERSONS ничего не меняет, а заполненный не
+# перебивает уже известный OID и не создаёт качелей на каждом пятиминутном цикле.
+DIRECTORY_MERGE_EXPRESSIONS = {
+    ("dim_organizations", "fir_oid"): (
+        "COALESCE("
+        "NULLIF(btrim(dim_organizations.fir_oid), ''), "
+        "NULLIF(btrim(EXCLUDED.fir_oid), '')"
+        ")"
+    ),
 }
 DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
@@ -513,7 +529,7 @@ def fetch_exchangelog_after_cursor(
     """Fetch EXCHANGELOG rows via keyset pagination by LOGID.
 
     Firebird supports ``WHERE LOGID > ? ORDER BY LOGID ROWS ?``; ``LIMIT/OFFSET`` is not used on
-    this dialect. See README.md §«Источник».
+    this dialect.
     """
     if limit <= 0:
         return []
@@ -578,7 +594,12 @@ def fetch_message_registry_after_cursor(
 
 
 def fetch_organizations(con: Any) -> list[tuple[Any, ...]]:
-    """Fetch organization directory rows from JPERSONS."""
+    """Fetch organization directory rows from JPERSONS.
+
+    Column order matches DIRECTORY_COLUMNS["dim_organizations"]. FIR_OID is the company
+    registry's own OID; it only fills gaps left by the NSI directory (see
+    DIRECTORY_MERGE_EXPRESSIONS) and never overwrites a known OID.
+    """
     cur = con.cursor()
     try:
         cur.execute(
@@ -587,8 +608,8 @@ def fetch_organizations(con: Any) -> list[tuple[Any, ...]]:
                 JID,
                 JNAME,
                 JINN,
-                JADDR
-                -- FIR_OID is not selected here: NSI matching owns dim_organizations.fir_oid.
+                JADDR,
+                FIR_OID
             FROM JPERSONS
             WHERE JID IS NOT NULL
             """
@@ -636,13 +657,22 @@ def sync_directory(
     column_sql = ", ".join(columns)
     pk_columns = DIRECTORY_PK_COLUMNS[table_name]
     conflict_sql = ", ".join(pk_columns)
+
+    def merged(column_name: str) -> str:
+        return DIRECTORY_MERGE_EXPRESSIONS.get(
+            (table_name, column_name), f"EXCLUDED.{column_name}"
+        )
+
     update_sql = ", ".join(
-        f"{column_name} = EXCLUDED.{column_name}"
+        f"{column_name} = {merged(column_name)}"
         for column_name in columns
         if column_name not in pk_columns
     )
+    # Предикат сверяется с итоговым состоянием строки, а не с сырым EXCLUDED: иначе
+    # колонка с правилом слияния считалась бы изменённой на каждом цикле и гоняла
+    # updated_at вместе с пересчётом JID документов.
     change_predicate = " OR ".join(
-        f"{table_name}.{column_name} IS DISTINCT FROM EXCLUDED.{column_name}"
+        f"{table_name}.{column_name} IS DISTINCT FROM {merged(column_name)}"
         for column_name in columns
         if column_name not in pk_columns
     )

@@ -116,6 +116,19 @@ psql -h PG_HOST -U egisz -d dwh_egisz -c "SHOW timezone"     # Europe/Moscow
 
 ---
 
+### 1.7. Справочники НСИ вне схемы
+
+Снимки федеральных справочников схемой не наполняются: их кладут отдельными запусками
+с рабочего места оператора, `apply-dwh-schema.ps1` их не трогает. Пока запуск не сделан,
+витрины `rpt_semd_guides` и `rpt_semd_dictionaries` возвращают пустой результат — так же
+ведёт себя `rpt_clinic_nsi_mapping` до загрузки справочника медицинских организаций.
+
+```powershell
+python scripts\load_nsi_semd_guides.py --guides <OID 638>_<версия>_json.zip --dictionaries <OID 805>_<версия>_json.zip --host <хост> --user egisz
+```
+
+Каталог `scripts/` в пакет не входит — запускать из рабочей копии репозитория.
+
 ## 2. Airflow
 
 ### 2.1. Предусловия

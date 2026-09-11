@@ -301,8 +301,9 @@ MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     QUEUE_PIVOT_CLINIC_NAME: [("clinic_label", "Клиника")],
     QUEUE_PIVOT_SEMD_NAME: [("semd_code", "Код СЭМД")],
     "Ошибки: тип × клиника": [
-        ("error_types", "Тип ошибки", "contains"),
+        ("error_types", "Тип ошибки (канонический)", "contains"),
         ("clinic_jid", "JID Клиники"),
+        ("error_text", "OID справочника", "contains"),
     ],
 }
 
@@ -602,9 +603,10 @@ CLINIC_ERROR_VOLUME_QUERY = (
 # мнемоники в классификаторе нет — витрина отдаёт зонтичную (VALIDATION_ERROR /
 # RUNTIME_ERROR), под которой отказ пришёл.
 #
-# Рядом выводится справочник кода: регистрационный путь отвечает мнемоникой ФНСИ 305, контур
-# ИЭМК — errorCode IHE XDS, шлюз — синтетическим кодом. Без указания справочника коды разных
-# контуров в одной колонке неразличимы, а у ИЭМК и шлюза она была бы просто пустой.
+# base_error_type и nsi_dictionary_oid в таблицу не выводятся, а несут дрилл: подпись типа
+# уже содержит справочник (см. rpt_error_breakdown), а documents.error_types хранит
+# канонический тип — отбор по подписи вернул бы пусто. OID уточняет отбор по тексту отказа,
+# иначе клик отдал бы документы по всем справочникам этого типа.
 ERROR_TYPE_CLINIC_QUERY = (
     "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
     "FROM public.rpt_documents "
@@ -615,22 +617,26 @@ ERROR_TYPE_CLINIC_QUERY = (
     # в полное имя public.rpt_error_breakdown.error_type, и алиас ломает ссылку.
     "base AS ( SELECT "
     "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, "
+    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.base_error_type), ''), 'Неизвестная ошибка') "
+    "AS base_error_type, "
+    "rpt_error_breakdown.nsi_dictionary_oid AS nsi_dictionary_oid, "
     "COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), "
     "NULLIF(TRIM(rpt_error_breakdown.error_code), ''), '—') AS error_code, "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.code_namespace), ''), '—') AS code_namespace, "
     "rpt_error_breakdown.clinic_label AS clinic_label, "
     "rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id "
     "FROM public.rpt_error_breakdown "
     "INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id "
     "WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' "
     "[[AND {{error_type}}]] ), "
-    "error_clinic AS ( SELECT error_type, error_code, code_namespace, clinic_label, clinic_jid, "
-    "COUNT(DISTINCT dwh_id)::bigint AS doc_count "
-    "FROM base GROUP BY 1, 2, 3, 4, 5 ), "
+    "error_clinic AS ( SELECT error_type, base_error_type, nsi_dictionary_oid, error_code, "
+    "clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count "
+    "FROM base GROUP BY 1, 2, 3, 4, 5, 6 ), "
     "clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs "
     "FROM period_docs GROUP BY clinic_jid ) "
-    'SELECT ec.error_type AS "Тип ошибки", ec.clinic_label AS "Клиника", '
-    'ec.error_code AS "Код отказа", ec.code_namespace AS "Справочник", '
+    'SELECT ec.error_type AS "Тип ошибки", '
+    'ec.base_error_type AS "Тип ошибки (канонический)", '
+    'ec.nsi_dictionary_oid AS "OID справочника", ec.clinic_label AS "Клиника", '
+    'ec.error_code AS "Код отказа", '
     'ec.clinic_jid AS "JID Клиники", ec.doc_count AS "Документов", '
     'ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS "% ошибок" '
     "FROM error_clinic ec "
@@ -761,15 +767,14 @@ ERROR_TYPE_CLINIC_FIELD_FILTERS = {
 
 ERROR_TYPE_CLINIC_TABLE_COLUMNS = [
     {"enabled": True, "name": "Тип ошибки"},
+    {"enabled": False, "name": "Тип ошибки (канонический)"},
+    {"enabled": False, "name": "OID справочника"},
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "Код отказа"},
-    {"enabled": True, "name": "Справочник"},
     {"enabled": False, "name": "JID Клиники"},
     {"enabled": True, "name": "Документов"},
     {"enabled": True, "name": "% ошибок"},
 ]
-
-ERROR_TYPE_CLINIC_COLUMN_WIDTHS = [360, 200, 280, 120, 88, 96, 104]
 
 SUCCESS_CLINIC_COLUMN_WIDTHS = [88, 300, 88, 88]
 SUCCESS_SEMD_COLUMN_WIDTHS = [88, 120, 88, 88, 88]
@@ -1255,11 +1260,11 @@ QUEUE_TAIL_WEEKS = 12
 # отбирается диапазоном по first_sent_at и берёт индекс. Порог по-прежнему читается из
 # dim_pending_segments, а не зашит в текст.
 QUEUE_TAIL_QUERY = (
-    "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') "
+    "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE public.report_timezone()) "
     f"- INTERVAL '{QUEUE_TAIL_WEEKS - 1} weeks' AS start_wall, "
-    "date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') AS last_wall, now() AS end_ts ), "
+    "date_trunc('week', now() AT TIME ZONE public.report_timezone()) AS last_wall, now() AS end_ts ), "
     "points AS ( SELECT gs::date AS week_start, "
-    "LEAST((gs + INTERVAL '7 days') AT TIME ZONE 'Europe/Moscow', w.end_ts) AS ts "
+    "LEAST((gs + INTERVAL '7 days') AT TIME ZONE public.report_timezone(), w.end_ts) AS ts "
     "FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), "
     "thresholds AS ( SELECT "
     "MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, "
@@ -2072,7 +2077,9 @@ def apply_error_type_clinic(card: dict) -> None:
     card.pop("metabase-model-drill-params", None)
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(ERROR_TYPE_CLINIC_TABLE_COLUMNS)
-    viz["table.column_widths"] = deepcopy(ERROR_TYPE_CLINIC_COLUMN_WIDTHS)
+    # Ширины карточка не фиксирует: их пишет Metabase, когда колонку тянут мышью,
+    # и выгрузка живого дашборда занесла бы их обратно в исходник.
+    viz.pop("table.column_widths", None)
     viz["table.cell_column"] = "Документов"
     cs = {
         '["name","Документов"]': {

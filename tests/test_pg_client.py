@@ -16,6 +16,7 @@ transform_raw_to_facts = extract_dag.transform_raw_to_facts
 update_cursors = extract_dag.update_cursors
 
 refresh_dag = extract_dag  # общий блок живёт в DAG фактов
+DIRECTORY_MERGE_EXPRESSIONS = refresh_dag.DIRECTORY_MERGE_EXPRESSIONS
 DIRECTORY_SYNC_LOCK_TIMEOUT = refresh_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
 DIRECTORY_SYNC_PAGE_SIZE = refresh_dag.DIRECTORY_SYNC_PAGE_SIZE
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = refresh_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
@@ -453,7 +454,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     sql = _read_dwh_init_sql()
     transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
-    assert "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, git_link)" in sql
+    assert "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, ig_oid)" in sql
     assert "oid = EXCLUDED.code" in sql
     assert "SET oid = code" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid" in sql
@@ -677,7 +678,9 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
 
     monkeypatch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
 
-    changed = sync_directory(con, "dim_organizations", [(1, "Clinic", "1234567890", "Address")])
+    changed = sync_directory(
+        con, "dim_organizations", [(1, "Clinic", "1234567890", "Address", "1.2.643.5.1.13.13.12.2.1.1")]
+    )
 
     assert changed == 1
     assert con.cursor_instance.calls == [
@@ -686,11 +689,41 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     ]
     assert captured["cursor"] is con.cursor_instance
     assert "INSERT INTO dim_organizations" in str(captured["sql"])
-    assert "fir_oid" not in str(captured["sql"])
     assert "IS DISTINCT FROM EXCLUDED." in str(captured["sql"])
-    assert captured["values"] == [(1, "Clinic", "1234567890", "Address")]
+    assert captured["values"] == [(1, "Clinic", "1234567890", "Address", "1.2.643.5.1.13.13.12.2.1.1")]
     assert captured["page_size"] == DIRECTORY_SYNC_PAGE_SIZE
     assert con.committed is True
+
+
+def test_sync_directory_never_clears_known_org_oid() -> None:
+    """OID организации имеет два источника, поэтому UPSERT не затирает его пустым.
+
+    Ведущий источник — справочник ФРМО; синхронизация справочников добирает OID из
+    JPERSONS только там, где он ещё не известен. Предикат изменения сверяется с итоговым
+    состоянием строки, иначе колонка считалась бы изменённой на каждом цикле и гоняла бы
+    пересчёт JID документов впустую.
+    """
+    merge_sql = DIRECTORY_MERGE_EXPRESSIONS[("dim_organizations", "fir_oid")]
+
+    assert "dim_organizations.fir_oid" in merge_sql
+    assert merge_sql.index("dim_organizations.fir_oid") < merge_sql.index("EXCLUDED.fir_oid")
+
+    con = FakeSyncConnection()
+    captured: dict[str, object] = {}
+
+    def fake_execute_values(cursor: object, sql: str, values: list[tuple[object, ...]], page_size: int) -> None:
+        captured["sql"] = sql
+        con.cursor_instance.rowcount = len(values)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
+        sync_directory(con, "dim_organizations", [(1, "Clinic", None, None, None)])
+
+    sql = str(captured["sql"])
+    assert f"fir_oid = {merge_sql}" in sql
+    assert f"dim_organizations.fir_oid IS DISTINCT FROM {merge_sql}" in sql
+    # Остальные колонки ведёт единственный источник — они перезаписываются как есть.
+    assert "name = EXCLUDED.name" in sql
 
 
 def test_clinic_registries_resolve_without_exchange_marker() -> None:

@@ -8,8 +8,49 @@
 -- 20_functions_parsing.sql — Parsing helpers (xml_text, normalize_message_id, clean_host, ...)
 -- Loaded by db/dwh_init.sql via \i db/02_functions.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
+
+-- Пояс отчётного календаря. Литерала пояса в отчётном слое нет: границы недель и месяцев
+-- берут значение отсюда, поэтому календарь витрин не может разойтись с календарём BI.
+--
+-- Значение читается из настройки роли конвейера (ALTER ROLE egisz SET timezone,
+-- 01_schema), а не из пояса сессии. Разница существенна: REFRESH материализованного
+-- представления пересчитывает границы периодов, и запуск обновления из сессии с другим
+-- поясом сдвинул бы уже закрытые недели. Настройка роли одна на контур, поэтому закрытый
+-- период считается одинаково, кем бы ни было запущено обновление.
+--
+-- Пояс сессии остаётся резервом: он покрывает контур, где пин роли не выставлен, и там же
+-- даёт Metabase его собственный report-timezone.
+--
+-- STABLE, а не IMMUTABLE: значение постоянно внутри запроса, но задано конфигурацией.
+-- Годится для материализованных представлений; в выражение индекса не ставится.
+CREATE OR REPLACE FUNCTION public.report_timezone()
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (
+            SELECT split_part(cfg, '=', 2)
+            FROM pg_catalog.pg_db_role_setting s
+            CROSS JOIN LATERAL unnest(s.setconfig) AS cfg
+            WHERE split_part(cfg, '=', 1) = 'TimeZone'
+              AND s.setrole <> 0
+              AND s.setdatabase IN (
+                  0,
+                  (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = current_database())
+              )
+            -- Детерминированный отбор при нескольких ролях с пином: сначала настройка,
+            -- заданная для этой базы, затем настройка текущего пользователя.
+            ORDER BY (s.setdatabase <> 0) DESC, (s.setrole = current_user::regrole::oid) DESC, s.setrole
+            LIMIT 1
+        ),
+        current_setting('TimeZone')
+    );
+$$;
+
+COMMENT ON FUNCTION public.report_timezone() IS
+'Пояс отчётного календаря: настройка timezone роли конвейера, резервно — пояс сессии. Границы недель и месяцев считаются через него, литералом пояс в SQL не задаётся.';
 
 CREATE OR REPLACE FUNCTION public.xml_text(payload text, tag_name text)
 RETURNS text
@@ -163,6 +204,23 @@ ORDER BY host, own_host DESC NULLS LAST, jid;
 COMMENT ON VIEW public.dim_clinic_endpoint IS
 'Адрес обмена → ЮЛ (MO_DOMEN = REPLY_TO): добор именованных хостов, у которых нет номера в имени.';
 
+-- Разрешение OID руководства по реализации: основной OID и синонимы из НСИ 638 в одном реестре.
+-- При совпадении выигрывает основной OID: загрузчик такое пересечение сейчас отвергает,
+-- но порядок разрешения не должен зависеть от этой проверки.
+CREATE OR REPLACE VIEW public.dim_semd_guide_oid AS
+SELECT DISTINCT ON (published_oid) published_oid, guide_oid, is_alias
+FROM (
+    SELECT g.oid, g.oid, false
+    FROM public.dim_nsi_semd_guide g
+    UNION ALL
+    SELECT a.alias_oid, a.guide_oid, true
+    FROM public.dim_nsi_semd_guide_alias a
+) t (published_oid, guide_oid, is_alias)
+ORDER BY published_oid, is_alias;
+
+COMMENT ON VIEW public.dim_semd_guide_oid IS
+'Реестр OID руководств по реализации: published_oid (dim_nsi_semd_guide.oid либо dim_nsi_semd_guide_alias.alias_oid) → guide_oid (dim_nsi_semd_guide.oid). Точка входа — dim_semd_types.ig_oid.';
+
 -- Основной путь: ЮЛ по OID медорганизации из содержания обмена (<organization>).
 -- DROP перед CREATE: смена типа возврата integer→bigint несовместима с CREATE OR REPLACE (JID > int4).
 DROP FUNCTION IF EXISTS public.jid_from_mo_uid(text);
@@ -276,7 +334,7 @@ $$;
 -- документа: корректировка ошибок штатно порождает новый localUid ⇒ новый dwh_id (новый
 -- экземпляр), без перезаписи существующего dwh_id.
 -- Стабильный ключ набора версий (CDA setId) в журнал не попадает: тело СЭМД (base64-CDA)
--- шлюзом не сохраняется (см. README §«Версии и идентичность документа»). Поэтому
+-- шлюзом не сохраняется. Поэтому
 -- группировка версий в один логический документ ведётся отдельным слоем document_group_id,
 -- а не через dwh_id.
 -- emdrId (рег. номер РЭМД) и OID (код типа в справочнике НСИ / OID организации) НЕ являются
@@ -314,7 +372,7 @@ AS $$
     SELECT code FROM public.dim_document_status WHERE is_final;
 $$;
 
--- Очередь обработки на момент времени (README §«Учёт отправленных»). Обе функции —
+-- Очередь обработки на момент времени. Обе функции —
 -- единственное определение членства и возраста: отчётный слой подставляет now(),
 -- срез на прошлый момент — правую границу периода.
 --
@@ -554,7 +612,7 @@ DROP INDEX IF EXISTS idx_dim_licenses_mo_domen_host;
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.clean_host(mo_domen));
 
 -- Статус одного EXCHANGELOG-сообщения. Ключевое различие синхронного и асинхронного
--- ответов РЭМД (см. README §«Схема регистрации СЭМД»):
+-- ответов РЭМД:
 --   * Синхронный RegisterDocumentResponse со <status>success</status> подтверждает только
 --     приём запроса на регистрацию (шаг 4 схемы), а не регистрацию документа — 'accepted'.
 --   * Регистрация подтверждается ТОЛЬКО асинхронным callback'ом registerDocumentResult с
@@ -605,7 +663,6 @@ $$;
 -- Правила классификации ошибок: dim_error_rules + dim_error_type_group.
 -- Loaded by db/dwh_init.sql via \i db/02_functions.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS dim_error_rules (
@@ -1265,7 +1322,6 @@ WHERE g.error_type = v.error_type
 -- 40_functions_errors.sql — Error classification functions + xml_error_items + build_errors_json + semd_type_report_label
 -- Loaded by db/dwh_init.sql via \i db/02_functions.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
--- Контракт схемы — README.md §DWH-модель.
 -- ============================================================================
 
 -- DROP перед CREATE: sep — обязательный параметр, а CREATE OR REPLACE не убирает DEFAULT.

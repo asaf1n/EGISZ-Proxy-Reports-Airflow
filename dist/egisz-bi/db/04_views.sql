@@ -54,6 +54,8 @@ DROP VIEW IF EXISTS public.rpt_clinic_nsi_mapping CASCADE;
 -- Снятое имя витрины типов СЭМД по лицензиям.
 DROP VIEW IF EXISTS public.rpt_clinic_semd_licenses CASCADE;
 DROP VIEW IF EXISTS public.rpt_clinic_semd_activity CASCADE;
+DROP VIEW IF EXISTS public.rpt_semd_dictionaries CASCADE;
+DROP VIEW IF EXISTS public.rpt_semd_guides CASCADE;
 
 -- Классификация даёт документу два поля: error_types (канонические типы,
 -- error_classify) и error_text (исходные <message>, error_messages_row).
@@ -328,7 +330,7 @@ SELECT
     ds.sort_order AS status_sort,
     -- Состояние отправки: нефинальный статус раскрывается ступенью возраста обработки.
     -- «В обработке» участвует в общих срезах наравне с исходами, «Без ответа» — только
-    -- на вкладке отправленных (README §«Учёт отправленных»).
+    -- на вкладке отправленных.
     ps.code AS pending_segment,
     ps.label AS pending_segment_label,
     ps.sort_order AS pending_segment_sort,
@@ -381,7 +383,7 @@ SELECT
     -- Считается по журналу, а не по дате создания CDA: document_created_at приходит далеко
     -- не во всех отправках, и метрика на его основе покрывала доли процента набора
     -- документов. Выход из очереди обработки определяет не эта величина, а
-    -- first_callback_at — отметка первого ответа (README §«Учёт отправленных»).
+    -- first_callback_at — отметка первого ответа.
     CASE
         WHEN d.first_sent_at IS NOT NULL
          AND d.last_callback_at IS NOT NULL
@@ -402,7 +404,7 @@ SELECT
     -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
     COALESCE(d.attempt_count, 1) AS attempt_count,
     (COALESCE(d.attempt_count, 1) > 1) AS is_resubmitted,
-    -- Слой версий (README §«Версии и идентичность документа»).
+    -- Слой версий.
     d.document_group_id,
     COALESCE(d.is_current_version, true) AS is_current_version,
     d.semd_version_number,
@@ -668,7 +670,7 @@ INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
 LEFT JOIN type_pattern tp ON tp.interpretation = a.base_error_type
 LEFT JOIN doc_dictionary dd
        ON dd.dwh_id = a.dwh_id AND dd.pattern = tp.pattern
--- Реестр наименований неполон по построению: OID без расшифровки идёт в подпись как есть.
+-- a/dist/egisz-bi/db/04_views.sql
 LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = dd.nsi_dictionary_oid
 WITH DATA;
 
@@ -770,17 +772,97 @@ LEFT JOIN public.dim_semd_types st ON st.code = f.semd_code;
 COMMENT ON VIEW public.rpt_clinic_semd_activity IS
 'Типы СЭМД в обмене клиники: грейн (clinic_jid, semd_code) по фактам документов; последняя отправка, последняя регистрация и число документов.';
 
+-- ---------------------------------------------------------------- section: semd_guides
+-- ============================================================================
+-- Требования руководств по реализации: какие справочники НСИ обязан использовать
+-- документ данного вида. Источник — НСИ 638 и 805, якорь — dim_semd_types.
+-- ============================================================================
+
+-- Одна строка на вид медицинской документации, включая виды без руководства. Иначе вид
+-- формата PDF/A, которому руководство не положено, и вид, чьё руководство не заведено
+-- в реестре, одинаково пропадали бы из выборки; различает их guide_match.
+CREATE OR REPLACE VIEW public.rpt_semd_guides AS
+SELECT
+    st.code AS semd_code,
+    st.name AS semd_name,
+    st.code || ' · ' || COALESCE(NULLIF(btrim(st.name), ''), '—') AS semd_label,
+    st.type_code AS semd_type_code,
+    st.level AS semd_level,
+    (st.level = '3') AS semd_is_cda,
+    st.start_date AS semd_start_date,
+    st.end_date AS semd_end_date,
+    (st.end_date IS NULL) AS semd_is_active,
+    g.oid AS guide_oid,
+    g.full_name AS guide_name,
+    g.release_number AS guide_release,
+    g.git_link AS guide_git_link,
+    g.git_pub_date AS guide_git_pub_date,
+    st.implementation_guide AS guide_portal_url,
+    CASE
+        WHEN NULLIF(btrim(st.ig_oid), '') IS NULL THEN 'руководство не предусмотрено'
+        WHEN g.oid IS NULL THEN 'руководство отсутствует в реестре'
+        WHEN r.is_alias THEN 'сопоставлено по синониму OID'
+        ELSE 'сопоставлено'
+    END AS guide_match,
+    d.dictionaries_total
+FROM public.dim_semd_types st
+LEFT JOIN public.dim_semd_guide_oid r ON r.published_oid = NULLIF(btrim(st.ig_oid), '')
+LEFT JOIN public.dim_nsi_semd_guide g ON g.oid = r.guide_oid
+LEFT JOIN LATERAL (
+    SELECT count(*) AS dictionaries_total
+    FROM public.dim_nsi_semd_guide_dictionary gd
+    WHERE gd.guide_oid = g.oid
+) d ON TRUE;
+
+COMMENT ON VIEW public.rpt_semd_guides IS
+'Виды медицинской документации и их руководства по реализации: грейн semd_code, признак сопоставления и число предписанных справочников НСИ.';
+
+-- Витрина требований: грейн (вид документации, справочник). Строится поверх rpt_semd_guides,
+-- чтобы правила сопоставления с руководством были определены в одном месте. Один набор
+-- справочников может относиться к нескольким видам: руководство обслуживает не обязательно
+-- один вид документации.
+CREATE OR REPLACE VIEW public.rpt_semd_dictionaries AS
+SELECT
+    s.semd_code,
+    s.semd_name,
+    s.semd_label,
+    s.semd_type_code,
+    s.semd_level,
+    s.semd_is_cda,
+    s.semd_start_date,
+    s.semd_end_date,
+    s.semd_is_active,
+    s.guide_oid,
+    s.guide_name,
+    s.guide_release,
+    s.guide_git_link,
+    s.guide_portal_url,
+    s.guide_match,
+    s.dictionaries_total,
+    gd.dict_oid,
+    gd.dict_name,
+    gd.dict_oid || ' · ' || COALESCE(NULLIF(btrim(gd.dict_name), ''), '—') AS dict_label,
+    gd.dict_version,
+    (gd.dict_version = '*') AS dict_any_version,
+    gd.dict_ids_systemname AS dict_id_field
+FROM public.rpt_semd_guides s
+JOIN public.dim_nsi_semd_guide_dictionary gd ON gd.guide_oid = s.guide_oid;
+
+COMMENT ON VIEW public.rpt_semd_dictionaries IS
+'Справочники НСИ, предписанные руководством по реализации для вида медицинской документации: грейн (semd_code, dict_oid).';
+
 -- ---------------------------------------------------------------- section: weekly
 -- ============================================================================
 -- 85_views_weekly.sql — недельный слой динамики для дашборда «Динамика по
 -- неделям». Идемпотентность — как у rpt_error_breakdown: DROP в 60, CREATE
 -- здесь, REFRESH + ANALYZE в 90.
 --
--- Неделя = понедельник МСК. AT TIME ZONE 'Europe/Moscow' применяется ОДИН раз
--- и сознательно: date_trunc вычисляется в момент REFRESH, а init-прогон (90-я
--- часть) обновляет matview под ролью postgres, у которой timezone НЕ запинен
--- (пин стоит только на роли egisz, 00_bootstrap). Это не двойной сдвиг:
--- ips_date — timestamptz, сдвиг задаёт стену МСК до усечения.
+-- Неделя = понедельник по отчётному календарю. Пояс берётся у report_timezone()
+-- и применяется ОДИН раз: ips_date — timestamptz, сдвиг задаёт стену календаря до
+-- усечения, второй сдвиг дал бы двойной перенос.
+--
+-- Пояс намеренно не читается из сессии: date_trunc вычисляется в момент REFRESH, и
+-- обновление из сессии с другим поясом переписало бы границы уже закрытых недель.
 -- ============================================================================
 
 -- Недельная витрина документов: грейн (week_start, клиника). Хранятся только
@@ -807,7 +889,7 @@ SELECT
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
-    (d.week_start < date_trunc('week', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_week
+    (d.week_start < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_week
 FROM (
     SELECT
         r.dwh_id,
@@ -816,13 +898,13 @@ FROM (
         r.clinic_label,
         r.status,
         r.first_sent_at,
-        date_trunc('week', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS week_start
+        date_trunc('week', r.ips_date AT TIME ZONE public.report_timezone())::date AS week_start
     FROM public.rpt_documents r
     WHERE r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
     SELECT LEAST(
-        ((d.week_start + 7)::timestamp AT TIME ZONE 'Europe/Moscow'),
+        ((d.week_start + 7)::timestamp AT TIME ZONE public.report_timezone()),
         now()
     ) AS ts
 ) anchor
@@ -846,14 +928,14 @@ COMMENT ON MATERIALIZED VIEW public.rpt_documents_weekly IS
 -- превышать 100 % от числа документов; это контракт панели структуры.
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown_weekly AS
 SELECT
-    date_trunc('week', b.ips_date AT TIME ZONE 'Europe/Moscow')::date AS week_start,
+    date_trunc('week', b.ips_date AT TIME ZONE public.report_timezone())::date AS week_start,
     b.clinic_jid,
     MAX(b.clinic_name) AS clinic_name,
     b.clinic_label,
     b.error_category,
     COUNT(DISTINCT b.dwh_id)::bigint AS docs_with_category,
-    (date_trunc('week', b.ips_date AT TIME ZONE 'Europe/Moscow')::date
-        < date_trunc('week', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_week
+    (date_trunc('week', b.ips_date AT TIME ZONE public.report_timezone())::date
+        < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_week
 FROM public.rpt_error_breakdown b
 WHERE b.ips_date IS NOT NULL
 GROUP BY 1, b.clinic_jid, b.clinic_label, b.error_category
@@ -873,11 +955,8 @@ COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_weekly IS
 -- месяцам» управленческого дашборда. Идемпотентность — как у недельного слоя:
 -- DROP в 60, CREATE здесь, REFRESH + ANALYZE в 90.
 --
--- Месяц = первое число месяца МСК. AT TIME ZONE 'Europe/Moscow' применяется
--- ОДИН раз и сознательно: date_trunc вычисляется в момент REFRESH, а init-прогон
--- (90-я часть) обновляет matview под ролью postgres, у которой timezone НЕ
--- запинен (пин стоит только на роли egisz, 00_bootstrap). Это не двойной сдвиг:
--- ips_date — timestamptz, сдвиг задаёт стену МСК до усечения.
+-- Месяц = первое число месяца по отчётному календарю. Пояс берётся у report_timezone()
+-- и применяется ОДИН раз — как в недельном слое.
 -- ============================================================================
 
 -- Месячная витрина документов: грейн (month_start, клиника). Хранятся только
@@ -903,7 +982,7 @@ SELECT
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
-    (d.month_start < date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_month
+    (d.month_start < date_trunc('month', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_month
 FROM (
     SELECT
         r.dwh_id,
@@ -912,13 +991,13 @@ FROM (
         r.clinic_label,
         r.status,
         r.first_sent_at,
-        date_trunc('month', r.ips_date AT TIME ZONE 'Europe/Moscow')::date AS month_start
+        date_trunc('month', r.ips_date AT TIME ZONE public.report_timezone())::date AS month_start
     FROM public.rpt_documents r
     WHERE r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
     SELECT LEAST(
-        ((d.month_start + INTERVAL '1 month')::timestamp AT TIME ZONE 'Europe/Moscow'),
+        ((d.month_start + INTERVAL '1 month')::timestamp AT TIME ZONE public.report_timezone()),
         now()
     ) AS ts
 ) anchor
@@ -942,14 +1021,14 @@ COMMENT ON MATERIALIZED VIEW public.rpt_documents_monthly IS
 -- превышать 100 % от числа документов; это контракт панели структуры.
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown_monthly AS
 SELECT
-    date_trunc('month', b.ips_date AT TIME ZONE 'Europe/Moscow')::date AS month_start,
+    date_trunc('month', b.ips_date AT TIME ZONE public.report_timezone())::date AS month_start,
     b.clinic_jid,
     MAX(b.clinic_name) AS clinic_name,
     b.clinic_label,
     b.error_category,
     COUNT(DISTINCT b.dwh_id)::bigint AS docs_with_category,
-    (date_trunc('month', b.ips_date AT TIME ZONE 'Europe/Moscow')::date
-        < date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date) AS is_complete_month
+    (date_trunc('month', b.ips_date AT TIME ZONE public.report_timezone())::date
+        < date_trunc('month', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_month
 FROM public.rpt_error_breakdown b
 WHERE b.ips_date IS NOT NULL
 GROUP BY 1, b.clinic_jid, b.clinic_label, b.error_category
@@ -1277,7 +1356,7 @@ SELECT * FROM (
          'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
 
--- Наблюдаемость слоя версий (README §«Версии и идентичность документа»).
+-- Наблюдаемость слоя версий.
 -- «Макс. размер группы» — детектор перемола: группа по (jid+тип+documentNumber) не должна
 -- схлопывать РАЗНЫЕ документы (страховка c_cap=50 в recompute_document_versions; max по
 -- базе = 7). «Коллизии localUid» — один dwh_id с разным типом СЭМД в transactions: признак

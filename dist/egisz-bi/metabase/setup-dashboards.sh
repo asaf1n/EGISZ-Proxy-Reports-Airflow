@@ -27,6 +27,13 @@ METABASE_SITE_NAME="${METABASE_SITE_NAME:-Интеграция с ЕГИСЗ}"
 CLIENT_DASHBOARD_NAME="${METABASE_CLIENT_DASHBOARD_NAME:-Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ}"
 METABASE_PUBLIC_CLIENT_DASHBOARD="${METABASE_PUBLIC_CLIENT_DASHBOARD:-false}"
 
+# Пояс отчётного календаря Metabase. Задаётся одним значением: оно уходит и в настройку
+# подключения к DWH, и в глобальную настройку инстанса, поэтому дни и недели на дашбордах
+# не могут разойтись между собой. В DWH тот же пояс объявлен один раз пином роли egisz
+# (db/01_schema.sql), а витрины читают его функцией report_timezone() — литерала пояса в
+# SQL нет.
+REPORT_TIMEZONE="${REPORT_TIMEZONE:-Europe/Moscow}"
+
 APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
 APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
@@ -199,6 +206,7 @@ login() {
       --arg dbname "${APP_DB_NAME}" \
       --arg user "${APP_DB_USER}" \
       --arg pass "${APP_DB_PASSWORD}" \
+      --arg tz "${REPORT_TIMEZONE}" \
       '{
         token: $token,
         user: {
@@ -221,7 +229,7 @@ login() {
             user: $user,
             password: $pass,
             ssl: false,
-            "report-timezone": "Europe/Moscow"
+            "report-timezone": $tz
           }
         }
       }'
@@ -250,6 +258,7 @@ resolve_or_create_app_database_id() {
       --arg dbname "${APP_DB_NAME}" \
       --arg user "${APP_DB_USER}" \
       --arg pass "${APP_DB_PASSWORD}" \
+      --arg tz "${REPORT_TIMEZONE}" \
       '{
         name: $name,
         engine: "postgres",
@@ -260,7 +269,7 @@ resolve_or_create_app_database_id() {
           user: $user,
           password: $pass,
           ssl: false,
-          "report-timezone": "Europe/Moscow"
+          "report-timezone": $tz
         }
       }'
   )
@@ -274,37 +283,37 @@ ensure_app_database_report_timezone() {
     api_request GET "/api/database/${APP_DB_ID}" |
       jq -r '.details["report-timezone"] // empty'
   )
-  if [ "${current_tz}" = "Europe/Moscow" ]; then
+  if [ "${current_tz}" = "${REPORT_TIMEZONE}" ]; then
     return
   fi
 
-  log_info "Setting Metabase report-timezone=Europe/Moscow for database id ${APP_DB_ID}"
+  log_info "Setting Metabase report-timezone=${REPORT_TIMEZONE} for database id ${APP_DB_ID}"
   payload=$(
     api_request GET "/api/database/${APP_DB_ID}" |
-      jq '.details["report-timezone"] = "Europe/Moscow" | {details: .details, engine: .engine, name: .name}'
+      jq --arg tz "${REPORT_TIMEZONE}" '.details["report-timezone"] = $tz | {details: .details, engine: .engine, name: .name}'
   )
   api_request PUT "/api/database/${APP_DB_ID}" "${payload}" >/dev/null
 }
 
 # Группировку по суткам на дашбордах задаёт ГЛОБАЛЬНая настройка report-timezone, а не
 # per-database деталь выше: при пустой глобальной настройке Metabase раскладывает дни в UTC,
-# и сутки МСК «уезжают» на день назад. Пинуем её на Europe/Moscow, чтобы дашборды считали
-# границу суток по Москве.
+# и сутки «уезжают» на день назад. Пинуем её на REPORT_TIMEZONE, чтобы дашборды считали
+# границу суток по отчётному календарю.
 ensure_global_report_timezone() {
   local current_tz
-  # Metabase (v0.62+) отдаёт строковые настройки сырым текстом, а не JSON — `jq` на «Europe/Moscow»
+  # Metabase (v0.62+) отдаёт строковые настройки сырым текстом, а не JSON — `jq` на значении
   # без кавычек падает с parse error и валит весь импорт. Парсим терпимо к обоим форматам.
   current_tz=$(api_request GET "/api/setting/report-timezone" | tr -d '"' | tr -d '[:space:]')
-  if [ "${current_tz}" = "Europe/Moscow" ]; then
+  if [ "${current_tz}" = "${REPORT_TIMEZONE}" ]; then
     return
   fi
-  log_info "Setting global Metabase report-timezone=Europe/Moscow"
-  api_request PUT "/api/setting/report-timezone" '{"value":"Europe/Moscow"}' >/dev/null
+  log_info "Setting global Metabase report-timezone=${REPORT_TIMEZONE}"
+  api_request PUT "/api/setting/report-timezone" "$(jq -nc --arg tz "${REPORT_TIMEZONE}" '{value: $tz}')" >/dev/null
 }
 
 # Дефолты инстанса Metabase (идемпотентно на каждый прогон): язык — русский, формат времени —
 # 24 часа сокращённый (HH:mm), валюта — рубль (₽), кеширование результатов — включено.
-# Локация (часовой пояс Europe/Moscow) пинится ensure_global_report_timezone. PUT идемпотентен —
+# Локация (часовой пояс REPORT_TIMEZONE) пинится ensure_global_report_timezone. PUT идемпотентен —
 # повторная установка того же значения безопасна; ошибки не валят импорт (|| true).
 ensure_localization_defaults() {
   log_info "Applying Metabase defaults: locale=ru, time=HH:mm, currency=RUB, query-caching=on"
