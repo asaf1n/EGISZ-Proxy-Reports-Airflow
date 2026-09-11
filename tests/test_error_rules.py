@@ -27,6 +27,11 @@ DSN = os.environ.get("EGISZ_TEST_PG_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="EGISZ_TEST_PG_DSN not set; live-PG tests skipped")
 
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
+SCHEMA_SQL = (DB_DIR / "01_schema.sql").read_text(encoding="utf-8")
+
+# Редакция НСИ 805, из которой взят реестр наименований справочников.
+NSI_DICTIONARY_SOURCE = ("1.2.643.5.1.13.13.99.2.805", "6.19")
+NSI_DICTIONARY_SIZE = 465
 
 RESPONSIBILITY_DOMAIN = ("клиника", "МИС", "интегратор", "РЭМД", "смешанная")
 CODE_NAMESPACES = ("НСИ 305", "IHE XDS", "шлюз")
@@ -626,3 +631,80 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
         WHERE is_active AND error_category = 'Ошибки справочника НСИ'
           AND nsi_dictionary_pattern IS NULL
     """) == 0
+
+
+# --- Реестр наименований справочников ФНСИ --------------------------------------------
+# Реестр — снимок НСИ 805; его единственный потребитель — подпись предмета отказа
+# в rpt_error_breakdown.error_type.
+
+
+def test_nsi_dictionary_matches_published_805_revision(con):
+    """Реестр обязан совпадать с опубликованной редакцией целиком: наименования подписи
+    берутся дословно, а расхождение с источником сделало бы сверку неоднозначной."""
+    assert one(con, "SELECT count(*) FROM dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
+    assert one(con, """
+        SELECT count(*) FROM dim_nsi_dictionary
+        WHERE source_oid <> %s OR source_version <> %s
+           OR name IS NULL OR btrim(name) = ''
+    """, *NSI_DICTIONARY_SOURCE) == 0
+
+
+def test_nsi_dictionary_agrees_with_805_snapshot(con):
+    """Реестр вписан литералами, потому что снимок 805 наполняется скриптом уже после
+    наката схемы. Разойтись с ним он всё равно не имеет права."""
+    if one(con, "SELECT count(*) FROM dim_nsi_semd_guide_dictionary") == 0:
+        pytest.skip("снимок НСИ 805 не загружен; сверять нечего")
+    assert one(con, """
+        SELECT count(*) FROM dim_nsi_dictionary d
+        JOIN (SELECT DISTINCT dict_oid, dict_name FROM dim_nsi_semd_guide_dictionary) g
+          ON g.dict_oid = d.oid
+        WHERE g.dict_name <> d.name
+    """) == 0
+
+
+def test_nsi_dictionary_short_name_only_shortens(con):
+    """Краткая подпись существует ради читаемости витрины. Запись, которая не короче
+    официального наименования, означает, что в подпись пролезло второе написание."""
+    assert one(con, """
+        SELECT count(*) FROM dim_nsi_dictionary
+        WHERE short_name IS NOT NULL
+          AND (btrim(short_name) = '' OR length(short_name) >= length(name))
+    """) == 0
+    assert one(con, """
+        SELECT short_name FROM dim_nsi_dictionary
+        WHERE oid = '1.2.643.5.1.13.13.11.1005'
+    """) == "МКБ-10"
+
+
+def test_error_breakdown_labels_every_registered_dictionary(con):
+    """Подпись показывает голый OID только для справочника вне 805. OID, заведённый в
+    реестре, обязан быть расшифрован — иначе соединение подписи потеряно."""
+    # Витрину пересоздаёт 04_views.sql; модуль правил её не строит и на голой базе не найдёт.
+    if one(con, "SELECT to_regclass('public.rpt_error_breakdown')") is None:
+        pytest.skip("витрина rpt_error_breakdown не построена; проверять нечего")
+    assert one(con, """
+        SELECT count(*) FROM rpt_error_breakdown b
+        WHERE b.nsi_dictionary_oid IS NOT NULL
+          AND b.nsi_dictionary_name IS NULL
+          AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = b.nsi_dictionary_oid)
+    """) == 0
+    # подпись берёт краткое написание там, где оно заведено
+    assert one(con, """
+        SELECT count(*) FROM rpt_error_breakdown b
+        JOIN dim_nsi_dictionary d ON d.oid = b.nsi_dictionary_oid
+        WHERE d.short_name IS NOT NULL AND b.error_type NOT LIKE '%' || d.short_name
+    """) == 0
+
+
+def test_nsi_dictionary_schema_contract() -> None:
+    """Комментарий к таблице — единственное место, где записано назначение реестра и его
+    потребитель. Ссылка на несуществующий объект уже однажды пережила снятие витрины."""
+    assert "CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (" in SCHEMA_SQL
+    assert "COMMENT ON TABLE dim_nsi_dictionary IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
+    assert "rpt_error_messages" not in SCHEMA_SQL
+    assert "ADD COLUMN IF NOT EXISTS short_name text" in SCHEMA_SQL
+    # редакция объявляется сидом, а не умолчанием колонки: на развёрнутой базе
+    # ADD COLUMN IF NOT EXISTS не срабатывает и умолчание застыло бы на прежней редакции
+    assert "SELECT v.oid, v.name, '%s'" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
+    assert "DELETE FROM dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL

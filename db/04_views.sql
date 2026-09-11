@@ -652,7 +652,7 @@ SELECT
     (a.base_error_type || CASE
         WHEN dd.oid_count > 1 THEN ' · несколько справочников'
         WHEN dd.nsi_dictionary_oid IS NOT NULL
-            THEN ' · ' || COALESCE(nd.name, 'OID ' || dd.nsi_dictionary_oid)
+            THEN ' · ' || COALESCE(nd.short_name, nd.name, 'OID ' || dd.nsi_dictionary_oid)
         ELSE ''
     END) COLLATE "und-x-icu" AS error_type,
     a.base_error_type,
@@ -670,7 +670,9 @@ INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
 LEFT JOIN type_pattern tp ON tp.interpretation = a.base_error_type
 LEFT JOIN doc_dictionary dd
        ON dd.dwh_id = a.dwh_id AND dd.pattern = tp.pattern
--- a/db/04_views.sql
+-- Реестр наименований — снимок НСИ 805, и справочники вне него там отсутствуют: OID без
+-- расшифровки идёт в подпись как есть. В подпись берётся краткое написание там, где оно
+-- заведено, иначе официальное наименование заняло бы до 181 символа.
 LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = dd.nsi_dictionary_oid
 WITH DATA;
 
