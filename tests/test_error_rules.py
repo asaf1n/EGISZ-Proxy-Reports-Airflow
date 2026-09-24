@@ -461,6 +461,14 @@ def test_remd_error_type_strips_document_values(con):
     assert one(con, "SELECT public.remd_error_type(%s)", "") == "(без текста)"
 
 
+def test_remd_error_type_masks_quoted_values_and_email(con):
+    """Отказ без правила идёт в тип своей формулировкой — в ней фамилии и почта."""
+    assert one(con, "SELECT public.remd_error_type(%s)",
+               "Неверный формат e-mail 'Ivanov.I.I@example.ru '") == "Неверный формат e-mail '[…]'"
+    assert one(con, "SELECT public.remd_error_type(%s)",
+               "Адрес ivanov@example.ru недоступен") == "Адрес <e-mail> недоступен"
+
+
 def test_uncovered_message_surfaces_as_text(con):
     """Формулировка без правила показывается как есть."""
     atoms = one(con, "SELECT public.error_item_atoms(%s, %s)",

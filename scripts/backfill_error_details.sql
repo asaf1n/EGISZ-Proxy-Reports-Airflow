@@ -16,15 +16,33 @@ TRUNCATE pg_temp.error_item_details_cache;
 
 -- Ранее перенесённые элементы могли получить тип из текста ответа вместе с реквизитами
 -- экземпляра. Тип строится из класса и сообщения элемента, поэтому ответ заново не разбирается.
+-- Класс без правила — сама нормализованная формулировка; её нормализация стала строже,
+-- поэтому такой класс пересчитывается из сообщения.
+CREATE OR REPLACE FUNCTION pg_temp.element_class(p_element jsonb)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE
+        WHEN NULLIF(btrim(p_element->>'message'), '') IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM public.dim_error_rules r
+                         WHERE r.interpretation = p_element->>'classification_type')
+        THEN public.remd_error_type(p_element->>'message')
+        ELSE p_element->>'classification_type'
+    END;
+$$;
+
 CREATE OR REPLACE FUNCTION pg_temp.details_by_class(p_details jsonb)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT COALESCE(jsonb_agg(e || jsonb_build_object('error_type',
-               public.error_type_label(e->>'classification_type', e->>'message')) ORDER BY o),
+    SELECT COALESCE(jsonb_agg(e || jsonb_build_object(
+               'classification_type', c.class_type,
+               'error_type', public.error_type_label(c.class_type, e->>'message')) ORDER BY o),
            '[]'::jsonb)
-    FROM jsonb_array_elements(p_details) WITH ORDINALITY AS x(e, o);
+    FROM jsonb_array_elements(p_details) WITH ORDINALITY AS x(e, o)
+    CROSS JOIN LATERAL (SELECT pg_temp.element_class(e) AS class_type) c;
 $$;
 
 CREATE OR REPLACE FUNCTION pg_temp.details_need_class(p_details jsonb)
@@ -33,8 +51,10 @@ LANGUAGE sql
 STABLE
 AS $$
     SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(p_details) e
-                   WHERE e->>'error_type' IS DISTINCT FROM
-                         public.error_type_label(e->>'classification_type', e->>'message'));
+                   CROSS JOIN LATERAL (SELECT pg_temp.element_class(e) AS class_type) c
+                   WHERE e->>'classification_type' IS DISTINCT FROM c.class_type
+                      OR e->>'error_type' IS DISTINCT FROM
+                         public.error_type_label(c.class_type, e->>'message'));
 $$;
 
 UPDATE public.documents d
