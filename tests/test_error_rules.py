@@ -278,18 +278,8 @@ def test_error_classify_dedups_and_joins(con):
           {"code":"PATIENT_MPI_MISMATCH","message":"не соответствует данным ГИП"}]'::jsonb)""")
     assert result == (
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
-        " · Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП"
+        " · не соответствует данным ГИП"
     )
-
-
-def test_error_type_names_gip_attribute_without_value(con):
-    details = one(con, """SELECT public.error_details(
-        '[{"code":"PATIENT_MPI_MISMATCH","message":"Указанное значение [Имя пациента] [Петрова Анна] не соответствует данным ГИП [Петрова Анна]. Пациент найден по локальному идентификатору"}]'::jsonb)""")
-    assert details[0]["error_type"] == (
-        "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП"
-        " (реквизит: Имя пациента)")
-    assert details[0]["classification_type"] == (
-        "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП")
 
 
 def test_error_classify_empty_message_known_code(con):
@@ -305,16 +295,24 @@ def test_error_classify_empty_message_known_code(con):
     ("NO_SNILS", "СНИЛС пациента в составе сведений о пациенте обязателен для данного вида документов"),
     ("OBJECT_NOT_FOUND", "Подразделение не существовало на дату создания документа"),
 ])
-def test_error_type_is_classification_and_message_is_kept(con, code, message):
+def test_readable_message_is_not_rephrased(con, code, message):
     import json
 
     details = one(con, "SELECT public.error_details(%s::jsonb)",
                   json.dumps([{"code": code, "message": message}]))
-    expected = one(con, "SELECT public.error_item_atoms(%s, %s)", code, message)[0]
-    assert details[0]["error_type"] == expected
-    assert details[0]["classification_type"] == expected
+    assert details[0]["error_type"] == message
     assert details[0]["message"] == message
     assert details[0]["code"] == code
+    assert details[0]["classification_type"] == one(
+        con, "SELECT public.error_item_atoms(%s, %s)", code, message)[0]
+
+
+def test_gip_mismatch_keeps_attribute_name_and_hides_values(con):
+    details = one(con, """SELECT public.error_details(
+        '[{"code":"PATIENT_MPI_MISMATCH","message":"Указанное значение [Имя пациента] [Петрова Анна] не соответствует данным ГИП [Петрова А.]. Пациент найден по локальному идентификатору"}]'::jsonb)""")
+    assert details[0]["error_type"] == (
+        "Указанное значение [Имя пациента] […] не соответствует данным ГИП […]."
+        " Пациент найден по локальному идентификатору")
 
 
 @pytest.mark.parametrize("code,message,leak", [
@@ -365,14 +363,14 @@ def test_literal_separator_in_message_is_not_an_error_boundary(con):
     details = one(con, """SELECT public.error_details(
         '[{"code":"VALIDATION_ERROR","message":"Поле не заполнено · проверка документа"}]'::jsonb)""")
     assert len(details) == 1
-    assert details[0]["message"] == "Поле не заполнено · проверка документа"
+    assert details[0]["error_type"] == "Поле не заполнено · проверка документа"
 
 
 def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
     import json
     import uuid
 
-    ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
     message = "Срок действия сертификата организации истек или еще не наступил"
     certificate = {"code": "CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "message": message}
     oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
@@ -388,21 +386,14 @@ def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
                     SELECT %s, 'async_error', now(), details, public.error_detail_types(details)
                     FROM (SELECT public.error_details(%s::jsonb) AS details) d
                 """, (doc_id, json.dumps(payload)))
-            cur.execute("""
-                INSERT INTO documents (dwh_id, status, last_callback_at, error_types, error_text)
-                VALUES (%s, 'async_error', now(),
-                        (public.error_item_atoms('INVALID_DICTIONARY_VERSION', %s))[1], %s)
-            """, (ids[2], dictionaries[0]["message"], " · ".join(x["message"] for x in dictionaries)))
             # Проверяется определение поставляемой витрины без REFRESH общего архива.
             cur.execute("SELECT pg_get_viewdef('public.rpt_error_breakdown', true)")
             view_sql = cur.fetchone()[0].rstrip().rstrip(';')
             cur.execute("SELECT dwh_id, error_type, nsi_dictionary_oid, nsi_dictionary_name "
                         "FROM (" + view_sql + ") b WHERE dwh_id = ANY(%s)", (ids,))
             rows = cur.fetchall()
-            assert len(rows) == 6
-            certificate_type = one(con, "SELECT public.error_item_atoms(%s, %s)",
-                                   certificate["code"], message)[0]
-            assert {row[0] for row in rows if row[1] == certificate_type} == set(ids[:2])
+            assert len(rows) == 4
+            assert {row[0] for row in rows if row[1] == message} == set(ids)
             for row in rows:
                 if row[2]:
                     assert row[2] in oids
@@ -411,39 +402,6 @@ def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT reporting_case")
             cur.execute("RELEASE SAVEPOINT reporting_case")
-
-
-def test_archive_backfill_repeats_without_changing_another_document(con):
-    script = (DB_DIR.parent / "scripts/backfill_error_details.sql").read_text(encoding="utf-8")
-    setup = script.split("CREATE OR REPLACE PROCEDURE")[0]
-    setup = "\n".join(line for line in setup.splitlines() if not line.startswith("\\"))
-    with con.cursor() as cur:
-        cur.execute("SAVEPOINT archive_replay")
-        try:
-            # Скрипт сначала приводит сохранённые подписи к классу — эталон снимается после.
-            cur.execute(setup)
-            cur.execute("""
-                SELECT d.dwh_id, d.error_types, d.error_details
-                FROM documents d
-                JOIN transactions t ON t.logid = d.result_logid AND t.dwh_id = d.dwh_id
-                                   AND t.log_date = d.last_callback_at
-                JOIN exchangelog_raw r ON r.logid = t.logid AND r.createdate = t.log_date
-                WHERE d.status = 'async_error' AND d.error_details IS NOT NULL
-                LIMIT 1
-            """)
-            original = cur.fetchone()
-            if not original:
-                pytest.skip("No migrated callback available for archive replay")
-            cur.execute("UPDATE documents SET error_details = NULL WHERE dwh_id = %s", (original[0],))
-            cur.execute("SELECT pg_temp.backfill_error_details(1)")
-            assert cur.fetchone()[0] == 1
-            cur.execute("SELECT dwh_id, error_types, error_details FROM documents WHERE dwh_id = %s", (original[0],))
-            assert cur.fetchone() == original
-            cur.execute("SELECT pg_temp.backfill_error_details(1)")
-            assert cur.fetchone()[0] == 0
-        finally:
-            cur.execute("ROLLBACK TO SAVEPOINT archive_replay")
-            cur.execute("RELEASE SAVEPOINT archive_replay")
 
 
 # --- Нормализация остатка --------------------------------------------------------------

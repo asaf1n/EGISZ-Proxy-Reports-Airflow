@@ -579,23 +579,12 @@ COMMENT ON VIEW public.rpt_network_errors IS
 -- как есть в категорию «Прочие».
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
 -- error_details сохраняет связь сообщения, классификации и OID одного элемента ответа.
--- NULL обрабатывается на время переноса архива: scripts/backfill_error_details.sql.
 WITH doc_details AS (
     SELECT doc.dwh_id, e.error_type AS base_error_type, e.classification_type,
            e.nsi_dictionary_oid, e.code
     FROM public.documents doc
-    CROSS JOIN LATERAL jsonb_to_recordset(COALESCE(NULLIF(doc.error_details, '[]'::jsonb),
-        (SELECT jsonb_agg(jsonb_build_object('error_type', btrim(atom),
-                                           'classification_type', btrim(atom),
-                                           'nsi_dictionary_oid', legacy_oid.oid))
-         FROM unnest(string_to_array(btrim(doc.error_types), ' · ')) atom
-         LEFT JOIN LATERAL (
-             SELECT DISTINCT (regexp_matches(doc.error_text, rule.nsi_dictionary_pattern, 'g'))[1] AS oid
-             FROM public.dim_error_rules rule
-             WHERE rule.is_active AND rule.interpretation = btrim(atom)
-               AND rule.nsi_dictionary_pattern IS NOT NULL
-         ) legacy_oid ON true)
-    )) AS e(error_type text, classification_type text, nsi_dictionary_oid text, code text)
+    CROSS JOIN LATERAL jsonb_to_recordset(doc.error_details)
+        AS e(error_type text, classification_type text, nsi_dictionary_oid text, code text)
     WHERE doc.status IN ('async_error', 'network_error')
       AND NULLIF(btrim(e.error_type), '') IS NOT NULL
 ),

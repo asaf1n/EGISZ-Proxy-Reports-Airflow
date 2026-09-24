@@ -234,8 +234,8 @@ def test_error_classify_uses_atomic_item_atoms() -> None:
     assert "error_detail_types(public.error_details(p_errors))" in classify
     details = sql.split("CREATE OR REPLACE FUNCTION public.error_details(")[1].split("$$;")[0]
     assert "error_item_atoms" in details
-    assert "error_message_is_readable" not in details
-    assert "error_type_label(class_type, message_text)" in details
+    assert "error_message_is_readable" in details
+    assert "error_message_type(message_text)" in details
     assert "error_interpretation_type" not in classify
 
 
@@ -244,12 +244,10 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     # Матвью: горячая витрина «Анализ ошибок» предрассчитана и индексирована.
     assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
     breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split("COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
-    assert "string_to_array" in breakdown
     assert "' · '" in breakdown
     # Канонизация set-based: LEFT JOIN к словарю (без построчных подзапросов).
     assert "dim_error_type_group" in breakdown
     assert "public.documents doc" in breakdown
-    assert "btrim(doc.error_types)" in breakdown
     assert "jsonb_to_recordset" in breakdown
     assert "d.classification_type" in breakdown
     assert "' (справочник: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'" in breakdown

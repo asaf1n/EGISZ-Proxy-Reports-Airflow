@@ -674,7 +674,6 @@ CREATE TABLE IF NOT EXISTS dim_error_rules (
     parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code),
     match_pattern text NOT NULL,
     nsi_dictionary_pattern text,
-    attribute_pattern text,
     interpretation text NOT NULL,
     error_category text NOT NULL DEFAULT 'Прочие',
     is_active boolean NOT NULL DEFAULT true,
@@ -693,16 +692,11 @@ ALTER TABLE dim_error_rules
     ADD COLUMN IF NOT EXISTS parent_nsi_error_code text REFERENCES dim_nsi_error_code (nsi_error_code);
 ALTER TABLE dim_error_rules
     ADD COLUMN IF NOT EXISTS nsi_dictionary_pattern text;
-ALTER TABLE dim_error_rules
-    ADD COLUMN IF NOT EXISTS attribute_pattern text;
 
 COMMENT ON COLUMN dim_error_rules.match_tier IS
 'Ярус матчинга: 1 — код + специфичный текст; 2 — только код (match_pattern = ''(?is).*''); 3 — специфичный текст без кода; 4 — широкий текстовый фолбэк. Первый ярус с совпадением побеждает.';
 COMMENT ON COLUMN dim_error_rules.nsi_dictionary_pattern IS
 'Регулярное выражение, извлекающее OID справочника ФНСИ из формулировки отказа (первая группа захвата). Заполняется у классов, чей отказ относится к справочнику; NULL — отказ к справочнику не относится. Захватывается именно справочник: версия и код элемента меняются от документа к документу и раздробили бы разбивку до значений отдельного случая. Шаблон обязан совпадать только с формулировками своего класса — кода отказа в error_text нет, и класс сообщения по тексту неизвестен.';
-
-COMMENT ON COLUMN dim_error_rules.attribute_pattern IS
-'Регулярное выражение, извлекающее наименование реквизита из формулировки отказа (первая группа захвата); реквизит дописывается к типу. Захватывается только наименование из закрытого набора, а не значение: значение принадлежит пациенту или сотруднику и в тип попадать не должно.';
 
 COMMENT ON COLUMN dim_error_rules.code_namespace IS
 'Пространство имён кода: «НСИ 305» — классификатор ФНСИ 1.2.643.5.1.13.13.99.2.305; «IHE XDS» — errorCode контура ИЭМК; «шлюз» — синтетический код интеграционного шлюза. NULL для текстовых ярусов.';
@@ -724,7 +718,6 @@ CREATE TEMP TABLE seed_error_rules (
     parent_nsi_error_code text,
     match_pattern text NOT NULL,
     nsi_dictionary_pattern text,
-    attribute_pattern text,
     interpretation text NOT NULL,
     error_category text NOT NULL
 );
@@ -1087,14 +1080,8 @@ UPDATE seed_error_rules
 SET nsi_dictionary_pattern = 'codeSystem=''([0-9.]+)'''
 WHERE rule_code = 'schematron_allowed_values';
 
--- РЭМД называет расходящийся с ГИП реквизит в первых скобках («Указанное значение
--- [Имя пациента] [значение] …»): без него отказы по имени, полу и дате рождения неразличимы.
-UPDATE seed_error_rules
-SET attribute_pattern = '^Указанное значение \[([^]]+)\]'
-WHERE rule_code = 'patient_mpi_mismatch';
-
-INSERT INTO dim_error_rules (rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, nsi_dictionary_pattern, attribute_pattern, interpretation, error_category)
-SELECT rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, nsi_dictionary_pattern, attribute_pattern, interpretation, error_category
+INSERT INTO dim_error_rules (rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, nsi_dictionary_pattern, interpretation, error_category)
+SELECT rule_code, match_tier, match_code, code_namespace, nsi_error_code, parent_nsi_error_code, match_pattern, nsi_dictionary_pattern, interpretation, error_category
 FROM seed_error_rules
 ON CONFLICT (rule_code) DO UPDATE SET
     match_tier = EXCLUDED.match_tier,
@@ -1104,7 +1091,6 @@ ON CONFLICT (rule_code) DO UPDATE SET
     parent_nsi_error_code = EXCLUDED.parent_nsi_error_code,
     match_pattern = EXCLUDED.match_pattern,
     nsi_dictionary_pattern = EXCLUDED.nsi_dictionary_pattern,
-    attribute_pattern = EXCLUDED.attribute_pattern,
     interpretation = EXCLUDED.interpretation,
     error_category = EXCLUDED.error_category,
     is_active = true,
@@ -1480,24 +1466,39 @@ AS $$
     END;
 $$;
 
--- Тип ошибки — всегда наименование класса. Текст ответа несёт реквизиты экземпляра
--- (ФИО и e-mail из сертификата, даты рождения, фамилии пациентов), и маскированием
--- все формулировки не закрыть; текст остаётся в поле message и в error_text.
-DROP FUNCTION IF EXISTS public.error_message_is_readable(text);
+-- Тип ошибки — формулировка РЭМД. Интерпретация правила показывается только там, где
+-- текста нет или он технический (XPath, XML, исключения); для категории она остаётся
+-- ключом classification_type. Явные диапазоны кириллицы работают при lc_ctype=C.
+CREATE OR REPLACE FUNCTION public.error_message_is_readable(p_message text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT COALESCE(p_message, '') ~ '[А-Яа-яЁё]{2,}[^А-Яа-яЁё]+[А-Яа-яЁё]{2,}'
+       AND COALESCE(p_message, '') !~* '(ClinicalDocument|Schematron|XPath|XSD|Exception|Traceback|nullFlavor|address:|identity:|cvc-|SOAP|internal_error|https?://|gost-[0-9]+)';
+$$;
 
-CREATE OR REPLACE FUNCTION public.error_type_label(p_class_type text, p_message text)
+-- Формулировка без значений экземпляра: тип уходит в фильтры и сводки дашбордов, в том
+-- числе клиентские. Хвост с реквизитами сертификата (субъект, серийный номер, e-mail)
+-- отрезается целиком, даты и ФИО со СНИЛС маскируются; значения в скобках и кавычках —
+-- в remd_error_type. Наименование реквизита в «Указанное значение [Имя пациента] …»
+-- сохраняется: это не значение, а указание, что именно не совпало с ГИП.
+CREATE OR REPLACE FUNCTION public.error_message_type(p_message text)
 RETURNS text
 LANGUAGE sql
-STABLE
+IMMUTABLE
 AS $$
-    SELECT p_class_type || COALESCE(' (реквизит: ' || (
-        SELECT (regexp_match(p_message, r.attribute_pattern))[1]
-        FROM public.dim_error_rules r
-        WHERE r.is_active AND r.interpretation = p_class_type
-          AND r.attribute_pattern IS NOT NULL
-          AND p_message ~ r.attribute_pattern
-        ORDER BY r.match_tier, r.rule_code
-        LIMIT 1) || ')', '');
+    SELECT regexp_replace(
+        public.remd_error_type(
+            regexp_replace(
+                regexp_replace(
+                    regexp_replace(
+                        regexp_replace(COALESCE(p_message, ''),
+                            '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', ''),
+                        ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', ': […] (СНИЛС: […])', 'g'),
+                    '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.+]+)?', '[…]', 'g'),
+                '^Указанное значение \[([А-Яа-яЁё :0-9]{1,40})\]', 'Указанное значение <<\1>>')),
+        '<<([^>]*)>>', '[\1]');
 $$;
 
 CREATE OR REPLACE FUNCTION public.error_details(p_errors jsonb)
@@ -1508,6 +1509,7 @@ AS $$
 DECLARE
     item jsonb;
     class_type text;
+    label text;
     message_text text;
     dictionary_oid text;
     result jsonb := '[]'::jsonb;
@@ -1517,6 +1519,11 @@ BEGIN
         message_text := item->>'message';
         FOREACH class_type IN ARRAY public.error_item_atoms(item->>'code', message_text)
         LOOP
+            label := class_type;
+            IF public.error_message_is_readable(message_text)
+               AND upper(COALESCE(item->>'code', '')) <> 'INTEGRATION_LOGSTATE_3' THEN
+                label := public.error_message_type(message_text);
+            END IF;
             SELECT (regexp_match(message_text, r.nsi_dictionary_pattern))[1]
             INTO dictionary_oid
             FROM public.dim_error_rules r
@@ -1527,8 +1534,7 @@ BEGIN
             LIMIT 1;
             result := result || jsonb_build_array(jsonb_build_object(
                 'code', item->>'code', 'message', message_text,
-                'error_type', public.error_type_label(class_type, message_text),
-                'classification_type', class_type,
+                'error_type', label, 'classification_type', class_type,
                 'nsi_dictionary_oid', dictionary_oid));
         END LOOP;
     END LOOP;

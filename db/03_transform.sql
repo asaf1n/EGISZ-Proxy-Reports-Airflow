@@ -404,7 +404,7 @@ BEGIN
         dwh_id, local_uid, semd_code,
         status, first_sent_at, request_logid, msgid,
         result_logid, first_callback_at, last_callback_at, jid, org_oid, jid_resolve_method,
-        error_types, error_text,
+        error_types, error_text, error_details,
         updated_at
     )
     SELECT
@@ -423,6 +423,8 @@ BEGIN
         a.resolve_method,
         CASE WHEN a.has_network_error THEN 'Сетевая ошибка' END,
         CASE WHEN a.has_network_error THEN a.network_message END,
+        CASE WHEN a.has_network_error THEN public.error_details(jsonb_build_array(jsonb_build_object(
+            'code', 'INTEGRATION_LOGSTATE_3', 'message', a.network_message))) END,
         now()
     FROM document_resolved a
     WHERE a.dwh_id IS NOT NULL
@@ -457,6 +459,7 @@ BEGIN
         END,
         error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
         error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
+        error_details = COALESCE(EXCLUDED.error_details, public.documents.error_details),
         msgid = CASE
             WHEN public.documents.status IN (SELECT public.document_status_final())
             THEN public.documents.msgid
