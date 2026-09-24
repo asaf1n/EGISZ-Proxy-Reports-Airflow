@@ -655,6 +655,9 @@ BEGIN
             -- errors_json нужен только для error-строк; для success/pending это всегда '[]',
             -- поэтому не гоняем разбор по payload'у успешных ответов.
             CASE
+                WHEN e.final_status = 'error' AND e.logstate = 3
+                THEN jsonb_build_array(jsonb_build_object(
+                    'code', 'INTEGRATION_LOGSTATE_3', 'message', e.event_message))
                 WHEN e.final_status = 'error'
                 THEN public.build_errors_json(e.final_status, e.error_code, e.event_message, e.msgtext)
                 ELSE '[]'::jsonb
@@ -669,17 +672,23 @@ BEGIN
         FROM with_errors
         WHERE final_status = 'error'
     ),
+    error_details_dict AS MATERIALIZED (
+        SELECT built_errors_json, public.error_details(built_errors_json) AS details
+        FROM error_dict
+    ),
     error_interp AS (
         SELECT
             built_errors_json,
-            public.error_classify(built_errors_json) AS error_type_dict,
+            public.error_detail_types(details) AS error_type_dict,
+            details AS error_details_dict,
             public.error_messages_row(built_errors_json) AS error_messages_dict
-        FROM error_dict
+        FROM error_details_dict
     ),
     with_bi_fields AS (
         SELECT
             e.*,
             ei.error_type_dict,
+            ei.error_details_dict,
             ei.error_messages_dict,
             regexp_split_to_array(public.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
             regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
@@ -691,7 +700,7 @@ BEGIN
         logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
         error_code, creation_date, loaded_at, link_method,
-        error_type, error_json_text,
+        error_type, error_json_text, error_details,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
     SELECT
@@ -705,6 +714,7 @@ BEGIN
             ELSE NULL  -- success/pending/unknown: видимость через status, error_type не заполняется
         END,
         e.error_messages_dict,
+        COALESCE(e.error_details_dict, '[]'::jsonb),
         CASE
             WHEN e.patient_parts IS NULL OR array_length(e.patient_parts, 1) IS NULL THEN '(нет данных)'
             ELSE substring(e.patient_parts[1] FROM 1 FOR 1) || '***'
@@ -749,6 +759,7 @@ BEGIN
         link_method = EXCLUDED.link_method,
         error_type = EXCLUDED.error_type,
         error_json_text = EXCLUDED.error_json_text,
+        error_details = EXCLUDED.error_details,
         patient_name_masked = EXCLUDED.patient_name_masked,
         snils_masked = EXCLUDED.snils_masked,
         doctor_name = EXCLUDED.doctor_name,
@@ -829,7 +840,7 @@ BEGIN
         status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
         first_callback_at, last_callback_at, last_status, jid, org_oid, jid_resolve_method,
-        error_types, error_text,
+        error_types, error_text, error_details,
         patient_hash, doctor_hash, updated_at
     )
     SELECT DISTINCT ON (f.dwh_id)
@@ -858,6 +869,7 @@ BEGIN
         f.jid_resolve_method,
         f.error_type,
         NULLIF(btrim(f.error_json_text), ''),
+        f.error_details,
         f.patient_hash,
         f.doctor_hash,
         now()
@@ -910,6 +922,12 @@ BEGIN
                >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
             THEN EXCLUDED.error_text
             ELSE public.documents.error_text
+        END,
+        error_details = CASE
+            WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
+               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
+            THEN EXCLUDED.error_details
+            ELSE public.documents.error_details
         END,
         patient_hash = COALESCE(EXCLUDED.patient_hash, public.documents.patient_hash),
         doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.documents.doctor_hash),

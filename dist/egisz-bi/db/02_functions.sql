@@ -1361,45 +1361,42 @@ $$;
 -- item с пустым текстом и известным кодом классифицируется правилом, а не «Код: X».
 CREATE OR REPLACE FUNCTION public.error_matching_rule_labels(p_code text, p_message text)
 RETURNS text[]
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
-    WITH incoming AS (
-        SELECT
-            upper(btrim(COALESCE(p_code, ''))) AS c,
-            btrim(COALESCE(p_message, '')) AS m
-    ),
-    -- РЭМД отдаёт часть мнемоник в написании, отличном от справочника (RECIPIENT_* против
-    -- RECEPIENT_*). Синоним разрешается до сопоставления, поэтому правило заводится один
-    -- раз — на каноничный код ФНСИ.
-    normalized AS (
-        SELECT COALESCE(a.nsi_error_code, i.c) AS c, i.m
-        FROM incoming i
-        LEFT JOIN public.dim_nsi_error_code_alias a ON a.alias = i.c
-    ),
-    matched AS (
-        SELECT r.match_tier, r.rule_code, r.interpretation
-        FROM normalized n
-        JOIN public.dim_error_rules r ON r.is_active
-        WHERE CASE r.match_tier
-            WHEN 1 THEN n.c <> '' AND r.match_code = n.c AND n.m <> '' AND n.m ~* r.match_pattern
-            WHEN 2 THEN n.c <> '' AND r.match_code = n.c AND n.m ~* r.match_pattern
-            ELSE n.m <> '' AND n.m ~* r.match_pattern
-        END
-    ),
-    -- Дедуп интерпретаций внутри выигравшего яруса: два правила яруса с одним типом
-    -- (напр. общий и уточнённый schematron-паттерн) не должны давать атом дважды.
-    winning AS (
-        SELECT m.interpretation, min(m.rule_code) AS rule_code
-        FROM matched m
-        WHERE m.match_tier = (SELECT min(match_tier) FROM matched)
-        GROUP BY m.interpretation
-    )
-    SELECT COALESCE(
-        array_agg(r.interpretation ORDER BY r.rule_code),
-        ARRAY[]::text[]
-    )
-    FROM winning r;
+DECLARE
+    normalized_code text := upper(btrim(COALESCE(p_code, '')));
+    message_text text := btrim(COALESCE(p_message, ''));
+    tier integer;
+    labels text[];
+BEGIN
+    SELECT COALESCE((SELECT a.nsi_error_code FROM public.dim_nsi_error_code_alias a
+                    WHERE a.alias = normalized_code), normalized_code)
+    INTO normalized_code;
+    -- Первый непустой приоритет завершает поиск. Проверка остальных шаблонов
+    -- после известного кода ничего не меняет, но замедляет обработку архива.
+    FOR tier IN 1..4 LOOP
+        SELECT array_agg(r.interpretation ORDER BY r.rule_code)
+        INTO labels
+        FROM (
+            SELECT rule.interpretation, min(rule.rule_code) AS rule_code
+            FROM public.dim_error_rules rule
+            WHERE rule.is_active AND rule.match_tier = tier
+              AND CASE tier
+                  WHEN 1 THEN normalized_code <> '' AND rule.match_code = normalized_code
+                              AND message_text <> '' AND message_text ~* rule.match_pattern
+                  WHEN 2 THEN normalized_code <> '' AND rule.match_code = normalized_code
+                              AND message_text ~* rule.match_pattern
+                  ELSE message_text <> '' AND message_text ~* rule.match_pattern
+              END
+            GROUP BY rule.interpretation
+        ) r;
+        IF cardinality(labels) > 0 THEN
+            RETURN labels;
+        END IF;
+    END LOOP;
+    RETURN ARRAY[]::text[];
+END;
 $$;
 
 -- Атомарные типы для одного <item>. Порядок разбора повторяет логику регламента
@@ -1469,6 +1466,72 @@ AS $$
     END;
 $$;
 
+-- Читаемая формулировка сохраняется; техническое выражение требует перевода правилом.
+-- Явные диапазоны кириллицы работают и при lc_ctype=C на рабочем PostgreSQL.
+CREATE OR REPLACE FUNCTION public.error_message_is_readable(p_message text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT COALESCE(p_message, '') ~ '[А-Яа-яЁё]{2,}[^А-Яа-яЁё]+[А-Яа-яЁё]{2,}'
+       AND COALESCE(p_message, '') !~* '(ClinicalDocument|Schematron|XPath|XSD|Exception|Traceback|nullFlavor|address:|identity:|cvc-|SOAP|internal_error|https?://|gost-[0-9]+)';
+$$;
+
+CREATE OR REPLACE FUNCTION public.error_details(p_errors jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    item jsonb;
+    class_type text;
+    label text;
+    message_text text;
+    dictionary_oid text;
+    result jsonb := '[]'::jsonb;
+BEGIN
+    FOR item IN SELECT value FROM jsonb_array_elements(public.error_payload_array(p_errors))
+    LOOP
+        message_text := item->>'message';
+        FOREACH class_type IN ARRAY public.error_item_atoms(item->>'code', message_text)
+        LOOP
+            label := class_type;
+            IF public.error_message_is_readable(message_text)
+               AND upper(COALESCE(item->>'code', '')) <> 'INTEGRATION_LOGSTATE_3' THEN
+                -- Имена и реквизиты экземпляра не должны попадать в список типов.
+                label := public.remd_error_type(regexp_replace(
+                    message_text, ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', ': […] (СНИЛС: […])', 'g'));
+            END IF;
+            SELECT (regexp_match(message_text, r.nsi_dictionary_pattern))[1]
+            INTO dictionary_oid
+            FROM public.dim_error_rules r
+            WHERE r.is_active AND r.interpretation = class_type
+              AND r.nsi_dictionary_pattern IS NOT NULL
+              AND message_text ~ r.nsi_dictionary_pattern
+            ORDER BY r.match_tier, r.rule_code
+            LIMIT 1;
+            result := result || jsonb_build_array(jsonb_build_object(
+                'code', item->>'code', 'message', message_text,
+                'error_type', label, 'classification_type', class_type,
+                'nsi_dictionary_oid', dictionary_oid));
+        END LOOP;
+    END LOOP;
+    RETURN result;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.error_detail_types(p_details jsonb)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT COALESCE(public.error_join_deduped(
+        array_agg(e->>'error_type' ORDER BY o)
+            FILTER (WHERE NULLIF(btrim(e->>'error_type'), '') IS NOT NULL),
+        ' · '), 'Неизвестная ошибка')
+    FROM jsonb_array_elements(COALESCE(p_details, '[]'::jsonb)) WITH ORDINALITY AS x(e, o);
+$$;
+
 -- Плоская таксономия error_types: каждый <item> → атомы (error_item_atoms),
 -- уникальные дедуплицируются и склеиваются через ' · ' (порядок детерминирован:
 -- позиция item, затем тип — детерминизм важен для идемпотентности transform).
@@ -1477,17 +1540,7 @@ RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT COALESCE(
-        public.error_join_deduped(
-            array_agg(btrim(atom) ORDER BY o, btrim(atom))
-                FILTER (WHERE NULLIF(btrim(atom), '') IS NOT NULL
-                          AND btrim(atom) <> 'Неизвестная ошибка'),
-            ' · '
-        ),
-        'Неизвестная ошибка'
-    )
-    FROM jsonb_array_elements(public.error_payload_array(p_errors)) WITH ORDINALITY AS x(e, o)
-    CROSS JOIN LATERAL unnest(public.error_item_atoms(e->>'code', e->>'message')) AS atom;
+    SELECT public.error_detail_types(public.error_details(p_errors));
 $$;
 
 -- Исходные тексты <message> каждого <item>, уникальные через ' · ' в порядке появления.

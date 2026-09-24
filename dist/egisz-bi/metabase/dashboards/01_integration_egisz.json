@@ -72,7 +72,8 @@
       "name": "Тип ошибки",
       "slug": "error_type_filter",
       "type": "string/=",
-      "sectionId": "string"
+      "sectionId": "string",
+      "values_query_type": "search"
     }
   ],
   "cards": [
@@ -471,7 +472,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -494,6 +495,13 @@
               "id": "fa000004-0004-4004-8004-0010",
               "name": "semd_type",
               "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -619,6 +627,10 @@
         "semd_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -2707,7 +2719,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]])::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2730,6 +2742,13 @@
               "id": "fa000003-0003-4003-8003-000000000010",
               "name": "semd_type",
               "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -2797,6 +2816,10 @@
         "jid": {
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       },
       "metabase-model-drill-params": {
@@ -2828,7 +2851,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
+          "query": "WITH base AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, dwh_id AS doc FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2849,6 +2872,13 @@
               "display-name": "Тип СЭМД (код НСИ)",
               "id": "fb040801-0801-4801-8801-000000000003",
               "name": "semd_type",
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -2906,6 +2936,10 @@
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       },
       "metabase-model-drill-params": {
@@ -2937,7 +2971,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2960,6 +2994,13 @@
               "id": "fa000004-0004-4004-8004-0010",
               "name": "semd_type",
               "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -3085,6 +3126,10 @@
         "semd_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -3094,7 +3139,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS \"Тип ошибки\", COALESCE(NULLIF(TRIM(error_category), ''), 'Прочие') AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3115,6 +3160,13 @@
               "display-name": "Тип СЭМД (код НСИ)",
               "id": "fb040201-0201-4201-8201-000000000003",
               "name": "semd_type",
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -3779,6 +3831,10 @@
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -3980,7 +4036,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% ошибок\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) > 0 ORDER BY 4 DESC, 5 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]])::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% ошибок\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) > 0 ORDER BY 4 DESC, 5 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4001,6 +4057,13 @@
               "display-name": "Тип СЭМД (код НСИ)",
               "id": "fb040701-0701-4701-8701-000000000003",
               "name": "semd_type",
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -4103,6 +4166,10 @@
         "semd_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -4112,7 +4179,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pairs AS ( SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS err, COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::numeric AS total FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
+          "query": "WITH pairs AS ( SELECT COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS err, COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS semd, COUNT(DISTINCT dwh_id)::numeric AS total FROM public.rpt_error_breakdown WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4133,6 +4200,13 @@
               "display-name": "Тип СЭМД (код НСИ)",
               "id": "fb040801-0801-4801-8801-000000000003",
               "name": "semd_type",
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -4214,6 +4288,10 @@
         "semd_type": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "semd_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },

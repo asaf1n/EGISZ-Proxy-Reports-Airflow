@@ -199,6 +199,9 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
 ALTER TABLE documents ALTER COLUMN semd_code DROP NOT NULL;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status text;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_details jsonb;
+COMMENT ON COLUMN documents.error_details IS
+    'Элементы последнего ответа: исходные code/message, отображаемый error_type и classification_type для категории. NULL означает, что архив ещё не перенесён; [] — ответ без ошибок.';
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS status_category text;
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS msgid text;
 DO $$
@@ -1591,6 +1594,7 @@ ALTER TABLE transactions ADD COLUMN IF NOT EXISTS dwh_id text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_type text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_json_text text;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_details jsonb;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_name_masked text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS snils_masked text;
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_name text;
