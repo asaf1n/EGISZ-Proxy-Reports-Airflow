@@ -1488,16 +1488,20 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
+    -- Порядок важен: даты в скобках уходят вместе со скобками в remd_error_type, свободные
+    -- даты маскируются после; вложенные скобки источника «[[…]]» оставляют лишнюю «]».
     SELECT regexp_replace(
-        public.remd_error_type(
+        regexp_replace(
             regexp_replace(
-                regexp_replace(
+                public.remd_error_type(
                     regexp_replace(
-                        regexp_replace(COALESCE(p_message, ''),
-                            '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', ''),
-                        ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', ': […] (СНИЛС: […])', 'g'),
-                    '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.+]+)?', '[…]', 'g'),
-                '^Указанное значение \[([А-Яа-яЁё :0-9]{1,40})\]', 'Указанное значение <<\1>>')),
+                        regexp_replace(
+                            regexp_replace(COALESCE(p_message, ''),
+                                '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', ''),
+                            ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', ': […] (СНИЛС: […])', 'g'),
+                        '^Указанное значение \[([А-Яа-яЁё :0-9]{1,40})\]', 'Указанное значение <<\1>>')),
+                '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+Z?)?', '[…]', 'g'),
+            '\[…\]\]+', '[…]', 'g'),
         '<<([^>]*)>>', '[\1]');
 $$;
 
