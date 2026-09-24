@@ -375,7 +375,7 @@ def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
                 if row[2]:
                     assert row[2] in oids
                     assert row[3]
-                    assert row[1].endswith(f"OID {row[2]} · {row[3]}")
+                    assert row[1].endswith(f" (справочник: {row[3]}, OID {row[2]})")
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT reporting_case")
             cur.execute("RELEASE SAVEPOINT reporting_case")
@@ -817,7 +817,7 @@ def test_error_breakdown_labels_every_registered_dictionary(con):
     assert one(con, """
         SELECT count(*) FROM rpt_error_breakdown b
         JOIN dim_nsi_dictionary d ON d.oid = b.nsi_dictionary_oid
-        WHERE b.error_type NOT LIKE '%OID ' || d.oid || ' · ' || d.name
+        WHERE b.error_type NOT LIKE '% (справочник: ' || d.name || ', OID ' || d.oid || ')'
     """) == 0
 
 

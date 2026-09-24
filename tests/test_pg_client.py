@@ -251,8 +251,8 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     assert "btrim(doc.error_types)" in breakdown
     assert "jsonb_to_recordset" in breakdown
     assert "d.classification_type" in breakdown
-    assert "' · OID ' || a.nsi_dictionary_oid" in breakdown
-    assert "' · ' || nd.name" in breakdown
+    assert "' (справочник: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'" in breakdown
+    assert "' · OID '" not in breakdown
     assert "несколько справочников" not in breakdown
     # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
     assert "uq_rpt_error_breakdown" in sql

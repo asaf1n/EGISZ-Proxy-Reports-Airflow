@@ -616,8 +616,10 @@ atom_types AS (
 SELECT
     r.ips_date, a.dwh_id, r.clinic_jid, r.clinic_name, r.clinic_label,
     r.semd_code, r.semd_label,
+    -- Справочник — в скобках: ' · ' разделяет разные типы в documents.error_types,
+    -- и подпись с тем же разделителем читается как несколько склеенных типов.
     (a.base_error_type || CASE WHEN a.nsi_dictionary_oid IS NOT NULL
-        THEN ' · OID ' || a.nsi_dictionary_oid || COALESCE(' · ' || nd.name, '')
+        THEN ' (справочник: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'
         ELSE '' END) COLLATE "und-x-icu" AS error_type,
     a.base_error_type COLLATE "und-x-icu" AS base_error_type,
     a.error_category, a.responsibility, a.is_retryable,
