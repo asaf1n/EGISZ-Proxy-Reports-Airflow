@@ -552,7 +552,8 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     assert "status IN ('success', 'async_error', 'network_error')" in query
     assert "COUNT(DISTINCT dwh_id)" in query
     # Показываем только пары с хотя бы одной ошибкой и без ограничения числа строк.
-    assert "HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) > 0" in query
+    assert "HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')" in query
+    assert "AND {{error_type}})]]) > 0" in query
     assert "ORDER BY 4 DESC" in query
     assert "semd_code" in query
     assert card["metabase-field-filters"]["ips_date"] == {
@@ -853,12 +854,26 @@ def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
     assert all("'pending'" not in q for q in queries)
 
 
-def test_executive_dashboard_uses_section_headers() -> None:
+def test_executive_dashboard_has_single_money_note() -> None:
+    """Текстовых подписей у рядов нет — назначение читается из имени карточки; единственная
+    оговорка, которой в имени не место, — о плоской ставке рублёвых карточек."""
     dashboard = json.loads(Path("metabase_dashboards/05_executive.json").read_text(encoding="utf-8"))
     text_cards = [card for card in dashboard["cards"] if card.get("display") == "text"]
-    assert len(text_cards) >= 3, "Управленческий дашборд должен сегментироваться text-заголовками разделов"
-    for card in text_cards:
-        assert "text" in card and card["text"].strip(), "text-карточка должна содержать содержимое"
+    assert len(text_cards) == 1
+    assert text_cards[0]["tab"] == "overview"
+    assert "10 000 ₽/JID/мес" in text_cards[0]["text"]
+
+    names = [c["name"] for c in dashboard["cards"] if c.get("tab") == "overview" and c.get("display") != "text"]
+    # Знаменатель и окно названы в имени: «от ответов»/«от успешных», «последние N дней».
+    assert "С первой подачи, % от ответов" in names
+    assert "С первой подачи, % от успешных" in names
+    assert {n for n in names if "последние 7 дней" in n} == {
+        "Успешных СЭМД за последние 7 дней",
+        "Доля успеха за последние 7 дней, %",
+        "Активных клиник за последние 7 дней",
+    }
+    assert "Клиник без успехов (от 10 документов)" in names
+    assert "Замолчавших клиник (нет документов 7 дней)" in names
 
 
 def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
@@ -1357,6 +1372,20 @@ def test_error_period_card_uses_canonical_filter_tags() -> None:
     assert drill_params.get("jid") == "clinic_label"
 
 
+def test_all_error_analysis_cards_filter_individual_error_types() -> None:
+    for card in _tab_dashboard("errors")["cards"]:
+        if card.get("display") == "text":
+            continue
+        native = card["dataset_query"]["native"]
+        assert "{{error_type}}" in native["query"], card["name"]
+        assert native["template-tags"]["error_type"]["widget-type"] == "string/="
+        assert card["metabase-field-filters"]["error_type"] == {
+            "table_ref": "public.rpt_error_breakdown", "field_name": "error_type"
+        }
+        if "semd_totals AS (" in native["query"]:
+            assert "{{error_type}}" not in native["query"].split("semd_totals AS (")[1]
+
+
 def test_pie_cards_do_not_keep_graph_dimensions() -> None:
     dashboard = _integration_dashboard()
     for card in dashboard["cards"]:
@@ -1503,7 +1532,7 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
                     expected_decimals = 1
                 elif (
                     "₽ за успешный СЭМД" in col_key
-                    and card_name == "Эфф. цена успешного СЭМД, ₽"
+                    and card_name == "Стоимость успешного СЭМД, ₽"
                 ):
                     expected_decimals = 1
                 else:
@@ -1567,7 +1596,7 @@ def test_executive_mrr_queries_do_not_compare_jid_to_empty_string() -> None:
         query = dq["native"]["query"]
         assert "NULLIF(clinic_jid, '')" not in query, card.get("name")
     executive = json.loads(Path("metabase_dashboards/05_executive.json").read_text(encoding="utf-8"))
-    clinic_card = next(c for c in executive["cards"] if c.get("name") == "Клиник без единого успеха")
+    clinic_card = next(c for c in executive["cards"] if c.get("name") == "Клиник без успехов (от 10 документов)")
     clinic_fmt = clinic_card["visualization_settings"]["column_settings"]['["name","Клиник без успеха"]']
     assert clinic_fmt["decimals"] == 0
     assert "suffix" not in clinic_fmt
@@ -2308,15 +2337,11 @@ def test_operational_monitoring_cards_have_no_drill_down() -> None:
 # Вкладки динамики управленческого дашборда (05) и периодические слои DWH
 # ---------------------------------------------------------------------------
 
+# Витрины вкладки и число карточек с данными: у месяцев на одну меньше — контрольная
+# карта по месяцам снята до накопления 12 закрытых месяцев.
 _PERIODIC_TABS = {
-    "weekly": (
-        {"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"},
-        "week_start",
-    ),
-    "monthly": (
-        {"public.rpt_documents_monthly", "public.rpt_error_breakdown_monthly"},
-        "month_start",
-    ),
+    "weekly": ({"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"}, 5),
+    "monthly": ({"public.rpt_documents_monthly", "public.rpt_error_breakdown_monthly"}, 4),
 }
 
 
@@ -2444,19 +2469,23 @@ def test_executive_dashboard_filters_apply_to_every_tab() -> None:
 
 
 def test_periodic_dynamics_tabs_bind_to_their_own_marts() -> None:
+    """Вкладки динамики показывают всю историю: привязан только срез по клинике,
+    фильтр «Обработано IPS» к периодическим витринам не подключён."""
     dashboard = _executive_dashboard()
-    for tab, (tables, date_field) in _PERIODIC_TABS.items():
+    for tab, (tables, expected_cards) in _PERIODIC_TABS.items():
         data_cards = [
             c for c in dashboard["cards"] if c.get("tab") == tab and c.get("display") != "text"
         ]
-        assert len(data_cards) == 5, tab
+        assert len(data_cards) == expected_cards, tab
         for card in data_cards:
+            query = card["dataset_query"]["native"]["query"]
+            assert "{{ips_date}}" not in query, card["name"]
             bindings = card.get("metabase-field-filters") or {}
-            assert set(bindings) == {"ips_date", "jid"}, card["name"]
-            for binding in bindings.values():
-                assert binding["table_ref"] in tables, card["name"]
-            assert bindings["ips_date"]["field_name"] == date_field, card["name"]
+            assert set(bindings) == {"jid"}, card["name"]
+            assert bindings["jid"]["table_ref"] in tables, card["name"]
             assert bindings["jid"]["field_name"] == "clinic_label", card["name"]
+        texts = [c["text"] for c in dashboard["cards"] if c.get("tab") == tab and c.get("display") == "text"]
+        assert not any("очистите" in t for t in texts), tab
 
 
 def test_status_dynamics_are_stacked_area() -> None:
@@ -2528,29 +2557,56 @@ def test_weekly_sql_layer_contract() -> None:
 
 
 def test_periodic_sli_is_ratio_of_sums() -> None:
-    """SLI — отношение сумм за период, а не среднее от долей; p-карта — окно 12 периодов."""
+    """SLI — отношение сумм за период, а не среднее от долей."""
     by_name = {
         c.get("name"): c for c in _executive_dashboard()["cards"] if c.get("display") != "text"
     }
-    periods = (
-        ("неделям", "week_start", "is_complete_week"),
-        ("месяцам", "month_start", "is_complete_month"),
-    )
-
-    for suffix, period_field, complete_flag in periods:
-        # SLI (доля ошибок отношением сумм) живёт в p-карте и сводке — отдельной
-        # линии SLI больше нет, её слот занял стек-площадь исходов.
-        control = by_name[f"Контрольная p-карта: доля ошибок по {suffix}"]
-        control_query = control["dataset_query"]["native"]["query"]
-        assert "SUM(docs_error)" in control_query
-        assert "NULLIF(SUM(docs_total)" in control_query
-        assert "ROWS BETWEEN 11 PRECEDING AND CURRENT ROW" in control_query
-        assert "sqrt(p_bar * (1.0 - p_bar)" in control_query
-        assert complete_flag in control_query
-
-        summary_name = "Сводка по неделям" if suffix == "неделям" else "Сводка по месяцам"
+    for summary_name, period_field in (
+        ("Сводка по неделям", "week_start"),
+        ("Сводка по месяцам", "month_start"),
+    ):
         summary_query = by_name[summary_name]["dataset_query"]["native"]["query"]
+        assert "ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1)" in summary_query
         assert f"LAG(sli_pct) OVER (ORDER BY {period_field})" in summary_query
+
+
+def test_weekly_control_chart_is_xmr() -> None:
+    """Контрольная карта — XmR по закрытым неделям: центр — средняя доля ошибок, границы —
+    средняя ± 2,66 × средний скользящий размах, LCL не ниже нуля. Биномиальная σ p-карты
+    при 55–75 тыс. документов в неделю в двадцать раз уже фактического разброса недель,
+    поэтому p-карта снята; месячной карты нет до 12 закрытых месяцев."""
+    by_name = {
+        c.get("name"): c for c in _executive_dashboard()["cards"] if c.get("display") != "text"
+    }
+    assert "Контрольная p-карта: доля ошибок по неделям" not in by_name
+    assert "Контрольная p-карта: доля ошибок по месяцам" not in by_name
+
+    control = by_name["Контрольная карта (XmR): доля ошибок по неделям"]
+    query = control["dataset_query"]["native"]["query"]
+    assert "public.rpt_documents_weekly" in query
+    assert "is_complete_week" in query
+    assert "SUM(docs_error)" in query and "SUM(docs_total)" in query
+    assert "ABS(x - LAG(x) OVER (ORDER BY week_start))" in query
+    assert "AVG(x) OVER ()" in query and "AVG(mr) OVER ()" in query
+    assert "x_bar + 2.66 * mr_bar" in query
+    assert "GREATEST(0.0, x_bar - 2.66 * mr_bar)" in query
+    assert "sqrt(" not in query and "PRECEDING" not in query
+    assert "{{ips_date}}" not in query and "{{jid}}" in query
+    assert "p-карта" in control["description"] and "XmR" in control["description"]
+
+    viz = control["visualization_settings"]
+    assert viz["graph.metrics"] == [
+        "Доля ошибок, %",
+        "Средняя, %",
+        "Верхняя граница (UCL), %",
+        "Нижняя граница (LCL), %",
+    ]
+    for metric in viz["graph.metrics"]:
+        assert f'AS "{metric}"' in query, metric
+
+    retired = json.loads(Path("metabase/retired-objects.json").read_text(encoding="utf-8"))
+    assert "Контрольная p-карта: доля ошибок по неделям" in retired["cards"]
+    assert "Контрольная p-карта: доля ошибок по месяцам" in retired["cards"]
 
 
 def test_error_type_drill_uses_canonical_type() -> None:

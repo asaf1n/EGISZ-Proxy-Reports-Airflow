@@ -150,6 +150,14 @@ RETIRED_CARD_NAMES = frozenset({
     # запрос соседней.
     "Топ типов СЭМД — клиент",
     "Структура ошибок по категориям — клиент",
+    # Управленческий дашборд: «затык доставки» (и его прежнее имя) за всю историю давал
+    # 0 ₽ — доля документов в обработке ни у одного JID не приближалась к порогу 80 %.
+    # Его место занял список «замолчавших» клиник.
+    "Выручка под риском «затык канала», ₽",
+    "Выручка под риском «затык доставки», ₽",
+    # Месячная контрольная карта снята до накопления 12 закрытых месяцев: границы по
+    # двум-трём точкам — не коридор, а шум.
+    "Контрольная p-карта: доля ошибок по месяцам",
 })
 
 # Модели, выведенные из обращения: импорт находит модель по имени, поэтому переименование
@@ -252,8 +260,38 @@ RENAME_OTHER: dict[str, dict[str, str]] = {
         # шли все документы, включая ещё не отвеченные. Честный first-pass живёт
         # отдельной плиткой «С первой попытки, %».
         "Доля успеха с первой попытки, %": "Доля успеха, %",
-        # «Канал» — слово контура обмена; у карточки речь о доставке документов.
-        "Выручка под риском «затык канала», ₽": "Выручка под риском «затык доставки», ₽",
+        # Текстовые подписи рядов сняты: знаменатель и окно перенесены в имена карточек.
+        # Оговорка «(без фильтра периода)» стала словом «последние» в имени.
+        "Успешных СЭМД (NSM)": "Успешных СЭМД за период",
+        "С первой попытки, %": "С первой подачи, % от ответов",
+        "Успехов с первой подачи, %": "С первой подачи, % от успешных",
+        f"Успешных СЭМД за 7 дней{NO_PERIOD_SUFFIX}": "Успешных СЭМД за последние 7 дней",
+        "Успешных СЭМД за 7 дней": "Успешных СЭМД за последние 7 дней",
+        f"Доля успеха за 7 дней, %{NO_PERIOD_SUFFIX}": "Доля успеха за последние 7 дней, %",
+        "Доля успеха за 7 дней, %": "Доля успеха за последние 7 дней, %",
+        f"Активных клиник за 7 дней{NO_PERIOD_SUFFIX}": "Активных клиник за последние 7 дней",
+        "Активных клиник за 7 дней": "Активных клиник за последние 7 дней",
+        "MRR (30 дн.), ₽": "MRR за последние 30 дней, ₽",
+        "ARR (год.), ₽": "ARR (MRR × 12), ₽",
+        "Активных JID (30 дн)": "Активных JID за последние 30 дней",
+        "Эфф. цена успешного СЭМД, ₽": "Стоимость успешного СЭМД, ₽",
+        "Динамика MRR (30 дн.), ₽": "MRR по дням за 90 дней, ₽",
+        "Динамика активных JID (30 дн.)": "Активных JID по дням за 90 дней",
+        "Сегменты ценности (MRR × ₽/успех)": (
+            "Сегменты клиник по объёму: MRR и ₽ за успешный СЭМД"
+        ),
+        "Клиник без единого успеха": "Клиник без успехов (от 10 документов)",
+        "Выручка под риском «ноль ценности», ₽": "MRR клиник без успехов, ₽",
+        "Очередь оттока: JID с нулём успехов": "Очередь оттока: клиники без успехов",
+        "Замолчавшие клиники (30 дн → 7 дн)": "Замолчавших клиник (нет документов 7 дней)",
+        "MRR замолчавших, ₽": "MRR замолчавших клиник, ₽",
+        "Очередь замолчавших": "Очередь замолчавших клиник",
+        # p-карта заменена XmR-картой: при 55–75 тыс. документов в неделю биномиальная
+        # σ (≈0,18 п.п.) в двадцать раз уже фактического разброса недель (≈3,9 п.п.),
+        # и почти каждая точка выпадала за коридор p̄ ± 3σ.
+        "Контрольная p-карта: доля ошибок по неделям": (
+            "Контрольная карта (XmR): доля ошибок по неделям"
+        ),
     },
 }
 
@@ -2697,6 +2735,9 @@ def ensure_dashboard_parameters(dash: dict) -> None:
                 "sectionId": "string",
             }
         )
+    for param in params:
+        if param.get("slug") == "error_type_filter":
+            param["values_query_type"] = "search"
     # Второй даты на вкладке нет: очередь считается на текущий момент. Параметр снимается
     # с уже опубликованных дашбордов вместе со своими привязками в карточках.
     dash["parameters"] = [p for p in params if p.get("slug") not in RETIRED_PARAM_IDS]
@@ -2938,6 +2979,49 @@ def normalize_dashboard(dash: dict) -> None:
         prune_unused_filters(card)
 
 
+def apply_error_type_filters(dash: dict) -> None:
+    """Отбор отдельных типов без изменения знаменателей долей документов."""
+    for card in dash.get("cards", []):
+        is_error_card = card.get("tab") == "errors" or card.get("name") == "Топ по типу ошибки"
+        if not is_error_card or card.get("display") == "text":
+            continue
+        native = card.get("dataset_query", {}).get("native")
+        if not native:
+            continue
+        query = native["query"]
+        if "{{error_type}}" not in query:
+            if "public.rpt_error_breakdown" in query:
+                # Первый источник — числитель; последующие CTE могут считать знаменатель.
+                start = query.index("FROM public.rpt_error_breakdown")
+                pos = query.index("WHERE ", start) + len("WHERE ")
+                query = query[:pos] + "1=1 [[AND {{error_type}}]] AND " + query[pos:]
+            else:
+                # Документ учитывается один раз, даже если выбранным типам отвечают
+                # несколько элементов. Знаменатель по всем документам сохраняется.
+                membership = (
+                    " [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown "
+                    "WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id "
+                    "AND {{error_type}})]]"
+                )
+                query = re.sub(
+                    r"status IN \('async_error',\s*'network_error'\)",
+                    lambda match: match.group(0) + membership, query,
+                )
+            if card.get("name") == "Топ по типу ошибки":
+                query = query.replace(
+                    "(SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err",
+                    "(SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown "
+                    "INNER JOIN period_docs USING (dwh_id))::numeric AS total_err",
+                )
+            native["query"] = query
+        native.setdefault("template-tags", {})["error_type"] = deepcopy(
+            ERROR_TYPE_CLINIC_TEMPLATE_TAGS["error_type"]
+        )
+        card.setdefault("metabase-field-filters", {})["error_type"] = {
+            "table_ref": "public.rpt_error_breakdown", "field_name": "error_type"
+        }
+
+
 def apply_01(dash: dict) -> None:
     ensure_dashboard_parameters(dash)
     dash["description"] = (
@@ -3054,6 +3138,7 @@ def apply_01(dash: dict) -> None:
     # После нормализации: вкладка «Отправленные» задаёт собственный блок фильтров
     # (pending_segment вместо status), который общий проход не должен переписывать.
     apply_sent_tab(dash)
+    apply_error_type_filters(dash)
 
 
 # ── Управленческий дашборд, вкладка «Обзор» ──────────────────────────────────────────
@@ -3075,11 +3160,42 @@ EXECUTIVE_PENDING = "status = 'sent' AND sent_state <> 'no_response'"
 # ориентир порядка величины, а не биллинг (README §«Управленческий дашборд»).
 EXECUTIVE_TARIFF = 10000
 
+# Имена карточек «Обзора» несут знаменатель и окно сами: текстовых подписей у рядов
+# нет, и читатель не должен искать, от чего доля и к какому дню привязано окно.
+EXECUTIVE_NSM_NAME = "Успешных СЭМД за период"
 EXECUTIVE_SUCCESS_NAME = "Доля успеха, %"
-EXECUTIVE_FIRST_PASS_NAME = "С первой попытки, %"
-EXECUTIVE_PULSE_SUCCESS_NAME = f"Успешных СЭМД за 7 дней{NO_PERIOD_SUFFIX}"
-EXECUTIVE_PULSE_RATE_NAME = f"Доля успеха за 7 дней, %{NO_PERIOD_SUFFIX}"
-EXECUTIVE_PULSE_CLINICS_NAME = f"Активных клиник за 7 дней{NO_PERIOD_SUFFIX}"
+EXECUTIVE_FIRST_PASS_NAME = "С первой подачи, % от ответов"
+EXECUTIVE_FIRST_PASS_OF_SUCCESS_NAME = "С первой подачи, % от успешных"
+# «Последние» в имени — окно привязано к текущему дню, фильтр периода не действует.
+EXECUTIVE_PULSE_SUCCESS_NAME = "Успешных СЭМД за последние 7 дней"
+EXECUTIVE_PULSE_RATE_NAME = "Доля успеха за последние 7 дней, %"
+EXECUTIVE_PULSE_CLINICS_NAME = "Активных клиник за последние 7 дней"
+EXECUTIVE_MRR_NAME = "MRR за последние 30 дней, ₽"
+EXECUTIVE_ARR_NAME = "ARR (MRR × 12), ₽"
+EXECUTIVE_ACTIVE_JID_NAME = "Активных JID за последние 30 дней"
+EXECUTIVE_COST_PER_SUCCESS_NAME = "Стоимость успешного СЭМД, ₽"
+EXECUTIVE_MRR_TREND_NAME = "MRR по дням за 90 дней, ₽"
+EXECUTIVE_ACTIVE_JID_TREND_NAME = "Активных JID по дням за 90 дней"
+EXECUTIVE_SEGMENTS_NAME = "Сегменты клиник по объёму: MRR и ₽ за успешный СЭМД"
+
+# Очередь оттока: JID с единичными попытками за период — проба подключения, а не риск
+# оттока; порог отсекает их из счётчика, суммы под риском и списка одинаково.
+EXECUTIVE_CHURN_MIN_DOCS = 10
+_EXECUTIVE_CHURN_PREDICATE = f"ok = 0 AND docs >= {EXECUTIVE_CHURN_MIN_DOCS}"
+EXECUTIVE_CHURN_COUNT_NAME = f"Клиник без успехов (от {EXECUTIVE_CHURN_MIN_DOCS} документов)"
+EXECUTIVE_CHURN_MRR_NAME = "MRR клиник без успехов, ₽"
+EXECUTIVE_CHURN_QUEUE_NAME = "Очередь оттока: клиники без успехов"
+
+# Замолчавшие: были в активной базе (документы за 30 дней), но за последние 7 суток не
+# прислали ничего. Окна совпадают с активной базой MRR и с «Пульсом»: список — ровно те
+# JID, что ещё платят, но уже выпали из недельного окна.
+EXECUTIVE_SILENT_ACTIVE_DAYS = 30
+EXECUTIVE_SILENT_QUIET_DAYS = 7
+EXECUTIVE_SILENT_COUNT_NAME = (
+    f"Замолчавших клиник (нет документов {EXECUTIVE_SILENT_QUIET_DAYS} дней)"
+)
+EXECUTIVE_SILENT_MRR_NAME = "MRR замолчавших клиник, ₽"
+EXECUTIVE_SILENT_QUEUE_NAME = "Очередь замолчавших клиник"
 
 # Скользящее семидневное окно с шагом в день: недельная сумма гасит разницу буден и
 # выходных, а шаг в день оставляет свежую точку. Соседние точки различаются одним днём,
@@ -3101,19 +3217,22 @@ def _executive_pulse(metric: str) -> str:
     return EXECUTIVE_PULSE_SHELL.replace("@metric@", metric)
 
 
+_EXECUTIVE_COUNT_FORMAT = {"decimals": 0, "number_separators": ", "}
+_EXECUTIVE_PCT_FORMAT = {"decimals": 1, "number_separators": ", ", "suffix": " %"}
+_EXECUTIVE_MONEY_FORMAT = {"decimals": 0, "number_separators": ", ", "suffix": " ₽"}
+
+
 def _executive_pct(name: str) -> dict:
     return {
         "scalar.field": name,
-        "column_settings": {
-            f'["name","{name}"]': {"decimals": 1, "number_separators": ", ", "suffix": " %"}
-        },
+        "column_settings": {f'["name","{name}"]': dict(_EXECUTIVE_PCT_FORMAT)},
     }
 
 
 def _executive_count(name: str) -> dict:
     return {
         "scalar.field": name,
-        "column_settings": {f'["name","{name}"]': {"decimals": 0, "number_separators": ", "}},
+        "column_settings": {f'["name","{name}"]': dict(_EXECUTIVE_COUNT_FORMAT)},
     }
 
 
@@ -3121,11 +3240,7 @@ def _executive_money(name: str, *, decimals: int = 0) -> dict:
     return {
         "scalar.field": name,
         "column_settings": {
-            f'["name","{name}"]': {
-                "decimals": decimals,
-                "number_separators": ", ",
-                "suffix": " ₽",
-            }
+            f'["name","{name}"]': {**_EXECUTIVE_MONEY_FORMAT, "decimals": decimals}
         },
     }
 
@@ -3201,10 +3316,10 @@ def _executive_scalar(expression: str, alias: str) -> str:
     )
 
 
-def _executive_share(numerator: str, alias: str) -> str:
+def _executive_share(numerator: str, alias: str, *, corpus: str = EXECUTIVE_FINAL_CORPUS) -> str:
     return _executive_scalar(
         f"ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE {numerator}) "
-        f"/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_FINAL_CORPUS}), 0), 1)",
+        f"/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE {corpus}), 0), 1)",
         alias,
     )
 
@@ -3220,12 +3335,15 @@ def _executive_active_base(tail: str) -> str:
 
 
 def _executive_daily_base(metric: str, alias: str) -> str:
-    """Дневной ряд активной базы за 90 дней — общий каркас двух графиков раздела «Деньги»."""
+    """Дневной ряд активной базы за 90 дней — общий каркас двух графиков раздела «Деньги».
+
+    Ряд начинается через 30 дней после первого дня истории: раньше окно ещё заполняется,
+    и подъём читался бы как рост базы, а не как накопление данных."""
     return (
         "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS "
         "activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL "
         "[[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), "
-        "CURRENT_DATE), CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), "
+        "CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), "
         "CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series("
         "(SELECT start_day FROM bounds), (SELECT end_day FROM bounds), "
         "'1 day'::interval)::date AS day) "
@@ -3274,30 +3392,57 @@ _EXECUTIVE_DOCS = "COUNT(DISTINCT dwh_id) AS docs"
 _EXECUTIVE_OK = "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok"
 
 
+def _executive_churn_top_error() -> str:
+    """Самый частый тип ошибки по документам JID за период: атомы documents.error_types
+    (разделитель « · »), ничья решается алфавитом. Считается только по JID очереди."""
+    return (
+        ", top_error AS (SELECT jid, error_type FROM (SELECT clinic_jid AS jid, "
+        "atom AS error_type, ROW_NUMBER() OVER (PARTITION BY clinic_jid "
+        "ORDER BY COUNT(DISTINCT dwh_id) DESC, atom) AS rn "
+        "FROM public.rpt_documents, LATERAL unnest(string_to_array(error_types, ' · ')) "
+        f"AS atom WHERE clinic_jid IN (SELECT jid FROM per_jid WHERE {_EXECUTIVE_CHURN_PREDICATE}) "
+        "AND error_types IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t "
+        "WHERE rn = 1) "
+    )
+
+
+def _executive_silent_base(tail: str) -> str:
+    """Замолчавшие клиники: активны за 30 дней, без документов за последние 7 суток.
+    Фильтр периода не участвует — окна привязаны к текущему дню, как у активной базы."""
+    return (
+        "WITH recent AS (SELECT clinic_jid AS jid, "
+        "COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, "
+        "MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, "
+        f"{_EXECUTIVE_DOCS}, {_EXECUTIVE_OK}, "
+        f"COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_FINAL_CORPUS}) AS answered "
+        "FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] "
+        f"AND ips_date >= CURRENT_DATE - INTERVAL '{EXECUTIVE_SILENT_ACTIVE_DAYS} days' "
+        "GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - "
+        f"INTERVAL '{EXECUTIVE_SILENT_QUIET_DAYS} days') {tail}"
+    )
+
+
 def executive_overview_cards() -> list[dict]:
-    """Карточки «Обзора»: ценность → пульс → здоровье → деньги → выручка под риском."""
+    """Карточки «Обзора» рядами: ценность и качество → здоровье → пульс → деньги →
+    выручка под риском. Текстовых подписей у рядов нет — назначение карточки читается из
+    имени, знаменатель и окно названы в нём же; единственная оговорка, которой в имени не
+    место, — о плоской ставке денег."""
     tariff = EXECUTIVE_TARIFF
+    churn = _EXECUTIVE_CHURN_PREDICATE
     return [
-        _executive_text(
-            "## Ценность и качество регистрации\n"
-            "Сколько СЭМД сервис довёл до РЭМД за выбранный период и какой ценой. "
-            "**Знаменатель долей — документы с ответом РЭМД** (успех + отказ РЭМД + ошибка "
-            "связи); «в обработке» в него не входят, поэтому цифры сходятся с дашбордом "
-            "«Интеграция с ЕГИСЗ» и с вкладками динамики. Реагируют на оба фильтра шапки.",
-            (0, 0, 24, 2),
-        ),
         _executive_card(
-            "Успешных СЭМД (NSM)",
-            "North Star: COUNT(DISTINCT документ) со статусом «Успешно зарегистрирован» за "
-            "период. Единственная метрика ценности сервиса — остальные карточки объясняют "
-            "её движение.",
+            EXECUTIVE_NSM_NAME,
+            "COUNT(DISTINCT документ) со статусом «Успешно зарегистрирован» за период. "
+            "Единственная метрика ценности сервиса — остальные карточки объясняют её "
+            "движение. Документ относится к периоду по дате итога (обработано IPS), а не "
+            "первой подачи.",
             _executive_scalar(
                 "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::bigint",
                 "Успешных СЭМД",
             ),
             _executive_count("Успешных СЭМД"),
             "scalar",
-            (2, 0, 6, 3),
+            (0, 0, 6, 3),
             0x01,
         ),
         _executive_card(
@@ -3307,117 +3452,81 @@ def executive_overview_cards() -> list[dict]:
             _executive_scalar("COUNT(DISTINCT dwh_id)::bigint", "Документов"),
             _executive_count("Документов"),
             "scalar",
-            (2, 6, 6, 3),
+            (0, 6, 6, 3),
             0x02,
         ),
         _executive_card(
             EXECUTIVE_SUCCESS_NAME,
-            "Доля успешно зарегистрированных СЭМД от документов с ответом РЭМД. Вместе с "
-            "«Отказов РЭМД, %» и «Ошибок связи, %» даёт в сумме 100 %.",
+            "Доля успешно зарегистрированных СЭМД от документов с ответом РЭМД (успех + "
+            "отказ РЭМД + ошибка связи; «в обработке» не входят — исход ещё не известен). "
+            "Тот же знаменатель, что у дашборда «Интеграция с ЕГИСЗ» и вкладок динамики. "
+            "Вместе с «Отказов РЭМД, %» и «Ошибок связи, %» даёт в сумме 100 %.",
             _executive_share("status = 'success'", EXECUTIVE_SUCCESS_NAME),
             _executive_pct(EXECUTIVE_SUCCESS_NAME),
             "scalar",
-            (2, 12, 6, 3),
+            (0, 12, 6, 3),
             0x03,
         ),
         _executive_card(
             EXECUTIVE_FIRST_PASS_NAME,
-            "Доля СЭМД, принятых без повторной подачи (attempt_count = 1), от того же "
-            "корпуса документов с ответом РЭМД. Разрыв с «Доля успеха, %» — цена пересдач: "
-            "документы, дошедшие только со второй и последующих попыток.",
+            "Доля СЭМД, зарегистрированных с первой подачи (attempt_count ≤ 1), от документов "
+            "с ответом РЭМД — знаменатель тот же, что у «Доля успеха, %». Документ относится "
+            "к периоду по дате итога (обработано IPS), а не по дате первой подачи. Разрыв с "
+            "«Доля успеха, %» — успехи после пересдачи: документы, дошедшие только со второй "
+            "и последующих попыток.",
             _executive_share(
-                "status = 'success' AND COALESCE(attempt_count, 1) <= 1",
+                "status = 'success' AND attempt_count <= 1",
                 EXECUTIVE_FIRST_PASS_NAME,
             ),
             _executive_pct(EXECUTIVE_FIRST_PASS_NAME),
             "scalar",
-            (2, 18, 6, 3),
+            (0, 18, 6, 3),
             0x04,
         ),
-        _executive_text(
-            "## Пульс: скользящие 7 дней\n"
-            "Итог за последние семь суток на каждый день (окно шагает по дням, 14 точек). "
-            "Недельное окно снимает разницу буден и выходных, поэтому «изменение» под "
-            "числом — сдвиг недельного итога, а не колебание одного дня. **Фильтр «Период» "
-            "карточки не двигает**, срез по клинике — действует.",
-            (5, 0, 24, 2),
-        ),
         _executive_card(
-            EXECUTIVE_PULSE_SUCCESS_NAME,
-            "Успешно зарегистрированные СЭМД за скользящие 7 суток. Изменение — к тому же "
-            "окну, сдвинутому на день назад.",
-            _executive_pulse(
-                "COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')"
-                '::bigint AS "Успешных СЭМД"'
+            EXECUTIVE_FIRST_PASS_OF_SUCCESS_NAME,
+            "Доля успешных СЭМД, принятых с первой подачи (attempt_count ≤ 1), от всех "
+            "успешных за период. Спутник «С первой подачи, % от ответов»: та же величина, "
+            "но от числа успешных. Дополнение до 100 % — доля успехов, потребовавших "
+            "пересдачи.",
+            _executive_share(
+                "status = 'success' AND attempt_count <= 1",
+                EXECUTIVE_FIRST_PASS_OF_SUCCESS_NAME,
+                corpus="status = 'success'",
             ),
-            _executive_count("Успешных СЭМД"),
-            "smartscalar",
-            (7, 0, 8, 3),
-            0x11,
-        ),
-        _executive_card(
-            EXECUTIVE_PULSE_RATE_NAME,
-            "Доля успеха за скользящие 7 суток от документов с ответом РЭМД. Знаменатель тот "
-            "же, что у плитки «Доля успеха, %» выше, но окно фиксированное — метрика "
-            "сравнима между днями независимо от выбранного периода.",
-            _executive_pulse(
-                "ROUND(100.0 * COUNT(DISTINCT doc.dwh_id) FILTER "
-                "(WHERE doc.status = 'success') / NULLIF(COUNT(DISTINCT doc.dwh_id) FILTER "
-                f"(WHERE doc.{EXECUTIVE_FINAL_CORPUS}), 0), 1) AS \"Доля успеха, %\""
-            ),
-            _executive_pct("Доля успеха, %"),
-            "smartscalar",
-            (7, 8, 8, 3),
-            0x12,
-        ),
-        _executive_card(
-            EXECUTIVE_PULSE_CLINICS_NAME,
-            "Клиники (JID), от которых за скользящие 7 суток пришёл хотя бы один документ. "
-            "Ранний признак отвала: поток от клиники прекращается задолго до того, как она "
-            "выпадет из тридцатидневной активной базы под MRR.",
-            _executive_pulse(
-                'COUNT(DISTINCT doc.clinic_jid)::bigint AS "Активных клиник"'
-            ),
-            _executive_count("Активных клиник"),
-            "smartscalar",
-            (7, 16, 8, 3),
-            0x13,
-        ),
-        _executive_text(
-            "## Здоровье сервиса\n"
-            "Guardrail-метрики, цель у всех трёх — вниз. Первые две считаются от того же "
-            "корпуса документов с ответом РЭМД, что и «Доля успеха, %». Третья — **от всех "
-            "документов периода**: «ответ не получен» это состояние отправки, а не исход "
-            "регистрации, и в корпус с ответом оно не входит.",
-            (10, 0, 24, 2),
+            _executive_pct(EXECUTIVE_FIRST_PASS_OF_SUCCESS_NAME),
+            "scalar",
+            (3, 0, 6, 3),
+            0x16,
         ),
         _executive_card(
             "Отказов РЭМД, %",
-            "Доля документов, отклонённых асинхронным ответом РЭМД, от корпуса документов с "
-            "ответом. Сигнал качества содержания СЭМД; разбор — вкладка «Анализ ошибок» "
-            "дашборда «Интеграция с ЕГИСЗ».",
+            "Доля документов, отклонённых асинхронным ответом РЭМД, от документов с ответом "
+            "(тот же знаменатель, что у «Доля успеха, %»). Сигнал качества содержания СЭМД; "
+            "разбор — вкладка «Анализ ошибок» дашборда «Интеграция с ЕГИСЗ». Цель — вниз.",
             _executive_share("status = 'async_error'", "Отказов РЭМД, %"),
             _executive_pct("Отказов РЭМД, %"),
             "scalar",
-            (12, 0, 8, 3),
+            (3, 6, 6, 3),
             0x05,
         ),
         _executive_card(
             "Ошибок связи, %",
-            "Доля документов с ошибкой связи от корпуса документов с ответом. Сигнал "
-            "состояния транспорта (VPN ГОСТ), а не содержания документа.",
+            "Доля документов с ошибкой связи от документов с ответом (тот же знаменатель, "
+            "что у «Доля успеха, %»). Сигнал состояния транспорта (VPN ГОСТ), а не "
+            "содержания документа. Цель — вниз.",
             _executive_share("status = 'network_error'", "Ошибок связи, %"),
             _executive_pct("Ошибок связи, %"),
             "scalar",
-            (12, 8, 8, 3),
+            (3, 12, 6, 3),
             0x06,
         ),
         _executive_card(
             EXECUTIVE_NO_RESPONSE_NAME,
             "Доля документов, по которым ответ ЕГИСЗ уже не ожидается (состояние отправки "
-            "«Ответ не получен», порог — из dim_pending_segments), от всех документов "
-            "периода. Эти документы не попали ни в успех, ни в ошибку: сервис принял их и не "
-            "довёл до результата.",
+            "«Ответ не получен», порог — из dim_pending_segments), **от всех документов "
+            "периода**: это состояние отправки, а не исход регистрации, в корпус с ответом "
+            "оно не входит. Сервис принял документы и не довёл до результата. Цель — вниз.",
             _executive_scalar(
                 "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER "
                 "(WHERE sent_state = 'no_response') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1)",
@@ -3425,43 +3534,90 @@ def executive_overview_cards() -> list[dict]:
             ),
             _executive_pct(EXECUTIVE_NO_RESPONSE_NAME),
             "scalar",
-            (12, 16, 8, 3),
+            (3, 18, 6, 3),
             0x07,
+        ),
+        _executive_card(
+            EXECUTIVE_PULSE_SUCCESS_NAME,
+            "Успешно зарегистрированные СЭМД за скользящие 7 суток на каждый день (окно "
+            "шагает по дням, 14 точек). Недельное окно снимает разницу буден и выходных, "
+            "поэтому «изменение» под числом — сдвиг недельного итога к окну, сдвинутому на "
+            "день назад, а не колебание одного дня. Окно привязано к текущему дню: фильтр "
+            "периода не действует, срез по клинике — действует.",
+            _executive_pulse(
+                "COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')"
+                '::bigint AS "Успешных СЭМД"'
+            ),
+            _executive_count("Успешных СЭМД"),
+            "smartscalar",
+            (6, 0, 8, 3),
+            0x11,
+        ),
+        _executive_card(
+            EXECUTIVE_PULSE_RATE_NAME,
+            "Доля успеха за скользящие 7 суток от документов с ответом РЭМД — знаменатель "
+            "тот же, что у «Доля успеха, %», но окно фиксированное, поэтому метрика "
+            "сравнима между днями независимо от выбранного периода. Окно привязано к "
+            "текущему дню: фильтр периода не действует, срез по клинике — действует.",
+            _executive_pulse(
+                "ROUND(100.0 * COUNT(DISTINCT doc.dwh_id) FILTER "
+                "(WHERE doc.status = 'success') / NULLIF(COUNT(DISTINCT doc.dwh_id) FILTER "
+                f"(WHERE doc.{EXECUTIVE_FINAL_CORPUS}), 0), 1) AS \"Доля успеха, %\""
+            ),
+            _executive_pct("Доля успеха, %"),
+            "smartscalar",
+            (6, 8, 8, 3),
+            0x12,
+        ),
+        _executive_card(
+            EXECUTIVE_PULSE_CLINICS_NAME,
+            "Клиники (JID), от которых за скользящие 7 суток пришёл хотя бы один документ. "
+            "Ранний признак отвала: поток от клиники прекращается задолго до того, как она "
+            "выпадет из тридцатидневной активной базы под MRR. Окно привязано к текущему "
+            "дню: фильтр периода не действует, срез по клинике — действует.",
+            _executive_pulse(
+                'COUNT(DISTINCT doc.clinic_jid)::bigint AS "Активных клиник"'
+            ),
+            _executive_count("Активных клиник"),
+            "smartscalar",
+            (6, 16, 8, 3),
+            0x13,
         ),
         _executive_text(
             "## Деньги — ориентировочный порядок величины\n"
             "Расчёт по плоской ставке **10 000 ₽/JID/мес**: договорная сетка сложнее, "
-            "поэтому суммы читаются как порядок величины и как масштаб риска, а не как "
-            "биллинг. Активная база — trailing-30d, а не календарный месяц: иначе 1-го числа "
-            "счётчик обнуляется. **Фильтр «Период» на этот раздел не действует.**",
-            (15, 0, 24, 2),
+            "поэтому суммы ниже — порядок величины и масштаб риска, а не биллинг. Активная "
+            "база — последние 30 дней, фильтр «Период» на рублёвые карточки не действует.",
+            (9, 0, 24, 2),
         ),
         _executive_card(
-            "MRR (30 дн.), ₽",
+            EXECUTIVE_MRR_NAME,
             "Активные за последние 30 дней JID × ставка. Ориентир месячной выручки при "
-            "текущей активной базе.",
+            "текущей активной базе. Календарный месяц не берётся — иначе 1-го числа "
+            "счётчик обнуляется.",
             _executive_active_base(
                 f'SELECT (COUNT(*) * {tariff})::numeric(14,2) AS "MRR, ₽" FROM active_jid'
             ),
             _executive_money("MRR, ₽"),
             "scalar",
-            (17, 0, 6, 3),
+            (11, 0, 6, 3),
             0x08,
         ),
         _executive_card(
-            "ARR (год.), ₽",
-            "MRR (trailing-30d) × 12. Годовой ориентир при сохранении текущей активной базы.",
+            EXECUTIVE_ARR_NAME,
+            "MRR за последние 30 дней × 12. Годовой ориентир при сохранении текущей "
+            "активной базы.",
             _executive_active_base(
                 f"SELECT (COUNT(*) * {tariff} * 12)::numeric(14,2) "
                 'AS "ARR, ₽" FROM active_jid'
             ),
             _executive_money("ARR, ₽"),
             "scalar",
-            (17, 6, 6, 3),
+            (11, 6, 6, 3),
             0x09,
         ),
         _executive_card(
-            "Активных JID (30 дн)",
+            EXECUTIVE_ACTIVE_JID_NAME,
             "JID, приславшие хотя бы один документ за последние 30 дней. Драйвер MRR при "
             "плоской ставке. Тарифицируется юридическое лицо, а JID — точка подключения: у "
             "части ЮЛ их несколько, поэтому счётчик слегка завышает число плательщиков.",
@@ -3470,12 +3626,12 @@ def executive_overview_cards() -> list[dict]:
             ),
             _executive_count("Активных JID"),
             "scalar",
-            (17, 12, 6, 3),
+            (11, 12, 6, 3),
             0x0A,
         ),
         _executive_card(
-            "Эфф. цена успешного СЭМД, ₽",
-            "MRR (trailing-30d) / успешные СЭМД за те же 30 дней. Рост означает, что "
+            EXECUTIVE_COST_PER_SUCCESS_NAME,
+            "MRR за последние 30 дней / успешные СЭМД за те же 30 дней. Рост означает, что "
             "абонплата собирается, а ценность за неё не выдаётся.",
             _executive_active_base(
                 ", success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM public.rpt_documents "
@@ -3486,47 +3642,42 @@ def executive_overview_cards() -> list[dict]:
             ),
             _executive_money("₽ за успешный СЭМД", decimals=1),
             "scalar",
-            (17, 18, 6, 3),
+            (11, 18, 6, 3),
             0x0B,
         ),
         _executive_card(
-            "Динамика MRR (30 дн.), ₽",
+            EXECUTIVE_MRR_TREND_NAME,
             "MRR на конец каждого дня за последние 90 дней: активные за предыдущие 30 суток "
-            "JID × ставка. Ступенька вниз — клиника, выпавшая из активной базы.",
+            "JID × ставка. Ступенька вниз — клиника, выпавшая из активной базы. Ряд "
+            "начинается через 30 дней после первого дня истории: раньше окно ещё "
+            "заполняется, и подъём был бы накоплением данных, а не ростом базы.",
             _executive_daily_base(
                 f"(COUNT(DISTINCT ja.jid) * {tariff})::numeric(14,2)", "MRR, ₽"
             ),
             _executive_daily_viz("MRR, ₽", "#509EE3", " ₽"),
             "line",
-            (20, 0, 12, 6),
+            (14, 0, 12, 6),
             0x0C,
         ),
         _executive_card(
-            "Динамика активных JID (30 дн.)",
-            "JID с хотя бы одним документом за предыдущие 30 суток на конец каждого дня. "
-            "Читается вместе с «Активных клиник за 7 дней»: недельное окно проседает раньше "
-            "тридцатидневного.",
+            EXECUTIVE_ACTIVE_JID_TREND_NAME,
+            "JID с хотя бы одним документом за предыдущие 30 суток на конец каждого дня за "
+            "последние 90 дней. Читается вместе с «Активных клиник за последние 7 дней»: "
+            "недельное окно проседает раньше тридцатидневного. Ряд начинается через 30 дней "
+            "после первого дня истории — заполнение окна ростом не показывается.",
             _executive_daily_base("COUNT(DISTINCT ja.jid)::bigint", "Активных JID"),
             _executive_daily_viz("Активных JID", "#A989C5", None),
             "line",
-            (20, 12, 12, 6),
+            (14, 12, 12, 6),
             0x0D,
         ),
-        _executive_text(
-            "## Выручка под риском\n"
-            "При плоской ставке выручка распределена по JID равномерно, а ценность — нет: "
-            "спящая клиника платит столько же, сколько поток на тысячи документов. Раздел "
-            "показывает, где абонплата собирается без результата. Обе очереди — «ноль "
-            "ценности» (ни одного успешного СЭМД) и «затык доставки» (свыше 80 % документов "
-            "стоят в обработке) — рабочие списки Customer Success. Реагируют на оба фильтра.",
-            (26, 0, 24, 2),
-        ),
         _executive_card(
-            "Сегменты ценности (MRR × ₽/успех)",
-            "JID по объёму потока за период. Ставка плоская, поэтому «₽ за успешный СЭМД» "
-            "растёт к спящим клиникам: это самая маржинальная и одновременно самая рисковая "
-            "на отток выручка. Столбец «Доля успеха, %» показывает, различается ли качество "
-            "сервиса между сегментами.",
+            EXECUTIVE_SEGMENTS_NAME,
+            "JID по объёму потока за период. При плоской ставке выручка распределена по JID "
+            "равномерно, а ценность — нет, поэтому «₽ за успешный СЭМД» растёт к спящим "
+            "клиникам: это самая маржинальная и одновременно самая рисковая на отток "
+            "выручка. Столбец «Доля успеха, %» показывает, различается ли качество сервиса "
+            "между сегментами.",
             _executive_per_jid(
                 _EXECUTIVE_DOCS,
                 _EXECUTIVE_OK,
@@ -3543,79 +3694,55 @@ def executive_overview_cards() -> list[dict]:
             "ORDER BY MIN(CASE WHEN docs >= 1000 THEN 1 WHEN docs >= 50 THEN 2 ELSE 3 END)",
             {
                 "column_settings": {
-                    '["name","Клиник"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","Документов"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","Успешных СЭМД"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","Доля успеха, %"]': {
-                        "decimals": 1,
-                        "number_separators": ", ",
-                        "suffix": " %",
-                    },
-                    '["name","MRR, ₽"]': {
-                        "decimals": 0,
-                        "number_separators": ", ",
-                        "suffix": " ₽",
-                    },
-                    '["name","₽ за успешный СЭМД"]': {
-                        "decimals": 0,
-                        "number_separators": ", ",
-                        "suffix": " ₽",
-                    },
+                    '["name","Клиник"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Документов"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Успешных СЭМД"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Доля успеха, %"]': dict(_EXECUTIVE_PCT_FORMAT),
+                    '["name","MRR, ₽"]': dict(_EXECUTIVE_MONEY_FORMAT),
+                    '["name","₽ за успешный СЭМД"]': dict(_EXECUTIVE_MONEY_FORMAT),
                 }
             },
             "table",
-            (28, 0, 24, 5),
+            (20, 0, 24, 5),
             0x0E,
         ),
         _executive_card(
-            "Выручка под риском «ноль ценности», ₽",
-            "Абонплата JID, у которых за период ноль успешно зарегистрированных СЭМД при "
-            "ненулевом потоке. Платят, но ценности не получают — очередь № 1 на отток.",
+            EXECUTIVE_CHURN_COUNT_NAME,
+            f"Число JID, у которых за период от {EXECUTIVE_CHURN_MIN_DOCS} документов и ноль "
+            "успешных СЭМД. Единичные попытки порог отсекает: это проба подключения, а не "
+            "риск оттока. Размер рабочего списка Customer Success — сам список ниже.",
             _executive_per_jid(_EXECUTIVE_DOCS, _EXECUTIVE_OK)
-            + f"SELECT (COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs > 0) * {tariff})::numeric "
-            'AS "₽ под риском" FROM per_jid',
-            _executive_money("₽ под риском"),
-            "scalar",
-            (33, 0, 8, 3),
-            0x0F,
-        ),
-        _executive_card(
-            "Выручка под риском «затык доставки», ₽",
-            "Абонплата JID, у которых свыше 80 % документов стоят в обработке (ответ ещё "
-            "ждут). Учитываются клиники от 10 документов за период — иначе в риск попадает "
-            "JID с единственной отправкой. Доставка фактически не работает: одновременно "
-            "риск оттока и повод для эскалации.",
-            _executive_per_jid(
-                _EXECUTIVE_DOCS,
-                f"COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_PENDING}) AS in_progress",
-            )
-            + "SELECT (COUNT(DISTINCT jid) FILTER (WHERE docs >= 10 "
-            f"AND in_progress::numeric / NULLIF(docs, 0) > 0.8) * {tariff})::numeric "
-            'AS "₽ под риском (затык)" FROM per_jid',
-            _executive_money("₽ под риском (затык)"),
-            "scalar",
-            (33, 8, 8, 3),
-            0x10,
-        ),
-        _executive_card(
-            "Клиник без единого успеха",
-            "Число JID, у которых за период ноль успешных СЭМД при ненулевом потоке. Размер "
-            "очереди Customer Success — сама очередь ниже.",
-            _executive_per_jid(_EXECUTIVE_DOCS, _EXECUTIVE_OK)
-            + "SELECT COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs > 0)::bigint "
+            + f"SELECT COUNT(DISTINCT jid) FILTER (WHERE {churn})::bigint "
             'AS "Клиник без успеха" FROM per_jid',
             _executive_count("Клиник без успеха"),
             "scalar",
-            (33, 16, 8, 3),
+            (25, 0, 12, 3),
             0x14,
         ),
         _executive_card(
-            "Очередь оттока: JID с нулём успехов",
-            "Клиники без единого успешного СЭМД за период, по убыванию объёма попыток. "
-            "Разбивка по исходам отвечает, к кому идти: «с ошибкой» — разбор содержания "
-            "документов, «в обработке» и «ответ не получен» — разбор доставки.",
+            EXECUTIVE_CHURN_MRR_NAME,
+            f"Абонплата JID, у которых за период от {EXECUTIVE_CHURN_MIN_DOCS} документов и "
+            "ноль успешно зарегистрированных СЭМД. Платят, но ценности не получают — очередь "
+            "№ 1 на отток. Порог объёма тот же, что у «Клиник без успехов».",
+            _executive_per_jid(_EXECUTIVE_DOCS, _EXECUTIVE_OK)
+            + f"SELECT (COUNT(DISTINCT jid) FILTER (WHERE {churn}) * {tariff})::numeric "
+            'AS "₽ под риском" FROM per_jid',
+            _executive_money("₽ под риском"),
+            "scalar",
+            (25, 12, 12, 3),
+            0x0F,
+        ),
+        _executive_card(
+            EXECUTIVE_CHURN_QUEUE_NAME,
+            f"Клиники от {EXECUTIVE_CHURN_MIN_DOCS} документов за период без единого "
+            "успешного СЭМД, по убыванию объёма попыток. Разбивка по исходам отвечает, к "
+            "кому идти: «с ошибкой» — разбор содержания документов, «в обработке» и «ответ "
+            "не получен» — разбор доставки. «Основной тип ошибки» — самый частый тип из "
+            "documents.error_types по документам JID за период; пусто, если у документов "
+            "нет распознанного типа.",
             _executive_per_jid(
                 "COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic",
+                "MAX(clinic_inn) AS inn",
                 _EXECUTIVE_DOCS,
                 _EXECUTIVE_OK,
                 "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', "
@@ -3623,46 +3750,103 @@ def executive_overview_cards() -> list[dict]:
                 f"COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_PENDING}) AS in_progress",
                 "COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') AS no_answer",
             )
-            + 'SELECT jid::text AS "JID Клиники", clinic AS "Клиника", docs AS "Попыток", '
-            'errs AS "С ошибкой", in_progress AS "В обработке", '
-            'no_answer AS "Ответ не получен", '
-            f'{tariff} AS "MRR, ₽" FROM per_jid WHERE ok = 0 AND docs > 0 '
-            "ORDER BY docs DESC LIMIT 15",
+            + _executive_churn_top_error()
+            + 'SELECT p.jid::text AS "JID Клиники", p.clinic AS "Клиника", p.inn AS "ИНН", '
+            'p.docs AS "Попыток", p.errs AS "С ошибкой", p.in_progress AS "В обработке", '
+            'p.no_answer AS "Ответ не получен", e.error_type AS "Основной тип ошибки", '
+            f'{tariff} AS "MRR, ₽" FROM per_jid p LEFT JOIN top_error e ON e.jid = p.jid '
+            f"WHERE p.ok = 0 AND p.docs >= {EXECUTIVE_CHURN_MIN_DOCS} "
+            "ORDER BY p.docs DESC LIMIT 15",
             {
                 "column_settings": {
                     '["name","Клиника"]': {"column_title": "Клиника"},
-                    '["name","Попыток"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","С ошибкой"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","В обработке"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","Ответ не получен"]': {"decimals": 0, "number_separators": ", "},
-                    '["name","MRR, ₽"]': {
-                        "decimals": 0,
-                        "number_separators": ", ",
-                        "suffix": " ₽",
-                    },
+                    '["name","ИНН"]': {"column_title": "ИНН"},
+                    '["name","Попыток"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","С ошибкой"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","В обработке"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Ответ не получен"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Основной тип ошибки"]': {"column_title": "Основной тип ошибки"},
+                    '["name","MRR, ₽"]': dict(_EXECUTIVE_MONEY_FORMAT),
                 }
             },
             "table",
-            (36, 0, 24, 7),
+            (28, 0, 24, 7),
             0x15,
+        ),
+        _executive_card(
+            EXECUTIVE_SILENT_COUNT_NAME,
+            f"JID с документами за последние {EXECUTIVE_SILENT_ACTIVE_DAYS} дней и без "
+            f"документов за последние {EXECUTIVE_SILENT_QUIET_DAYS} суток: ещё в активной "
+            "базе под MRR, но поток уже остановился. Окна привязаны к текущему дню: фильтр "
+            "периода не действует, срез по клинике — действует. Очередь № 2 Customer "
+            "Success — сам список ниже.",
+            _executive_silent_base(
+                'SELECT COUNT(DISTINCT jid)::bigint AS "Замолчавших клиник" FROM silent'
+            ),
+            _executive_count("Замолчавших клиник"),
+            "scalar",
+            (35, 0, 12, 3),
+            0x17,
+        ),
+        _executive_card(
+            EXECUTIVE_SILENT_MRR_NAME,
+            "Абонплата замолчавших клиник: число замолчавших × ставка. Часть MRR за "
+            "последние 30 дней, которая выпадет из активной базы, если поток не "
+            "возобновится. Фильтр периода не действует.",
+            _executive_silent_base(
+                f'SELECT (COUNT(DISTINCT jid) * {tariff})::numeric AS "MRR замолчавших, ₽" '
+                "FROM silent"
+            ),
+            _executive_money("MRR замолчавших, ₽"),
+            "scalar",
+            (35, 12, 12, 3),
+            0x18,
+        ),
+        _executive_card(
+            EXECUTIVE_SILENT_QUEUE_NAME,
+            f"Замолчавшие клиники по убыванию объёма за {EXECUTIVE_SILENT_ACTIVE_DAYS} дней: "
+            "чем больше был поток, тем дороже остановка. Дата последнего документа "
+            "показывает, как давно клиника молчит; доля успеха за те же 30 дней — не ушла "
+            "ли она из-за качества регистрации. Фильтр периода не действует.",
+            _executive_silent_base(
+                'SELECT jid::text AS "JID Клиники", clinic AS "Клиника", inn AS "ИНН", '
+                'last_doc_at::date AS "Последний документ", docs AS "Документов за 30 дней", '
+                'ROUND(100.0 * ok / NULLIF(answered, 0), 1) AS "Доля успеха за 30 дней, %" '
+                "FROM silent ORDER BY docs DESC LIMIT 15"
+            ),
+            {
+                "column_settings": {
+                    '["name","Клиника"]': {"column_title": "Клиника"},
+                    '["name","ИНН"]': {"column_title": "ИНН"},
+                    '["name","Последний документ"]': {"column_title": "Последний документ"},
+                    '["name","Документов за 30 дней"]': dict(_EXECUTIVE_COUNT_FORMAT),
+                    '["name","Доля успеха за 30 дней, %"]': dict(_EXECUTIVE_PCT_FORMAT),
+                }
+            },
+            "table",
+            (38, 0, 24, 7),
+            0x19,
         ),
     ]
 
 
 EXECUTIVE_DESCRIPTION = (
     "Управленческий взгляд на сервис интеграции с ЕГИСЗ (грейн: JID / документ / "
-    "состояние; без тела СЭМД). «Обзор» — иерархия от ценности к риску: NSM и качество "
-    "регистрации → пульс за скользящие 7 дней → guardrail-метрики здоровья сервиса → "
-    "ориентировочные деньги → выручка под риском. «Динамика по неделям» и «Динамика по "
-    "месяцам» — доступность сервиса во времени: контрольная p-карта (скользящая средняя "
-    "за 12 периодов, границы p̄ ± 3σ), состав исходов и структура ошибок по категориям. "
-    "Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД + "
-    "ошибка связи) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» "
-    "и у витрин rpt_documents_weekly / rpt_documents_monthly. Рублёвые карточки "
-    "рассчитаны по плоской ставке 10 000 ₽/JID/мес и читаются как порядок величины: "
-    "договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка "
-    "подключения. Разделы «Пульс» и «Деньги» на фильтр «Период» не реагируют, срез по "
-    "клинике действует на все карточки дашборда."
+    "состояние; без тела СЭМД). «Обзор» — ряды от ценности к риску: успешные СЭМД и "
+    "качество регистрации → отказы, ошибки связи и «ответ не получен» → пульс за последние "
+    "7 дней → ориентировочные деньги → выручка под риском (списки клиник без успехов и "
+    "замолчавших). Текстовых подписей у рядов нет: знаменатель и окно названы в имени "
+    "карточки, подробности — в её описании. «Динамика по неделям» и «Динамика по месяцам» "
+    "— доступность сервиса во времени за всю историю: контрольная карта XmR по закрытым "
+    "неделям (центр — средняя доля ошибок, границы — средняя ± 2,66 × средний скользящий "
+    "размах), состав исходов и структура ошибок по категориям. Доли качества везде "
+    "считаются от документов с ответом РЭМД (успех + отказ РЭМД + ошибка связи) — тот же "
+    "корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин "
+    "rpt_documents_weekly / rpt_documents_monthly. Рублёвые карточки рассчитаны по плоской "
+    "ставке 10 000 ₽/JID/мес и читаются как порядок величины: договорная сетка сложнее, а "
+    "тарифицируется юридическое лицо, тогда как JID — точка подключения. Карточки за "
+    "последние 7 и 30 дней, рублёвые карточки, список замолчавших и вкладки динамики на "
+    "фильтр «Период» не реагируют, срез по клинике действует на все карточки дашборда."
 )
 
 
@@ -3685,9 +3869,6 @@ def apply_renames(path: Path, mapping: dict[str, str], *, post=None) -> bool:
         if dq.get("type") == "native":
             dq["native"]["query"] = fix_sql(dq["native"]["query"])
         fix_viz(card.get("visualization_settings") or {}, display=card.get("display", "table"))
-        if card.get("name") == "Очередь оттока: JID с нулём успехов":
-            cs = card.setdefault("visualization_settings", {}).setdefault("column_settings", {})
-            cs['["name","Клиника"]'] = {"column_title": "Клиника"}
     if post is not None:
         post(dash)
     normalize_dashboard(dash)

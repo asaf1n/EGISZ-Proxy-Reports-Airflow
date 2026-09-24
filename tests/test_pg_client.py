@@ -12,6 +12,7 @@ extract_dag = load_dag_module("egisz_etl_dag")
 connect_pg = extract_dag.connect_pg
 get_cursors = extract_dag.get_cursors
 load_raw_logs = extract_dag.load_raw_logs
+RAW_LOG_COLUMNS = extract_dag.RAW_LOG_COLUMNS
 transform_raw_to_facts = extract_dag.transform_raw_to_facts
 update_cursors = extract_dag.update_cursors
 
@@ -82,6 +83,48 @@ def test_load_raw_logs_rejects_missing_required_exchangelog_keys() -> None:
 
     with pytest.raises(ValueError, match="msgtext"):
         load_raw_logs(FakeConnection(), [row])
+
+
+def test_load_raw_logs_strips_embedded_nul_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EXCHANGELOG изредка приносит битые SOAP-тела с 0x00 внутри LOGTEXT/MSGTEXT;
+    psycopg2 отказывается строить текстовый литерал с NUL ещё до обращения к серверу."""
+    row = {
+        "logid": 1,
+        "logdate": "2026-05-07T15:00:00",
+        "createdate": "2026-05-07T14:59:00",
+        "msgid": "message-1",
+        "logstate": 1,
+        "logtext": "before\x00after",
+        "msgtext": "clean",
+        "uri": "http://example\x00.invalid",
+    }
+    captured: dict[str, list[tuple[object, ...]]] = {}
+
+    def fake_execute_values(_cur, _sql, values, *_args, **_kwargs) -> None:
+        captured["values"] = list(values)
+
+    monkeypatch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
+
+    class Cursor:
+        def __enter__(self) -> "Cursor":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class Connection:
+        def cursor(self) -> Cursor:
+            return Cursor()
+
+        def commit(self) -> None:
+            return None
+
+    load_raw_logs(Connection(), [row])
+
+    (loaded,) = captured["values"]
+    assert "\x00" not in loaded[RAW_LOG_COLUMNS.index("logtext")]
+    assert "\x00" not in loaded[RAW_LOG_COLUMNS.index("uri")]
+    assert loaded[RAW_LOG_COLUMNS.index("logtext")] == "beforeafter"
 
 
 class FakeTransformCursor:
@@ -164,7 +207,8 @@ def test_error_matching_is_tiered() -> None:
     assert "chk_dim_error_type_group_responsibility" in rules
     fns = (parts / "02_functions.sql").read_text(encoding="utf-8")
     matching_fn = fns.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
-    assert "min(match_tier)" in matching_fn
+    assert "FOR tier IN 1..4 LOOP" in matching_fn
+    assert "IF cardinality(labels) > 0 THEN" in matching_fn
     # ИЭМК: RegistryError (атрибуты) парсится отдельной веткой build_errors_json
     assert "CREATE OR REPLACE FUNCTION public.xml_registry_errors" in fns
     build_fn = fns.split("CREATE OR REPLACE FUNCTION public.build_errors_json")[1].split("$$;")[0]
@@ -187,7 +231,10 @@ def test_error_classify_uses_atomic_item_atoms() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     assert "CREATE OR REPLACE FUNCTION public.error_item_atoms" in sql
     classify = sql.split("CREATE OR REPLACE FUNCTION public.error_classify")[1].split("$$;")[0]
-    assert "error_item_atoms" in classify
+    assert "error_detail_types(public.error_details(p_errors))" in classify
+    details = sql.split("CREATE OR REPLACE FUNCTION public.error_details(")[1].split("$$;")[0]
+    assert "error_item_atoms" in details
+    assert "error_message_is_readable" in details
     assert "error_interpretation_type" not in classify
 
 
@@ -202,6 +249,11 @@ def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
     assert "dim_error_type_group" in breakdown
     assert "public.documents doc" in breakdown
     assert "btrim(doc.error_types)" in breakdown
+    assert "jsonb_to_recordset" in breakdown
+    assert "d.classification_type" in breakdown
+    assert "' · OID ' || a.nsi_dictionary_oid" in breakdown
+    assert "' · ' || nd.name" in breakdown
+    assert "несколько справочников" not in breakdown
     # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
     assert "uq_rpt_error_breakdown" in sql
     # Дроп обоих видов объекта + REFRESH после transform.
@@ -556,6 +608,8 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
     assert 'AS "Ошибки JSON raw"' not in sql
     assert "error_messages_row" in sql
+    assert "WHEN e.final_status = 'error' AND e.logstate = 3" in transform_sql
+    assert "'code', 'INTEGRATION_LOGSTATE_3', 'message', e.event_message" in transform_sql
     assert "FROM public.documents d" in sql
     assert "WHERE r.status = 'network_error'" in sql
     assert "fact_egisz_channel_errors" not in transform_sql

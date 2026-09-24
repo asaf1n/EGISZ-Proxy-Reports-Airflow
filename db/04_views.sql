@@ -578,102 +578,55 @@ COMMENT ON VIEW public.rpt_network_errors IS
 -- Атом вне словаря — это формулировка отказа, не покрытая правилом: пропускаем её
 -- как есть в категорию «Прочие».
 CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
--- Детализация типа справочником НСИ. Тип очищен от значений в скобках, поэтому отказы
--- по разным справочникам сливаются в одну строку: «Значение с указанным кодом
--- отсутствует в справочнике» одинаково закрывает и МКБ-10, и номенклатуру услуг.
--- Подпись типа дополняется справочником там, где класс объявил шаблон
--- (dim_error_rules.nsi_dictionary_pattern).
---
--- Справочник ищется шаблоном СВОЕГО класса: у отказа по справочнику и у отказа
--- Schematron разные написания, общий шаблон смешал бы их признаки.
---
--- Грейн остаётся уникальным: документ с двумя справочниками одного типа даёт две строки
--- с разными подписями, и это разные отказы. При нескольких справочниках в одном типе
--- подпись говорит об этом прямо.
-WITH type_pattern AS (
-    SELECT DISTINCT r.interpretation, r.nsi_dictionary_pattern AS pattern
-    FROM public.dim_error_rules r
-    WHERE r.is_active AND r.nsi_dictionary_pattern IS NOT NULL
-),
-doc_dictionary AS (
-    SELECT
-        doc.dwh_id,
-        p.pattern,
-        CASE WHEN count(DISTINCT d.oid) = 1 THEN min(d.oid) END AS nsi_dictionary_oid,
-        count(DISTINCT d.oid) AS oid_count
+-- error_details сохраняет связь сообщения, классификации и OID одного элемента ответа.
+-- NULL обрабатывается на время переноса архива: scripts/backfill_error_details.sql.
+WITH doc_details AS (
+    SELECT doc.dwh_id, e.error_type AS base_error_type, e.classification_type,
+           e.nsi_dictionary_oid, e.code
     FROM public.documents doc
-    CROSS JOIN (SELECT DISTINCT pattern FROM type_pattern) p
-    CROSS JOIN LATERAL unnest(string_to_array(doc.error_text, ' · ')) AS a(message)
-    CROSS JOIN LATERAL (SELECT (regexp_match(a.message, p.pattern))[1] AS oid) d
+    CROSS JOIN LATERAL jsonb_to_recordset(COALESCE(NULLIF(doc.error_details, '[]'::jsonb),
+        (SELECT jsonb_agg(jsonb_build_object('error_type', btrim(atom),
+                                           'classification_type', btrim(atom),
+                                           'nsi_dictionary_oid', legacy_oid.oid))
+         FROM unnest(string_to_array(btrim(doc.error_types), ' · ')) atom
+         LEFT JOIN LATERAL (
+             SELECT DISTINCT (regexp_matches(doc.error_text, rule.nsi_dictionary_pattern, 'g'))[1] AS oid
+             FROM public.dim_error_rules rule
+             WHERE rule.is_active AND rule.interpretation = btrim(atom)
+               AND rule.nsi_dictionary_pattern IS NOT NULL
+         ) legacy_oid ON true)
+    )) AS e(error_type text, classification_type text, nsi_dictionary_oid text, code text)
     WHERE doc.status IN ('async_error', 'network_error')
-      AND doc.error_text IS NOT NULL
-      AND d.oid IS NOT NULL
-    GROUP BY doc.dwh_id, p.pattern
+      AND NULLIF(btrim(e.error_type), '') IS NOT NULL
 ),
 atom_types AS (
-    SELECT DISTINCT
-        doc.dwh_id,
-        n.norm COLLATE "und-x-icu" AS base_error_type,
+    SELECT DISTINCT ON (d.dwh_id, d.base_error_type, d.nsi_dictionary_oid)
+        d.dwh_id, d.base_error_type, d.classification_type, d.nsi_dictionary_oid,
         COALESCE(g.error_category, 'Прочие') AS error_category,
-        -- Для непокрытых формулировок зона ответственности и повторяемость неизвестны.
         COALESCE(g.responsibility, 'смешанная') AS responsibility,
         COALESCE(g.is_retryable, false) AS is_retryable,
-        -- Мнемоника, под которой пришёл отказ: своя, если тип рождён кодовым правилом,
-        -- иначе зонтичная (тип распознан текстом внутри VALIDATION_ERROR/RUNTIME_ERROR).
         COALESCE(g.nsi_error_code, g.parent_nsi_error_code) AS nsi_error_code,
-        c.nsi_error_description,
-        -- Код отказа в своём пространстве имён: у контуров ИЭМК и шлюза мнемоники ФНСИ 305
-        -- нет по существу, и без этой пары колонка кода оставалась бы у них пустой.
-        g.error_code,
-        g.code_namespace
-    FROM public.documents doc
-    CROSS JOIN LATERAL unnest(
-        -- error_types гарантированно непустой ниже по WHERE, поэтому фолбэк не нужен.
-        string_to_array(btrim(doc.error_types), ' · ')
-    ) AS atom
-    CROSS JOIN LATERAL (SELECT NULLIF(btrim(atom), '') AS norm) n
-    LEFT JOIN public.dim_error_type_group g ON g.error_type = n.norm
+        c.nsi_error_description, g.error_code, g.code_namespace
+    FROM doc_details d
+    LEFT JOIN public.dim_error_type_group g ON g.error_type = d.classification_type
     LEFT JOIN public.dim_nsi_error_code c
       ON c.nsi_error_code = COALESCE(g.nsi_error_code, g.parent_nsi_error_code)
-    WHERE doc.status IN ('async_error', 'network_error')
-      AND doc.error_types IS NOT NULL
-      AND btrim(doc.error_types) <> ''
-      AND n.norm IS NOT NULL
+    ORDER BY d.dwh_id, d.base_error_type, d.nsi_dictionary_oid, d.classification_type
 )
 SELECT
-    r.ips_date,
-    a.dwh_id,
-    r.clinic_jid,
-    r.clinic_name,
-    r.clinic_label,
-    r.semd_code,
-    r.semd_label,
-    -- Подпись типа: класс плюс справочник, если класс его объявил.
-    (a.base_error_type || CASE
-        WHEN dd.oid_count > 1 THEN ' · несколько справочников'
-        WHEN dd.nsi_dictionary_oid IS NOT NULL
-            THEN ' · ' || COALESCE(nd.short_name, nd.name, 'OID ' || dd.nsi_dictionary_oid)
-        ELSE ''
-    END) COLLATE "und-x-icu" AS error_type,
-    a.base_error_type,
-    a.error_category,
-    a.responsibility,
-    a.is_retryable,
-    a.nsi_error_code,
-    a.nsi_error_description,
-    a.error_code,
-    a.code_namespace,
-    dd.nsi_dictionary_oid,
-    nd.name AS nsi_dictionary_name
+    r.ips_date, a.dwh_id, r.clinic_jid, r.clinic_name, r.clinic_label,
+    r.semd_code, r.semd_label,
+    (a.base_error_type || CASE WHEN a.nsi_dictionary_oid IS NOT NULL
+        THEN ' · OID ' || a.nsi_dictionary_oid || COALESCE(' · ' || nd.name, '')
+        ELSE '' END) COLLATE "und-x-icu" AS error_type,
+    a.base_error_type COLLATE "und-x-icu" AS base_error_type,
+    a.error_category, a.responsibility, a.is_retryable,
+    a.nsi_error_code, a.nsi_error_description, a.error_code, a.code_namespace,
+    a.nsi_dictionary_oid, nd.name AS nsi_dictionary_name,
+    a.classification_type
 FROM atom_types a
 INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
-LEFT JOIN type_pattern tp ON tp.interpretation = a.base_error_type
-LEFT JOIN doc_dictionary dd
-       ON dd.dwh_id = a.dwh_id AND dd.pattern = tp.pattern
--- Реестр наименований — снимок НСИ 805, и справочники вне него там отсутствуют: OID без
--- расшифровки идёт в подпись как есть. В подпись берётся краткое написание там, где оно
--- заведено, иначе официальное наименование заняло бы до 181 символа.
-LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = dd.nsi_dictionary_oid
+LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = a.nsi_dictionary_oid
 WITH DATA;
 
 -- UNIQUE индекс нужен для REFRESH ... CONCURRENTLY; грейн = (dwh_id, error_type).
@@ -691,7 +644,7 @@ CREATE INDEX IF NOT EXISTS idx_rpt_eb_base_error_type
     ON public.rpt_error_breakdown (base_error_type);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
-'Разбивка ошибок (matview): один ряд = один канонический тип на документ (split documents.error_types по '' · ''). Обновляется refresh_error_breakdown() после transform. error_type — подпись типа со справочником НСИ там, где класс объявил шаблон (dim_error_rules.nsi_dictionary_pattern): без справочника отказы по разным справочникам неразличимы. base_error_type — канонический тип для связей со словарями.';
+'Одна строка на документ и отдельный тип ошибки. Читаемый текст имеет приоритет; технический текст интерпретируется. НСИ: OID и полное наименование. base_error_type — тип без подписи НСИ для отбора в documents.error_types; classification_type — ключ dim_error_type_group. Источник — сохранённые documents.error_details.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT
@@ -1211,7 +1164,7 @@ no_response_after AS (
 uncovered_types AS (
     SELECT DISTINCT b.dwh_id
     FROM public.rpt_error_breakdown b
-    LEFT JOIN public.dim_error_type_group g ON g.error_type = b.error_type
+    LEFT JOIN public.dim_error_type_group g ON g.error_type = b.classification_type
     WHERE g.error_type IS NULL
 ),
 -- Полнота выгрузки журнала. Шлюз нумерует EXCHANGELOG непрерывно, поэтому число

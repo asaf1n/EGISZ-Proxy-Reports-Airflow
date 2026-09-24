@@ -307,6 +307,15 @@ def update_cursors(
     con.commit()
 
 
+def _strip_nul(value: Any) -> Any:
+    """Drop NUL (0x00) characters PostgreSQL text literals cannot hold.
+
+    Firebird BLOB/text columns occasionally carry embedded NULs (garbled SOAP payloads);
+    psycopg2 rejects them client-side before the row ever reaches the server.
+    """
+    return value.replace("\x00", "") if isinstance(value, str) else value
+
+
 def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:
     """Load EXCHANGELOG rows into exchangelog_raw without transforming them in Python."""
     values: list[tuple[Any, ...]] = []
@@ -318,9 +327,9 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
             normalized_row = dict(row)
             if normalized_row.get("createdate") is None:
                 normalized_row["createdate"] = normalized_row.get("logdate")
-            values.append(tuple(normalized_row[column] for column in RAW_LOG_COLUMNS))
+            values.append(tuple(_strip_nul(normalized_row[column]) for column in RAW_LOG_COLUMNS))
         else:
-            values.append(tuple(row))
+            values.append(tuple(_strip_nul(value) for value in row))
 
     if not values:
         return

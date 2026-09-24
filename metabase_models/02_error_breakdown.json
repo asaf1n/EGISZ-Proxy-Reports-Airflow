@@ -13,7 +13,7 @@
     "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
     "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" }
   },
-  "hidden_fields": ["dwh_id", "clinic_name"],
+  "hidden_fields": ["dwh_id", "clinic_name", "classification_type"],
   "metrics": {
     "Вхождений ошибки": {
       "aggregation": ["count"]

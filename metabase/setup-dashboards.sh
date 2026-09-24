@@ -476,7 +476,11 @@ fetch_db_metadata() {
   local parts schema_json table_name table_id count=0
   parts="${DB_METADATA_FILE}.parts"
   : > "${parts}"
-  schema_json="$(api_request GET "/api/database/${APP_DB_ID}/schema/public")"
+  # На свежем инстансе схема появляется только после первой синхронизации: до неё
+  # Metabase отвечает 404, и это не сбой, а «таблиц пока нет» — повторы делает
+  # wait_for_metabase_metadata.
+  schema_json="$(api_request_optional GET "/api/database/${APP_DB_ID}/schema/public")"
+  schema_json="${schema_json:-[]}"
   while IFS= read -r table_name; do
     [ -n "${table_name}" ] || continue
     table_id="$(printf '%s' "${schema_json}" |

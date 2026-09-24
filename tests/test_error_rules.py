@@ -278,7 +278,7 @@ def test_error_classify_dedups_and_joins(con):
           {"code":"PATIENT_MPI_MISMATCH","message":"не соответствует данным ГИП"}]'::jsonb)""")
     assert result == (
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
-        " · Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП"
+        " · не соответствует данным ГИП"
     )
 
 
@@ -286,6 +286,131 @@ def test_error_classify_empty_message_known_code(con):
     result = one(con, """SELECT public.error_classify(
         '[{"code":"NOT_UNIQUE_PROVIDED_ID","message":""}]'::jsonb)""")
     assert result == "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован"
+
+
+@pytest.mark.parametrize("code,message", [
+    ("CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "Срок действия сертификата организации истек или еще не наступил"),
+    ("NO_SNILS", "СНИЛС пациента в составе сведений о пациенте обязателен для данного вида документов"),
+    ("OBJECT_NOT_FOUND", "Подразделение не существовало на дату создания документа"),
+])
+def test_readable_message_is_not_rephrased(con, code, message):
+    import json
+
+    details = one(con, "SELECT public.error_details(%s::jsonb)",
+                  json.dumps([{"code": code, "message": message}]))
+    assert details[0]["error_type"] == message
+    assert details[0]["message"] == message
+    assert details[0]["code"] == code
+    assert details[0]["classification_type"] == one(
+        con, "SELECT public.error_item_atoms(%s, %s)", code, message)[0]
+
+
+def test_machine_message_still_uses_interpretation(con):
+    details = one(con, """SELECT public.error_details(
+        '[{"code":"XDSRepositoryError","message":"Internal error"}]'::jsonb)""")
+    assert details[0]["error_type"] == details[0]["classification_type"]
+    assert details[0]["error_type"] != "Internal error"
+
+
+def test_gateway_status_retains_transport_classification(con):
+    details = one(con, """SELECT public.error_details(
+        '[{"code":"INTEGRATION_LOGSTATE_3","message":"Сетевая ошибка: соединение прервано"}]'::jsonb)""")
+    assert details[0]["error_type"] == "Сетевая ошибка"
+    assert details[0]["classification_type"] == "Сетевая ошибка"
+
+
+def test_error_details_keep_dictionary_with_its_own_item(con):
+    import json
+
+    oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
+    payload = [{"code": "INVALID_DICTIONARY_VERSION", "message":
+                f"Справочник OID [{oid}]. Версия [1] недопустима для документа вида [227]. Требуется использовать версии: [2]"}
+               for oid in oids]
+    details = one(con, "SELECT public.error_details(%s::jsonb)", json.dumps(payload))
+    assert [x["nsi_dictionary_oid"] for x in details] == oids
+    assert [x["message"] for x in details] == [x["message"] for x in payload]
+
+
+def test_literal_separator_in_message_is_not_an_error_boundary(con):
+    details = one(con, """SELECT public.error_details(
+        '[{"code":"VALIDATION_ERROR","message":"Поле не заполнено · проверка документа"}]'::jsonb)""")
+    assert len(details) == 1
+    assert details[0]["error_type"] == "Поле не заполнено · проверка документа"
+
+
+def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
+    import json
+    import uuid
+
+    ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
+    message = "Срок действия сертификата организации истек или еще не наступил"
+    certificate = {"code": "CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "message": message}
+    oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
+    dictionaries = [{"code": "INVALID_DICTIONARY_VERSION", "message":
+                     f"Справочник OID [{oid}]. Версия [1] недопустима для документа вида [227]. Требуется использовать версии: [2]"}
+                    for oid in oids]
+    with con.cursor() as cur:
+        cur.execute("SAVEPOINT reporting_case")
+        try:
+            for doc_id, payload in zip(ids, [dictionaries + [certificate, certificate], [certificate]]):
+                cur.execute("""
+                    INSERT INTO documents (dwh_id, status, last_callback_at, error_details, error_types)
+                    SELECT %s, 'async_error', now(), details, public.error_detail_types(details)
+                    FROM (SELECT public.error_details(%s::jsonb) AS details) d
+                """, (doc_id, json.dumps(payload)))
+            cur.execute("""
+                INSERT INTO documents (dwh_id, status, last_callback_at, error_types, error_text)
+                VALUES (%s, 'async_error', now(),
+                        (public.error_item_atoms('INVALID_DICTIONARY_VERSION', %s))[1], %s)
+            """, (ids[2], dictionaries[0]["message"], " · ".join(x["message"] for x in dictionaries)))
+            # Проверяется определение поставляемой витрины без REFRESH общего архива.
+            cur.execute("SELECT pg_get_viewdef('public.rpt_error_breakdown', true)")
+            view_sql = cur.fetchone()[0].rstrip().rstrip(';')
+            cur.execute("SELECT dwh_id, error_type, nsi_dictionary_oid, nsi_dictionary_name "
+                        "FROM (" + view_sql + ") b WHERE dwh_id = ANY(%s)", (ids,))
+            rows = cur.fetchall()
+            assert len(rows) == 6
+            assert {row[0] for row in rows if row[1] == message} == set(ids[:2])
+            for row in rows:
+                if row[2]:
+                    assert row[2] in oids
+                    assert row[3]
+                    assert row[1].endswith(f"OID {row[2]} · {row[3]}")
+        finally:
+            cur.execute("ROLLBACK TO SAVEPOINT reporting_case")
+            cur.execute("RELEASE SAVEPOINT reporting_case")
+
+
+def test_archive_backfill_repeats_without_changing_another_document(con):
+    script = (DB_DIR.parent / "scripts/backfill_error_details.sql").read_text(encoding="utf-8")
+    setup = script.split("CREATE OR REPLACE PROCEDURE")[0]
+    setup = "\n".join(line for line in setup.splitlines() if not line.startswith("\\"))
+    with con.cursor() as cur:
+        cur.execute("""
+            SELECT d.dwh_id, d.error_types, d.error_details
+            FROM documents d
+            JOIN transactions t ON t.logid = d.result_logid AND t.dwh_id = d.dwh_id
+                               AND t.log_date = d.last_callback_at
+            JOIN exchangelog_raw r ON r.logid = t.logid AND r.createdate = t.log_date
+            WHERE d.status = 'async_error' AND d.error_details IS NOT NULL
+            LIMIT 1
+        """)
+        original = cur.fetchone()
+        if not original:
+            pytest.skip("No migrated callback available for archive replay")
+        cur.execute("SAVEPOINT archive_replay")
+        try:
+            cur.execute(setup)
+            cur.execute("UPDATE documents SET error_details = NULL WHERE dwh_id = %s", (original[0],))
+            cur.execute("SELECT pg_temp.backfill_error_details(1)")
+            assert cur.fetchone()[0] == 1
+            cur.execute("SELECT dwh_id, error_types, error_details FROM documents WHERE dwh_id = %s", (original[0],))
+            assert cur.fetchone() == original
+            cur.execute("SELECT pg_temp.backfill_error_details(1)")
+            assert cur.fetchone()[0] == 0
+        finally:
+            cur.execute("ROLLBACK TO SAVEPOINT archive_replay")
+            cur.execute("RELEASE SAVEPOINT archive_replay")
 
 
 # --- Нормализация остатка --------------------------------------------------------------
@@ -688,11 +813,11 @@ def test_error_breakdown_labels_every_registered_dictionary(con):
           AND b.nsi_dictionary_name IS NULL
           AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = b.nsi_dictionary_oid)
     """) == 0
-    # подпись берёт краткое написание там, где оно заведено
+    # В подписи нужны OID и полное наименование, даже если есть короткое.
     assert one(con, """
         SELECT count(*) FROM rpt_error_breakdown b
         JOIN dim_nsi_dictionary d ON d.oid = b.nsi_dictionary_oid
-        WHERE d.short_name IS NOT NULL AND b.error_type NOT LIKE '%' || d.short_name
+        WHERE b.error_type NOT LIKE '%OID ' || d.oid || ' · ' || d.name
     """) == 0
 
 
