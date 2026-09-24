@@ -14,6 +14,39 @@ CREATE INDEX IF NOT EXISTS idx_error_item_details_cache
     ON error_item_details_cache USING hash (item);
 TRUNCATE pg_temp.error_item_details_cache;
 
+-- Ранее перенесённые элементы могли получить тип из текста ответа вместе с реквизитами
+-- экземпляра. Тип строится из класса и сообщения элемента, поэтому ответ заново не разбирается.
+CREATE OR REPLACE FUNCTION pg_temp.details_by_class(p_details jsonb)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(jsonb_agg(e || jsonb_build_object('error_type',
+               public.error_type_label(e->>'classification_type', e->>'message')) ORDER BY o),
+           '[]'::jsonb)
+    FROM jsonb_array_elements(p_details) WITH ORDINALITY AS x(e, o);
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.details_need_class(p_details jsonb)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(p_details) e
+                   WHERE e->>'error_type' IS DISTINCT FROM
+                         public.error_type_label(e->>'classification_type', e->>'message'));
+$$;
+
+UPDATE public.documents d
+SET error_details = pg_temp.details_by_class(d.error_details),
+    error_types = public.error_detail_types(pg_temp.details_by_class(d.error_details))
+WHERE d.error_details IS NOT NULL AND pg_temp.details_need_class(d.error_details);
+
+UPDATE public.transactions t
+SET error_details = pg_temp.details_by_class(t.error_details),
+    error_type = public.error_detail_types(pg_temp.details_by_class(t.error_details))
+WHERE t.error_details IS NOT NULL AND pg_temp.details_need_class(t.error_details);
+
 -- Переносится выбранный ответ документа, а не курсор ELT. Источник сохраняет
 -- принадлежность code/message одному item; разделять error_text по точке нельзя.
 CREATE OR REPLACE FUNCTION pg_temp.backfill_error_details(p_batch_size integer)
