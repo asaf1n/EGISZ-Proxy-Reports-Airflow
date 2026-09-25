@@ -608,7 +608,7 @@ SELECT
     -- Справочник — в скобках: ' · ' разделяет разные типы в documents.error_types,
     -- и подпись с тем же разделителем читается как несколько склеенных типов.
     (a.base_error_type || CASE WHEN a.nsi_dictionary_oid IS NOT NULL
-        THEN ' (справочник: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'
+        THEN ' (НСИ: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'
         ELSE '' END) COLLATE "und-x-icu" AS error_type,
     a.base_error_type COLLATE "und-x-icu" AS base_error_type,
     a.error_category, a.responsibility, a.is_retryable,
