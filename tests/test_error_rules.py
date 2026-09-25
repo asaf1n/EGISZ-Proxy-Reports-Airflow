@@ -307,6 +307,33 @@ def test_readable_message_is_not_rephrased(con, code, message):
         con, "SELECT public.error_item_atoms(%s, %s)", code, message)[0]
 
 
+@pytest.mark.parametrize("code,message,expected", [
+    ("XDSPatientRegistrationError",
+     "[CRE-013]: PAT-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
+     " Patient(moId: [1.2.643.5.1.13.13.12.2.77.12345], patientId: [B1234567-B123-4C12-8A1B-1234E12DDFFA])",
+     "ИЭМК: Пациент не определен: СНИЛС […] не валидно контрольное число"),
+    ("XDSPatientRegistrationError",
+     "[CRE-013]: PAT-001; Пациент не определен: [СНИЛС [12345678] не соответствует формату \\d{11}];"
+     " Patient(moId: [1.2.643.5.1.13.13.12.2.77.1234], patientId: [DFD1F2A3-4EEF-5B6A-A7E8-9CC01C23BC45])",
+     "ИЭМК: Пациент не определен: СНИЛС […] не соответствует формату (11 цифр)"),
+    ("VALSYS_REJECT",
+     "Ошибки валидации в ФРМСС: [code: DUPLICATE, description: Свидетельство с номером 123456789 и серией 12"
+     " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа.].",
+     "Ошибки валидации в ФРМСС (DUPLICATE): Свидетельство с номером […] и серией […]"
+     " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа."),
+    ("VALSYS_REJECT",
+     "Ошибки валидации в ФРМСС: [code: MSSCERT, description: Внутренняя ошибка сервиса ФРМСС,"
+     " уникальный идентификатор ошибки: a1a2f3f4-d56d-78ba-bd9f-e0b12db34a56].",
+     "Ошибки валидации в ФРМСС (MSSCERT): Внутренняя ошибка сервиса ФРМСС"),
+])
+def test_wrapped_responses_are_unwrapped(con, code, message, expected):
+    import json
+
+    details = one(con, "SELECT public.error_details(%s::jsonb)",
+                  json.dumps([{"code": code, "message": message}]))
+    assert details[0]["error_type"] == expected
+
+
 def test_gip_mismatch_keeps_attribute_name_and_hides_values(con):
     details = one(con, """SELECT public.error_details(
         '[{"code":"PATIENT_MPI_MISMATCH","message":"Указанное значение [Имя пациента] [Петрова Анна] не соответствует данным ГИП [Петрова А.]. Пациент найден по локальному идентификатору"}]'::jsonb)""")

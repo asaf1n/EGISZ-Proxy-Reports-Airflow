@@ -1483,6 +1483,34 @@ $$;
 -- отрезается целиком, даты и ФИО со СНИЛС маскируются; значения в скобках и кавычках —
 -- в remd_error_type. Наименование реквизита в «Указанное значение [Имя пациента] …»
 -- сохраняется: это не значение, а указание, что именно не совпало с ГИП.
+-- Ответы ИЭМК и ФРМСС вкладывают формулировку в служебную обёртку: коды правила
+-- ИЭМК ([CRE-…]: PAT-…;) и хвост Patient(…), у ФРМСС — [code: …, description: …] с
+-- идентификатором ошибки. Обёртка снимается до маскирования, иначе значения скрывают
+-- всю формулировку вместе с вложенными скобками.
+CREATE OR REPLACE FUNCTION public.error_message_unwrap(p_message text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT regexp_replace(
+        regexp_replace(
+            regexp_replace(
+                replace(
+                    regexp_replace(
+                        regexp_replace(
+                            regexp_replace(
+                                regexp_replace(COALESCE(p_message, ''),
+                                    '^\[[A-Z]+-[0-9]+\]:\s*[A-Z]+-[0-9]+;\s*', ''),
+                                ';\s*Patient\(.*$', ''),
+                            '^(Пациент не определен:\s*)\[(.*)\]$', '\1\2'),
+                        'контрольное число [0-9]+', 'контрольное число', 'g'),
+                    'формату \d{11}', 'формату (11 цифр)'),
+                '(?s)^(Ошибки валидации в ФРМСС):\s*\[code:\s*([A-Za-z_]+),\s*description:\s*(.*)\]\.?\s*$',
+                '\1 (\2): \3'),
+            ',?\s*уникальный идентификатор ошибки:\s*\S+\s*$', ''),
+        '(номером|серией) [0-9]+', '\1 […]', 'g');
+$$;
+
 CREATE OR REPLACE FUNCTION public.error_message_type(p_message text)
 RETURNS text
 LANGUAGE sql
@@ -1496,7 +1524,7 @@ AS $$
                 public.remd_error_type(
                     regexp_replace(
                         regexp_replace(
-                            regexp_replace(COALESCE(p_message, ''),
+                            regexp_replace(public.error_message_unwrap(p_message),
                                 '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', ''),
                             ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', ': […] (СНИЛС: […])', 'g'),
                         '^Указанное значение \[([А-Яа-яЁё :0-9]{1,40})\]', 'Указанное значение <<\1>>')),
@@ -1527,6 +1555,11 @@ BEGIN
             IF public.error_message_is_readable(message_text)
                AND upper(COALESCE(item->>'code', '')) <> 'INTEGRATION_LOGSTATE_3' THEN
                 label := public.error_message_type(message_text);
+                -- Контур ИЭМК отвечает кодами IHE XDS; его формулировки помечаются контуром,
+                -- как и интерпретации правил ИЭМК.
+                IF upper(COALESCE(item->>'code', '')) LIKE 'XDS%' AND label NOT LIKE 'ИЭМК: %' THEN
+                    label := 'ИЭМК: ' || label;
+                END IF;
             END IF;
             SELECT (regexp_match(message_text, r.nsi_dictionary_pattern))[1]
             INTO dictionary_oid
