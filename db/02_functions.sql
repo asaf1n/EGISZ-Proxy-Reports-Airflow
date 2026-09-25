@@ -1533,6 +1533,23 @@ AS $$
         '<<([^>]*)>>', '[\1]');
 $$;
 
+-- Подпись элемента ответа: формулировка РЭМД либо класс. Контур ИЭМК отвечает кодами
+-- IHE XDS; его формулировки помечаются контуром, как и интерпретации правил ИЭМК.
+CREATE OR REPLACE FUNCTION public.error_item_label(p_code text, p_message text, p_class text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+        WHEN NOT public.error_message_is_readable(p_message)
+          OR upper(COALESCE(p_code, '')) = 'INTEGRATION_LOGSTATE_3' THEN p_class
+        WHEN upper(COALESCE(p_code, '')) LIKE 'XDS%'
+         AND public.error_message_type(p_message) NOT LIKE 'ИЭМК: %'
+            THEN 'ИЭМК: ' || public.error_message_type(p_message)
+        ELSE public.error_message_type(p_message)
+    END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.error_details(p_errors jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -1551,16 +1568,7 @@ BEGIN
         message_text := item->>'message';
         FOREACH class_type IN ARRAY public.error_item_atoms(item->>'code', message_text)
         LOOP
-            label := class_type;
-            IF public.error_message_is_readable(message_text)
-               AND upper(COALESCE(item->>'code', '')) <> 'INTEGRATION_LOGSTATE_3' THEN
-                label := public.error_message_type(message_text);
-                -- Контур ИЭМК отвечает кодами IHE XDS; его формулировки помечаются контуром,
-                -- как и интерпретации правил ИЭМК.
-                IF upper(COALESCE(item->>'code', '')) LIKE 'XDS%' AND label NOT LIKE 'ИЭМК: %' THEN
-                    label := 'ИЭМК: ' || label;
-                END IF;
-            END IF;
+            label := public.error_item_label(item->>'code', message_text, class_type);
             SELECT (regexp_match(message_text, r.nsi_dictionary_pattern))[1]
             INTO dictionary_oid
             FROM public.dim_error_rules r

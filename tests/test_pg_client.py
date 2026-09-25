@@ -234,8 +234,7 @@ def test_error_classify_uses_atomic_item_atoms() -> None:
     assert "error_detail_types(public.error_details(p_errors))" in classify
     details = sql.split("CREATE OR REPLACE FUNCTION public.error_details(")[1].split("$$;")[0]
     assert "error_item_atoms" in details
-    assert "error_message_is_readable" in details
-    assert "error_message_type(message_text)" in details
+    assert "error_item_label(item->>'code', message_text, class_type)" in details
     assert "error_interpretation_type" not in classify
 
 
