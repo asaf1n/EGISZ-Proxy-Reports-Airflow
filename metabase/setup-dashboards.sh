@@ -536,6 +536,61 @@ existing_dashboard_id() {
   fi
 }
 
+# Файл дашборда по имени: вкладки цели перехода адресуются slug-ом из её JSON.
+dashboard_file_by_name() {
+  local name="$1" candidate
+  for candidate in "${DASHBOARDS_DIR}"/*.json; do
+    [ -f "${candidate}" ] || continue
+    if [ "$(jq -r '.name' "${candidate}")" = "${name}" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Цели переходов «на другой дашборд» из карточек файла: id дашборда на контуре, его фильтры
+# (slug → id) и вкладки (slug из JSON цели → id). Файлы импортируются по порядку имён, и цель
+# к этому моменту уже на контуре; не найденная цель снимает переход, а не роняет импорт.
+build_dashboard_link_targets() {
+  local file="$1" current_name="$2" out_file="$3"
+  local names target_name target_id target_file target_live target_spec
+  printf '{}' > "${out_file}"
+  names="$(jq -r --arg current "${current_name}" '
+    [.cards[]? | (.click_behavior // empty)
+      | select(type == "object" and (.linkType // "") == "dashboard")
+      | (.targetDashboard // empty) | select(. != $current)]
+    | unique | .[]' "${file}")"
+  [ -n "${names}" ] || return 0
+  while IFS= read -r target_name; do
+    [ -n "${target_name}" ] || continue
+    target_id="$(existing_dashboard_id "${target_name}")"
+    if [ -z "${target_id}" ]; then
+      log_info "WARN: link target dashboard '${target_name}' is not in the collection; links to it are skipped"
+      continue
+    fi
+    target_live="$(api_request GET "/api/dashboard/${target_id}" | jq -c '{
+      parameters: [(.parameters // [])[] | {id, slug}],
+      tabs: [(.tabs // [])[] | {id, name}]
+    }')"
+    target_spec='{"tabs":[]}'
+    if target_file="$(dashboard_file_by_name "${target_name}")"; then
+      target_spec="$(jq -c '{tabs: [(.tabs // [])[] | {id, name}]}' "${target_file}")"
+    fi
+    jq -c \
+      --arg name "${target_name}" \
+      --argjson id "${target_id}" \
+      --argjson live "${target_live}" \
+      --argjson spec "${target_spec}" '
+      . + {($name): {
+        id: $id,
+        parameters: $live.parameters,
+        tabs: (reduce $spec.tabs[] as $t ({};
+          . + {($t.id): ([$live.tabs[] | select(.name == $t.name) | .id][0])}))
+      }}' "${out_file}" > "${out_file}.tmp" && mv "${out_file}.tmp" "${out_file}"
+  done <<< "${names}"
+}
+
 declare -gA CARD_REGISTRY=()
 
 existing_card_id() {
@@ -1100,11 +1155,12 @@ finalize_dashboard_model_drills() {
 create_or_update_dashboard() {
   local file="$1"
   local payload dashboard_id saved_parameters cards num_cards i
-  local dashboard_name tab_map_file ordered_tabs_json dashboard_slug
+  local dashboard_name tab_map_file ordered_tabs_json dashboard_slug link_targets_file
   local existing_dashcards used_dashcard_ids existing_id
   dashboard_name="$(jq -r '.name' "${file}")"
   dashboard_slug="$(basename "${file}" .json)"
   tab_map_file="/tmp/metabase-tab-map-${dashboard_slug}.json"
+  link_targets_file="/tmp/metabase-link-targets-${dashboard_slug}.json"
   ordered_tabs_json="[]"
   if [ "$(jq '.tabs | length // 0' "${file}")" -gt 0 ]; then
     echo '{}' > "${tab_map_file}"
@@ -1140,6 +1196,7 @@ create_or_update_dashboard() {
 
   saved_parameters="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.parameters // []')"
   existing_dashcards="$(api_request GET "/api/dashboard/${dashboard_id}" | jq -c '.dashcards // []')"
+  build_dashboard_link_targets "${file}" "${dashboard_name}" "${link_targets_file}"
   cards="[]"
   # Одна карточка размещается на нескольких вкладках: без учёта вкладки и уже
   # занятых id одно и то же существующее id дашкарты попадает в payload дважды,
@@ -1178,27 +1235,11 @@ create_or_update_dashboard() {
         viz_settings="$(
           jq -c \
             --arg dashId "${dashboard_id}" \
+            --arg dashName "${dashboard_name}" \
             --argjson dashParams "${saved_parameters}" \
             --slurpfile tabMap "${tab_map_file}" \
-            --slurpfile models_file "${MODEL_REGISTRY_FILE}" '
-            def resolve_param_id($slug):
-              ($dashParams[] | select(.slug == $slug) | .id) // empty;
-
-            def model_field_id($model_ref; $field_name):
-              ($models_file[0][$model_ref].fields[$field_name]) // empty;
-
-            def model_dimension($model_ref; $field_name):
-              (model_field_id($model_ref; $field_name)) as $fid
-              | ["dimension", ["field", $fid, {"stage-number": 0}]];
-
-            def model_dimension_key($model_ref; $field_name):
-              model_dimension($model_ref; $field_name) | tojson;
-
-            def dashboard_param_slug($base):
-              $base + "_filter";
-
-            (."metabase-model-drill-params" // {}) as $drillParams
-            | (.click_behavior // null) as $raw
+            --slurpfile linkTargets "${link_targets_file}" '
+            (.click_behavior // null) as $raw
             | if $raw == null or ($raw | type) != "object" or ($raw.type // "") != "link" then
                 {}
               elif ($raw.linkType // "") == "question" and ($raw.targetModel // "") != "" then
@@ -1207,25 +1248,45 @@ create_or_update_dashboard() {
                 # dashcard. Здесь не дублируем сборку click_behavior.
                 {}
               else
-                {
-                  click_behavior: (
-                    $raw
-                    | del(.targetDashboard, .tab)
-                    | .targetId = ($dashId | tonumber)
-                    | (if ($raw.tab // "") != "" then .tabId = ($tabMap[0][$raw.tab] // null) else . end)
-                    | .parameterMapping = (
-                        reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
-                          (resolve_param_id($entry.key) // $entry.value.target.id // empty) as $pid
-                          | select($pid != "")
-                          | .[$pid] = (
-                              $entry.value
-                              | .target = {"type": "parameter", "id": $pid}
-                              | .source = (.source + {id: (.source.name // "")})
+                # Переход на дашборд: цель — сам дашборд или другой из коллекции (id, фильтры и
+                # вкладки собраны build_dashboard_link_targets). Ключ сопоставления в JSON —
+                # slug фильтра цели; источник — столбец строки или фильтр этого дашборда по slug.
+                ($raw.targetDashboard // "") as $targetName
+                | (if $targetName == "" or $targetName == $dashName then {self: true}
+                   else ($linkTargets[0][$targetName] // null) end) as $target
+                | if $target == null then
+                    {}
+                  else
+                    (if $target.self then $dashParams else $target.parameters end) as $targetParams
+                    | (if $target.self then $tabMap[0] else $target.tabs end) as $targetTabs
+                    | {
+                        click_behavior: (
+                          $raw
+                          | del(.targetDashboard, .tab)
+                          | .targetId = (if $target.self then ($dashId | tonumber) else $target.id end)
+                          | (if ($raw.tab // "") != "" then .tabId = ($targetTabs[$raw.tab] // null) else . end)
+                          | .parameterMapping = (
+                              # reduce-safe: пустой select() обнулял бы накопитель; ветвим через if.
+                              reduce (($raw.parameterMapping // {}) | to_entries[]) as $entry ({};
+                                (first($targetParams[] | select(.slug == $entry.key) | .id)
+                                  // $entry.value.target.id // "") as $pid
+                                | (if ($entry.value.source.type // "") == "parameter"
+                                   then (first($dashParams[] | select(.slug == $entry.value.source.id) | .id) // "")
+                                   else ($entry.value.source.name // "") end) as $sid
+                                | if $pid == "" or $sid == "" then .
+                                  else
+                                    .[$pid] = (
+                                      $entry.value
+                                      | .id = $pid
+                                      | .target = {"type": "parameter", "id": $pid}
+                                      | .source = (.source + {id: $sid})
+                                    )
+                                  end
+                              )
                             )
                         )
-                      )
-                  )
-                }
+                      }
+                  end
               end
             ' "${card_file}"
         )"
@@ -1374,7 +1435,7 @@ create_or_update_dashboard() {
       "${tab_map_file}" \
       "${saved_parameters}" \
       "${ordered_tabs_json}"
-    rm -f "${tab_map_file}" >/dev/null 2>&1 || true
+    rm -f "${tab_map_file}" "${link_targets_file}" >/dev/null 2>&1 || true
   fi
 
   printf '%s\n' "${dashboard_id}"

@@ -217,7 +217,7 @@
       },
       "sizeX": 24,
       "sizeY": 8,
-      "row": 0,
+      "row": 3,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -368,7 +368,7 @@
       },
       "sizeX": 16,
       "sizeY": 6,
-      "row": 8,
+      "row": 11,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -529,7 +529,7 @@
       },
       "sizeX": 8,
       "sizeY": 6,
-      "row": 8,
+      "row": 11,
       "col": 16,
       "tab": "operational",
       "metabase-field-filters": {
@@ -721,7 +721,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 14,
+      "row": 17,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -880,7 +880,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 14,
+      "row": 17,
       "col": 12,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1025,7 +1025,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 22,
+      "row": 25,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1191,7 +1191,7 @@
       },
       "sizeX": 12,
       "sizeY": 8,
-      "row": 22,
+      "row": 25,
       "col": 12,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1336,7 +1336,7 @@
       },
       "sizeX": 15,
       "sizeY": 7,
-      "row": 30,
+      "row": 33,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -1456,7 +1456,7 @@
       },
       "sizeX": 24,
       "sizeY": 10,
-      "row": 37,
+      "row": 40,
       "col": 0,
       "tab": "operational",
       "metabase-field-filters": {
@@ -3045,7 +3045,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 0,
+      "row": 9,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -3165,7 +3165,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 0,
+      "row": 9,
       "col": 12,
       "tab": "errors",
       "metabase-field-filters": {
@@ -3371,7 +3371,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 7,
+      "row": 16,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -4084,7 +4084,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 7,
+      "row": 16,
       "col": 12,
       "tab": "errors",
       "metabase-field-filters": {
@@ -4228,7 +4228,7 @@
       },
       "sizeX": 24,
       "sizeY": 8,
-      "row": 14,
+      "row": 23,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -4419,7 +4419,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 22,
+      "row": 31,
       "col": 0,
       "tab": "errors",
       "metabase-field-filters": {
@@ -4541,7 +4541,7 @@
       },
       "sizeX": 12,
       "sizeY": 7,
-      "row": 22,
+      "row": 31,
       "col": 12,
       "tab": "errors",
       "metabase-field-filters": {
@@ -5532,7 +5532,7 @@
       "name": "Документов в очереди (без фильтра периода)",
       "display": "smartscalar",
       "tab": "sent",
-      "description": "Сколько документов ждёт ответа прямо сейчас. Реквизиты: количество документов и сравнение с предыдущим днём. Ряд строится по дням за две недели, значение дня — очередь на его конец, последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Сколько документов ждёт ответа прямо сейчас. Реквизиты: количество документов и сравнение с предыдущим днём; рост окрашен красным. Ряд строится по дням за две недели, значение дня — очередь на его конец, последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5582,12 +5582,19 @@
       },
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Документов в очереди (без фильтра периода)\"]": {
+          "[\"name\",\"Документов в очереди\"]": {
             "decimals": 0,
             "number_separators": ", "
           }
         },
-        "scalar.field": "Документов в очереди (без фильтра периода)"
+        "scalar.switch_positive_negative": true,
+        "scalar.comparisons": [
+          {
+            "id": "5e1a7c00-0000-4000-8000-000000000001",
+            "type": "previousValue"
+          }
+        ],
+        "scalar.field": "Документов в очереди"
       },
       "row": 0,
       "col": 0,
@@ -5598,7 +5605,7 @@
       "name": "Ожидают > 24 часов (без фильтра периода)",
       "display": "smartscalar",
       "tab": "sent",
-      "description": "Часть очереди, которая ждёт дольше 24 часов. Реквизиты: количество документов и сравнение с предыдущим днём. Штатный ответ ЕГИСЗ приходит за минуты-часы, поэтому рост ряда — аномалия, а не сезонность. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Часть очереди, которая ждёт дольше 24 часов. Реквизиты: количество документов и сравнение с предыдущим днём; рост окрашен красным. Штатный ответ ЕГИСЗ приходит за минуты-часы, поэтому рост ряда — аномалия, а не сезонность. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5648,12 +5655,19 @@
       },
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Ожидают > 24 часов (без фильтра периода)\"]": {
+          "[\"name\",\"Ожидают > 24 часов\"]": {
             "decimals": 0,
             "number_separators": ", "
           }
         },
-        "scalar.field": "Ожидают > 24 часов (без фильтра периода)"
+        "scalar.switch_positive_negative": true,
+        "scalar.comparisons": [
+          {
+            "id": "5e1a7c00-0000-4000-8000-000000000001",
+            "type": "previousValue"
+          }
+        ],
+        "scalar.field": "Ожидают > 24 часов"
       },
       "row": 0,
       "col": 6,
@@ -5664,7 +5678,7 @@
       "name": "Ожидают 7–15 суток (без фильтра периода)",
       "display": "scalar",
       "tab": "sent",
-      "description": "Документы, которые ждут ответа от 7 до 15 суток, — последний срок, когда ещё есть смысл разбираться: после 15 суток ответ не приходит. Реквизиты: количество документов. Целевое значение — ноль. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Документы, которые ждут ответа от 7 до 15 суток, — последний срок, когда ещё есть смысл разбираться: после 15 суток ответ не приходит. Реквизиты: количество документов. Целевое значение — ноль. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5729,7 +5743,7 @@
       "name": "Самый давний в очереди, суток (без фильтра периода)",
       "display": "scalar",
       "tab": "sent",
-      "description": "Сколько суток ждёт самый давний документ очереди. Возраст считается от запроса файла ЕГИСЗ. Реквизиты: срок ожидания в сутках. Значение упирается в 15 суток — дальше документ уходит в «Ответ не получен» и в очереди не числится, поэтому 15,0 означает «на верхнем сроке есть документы». Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Сколько суток ждёт самый давний документ очереди. Возраст считается от запроса файла ЕГИСЗ. Реквизиты: срок ожидания в сутках. Значение упирается в 15 суток — дальше документ уходит в «Ответ не получен» и в очереди не числится, поэтому 15,0 означает «на верхнем сроке есть документы». Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5794,7 +5808,7 @@
       "name": "Время ожидания ответа: сейчас и неделю назад (без фильтра периода)",
       "display": "line",
       "tab": "sent",
-      "description": "Насколько затянулось ожидание: точка — доля очереди, которая ждёт дольше указанного срока. Реквизиты: срок ожидания, срез (сейчас / неделю назад), доля очереди в процентах. Ряд накопительный — в отличие от взаимоисключающих сроков карточки «Документы в обработке» на вкладке «Оперативный мониторинг». Второй ряд показывает ту же картину неделю назад: сравнивается форма ожидания, а не размер очереди. Крайняя правая точка всегда нулевая: документ старше 15 суток из очереди уже вышел. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Насколько затянулось ожидание: точка — доля очереди, которая ждёт дольше указанного срока. Реквизиты: срок ожидания, срез (сейчас / неделю назад), доля очереди в процентах. Ряд накопительный — в отличие от взаимоисключающих сроков карточки «Документы в обработке» на вкладке «Оперативный мониторинг». Второй ряд показывает ту же картину неделю назад: сравнивается форма ожидания, а не размер очереди. Крайняя правая точка всегда нулевая: документ старше 15 суток из очереди уже вышел. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -5866,7 +5880,7 @@
       "name": "Клиника × срок ожидания (без фильтра периода)",
       "display": "table",
       "tab": "sent",
-      "description": "Где стоит очередь: строка — клиника, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: клиника, сроки ожидания, итог по строке. Заливка ячейки показывает величину, а не оценку. Скопление на дальних сроках у одной клиники указывает на транспорт с её стороны; ровное распределение по многим клиникам разбирается соседней таблицей по типам СЭМД. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Где стоит очередь: строка — клиника, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: клиника, сроки ожидания, итог по строке. Заливка ячейки показывает величину, а не оценку. Скопление на дальних сроках у одной клиники указывает на транспорт с её стороны; ровное распределение по многим клиникам разбирается соседней таблицей по типам СЭМД. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -6048,7 +6062,7 @@
       "name": "Тип СЭМД × срок ожидания (без фильтра периода)",
       "display": "table",
       "tab": "sent",
-      "description": "Что стоит в очереди: строка — код СЭМД, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: код СЭМД, сроки ожидания, итог по строке. Скопление по одному коду при ровном распределении по клиникам указывает на обработку этого типа документа на стороне ЕГИСЗ. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Что стоит в очереди: строка — код СЭМД, колонка — срок ожидания, в ячейке — количество документов. Реквизиты: код СЭМД, сроки ожидания, итог по строке. Скопление по одному коду при ровном распределении по клиникам указывает на обработку этого типа документа на стороне ЕГИСЗ. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -6230,7 +6244,7 @@
       "name": "Движение очереди за 7 суток (без фильтра периода)",
       "display": "waterfall",
       "tab": "sent",
-      "description": "Баланс очереди за 7 суток: что стояло на начало окна, что отправлено внутри него, что ушло полученным ответом и что списано по сроку. Реквизиты: этап, количество документов, итог. Сумма шагов равна очереди на конец окна. Оба оттока окрашены одинаково: у водопада один цвет убыли, шаги различаются подписью. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Баланс очереди за 7 суток: что стояло на начало окна, что отправлено внутри него, что ушло полученным ответом и что списано по сроку. Реквизиты: этап, количество документов, итог. Сумма шагов равна очереди на конец окна. Оба оттока окрашены одинаково: у водопада один цвет убыли, шаги различаются подписью. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -6295,7 +6309,7 @@
       "name": "Доля долгого ожидания по неделям (без фильтра периода)",
       "display": "line",
       "tab": "sent",
-      "description": "Тянется ли ожидание из недели в неделю: точка — доля очереди на конец недели, которая ждала дольше 24 часов, 3 и 7 суток. Реквизиты: неделя (МСК), три доли в процентах. Последняя точка — на текущий момент. Недели левее начала накопления истории пустые: журнал обмена выгружается на ограниченную глубину, и очередь на более ранний момент восстанавливать не из чего. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Тянется ли ожидание из недели в неделю: точка — доля очереди на конец недели, которая ждала дольше 24 часов, 3 и 7 суток. Реквизиты: неделя (МСК), три доли в процентах. Последняя точка — на текущий момент. Недели левее начала накопления истории пустые: журнал обмена выгружается на ограниченную глубину, и очередь на более ранний момент восстанавливать не из чего. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -6380,7 +6394,7 @@
       "name": "Документы в обработке (без фильтра периода)",
       "display": "row",
       "tab": "operational",
-      "description": "Из чего складывается очередь прямо сейчас: строка — срок ожидания, длина полосы — сколько документов ждёт ровно столько. Реквизиты: срок ожидания, количество документов. Сроки взаимоисключающие, сумма полос равна размеру очереди. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "description": "Из чего складывается очередь прямо сейчас: строка — срок ожидания, длина полосы — сколько документов ждёт ровно столько. Реквизиты: срок ожидания, количество документов. Сроки взаимоисключающие, сумма полос равна размеру очереди. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
       "dataset_query": {
         "type": "native",
         "database": 1,
@@ -6452,10 +6466,387 @@
           }
         }
       },
-      "row": 30,
+      "row": 33,
       "col": 15,
       "sizeX": 9,
       "sizeY": 7
+    },
+    {
+      "name": "Документов в очереди (без фильтра периода)",
+      "display": "smartscalar",
+      "tab": "operational",
+      "description": "Сколько документов ждёт ответа прямо сейчас. Реквизиты: количество документов и сравнение с предыдущим днём; рост окрашен красным. Ряд строится по дням за две недели, значение дня — очередь на его конец, последняя точка — на текущий момент. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id)::bigint AS \"Документов в очереди\" FROM points p LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "template-tags": {
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.dim_pending_segments",
+          "field_name": "label"
+        }
+      },
+      "visualization_settings": {
+        "scalar.switch_positive_negative": true,
+        "scalar.comparisons": [
+          {
+            "id": "5e1a7c00-0000-4000-8000-000000000001",
+            "type": "previousValue"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов в очереди\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        },
+        "scalar.field": "Документов в очереди"
+      },
+      "row": 0,
+      "col": 8,
+      "sizeX": 8,
+      "sizeY": 3
+    },
+    {
+      "name": "Ожидают > 24 часов (без фильтра периода)",
+      "display": "smartscalar",
+      "tab": "operational",
+      "description": "Часть очереди, которая ждёт дольше 24 часов. Реквизиты: количество документов и сравнение с предыдущим днём; рост окрашен красным. Штатный ответ ЕГИСЗ приходит за минуты-часы, поэтому рост ряда — аномалия, а не сезонность. Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку не двигает: очередь — состояние на текущий момент.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), threshold AS ( SELECT max_age_minutes AS minutes FROM public.dim_pending_segments WHERE code = 'p_24h' ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)::bigint AS \"Ожидают > 24 часов\" FROM points p CROSS JOIN threshold t LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "template-tags": {
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.dim_pending_segments",
+          "field_name": "label"
+        }
+      },
+      "visualization_settings": {
+        "scalar.switch_positive_negative": true,
+        "scalar.comparisons": [
+          {
+            "id": "5e1a7c00-0000-4000-8000-000000000001",
+            "type": "previousValue"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Ожидают > 24 часов\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        },
+        "scalar.field": "Ожидают > 24 часов"
+      },
+      "row": 0,
+      "col": 16,
+      "sizeX": 8,
+      "sizeY": 3
+    },
+    {
+      "name": "Ошибок связи за последние 24 часа (без фильтра периода)",
+      "tab": "operational",
+      "display": "smartscalar",
+      "description": "Сколько документов получили ошибку связи за последние 24 часа — скользящие сутки от текущего момента. Реквизиты: количество документов и сравнение с предыдущими 24 часами; рост окрашен красным. Ряд — 14 таких суток; обычный уровень и всплески по календарным дням — карточка «Тренд ошибок связи по дням», виды сбоев и последние события — вкладка «Сервис интеграции». Фильтр периода карточку не двигает: это состояние на текущий момент.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH errors AS ( SELECT FLOOR(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400)::int AS days_back, COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_documents WHERE status = 'network_error' AND ips_date > now() - INTERVAL '14 days' AND ips_date <= now() [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ) SELECT now() - k * INTERVAL '1 day' AS \"Сутки по\", COALESCE(e.docs, 0)::bigint AS \"Ошибок связи\" FROM generate_series(13, 0, -1) AS k LEFT JOIN errors e ON e.days_back = k ORDER BY 1",
+          "template-tags": {
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      },
+      "visualization_settings": {
+        "scalar.field": "Ошибок связи",
+        "scalar.switch_positive_negative": true,
+        "scalar.comparisons": [
+          {
+            "id": "5e1a7c00-0000-4000-8000-000000000001",
+            "type": "previousValue"
+          }
+        ],
+        "column_settings": {
+          "[\"name\",\"Ошибок связи\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "row": 0,
+      "col": 0,
+      "sizeX": 8,
+      "sizeY": 3
+    },
+    {
+      "name": "Вклад клиник в изменение доли ошибок",
+      "tab": "errors",
+      "display": "table",
+      "description": "Какие клиники сдвинули долю ошибок: период из фильтра «Обработано IPS» против опорного периода фазы из справочника dim_control_chart_phases — той же базы, от которой XmR-карта управленческого дашборда считает центр; фаза берётся по последней неделе периода. Доля ошибок — отказы РЭМД и ошибки связи от документов с ответом РЭМД. Первая строка — итог по всем клиникам с датами опорного периода; опорная доля в ней — отношение сумм, а центр XmR — среднее недельных долей, поэтому они расходятся на десятые доли процента. Вклад клиники — её превышение над опорной долей в периоде минус то же превышение в опорном периоде, в процентных пунктах общей доли; вклады клиник в сумме дают изменение итога. Вклад раскладывается на две части: «за счёт доли ошибок» — клиника стала ошибаться чаще или реже; «за счёт объёма» — изменилась её доля в потоке при прежней доле ошибок. У новых клиник и у пропавших из потока весь вклад — объёмный. Клиники стоят по направлению общего изменения: первыми те, кто его дал. Основной тип ошибки — самый частый тип по документам клиники за период. При выбранном типе ошибки считается доля документов с этим типом. Если опорный период фазы ещё не закрыт, сравнения нет, как и границ на XmR-карте.",
+      "dataset_query": {
+        "type": "native",
+        "database": 1,
+        "native": {
+          "query": "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz ), period AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) AS errs, MAX(ips_date) AS last_at FROM public.rpt_documents WHERE ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), phase AS MATERIALIZED ( SELECT ph.baseline_start, ph.baseline_end, ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts, (ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts FROM calendar c CROSS JOIN LATERAL ( SELECT baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= ( SELECT date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date FROM period ) ORDER BY phase_start DESC LIMIT 1 ) ph WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date ), baseline AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) AS errs FROM public.rpt_documents CROSS JOIN phase WHERE ips_date >= phase.from_ts AND ips_date < phase.to_ts [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), clinics AS ( SELECT COALESCE(p.clinic_label, b.clinic_label) AS clinic_label, COALESCE(b.docs, 0) AS docs0, COALESCE(b.errs, 0) AS errs0, COALESCE(p.docs, 0) AS docs1, COALESCE(p.errs, 0) AS errs1 FROM period p FULL JOIN baseline b ON b.clinic_label = p.clinic_label WHERE EXISTS (SELECT 1 FROM phase) ), totals AS ( SELECT SUM(docs0) AS n0, SUM(docs1) AS n1, SUM(errs0)::numeric / NULLIF(SUM(docs0), 0) AS p0, SUM(errs1)::numeric / NULLIF(SUM(docs1), 0) AS p1 FROM clinics ), contrib AS ( SELECT c.*, 100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) - (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp, CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) * (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0) ELSE 0 END AS rate_pp, SIGN(t.p1 - t.p0) AS direction FROM clinics c CROSS JOIN totals t ), top_error AS ( SELECT clinic_label, top_type FROM ( SELECT clinic_label, atom AS top_type, ROW_NUMBER() OVER (PARTITION BY clinic_label ORDER BY COUNT(DISTINCT dwh_id) DESC, atom) AS rn FROM public.rpt_documents, LATERAL unnest(string_to_array(error_types, ' · ')) AS atom WHERE error_types IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label, atom ) ranked WHERE rn = 1 ) SELECT \"Клиника\", \"Документов с ответом, опорный период\", \"Документов с ответом, период\", \"Доля ошибок, опорный период, %\", \"Доля ошибок, период, %\", \"Вклад, п.п.\", \"За счёт доли ошибок, п.п.\", \"За счёт объёма, п.п.\", \"Основной тип ошибки за период\" FROM ( SELECT 0 AS row_kind, NULL::numeric AS sort_key, CASE WHEN NOT EXISTS (SELECT 1 FROM period) THEN 'Нет документов за период' WHEN ph.baseline_start IS NULL THEN 'Нет закрытого опорного периода фазы' ELSE 'Итого (опорный период ' || to_char(ph.baseline_start, 'DD.MM') || '–' || to_char(ph.baseline_end + 6, 'DD.MM.YYYY') || ')' END AS \"Клиника\", t.n0 AS \"Документов с ответом, опорный период\", t.n1 AS \"Документов с ответом, период\", ROUND(100 * t.p0, 1) AS \"Доля ошибок, опорный период, %\", ROUND(100 * t.p1, 1) AS \"Доля ошибок, период, %\", ROUND(100 * (t.p1 - t.p0), 1) AS \"Вклад, п.п.\", (SELECT ROUND(SUM(rate_pp), 1) FROM contrib) AS \"За счёт доли ошибок, п.п.\", (SELECT ROUND(SUM(total_pp - rate_pp), 1) FROM contrib) AS \"За счёт объёма, п.п.\", NULL::text AS \"Основной тип ошибки за период\" FROM totals t LEFT JOIN phase ph ON TRUE UNION ALL SELECT 1, c.direction * c.total_pp, c.clinic_label, c.docs0, c.docs1, ROUND(100.0 * c.errs0 / NULLIF(c.docs0, 0), 1), ROUND(100.0 * c.errs1 / NULLIF(c.docs1, 0), 1), ROUND(c.total_pp, 1), ROUND(c.rate_pp, 1), ROUND(c.total_pp - c.rate_pp, 1), te.top_type FROM contrib c LEFT JOIN top_error te ON te.clinic_label = c.clinic_label ) contribution ORDER BY row_kind, sort_key DESC NULLS LAST, \"Документов с ответом, период\" DESC",
+          "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате «Обработано»",
+              "id": "f2000099-0099-4099-8099-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f2000099-0099-4099-8099-000000000010",
+              "name": "semd_type",
+              "required": false,
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f2000099-0099-4099-8099-000000000011",
+              "name": "jid",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
+              "type": "dimension"
+            }
+          }
+        }
+      },
+      "metabase-field-filters": {
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
+        "semd_type": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "semd_label"
+        },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
+        }
+      },
+      "visualization_settings": {
+        "table.columns": [
+          {
+            "enabled": true,
+            "name": "Клиника"
+          },
+          {
+            "enabled": true,
+            "name": "Документов с ответом, опорный период"
+          },
+          {
+            "enabled": true,
+            "name": "Документов с ответом, период"
+          },
+          {
+            "enabled": true,
+            "name": "Доля ошибок, опорный период, %"
+          },
+          {
+            "enabled": true,
+            "name": "Доля ошибок, период, %"
+          },
+          {
+            "enabled": true,
+            "name": "Вклад, п.п."
+          },
+          {
+            "enabled": true,
+            "name": "За счёт доли ошибок, п.п."
+          },
+          {
+            "enabled": true,
+            "name": "За счёт объёма, п.п."
+          },
+          {
+            "enabled": true,
+            "name": "Основной тип ошибки за период"
+          }
+        ],
+        "table.column_widths": [
+          330,
+          110,
+          110,
+          110,
+          110,
+          96,
+          110,
+          110,
+          420
+        ],
+        "column_settings": {
+          "[\"name\",\"Документов с ответом, опорный период\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Документов с ответом, период\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Доля ошибок, опорный период, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Доля ошибок, период, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Вклад, п.п.\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
+          "[\"name\",\"За счёт доли ошибок, п.п.\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
+          "[\"name\",\"За счёт объёма, п.п.\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          }
+        },
+        "table.column_formatting": [
+          {
+            "color": "#FEE2E2",
+            "columns": [
+              "Вклад, п.п."
+            ],
+            "operator": ">",
+            "type": "single",
+            "value": 0
+          },
+          {
+            "color": "#DCFCE7",
+            "columns": [
+              "Вклад, п.п."
+            ],
+            "operator": "<",
+            "type": "single",
+            "value": 0
+          }
+        ]
+      },
+      "row": 0,
+      "col": 0,
+      "sizeX": 24,
+      "sizeY": 9
     }
   ],
   "tabs": [

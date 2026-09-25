@@ -12,6 +12,10 @@ QUEUE_NOW_NAME = _plan.QUEUE_NOW_NAME
 QUEUE_SURVIVAL_NAME = _plan.QUEUE_SURVIVAL_NAME
 QUEUE_PIVOT_CLINIC_NAME = _plan.QUEUE_PIVOT_CLINIC_NAME
 QUEUE_PIVOT_SEMD_NAME = _plan.QUEUE_PIVOT_SEMD_NAME
+QUEUE_SIZE_NAME = _plan.QUEUE_SIZE_NAME
+QUEUE_OVER_24H_NAME = _plan.QUEUE_OVER_24H_NAME
+TRANSPORT_24H_NAME = _plan.TRANSPORT_24H_NAME
+CONTRIBUTION_NAME = _plan.CONTRIBUTION_NAME
 
 INTEGRATION_DASHBOARD = Path("metabase_dashboards/01_integration_egisz.json")
 
@@ -23,17 +27,6 @@ def _archive_click_target(card: dict) -> dict:
 def _tab_cards(tab: str, dashboard: dict | None = None) -> list[dict]:
     dash = dashboard or _integration_dashboard()
     return [c for c in dash["cards"] if c.get("tab") == tab and c.get("display") != "text"]
-
-
-def _assert_documents_drill_through(card: dict, expected_slugs: set[str] | None = None) -> None:
-    click = _archive_click_target(card)
-    assert click.get("targetDashboard") == "Интеграция с ЕГИСЗ"
-    assert click.get("tab") == "archive"
-    mapping = click.get("parameterMapping") or {}
-    if expected_slugs is not None:
-        assert expected_slugs <= set(mapping), f"missing mappings: {expected_slugs - set(mapping)}"
-    else:
-        assert mapping, f"{card.get('name')} drill-through must map dashboard parameters"
 
 
 def _assert_model_drill_through(
@@ -65,10 +58,6 @@ def _assert_model_drill_through(
         )
         assert spec is not None, f"missing contains mapping for {field_name!r}"
         assert (spec.get("target") or {}).get("operator") == "contains"
-
-
-def _assert_archive_tab_click(card: dict) -> None:
-    _assert_documents_drill_through(card)
 
 
 def _integration_dashboard() -> dict:
@@ -570,7 +559,9 @@ def test_quality_error_rate_error_kind_by_semd_card() -> None:
     assert card["display"] == "table"
     assert card["sizeX"] == 12
     assert card["col"] == 12
-    assert card["row"] == 22
+    # Пара срезов «% ошибок» стоит в одном ряду: клиника слева, тип ошибки справа.
+    pair = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: клиника × тип СЭМД")
+    assert card["row"] == pair["row"]
     assert "rpt_error_breakdown" in query
     assert "WITH pairs AS" in query
     # Знаменатель «% ошибок» — документы (COUNT DISTINCT) по типу СЭМД.
@@ -1579,6 +1570,8 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
                     or "Суток в очереди" in col_key
                     or "Дней в ожидании" in col_key
                     or ", дн." in col_key
+                    # Процентные пункты — как и проценты, до десятых.
+                    or ", п.п." in col_key
                 ):
                     expected_decimals = 1
                 elif (
@@ -1688,13 +1681,15 @@ def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
         tab = card.get("tab")
         assert tab, f"card {card.get('name', '?')} missing tab"
         by_tab[tab] = by_tab.get(tab, 0) + 1
-    assert by_tab["operational"] == 10
+    # «Оперативный мониторинг»: ряд состояния из трёх плиток и десять карточек разбора.
+    assert by_tab["operational"] == 13
     assert by_tab["service"] == 10
     # Вкладка «Отправленные»: четыре плитки состояния, распределение возраста и кривая
     # дожития, две сводные «объект × ступень», движение и хвост, скорость регистрации,
     # три журнала и две плитки к ним.
     assert by_tab["sent"] == 15
-    assert by_tab["errors"] == 7
+    # «Анализ ошибок»: вклад клиник в изменение доли ошибок и семь карточек разбора причин.
+    assert by_tab["errors"] == 8
     assert by_tab["archive"] == 6
 
 
@@ -1865,18 +1860,118 @@ def test_operational_tab_has_core_cards() -> None:
         # Очередь на текущий момент — оперативный вопрос; её разбор живёт на вкладке
         # «Отправленные».
         QUEUE_NOW_NAME,
+        # Ряд состояния: транспорт и очередь прямо сейчас.
+        TRANSPORT_24H_NAME,
+        QUEUE_SIZE_NAME,
+        QUEUE_OVER_24H_NAME,
     }
 
 
-def test_operational_tab_has_no_scalar_kpi_row() -> None:
+def test_operational_tab_tiles_are_current_state_row_only() -> None:
+    """Плиток за период на мониторинге нет — их место занял разбор по дням и статусам.
+    Единственный ряд плиток — состояние на текущий момент: при фильтре «текущий месяц»
+    сегодняшний всплеск ошибок связи и очереди растворяется в карточках за период."""
     dashboard = _integration_dashboard()
-    names = {c.get("name") for c in dashboard["cards"] if c.get("tab") == "operational"}
+    operational = _tab_cards("operational", dashboard)
+    names = {c.get("name") for c in operational}
     assert not names & {"Всего документов", "Всего клиник", "Отправлено"}
-    scalars = [
-        c for c in dashboard["cards"]
-        if c.get("tab") == "operational" and c.get("display") == "scalar"
-    ]
-    assert not scalars
+    assert not [c for c in operational if c.get("display") == "scalar"]
+
+    tiles = sorted(
+        (c for c in operational if c.get("display") == "smartscalar"), key=lambda c: c["col"]
+    )
+    assert [c["name"] for c in tiles] == [TRANSPORT_24H_NAME, QUEUE_SIZE_NAME, QUEUE_OVER_24H_NAME]
+    for tile in tiles:
+        assert tile["row"] == 0 and tile["sizeX"] == 8 and tile["sizeY"] == 3, tile["name"]
+        assert tile["name"].endswith(_plan.NO_PERIOD_SUFFIX), tile["name"]
+        assert "{{ips_date}}" not in tile["dataset_query"]["native"]["query"], tile["name"]
+        viz = tile["visualization_settings"]
+        # Рост ошибок и очереди — ухудшение: красный. Сравнение — с предыдущей точкой ряда.
+        assert viz["scalar.switch_positive_negative"] is True, tile["name"]
+        assert [c["type"] for c in viz["scalar.comparisons"]] == ["previousValue"], tile["name"]
+        # Плитка показывает столбец запроса, а не имя карточки.
+        assert f'AS "{viz["scalar.field"]}"' in tile["dataset_query"]["native"]["query"]
+    below = [c for c in operational if c.get("display") != "smartscalar"]
+    assert min(c["row"] for c in below) == 3
+
+    # Плитки очереди — те же карточки, что на «Отправленных»: один запрос, одно описание.
+    for name in (QUEUE_SIZE_NAME, QUEUE_OVER_24H_NAME):
+        placements = [c for c in dashboard["cards"] if c.get("name") == name]
+        assert {c["tab"] for c in placements} == {"operational", "sent"}, name
+        assert len({_card_query_fingerprint(c) for c in placements}) == 1, name
+        assert len({c["description"] for c in placements}) == 1, name
+
+
+def test_transport_tile_counts_network_errors_over_rolling_24h() -> None:
+    """Скользящие сутки от текущего момента, а не календарный день: утром день почти пуст.
+    Ряд из 14 суток нужен плитке для сравнения с предыдущими 24 часами."""
+    tile = next(c for c in _tab_cards("operational") if c.get("name") == TRANSPORT_24H_NAME)
+    query = tile["dataset_query"]["native"]["query"]
+    assert "FROM public.rpt_documents" in query
+    assert "WHERE status = 'network_error'" in query
+    assert "FLOOR(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400)::int AS days_back" in query
+    assert "AND ips_date > now() - INTERVAL '14 days' AND ips_date <= now()" in query
+    assert "generate_series(13, 0, -1) AS k" in query
+    assert "COUNT(DISTINCT dwh_id)" in query and "COUNT(*)" not in query
+    assert set(tile["dataset_query"]["native"]["template-tags"]) == {"semd_type", "jid"}
+    assert tile["metabase-field-filters"] == {
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    }
+    assert "click_behavior" not in tile
+
+
+def test_clinic_error_contribution_explains_shift_from_phase_baseline() -> None:
+    """Таблица вклада клиник: период фильтра против опорного периода фазы — той же базы,
+    что у центра XmR-карты. Вклады клиник в сумме равны изменению общей доли."""
+    errors = _tab_cards("errors")
+    card = next(c for c in errors if c.get("name") == CONTRIBUTION_NAME)
+    assert (card["row"], card["col"], card["sizeX"]) == (0, 0, 24)
+    assert min(c["row"] for c in errors if c is not card) == card["row"] + card["sizeY"]
+    query = card["dataset_query"]["native"]["query"]
+
+    # Опорный период — из справочника фаз, по фазе последней недели периода; незакрытый
+    # опорный период не сравнивается, как и у XmR-карты.
+    assert "FROM public.dim_control_chart_phases WHERE period_grain = 'week'" in query
+    assert "date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date" in query
+    assert "WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date" in query
+    assert "(ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts" in query
+    assert "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz )" in query
+    assert query.count("public.report_timezone()") == 1
+    # Фильтр периода — только у периода и основного типа ошибки, у опорного периода его нет.
+    baseline = query.split("baseline AS (", 1)[1].split("clinics AS (", 1)[0]
+    assert "{{ips_date}}" not in baseline
+    assert "[[AND {{semd_type}}]] [[AND {{jid}}]]" in baseline
+    assert query.count("{{ips_date}}") == 2
+
+    # Корпус XmR: знаменатель — документы с ответом РЭМД, числитель — отказы и ошибки связи.
+    # Отбор по типу ошибки дописан в числитель обоих периодов, знаменатели не тронуты.
+    assert query.count("COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs") == 2
+    membership = (
+        "status IN ('async_error', 'network_error') [[AND EXISTS (SELECT 1 FROM "
+        "public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id "
+        "AND {{error_type}})]]"
+    )
+    assert query.count(membership) == 2
+    assert "COUNT(*)" not in query
+
+    # Разложение: вклад = превышение над опорной долей в периоде минус то же в опорном;
+    # часть «за счёт доли ошибок» — вес в периоде × изменение доли клиники.
+    assert "FULL JOIN baseline b ON b.clinic_label = p.clinic_label" in query
+    assert (
+        "100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) "
+        "- (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp"
+    ) in query
+    assert "CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0)" in query
+    assert "ORDER BY row_kind, sort_key DESC NULLS LAST" in query
+    assert "c.direction * c.total_pp" in query and "SIGN(t.p1 - t.p0) AS direction" in query
+
+    columns = [c["name"] for c in card["visualization_settings"]["table.columns"]]
+    assert columns == list(_plan.CONTRIBUTION_COLUMNS)
+    for column in columns:
+        assert f'"{column}"' in query, column
+    assert set(card["metabase-field-filters"]) == {"ips_date", "semd_type", "jid", "error_type"}
+    assert "click_behavior" not in card
 
 
 def test_metabase_models_catalog_exists() -> None:
@@ -2689,6 +2784,56 @@ def test_weekly_control_chart_is_xmr() -> None:
     retired = json.loads(Path("metabase/retired-objects.json").read_text(encoding="utf-8"))
     assert "Контрольная p-карта: доля ошибок по неделям" in retired["cards"]
     assert "Контрольная p-карта: доля ошибок по месяцам" in retired["cards"]
+
+
+def test_xmr_point_links_to_clinic_contribution() -> None:
+    """Клик по точке XmR-карты открывает «Анализ ошибок» дашборда «Интеграция с ЕГИСЗ» за
+    неделю точки. Дату из native-запроса Metabase передаёт в фильтр одним днём, поэтому
+    неделя уходит текстовым диапазоном «с~по» из отдельного столбца, не выводимого на график."""
+    control = next(
+        c for c in _executive_dashboard()["cards"]
+        if c.get("name") == "Контрольная карта (XmR): доля ошибок по неделям"
+    )
+    query = control["dataset_query"]["native"]["query"]
+    assert (
+        "to_char(period_start, 'YYYY-MM-DD') || '~' || to_char(period_start + 6, 'YYYY-MM-DD') "
+        'AS "Период"'
+    ) in query
+    assert "Период" not in control["visualization_settings"]["graph.metrics"]
+
+    integration = _integration_dashboard()
+    click = control["click_behavior"]
+    assert click["type"] == "link" and click["linkType"] == "dashboard"
+    assert click["targetDashboard"] == integration["name"] == _plan.INTEGRATION_DASHBOARD_NAME
+    assert click["tab"] == "errors" and "errors" in {t["id"] for t in integration["tabs"]}
+    mapping = click["parameterMapping"]
+    assert mapping["ips_date_filter"]["source"] == {"type": "column", "id": "Период", "name": "Период"}
+    assert mapping["jid_filter"]["source"]["type"] == "parameter"
+    # Ключи — slug фильтров цели, источник-фильтр — slug этого дашборда: id подставляет импорт.
+    target_slugs = {p["slug"]: p for p in integration["parameters"]}
+    assert set(mapping) <= set(target_slugs)
+    assert target_slugs["ips_date_filter"]["type"] == "date/all-options"
+    source_slugs = {p["slug"] for p in _executive_dashboard()["parameters"]}
+    assert mapping["jid_filter"]["source"]["id"] in source_slugs
+    # Клиника на обоих дашбордах фильтрует по одной подписи.
+    table = next(c for c in integration["cards"] if c.get("name") == CONTRIBUTION_NAME)
+    assert table["metabase-field-filters"]["jid"]["field_name"] == "clinic_label"
+    assert control["metabase-field-filters"]["jid"]["field_name"] == "clinic_label"
+    assert CONTRIBUTION_NAME in control["description"]
+
+
+def test_metabase_import_resolves_links_to_other_dashboards() -> None:
+    """Переход на другой дашборд: id дашборда, вкладки и фильтров различаются между
+    контурами, поэтому импорт находит цель по имени, вкладку — по slug из JSON цели, фильтр
+    цели и фильтр-источник — по slug. Не найденная цель снимает переход, а не роняет импорт."""
+    sh = Path("metabase/setup-dashboards.sh").read_text(encoding="utf-8")
+    assert "build_dashboard_link_targets() {" in sh
+    assert 'build_dashboard_link_targets "${file}" "${dashboard_name}" "${link_targets_file}"' in sh
+    assert '--slurpfile linkTargets "${link_targets_file}"' in sh
+    assert "($linkTargets[0][$targetName] // null)" in sh
+    assert "first($targetParams[] | select(.slug == $entry.key) | .id)" in sh
+    assert "first($dashParams[] | select(.slug == $entry.value.source.id) | .id)" in sh
+    assert "links to it are skipped" in sh
 
 
 def test_control_chart_phases_are_state_declarative() -> None:

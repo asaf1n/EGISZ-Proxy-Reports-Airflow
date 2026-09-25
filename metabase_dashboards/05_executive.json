@@ -1559,11 +1559,11 @@
     },
     {
       "name": "Контрольная карта (XmR): доля ошибок по неделям",
-      "description": "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД и ошибки связи от документов с ответом РЭМД). Центр и границы «центр ± 2,66 × средний скользящий размах» считаются по опорному периоду фазы (справочник dim_control_chart_phases) и продлеваются вперёд до следующей фазы; нижняя граница не опускается ниже нуля. Фаза — отрезок с неизменными условиями работы: новая заводится при смене условий, а не по наблюдаемому сдвигу, поэтому границы закрытых недель не зависят от момента расчёта. Точка «Сигнал» — сработало правило внутри фазы: выход за границу; 8 подряд по одну сторону от центра; 2 из 3 за 2σ по одну сторону. Какое правило сработало — столбец «Сигнал XmR» сводки. Почему не p-карта: при 55–77 тыс. документов в неделю биномиальный коридор ±3σ — около ±0,5 п.п., а фактический разброс недельных долей — ±3–4 п.п.; на истории она давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно поглощал сдвиг уровня. Срез по клинике пересчитывает центр и границы по опорным неделям клиники; фильтр периода не действует — ряд за всю историю закрытых недель.",
+      "description": "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД и ошибки связи от документов с ответом РЭМД). Центр и границы «центр ± 2,66 × средний скользящий размах» считаются по опорному периоду фазы (справочник dim_control_chart_phases) и продлеваются вперёд до следующей фазы; нижняя граница не опускается ниже нуля. Фаза — отрезок с неизменными условиями работы: новая заводится при смене условий, а не по наблюдаемому сдвигу, поэтому границы закрытых недель не зависят от момента расчёта. Точка «Сигнал» — сработало правило внутри фазы: выход за границу; 8 подряд по одну сторону от центра; 2 из 3 за 2σ по одну сторону. Какое правило сработало — столбец «Сигнал XmR» сводки. Почему не p-карта: при 55–77 тыс. документов в неделю биномиальный коридор ±3σ — около ±0,5 п.п., а фактический разброс недельных долей — ±3–4 п.п.; на истории она давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно поглощал сдвиг уровня. Срез по клинике пересчитывает центр и границы по опорным неделям клиники; фильтр периода не действует — ряд за всю историю закрытых недель. Клик по точке открывает дашборд «Интеграция с ЕГИСЗ» на вкладке «Анализ ошибок» за эту неделю: таблица «Вклад клиник в изменение доли ошибок» показывает, какие клиники дали отклонение от того же опорного периода; срез по клинике переносится.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT period_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(cl, 1) AS \"Центр, %\", ROUND(ucl, 1) AS \"Верхняя граница (UCL), %\", ROUND(lcl, 1) AS \"Нижняя граница (LCL), %\", CASE WHEN signal_rules IS NOT NULL THEN ROUND(x, 1) END AS \"Сигнал, %\" FROM signals ORDER BY period_start",
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT period_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(cl, 1) AS \"Центр, %\", ROUND(ucl, 1) AS \"Верхняя граница (UCL), %\", ROUND(lcl, 1) AS \"Нижняя граница (LCL), %\", CASE WHEN signal_rules IS NOT NULL THEN ROUND(x, 1) END AS \"Сигнал, %\", to_char(period_start, 'YYYY-MM-DD') || '~' || to_char(period_start + 6, 'YYYY-MM-DD') AS \"Период\" FROM signals ORDER BY period_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1655,6 +1655,36 @@
         "jid": {
           "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
+        }
+      },
+      "click_behavior": {
+        "type": "link",
+        "linkType": "dashboard",
+        "targetDashboard": "Интеграция с ЕГИСЗ",
+        "tab": "errors",
+        "parameterMapping": {
+          "ips_date_filter": {
+            "source": {
+              "type": "column",
+              "id": "Период",
+              "name": "Период"
+            },
+            "target": {
+              "type": "parameter",
+              "id": "ips_date_filter"
+            }
+          },
+          "jid_filter": {
+            "source": {
+              "type": "parameter",
+              "id": "jid_filter",
+              "name": "Клиника"
+            },
+            "target": {
+              "type": "parameter",
+              "id": "jid_filter"
+            }
+          }
         }
       }
     },

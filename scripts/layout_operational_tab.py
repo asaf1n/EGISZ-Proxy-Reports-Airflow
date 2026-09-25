@@ -1,4 +1,4 @@
-"""Reorganize Metabase dashboards: compact 24-column grids, no operational/service scalar KPIs."""
+"""Reorganize Metabase dashboards: compact 24-column grids, no period scalar KPIs on monitoring."""
 from __future__ import annotations
 
 import json
@@ -19,6 +19,7 @@ INTEGRATION = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
 # переименовании.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from apply_dashboard_plan import (  # noqa: E402
+    CONTRIBUTION_NAME,
     QUEUE_FLOW_NAME,
     QUEUE_MAX_AGE_NAME,
     QUEUE_NOW_NAME,
@@ -29,6 +30,7 @@ from apply_dashboard_plan import (  # noqa: E402
     QUEUE_SIZE_NAME,
     QUEUE_SURVIVAL_NAME,
     QUEUE_TAIL_NAME,
+    TRANSPORT_24H_NAME,
 )
 
 
@@ -42,19 +44,24 @@ def write_json_if_changed(path: Path, data: dict) -> bool:
 OPERATIONAL_SCALAR_NAMES = frozenset({"Всего документов", "Всего клиник"})
 
 OPERATIONAL_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Последние операции": (0, 0, 24, 8),
-    "Статусы регистрации СЭМД": (8, 0, 16, 6),
-    "Статусы за период": (8, 16, 8, 6),
-    "Топ по типу ошибки": (14, 0, 12, 8),
-    "Успешность по типам СЭМД": (14, 12, 12, 8),
-    "Объём по клиникам": (22, 0, 12, 8),
-    "Успешность по клиникам": (22, 12, 12, 8),
+    # Ряд состояния на текущий момент: транспорт и очередь. Плиток за период на вкладке
+    # нет — их место занял разбор по дням и статусам.
+    TRANSPORT_24H_NAME: (0, 0, 8, 3),
+    QUEUE_SIZE_NAME: (0, 8, 8, 3),
+    QUEUE_OVER_24H_NAME: (0, 16, 8, 3),
+    "Последние операции": (3, 0, 24, 8),
+    "Статусы регистрации СЭМД": (11, 0, 16, 6),
+    "Статусы за период": (11, 16, 8, 6),
+    "Топ по типу ошибки": (17, 0, 12, 8),
+    "Успешность по типам СЭМД": (17, 12, 12, 8),
+    "Объём по клиникам": (25, 0, 12, 8),
+    "Успешность по клиникам": (25, 12, 12, 8),
     # Ряд «где болит»: объём ошибок по клиникам и рядом — что стоит в обработке прямо
     # сейчас. Обе карточки читаются вместе: одна показывает накопленный отказ за период,
     # вторая — незакрытое ожидание на текущий момент.
-    "Объём ошибок по клиникам": (30, 0, 15, 7),
-    QUEUE_NOW_NAME: (30, 15, 9, 7),
-    "Тепловая карта: клиника × день": (37, 0, 24, 10),
+    "Объём ошибок по клиникам": (33, 0, 15, 7),
+    QUEUE_NOW_NAME: (33, 15, 9, 7),
+    "Тепловая карта: клиника × день": (40, 0, 24, 10),
 }
 
 ARCHIVE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -79,13 +86,16 @@ SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
 }
 
 ERRORS_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Топ типов СЭМД по ошибкам": (0, 0, 12, 7),
-    "Топ типов СЭМД по видам ошибки": (0, 12, 12, 7),
-    "Топ по типу ошибки": (7, 0, 12, 7),
-    "Топ категорий и типов ошибки": (7, 12, 12, 7),
-    "Ошибки: тип × клиника": (14, 0, 24, 8),
-    "% ошибок: клиника × тип СЭМД": (22, 0, 12, 7),
-    "% ошибок: тип ошибки × тип СЭМД": (22, 12, 12, 7),
+    # Первой — кто сдвинул долю ошибок: сюда же ведёт клик по точке XmR-карты
+    # управленческого дашборда. Остальные карточки разбирают причины.
+    CONTRIBUTION_NAME: (0, 0, 24, 9),
+    "Топ типов СЭМД по ошибкам": (9, 0, 12, 7),
+    "Топ типов СЭМД по видам ошибки": (9, 12, 12, 7),
+    "Топ по типу ошибки": (16, 0, 12, 7),
+    "Топ категорий и типов ошибки": (16, 12, 12, 7),
+    "Ошибки: тип × клиника": (23, 0, 24, 8),
+    "% ошибок: клиника × тип СЭМД": (31, 0, 12, 7),
+    "% ошибок: тип ошибки × тип СЭМД": (31, 12, 12, 7),
 }
 
 # Вкладку читают сверху вниз: состояние очереди → как быстро отвечает РЭМД и куда
@@ -117,9 +127,10 @@ SENT_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Документы: недоставленные в клинику (ошибка связи шлюз-МО)": (51, 0, 24, 10),
 }
 
-# Раскладку вкладки «Обзор» управленческого дашборда задаёт её сборщик
-# (apply_dashboard_plan.executive_overview_cards): сетка объявлена там же, где состав
-# карточек, поэтому второй список координат разошёлся бы с ним при первой же правке.
+# Раскладку всех вкладок управленческого дашборда задают их сборщики
+# (apply_dashboard_plan.executive_overview_cards / executive_periodic_cards): сетка объявлена
+# там же, где состав карточек. Второй список координат уже расходился с ними: карточки
+# вкладок динамики, добавленные сборщиком, накладывались на переставленные отсюда.
 # row/col отсчитываются ВНУТРИ вкладки (Обзор / Ошибки регистрации ЭМД / Документы),
 # поэтому карточки разных вкладок могут делить одинаковые координаты.
 CLIENT_SERVICE_LAYOUT: dict[str, tuple[int, int, int, int]] = {
@@ -158,26 +169,6 @@ CLIENT_BI_TEXT_LAYOUT: dict[str, tuple[int, int, int, int]] = {
     "Медицинские показатели (агрегаты по пациентам и врачам)": (24, 0, 24, 1),
 }
 
-# Вкладки «Динамика по неделям» / «Динамика по месяцам» управленческого дашборда:
-# row/col отсчитываются внутри вкладки, поэтому сетки совпадают.
-WEEKLY_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Статусы по неделям": (0, 0, 12, 6),
-    "Объём документов по неделям": (0, 12, 12, 6),
-    "Контрольная карта (XmR): доля ошибок по неделям": (6, 0, 24, 6),
-    "Категории ошибок по неделям": (12, 0, 24, 6),
-    "Сводка по неделям": (18, 0, 24, 7),
-}
-
-# Контрольной карты по месяцам нет до накопления 12 закрытых месяцев, поэтому структура
-# ошибок стоит сразу под рядом объёма.
-MONTHLY_LAYOUT: dict[str, tuple[int, int, int, int]] = {
-    "Статусы по месяцам": (0, 0, 12, 6),
-    "Объём документов по месяцам": (0, 12, 12, 6),
-    "Категории ошибок по месяцам": (6, 0, 24, 6),
-    "Сводка по месяцам": (12, 0, 24, 7),
-}
-
-
 def _apply_layout(card: dict, layout: tuple[int, int, int, int]) -> None:
     row, col, size_x, size_y = layout
     card["row"] = row
@@ -204,8 +195,8 @@ def _layout_named_cards(
 
 
 def _layout_integration(dashboard: dict) -> None:
-    # Счётчики-плитки на мониторинге сняты: их место занял разбор по дням и статусам.
-    # Сами карточки живут в архиве, поэтому отбор идёт по паре «вкладка + тип».
+    # Счётчики-плитки за период на мониторинге сняты: их место занял разбор по дням и
+    # статусам. Сами карточки живут в архиве, поэтому отбор идёт по паре «вкладка + тип».
     dashboard["cards"] = [
         card
         for card in dashboard["cards"]
@@ -240,18 +231,11 @@ def main() -> None:
     op = [c["name"] for c in integration["cards"] if c.get("tab") == "operational"]
     print(f"operational ({len(op)}):", ", ".join(op))
 
-    other = {
-        ROOT / "metabase_dashboards" / "05_executive.json": {
-            **WEEKLY_LAYOUT,
-            **MONTHLY_LAYOUT,
-        },
-        ROOT / "metabase_dashboards" / "07_client_service.json": CLIENT_SERVICE_LAYOUT,
-    }
-    for path, layout in other.items():
-        dashboard = json.loads(path.read_text(encoding="utf-8"))
-        _layout_named_cards(dashboard, layout)
-        if write_json_if_changed(path, dashboard):
-            print(f"updated {path.name}")
+    client_path = ROOT / "metabase_dashboards" / "07_client_service.json"
+    client_dashboard = json.loads(client_path.read_text(encoding="utf-8"))
+    _layout_named_cards(client_dashboard, CLIENT_SERVICE_LAYOUT)
+    if write_json_if_changed(client_path, client_dashboard):
+        print(f"updated {client_path.name}")
 
     bi_path = ROOT / "metabase_dashboards" / "08_client_bianalytic.json"
     bi_dashboard = json.loads(bi_path.read_text(encoding="utf-8"))

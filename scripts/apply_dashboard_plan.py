@@ -102,12 +102,7 @@ def write_json_if_changed(path: Path, data: dict) -> bool:
     path.write_text(text, encoding="utf-8")
     return True
 
-PARAM_IDS = {
-    "jid_filter": "e3c4d5e6-f7a8-4901-c234-56789abcdef0",
-    "semd_type_filter": "d2b3c4d5-e6f7-4890-b123-456789abcdef",
-    "status_filter": "e3c4d5e6-f7a8-4901-c234-56789abcdef4",
-    "error_type_filter": "f1a2b3c4-d5e6-4789-a01b-0123456789c0",
-}
+ERROR_TYPE_PARAM_ID = "f1a2b3c4-d5e6-4789-a01b-0123456789c0"
 
 # Фильтр «Очередь на дату» снят: очередь — состояние на текущий момент, второй даты
 # на вкладке нет. Слаг и идентификатор остаются здесь, чтобы прогон убирал параметр
@@ -228,6 +223,16 @@ QUEUE_FLOW_DAYS = 7
 QUEUE_FLOW_NAME = f"Движение очереди за {QUEUE_FLOW_DAYS} суток{NO_PERIOD_SUFFIX}"
 QUEUE_TAIL_NAME = f"Доля долгого ожидания по неделям{NO_PERIOD_SUFFIX}"
 
+# Ряд состояния «Оперативного мониторинга»: транспорт и очередь на текущий момент. Плитки
+# очереди — те же карточки, что на «Отправленных»; фильтр периода к ряду не подключён: при
+# периоде «текущий месяц» сегодняшний всплеск растворяется в карточках за период.
+TRANSPORT_24H_NAME = f"Ошибок связи за последние 24 часа{NO_PERIOD_SUFFIX}"
+
+# Таблица вкладки «Анализ ошибок»: кто из клиник сдвинул долю ошибок относительно опорного
+# периода фазы — той же базы, от которой XmR-карта управленческого дашборда считает центр.
+CONTRIBUTION_NAME = "Вклад клиник в изменение доли ошибок"
+INTEGRATION_DASHBOARD_NAME = "Интеграция с ЕГИСЗ"
+
 # Переименования, ещё НЕ применённые на целевых контурах. Карта не архив: как только
 # прогон импорта прошёл везде, запись отсюда убирается — прежнее имя уже не встретится,
 # а копить цепочки «имя → имя → имя» значит хранить историю в рабочем коде.
@@ -323,10 +328,7 @@ ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 SENT_MODEL_REF = "Отправленные"
 
 # Карточки без дрилла (агрегаты-рейтинги без естественного грейна для строки).
-DRILL_BY_NAME: dict[str, list[tuple[str, str]]] = {
-    "Топ по типу ошибки": [],
-    "Топ категорий и типов ошибки": [],
-}
+NO_DRILL_NAMES = frozenset({"Топ по типу ошибки", "Топ категорий и типов ошибки"})
 
 ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
 
@@ -1158,10 +1160,13 @@ QUEUE_TREND_POINT_QUEUE = (
     "[[AND {{pending_segment}}]] ) q ON TRUE"
 )
 
+QUEUE_SIZE_FIELD = "Документов в очереди"
+QUEUE_OVER_24H_FIELD = "Ожидают > 24 часов"
+
 QUEUE_SIZE_QUERY = (
     QUEUE_TREND_CORPUS
     + ' SELECT p.day_start::date AS "Дата", '
-    'COUNT(DISTINCT q.dwh_id)::bigint AS "Документов в очереди" '
+    f'COUNT(DISTINCT q.dwh_id)::bigint AS "{QUEUE_SIZE_FIELD}" '
     f"FROM points p {QUEUE_TREND_POINT_QUEUE} GROUP BY 1 ORDER BY 1"
 )
 
@@ -1171,10 +1176,50 @@ QUEUE_OVER_24H_QUERY = (
     "FROM public.dim_pending_segments WHERE code = 'p_24h' ) "
     'SELECT p.day_start::date AS "Дата", '
     "COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)"
-    '::bigint AS "Ожидают > 24 часов" '
+    f'::bigint AS "{QUEUE_OVER_24H_FIELD}" '
     f"FROM points p CROSS JOIN threshold t {QUEUE_TREND_POINT_QUEUE} "
     "GROUP BY 1 ORDER BY 1"
 )
+
+# Скользящие сутки, а не календарный день: утром календарный день почти пуст, и плитка
+# сравнивала бы неполные сутки с полными. Ряд шагает на сутки назад от текущего момента;
+# документ попадает ровно в одно окно — по своей дате обработки.
+TRANSPORT_TREND_DAYS = 14
+TRANSPORT_24H_FIELD = "Ошибок связи"
+TRANSPORT_24H_QUERY = (
+    "WITH errors AS ( SELECT "
+    "FLOOR(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400)::int AS days_back, "
+    "COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_documents "
+    "WHERE status = 'network_error' "
+    f"AND ips_date > now() - INTERVAL '{TRANSPORT_TREND_DAYS} days' AND ips_date <= now() "
+    "[[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ) "
+    "SELECT now() - k * INTERVAL '1 day' AS \"Сутки по\", "
+    f'COALESCE(e.docs, 0)::bigint AS "{TRANSPORT_24H_FIELD}" '
+    f"FROM generate_series({TRANSPORT_TREND_DAYS - 1}, 0, -1) AS k "
+    "LEFT JOIN errors e ON e.days_back = k ORDER BY 1"
+)
+
+TRANSPORT_24H_DESCRIPTION = (
+    "Сколько документов получили ошибку связи за последние 24 часа — скользящие сутки от "
+    "текущего момента. Реквизиты: количество документов и сравнение с предыдущими 24 часами; "
+    "рост окрашен красным. Ряд — 14 таких суток; обычный уровень и всплески по календарным "
+    "дням — карточка «Тренд ошибок связи по дням», виды сбоев и последние события — вкладка "
+    "«Сервис интеграции». Фильтр периода карточку не двигает: это состояние на текущий момент."
+)
+
+# Плитка ряда состояния: число и сравнение с предыдущей точкой ряда. Рост ошибок и очереди —
+# ухудшение, поэтому рост окрашен красным. Сравнение задано явно: без него Metabase выбирает
+# его по «инсайтам» ряда, и у скользящих суток выбор мог бы уйти в календарный период.
+STATUS_TILE_COMPARISON_ID = "5e1a7c00-0000-4000-8000-000000000001"
+
+
+def status_tile_viz(field: str) -> dict:
+    return {
+        "scalar.field": field,
+        "scalar.switch_positive_negative": True,
+        "scalar.comparisons": [{"id": STATUS_TILE_COMPARISON_ID, "type": "previousValue"}],
+        "column_settings": {_column_key(field): {"decimals": 0, "number_separators": ", "}},
+    }
 
 QUEUE_RESCUE_QUERY = (
     SENT_QUEUE_CORPUS
@@ -1374,13 +1419,16 @@ SENT_QUEUE_CARDS = frozenset(
 SENT_QUEUE_AXIS_CARDS = frozenset({QUEUE_SURVIVAL_NAME, QUEUE_FLOW_NAME, QUEUE_TAIL_NAME})
 SENT_QUEUE_TREND_CARDS = frozenset({QUEUE_SIZE_NAME, QUEUE_OVER_24H_NAME})
 
-# Состав вкладки: имя, подача, вкладка. Распределение возраста показывается дважды —
-# на мониторинге это очередь «прямо сейчас», на «Отправленных» — часть разбора.
+# Состав вкладки: имя, подача, вкладка. Размер очереди, её часть старше суток и
+# распределение возраста показываются дважды: на мониторинге это состояние «прямо сейчас»,
+# на «Отправленных» — часть разбора.
 SENT_TAB_CARD_PLAN: tuple[tuple[str, str, str], ...] = (
     (SENT_TABLE_NAME_NO_RESPONSE, "table", "sent"),
     (SENT_REGISTRATION_FUNNEL_NAME, "funnel", "sent"),
     (QUEUE_SIZE_NAME, "smartscalar", "sent"),
+    (QUEUE_SIZE_NAME, "smartscalar", "operational"),
     (QUEUE_OVER_24H_NAME, "smartscalar", "sent"),
+    (QUEUE_OVER_24H_NAME, "smartscalar", "operational"),
     (QUEUE_RESCUE_NAME, "progress", "sent"),
     (QUEUE_MAX_AGE_NAME, "scalar", "sent"),
     (QUEUE_SURVIVAL_NAME, "line", "sent"),
@@ -1458,8 +1506,8 @@ SENT_TAB_QUERIES: dict[str, str] = {
 _QUEUE_SCOPE = (
     "Очередь — документы, отправленные до текущего момента, по которым ещё не пришёл "
     "первый ответ ЕГИСЗ и срок ожидания не вышел за 15 суток; более давние разбираются "
-    "парой карточек «Ответ не получен» внизу вкладки. Фильтр периода карточку не двигает: "
-    "очередь — состояние на текущий момент."
+    "парой карточек «Ответ не получен» внизу вкладки «Отправленные». Фильтр периода карточку "
+    "не двигает: очередь — состояние на текущий момент."
 )
 
 SENT_TAB_DESCRIPTIONS: dict[str, str] = {
@@ -1489,13 +1537,14 @@ SENT_TAB_DESCRIPTIONS: dict[str, str] = {
     ),
     QUEUE_SIZE_NAME: (
         "Сколько документов ждёт ответа прямо сейчас. Реквизиты: количество документов и "
-        "сравнение с предыдущим днём. Ряд строится по дням за две недели, значение дня — "
-        f"очередь на его конец, последняя точка — на текущий момент. {_QUEUE_SCOPE}"
+        "сравнение с предыдущим днём; рост окрашен красным. Ряд строится по дням за две "
+        "недели, значение дня — очередь на его конец, последняя точка — на текущий момент. "
+        f"{_QUEUE_SCOPE}"
     ),
     QUEUE_OVER_24H_NAME: (
         "Часть очереди, которая ждёт дольше 24 часов. Реквизиты: количество документов и "
-        "сравнение с предыдущим днём. Штатный ответ ЕГИСЗ приходит за минуты-часы, поэтому "
-        f"рост ряда — аномалия, а не сезонность. {_QUEUE_SCOPE}"
+        "сравнение с предыдущим днём; рост окрашен красным. Штатный ответ ЕГИСЗ приходит за "
+        f"минуты-часы, поэтому рост ряда — аномалия, а не сезонность. {_QUEUE_SCOPE}"
     ),
     QUEUE_RESCUE_NAME: (
         "Документы, которые ждут ответа от 7 до 15 суток, — последний срок, когда ещё есть "
@@ -2408,10 +2457,8 @@ def apply_sent_card_visualization(card: dict, name: str, viz: dict) -> None:
         viz["funnel.metric"] = "Документов"
     elif name in SENT_QUEUE_TREND_CARDS:
         card["display"] = "smartscalar"
-        viz["scalar.field"] = name
-        viz["column_settings"] = {
-            _column_key(name): {"decimals": 0, "number_separators": ", "}
-        }
+        field = QUEUE_SIZE_FIELD if name == QUEUE_SIZE_NAME else QUEUE_OVER_24H_FIELD
+        viz.update(status_tile_viz(field))
     elif name == QUEUE_RESCUE_NAME:
         # Цель карточки — ноль, а полоса прогресса считает долю от цели: при нулевой цели
         # Metabase делит на ноль. Числу «сколько документов вот-вот перестанут ждать»
@@ -2664,20 +2711,52 @@ def _dim(d: str) -> str:
     return mapping.get(d, d)
 
 
-def build_drill(mappings: list[tuple[str, str]]) -> dict:
-    pm: dict = {}
-    for slug, col in mappings:
-        pm[slug] = {
-            "source": {"type": "column", "name": col},
-            "target": {"type": "parameter", "id": PARAM_IDS[slug]},
+def build_dashboard_link(
+    target_dashboard: str,
+    tab: str,
+    *,
+    columns: dict[str, str] | None = None,
+    parameters: dict[str, tuple[str, str]] | None = None,
+) -> dict:
+    """Переход на вкладку другого дашборда.
+
+    Ключ сопоставления — slug фильтра цели. Источник — столбец строки, по которой кликнули
+    (columns: slug → имя столбца), или фильтр текущего дашборда (parameters: slug цели →
+    (slug источника, его подпись)). Числовые id дашборда, вкладки и фильтров различаются
+    между контурами, поэтому их подставляет импорт (setup-dashboards.sh).
+    """
+    mapping: dict = {}
+    for slug, column in (columns or {}).items():
+        mapping[slug] = {
+            "source": {"type": "column", "id": column, "name": column},
+            "target": {"type": "parameter", "id": slug},
+        }
+    for slug, (source_slug, source_name) in (parameters or {}).items():
+        mapping[slug] = {
+            "source": {"type": "parameter", "id": source_slug, "name": source_name},
+            "target": {"type": "parameter", "id": slug},
         }
     return {
         "type": "link",
         "linkType": "dashboard",
-        "targetDashboard": "Интеграция с ЕГИСЗ",
-        "tab": "archive",
-        "parameterMapping": pm,
+        "targetDashboard": target_dashboard,
+        "tab": tab,
+        "parameterMapping": mapping,
     }
+
+
+def apply_drill(card: dict) -> None:
+    """Дрилл строки — в модель; у рейтингов без естественного грейна строки дрилла нет."""
+    name = card.get("name", "")
+    if name in MODEL_DRILL_BY_NAME:
+        target = MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF)
+        card["click_behavior"] = build_model_drill(target, MODEL_DRILL_BY_NAME[name])
+        params = MODEL_DRILL_DASHBOARD_PARAMS.get(name)
+        if params:
+            fields = MODEL_PARAM_FIELDS[target]
+            card["metabase-model-drill-params"] = {key: fields[key] for key in params}
+    elif name in NO_DRILL_NAMES:
+        card.pop("click_behavior", None)
 
 
 def build_model_drill(
@@ -2738,7 +2817,7 @@ def ensure_dashboard_parameters(dash: dict) -> None:
     if not any(p.get("slug") == "error_type_filter" for p in params):
         params.append(
             {
-                "id": PARAM_IDS["error_type_filter"],
+                "id": ERROR_TYPE_PARAM_ID,
                 "name": "Тип ошибки",
                 "slug": "error_type_filter",
                 "type": "string/=",
@@ -3086,6 +3165,214 @@ def apply_operational_filters(dash: dict) -> None:
             field_filters[key] = deepcopy(OPERATIONAL_EXTRA_FIELD_FILTERS[key])
 
 
+def _tab_card(dash: dict, name: str, tab: str) -> dict:
+    """Карточка вкладки по имени; нет — заводится пустой и дополняется сборщиком."""
+    cards = dash.setdefault("cards", [])
+    card = next((c for c in cards if c.get("name") == name and c.get("tab") == tab), None)
+    if card is None:
+        card = {"name": name, "tab": tab}
+        cards.append(card)
+    return card
+
+
+def apply_operational_status_row(dash: dict) -> None:
+    """Плитка ошибок связи ряда состояния. Плитки очереди ставит план вкладки
+    «Отправленные» (SENT_TAB_CARD_PLAN): это те же карточки, запрос у них общий."""
+    card = _tab_card(dash, TRANSPORT_24H_NAME, "operational")
+    card["display"] = "smartscalar"
+    card["description"] = TRANSPORT_24H_DESCRIPTION
+    card["dataset_query"] = {
+        "type": "native",
+        "database": 1,
+        "native": {
+            "query": TRANSPORT_24H_QUERY,
+            "template-tags": {
+                key: deepcopy(DOCUMENTS_FILTER_TEMPLATE_TAGS[key]) for key in ("semd_type", "jid")
+            },
+        },
+    }
+    card["metabase-field-filters"] = {
+        key: deepcopy(DOCUMENTS_FILTER_FIELD_FILTERS[key]) for key in ("semd_type", "jid")
+    }
+    card["visualization_settings"] = status_tile_viz(TRANSPORT_24H_FIELD)
+
+
+CONTRIBUTION_DOCS_BASE = "Документов с ответом, опорный период"
+CONTRIBUTION_DOCS_PERIOD = "Документов с ответом, период"
+CONTRIBUTION_SHARE_BASE = "Доля ошибок, опорный период, %"
+CONTRIBUTION_SHARE_PERIOD = "Доля ошибок, период, %"
+CONTRIBUTION_TOTAL = "Вклад, п.п."
+CONTRIBUTION_RATE = "За счёт доли ошибок, п.п."
+CONTRIBUTION_VOLUME = "За счёт объёма, п.п."
+CONTRIBUTION_TOP_ERROR = "Основной тип ошибки за период"
+CONTRIBUTION_COLUMNS = (
+    "Клиника",
+    CONTRIBUTION_DOCS_BASE,
+    CONTRIBUTION_DOCS_PERIOD,
+    CONTRIBUTION_SHARE_BASE,
+    CONTRIBUTION_SHARE_PERIOD,
+    CONTRIBUTION_TOTAL,
+    CONTRIBUTION_RATE,
+    CONTRIBUTION_VOLUME,
+    CONTRIBUTION_TOP_ERROR,
+)
+CONTRIBUTION_COLUMN_WIDTHS = [330, 110, 110, 110, 110, 96, 110, 110, 420]
+# Вклад — оценка: положительный тянет долю ошибок вверх (красный), отрицательный — вниз.
+CONTRIBUTION_UP_BG = "#FEE2E2"
+CONTRIBUTION_DOWN_BG = "#DCFCE7"
+
+# Знаменатель — документы с ответом РЭМД, числитель — отказы и ошибки связи: тот же корпус,
+# что у XmR-карты и витрины rpt_documents_weekly. Отбор по типу ошибки apply_error_type_filters
+# добавляет к числителю обоих периодов, знаменатели не меняются.
+_CONTRIBUTION_COUNTS = (
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS errs"
+)
+
+CONTRIBUTION_QUERY = (
+    # Пояс отчётного календаря вычисляется один раз: вызов на каждой строке растягивает запрос.
+    "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz ), "
+    f"period AS ( SELECT clinic_label, {_CONTRIBUTION_COUNTS}, MAX(ips_date) AS last_at "
+    "FROM public.rpt_documents WHERE ips_date IS NOT NULL "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), "
+    # Опорный период — у фазы, в которой лежит последняя неделя периода: это центр XmR-карты
+    # для той же недели. Незакрытый опорный период не сравнивается, как и у карты.
+    "phase AS MATERIALIZED ( SELECT ph.baseline_start, ph.baseline_end, "
+    "ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts, "
+    "(ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts "
+    "FROM calendar c CROSS JOIN LATERAL ( SELECT baseline_start, baseline_end "
+    "FROM public.dim_control_chart_phases WHERE period_grain = 'week' "
+    "AND phase_start <= ( SELECT date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date "
+    "FROM period ) ORDER BY phase_start DESC LIMIT 1 ) ph "
+    "WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date ), "
+    f"baseline AS ( SELECT clinic_label, {_CONTRIBUTION_COUNTS} "
+    "FROM public.rpt_documents CROSS JOIN phase "
+    "WHERE ips_date >= phase.from_ts AND ips_date < phase.to_ts "
+    "[[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), "
+    "clinics AS ( SELECT COALESCE(p.clinic_label, b.clinic_label) AS clinic_label, "
+    "COALESCE(b.docs, 0) AS docs0, COALESCE(b.errs, 0) AS errs0, "
+    "COALESCE(p.docs, 0) AS docs1, COALESCE(p.errs, 0) AS errs1 "
+    "FROM period p FULL JOIN baseline b ON b.clinic_label = p.clinic_label "
+    "WHERE EXISTS (SELECT 1 FROM phase) ), "
+    "totals AS ( SELECT SUM(docs0) AS n0, SUM(docs1) AS n1, "
+    "SUM(errs0)::numeric / NULLIF(SUM(docs0), 0) AS p0, "
+    "SUM(errs1)::numeric / NULLIF(SUM(docs1), 0) AS p1 FROM clinics ), "
+    # Вклад — превышение клиники над опорной долей в периоде минус то же превышение в
+    # опорном периоде; сумма по клиникам равна изменению общей доли. Часть «за счёт доли
+    # ошибок» — вес клиники в периоде × изменение её доли; остальное — изменение веса.
+    # У клиники, которой нет в одном из периодов, своей доли для сравнения нет: весь её
+    # вклад — объёмный.
+    "contrib AS ( SELECT c.*, 100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) "
+    "- (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp, "
+    "CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) "
+    "* (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0) ELSE 0 END AS rate_pp, "
+    "SIGN(t.p1 - t.p0) AS direction FROM clinics c CROSS JOIN totals t ), "
+    # Самый частый элемент error_types по документам клиники за период; ничья — по алфавиту.
+    "top_error AS ( SELECT clinic_label, top_type FROM ( SELECT clinic_label, "
+    "atom AS top_type, ROW_NUMBER() OVER (PARTITION BY clinic_label "
+    "ORDER BY COUNT(DISTINCT dwh_id) DESC, atom) AS rn "
+    "FROM public.rpt_documents, LATERAL unnest(string_to_array(error_types, ' · ')) AS atom "
+    "WHERE error_types IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "GROUP BY clinic_label, atom ) ranked WHERE rn = 1 ) "
+    f'SELECT "Клиника", "{CONTRIBUTION_DOCS_BASE}", "{CONTRIBUTION_DOCS_PERIOD}", '
+    f'"{CONTRIBUTION_SHARE_BASE}", "{CONTRIBUTION_SHARE_PERIOD}", "{CONTRIBUTION_TOTAL}", '
+    f'"{CONTRIBUTION_RATE}", "{CONTRIBUTION_VOLUME}", "{CONTRIBUTION_TOP_ERROR}" FROM ( '
+    "SELECT 0 AS row_kind, NULL::numeric AS sort_key, "
+    "CASE WHEN NOT EXISTS (SELECT 1 FROM period) THEN 'Нет документов за период' "
+    "WHEN ph.baseline_start IS NULL THEN 'Нет закрытого опорного периода фазы' "
+    "ELSE 'Итого (опорный период ' || to_char(ph.baseline_start, 'DD.MM') || '–' "
+    "|| to_char(ph.baseline_end + 6, 'DD.MM.YYYY') || ')' END AS \"Клиника\", "
+    f't.n0 AS "{CONTRIBUTION_DOCS_BASE}", t.n1 AS "{CONTRIBUTION_DOCS_PERIOD}", '
+    f'ROUND(100 * t.p0, 1) AS "{CONTRIBUTION_SHARE_BASE}", '
+    f'ROUND(100 * t.p1, 1) AS "{CONTRIBUTION_SHARE_PERIOD}", '
+    f'ROUND(100 * (t.p1 - t.p0), 1) AS "{CONTRIBUTION_TOTAL}", '
+    f'(SELECT ROUND(SUM(rate_pp), 1) FROM contrib) AS "{CONTRIBUTION_RATE}", '
+    f'(SELECT ROUND(SUM(total_pp - rate_pp), 1) FROM contrib) AS "{CONTRIBUTION_VOLUME}", '
+    f'NULL::text AS "{CONTRIBUTION_TOP_ERROR}" '
+    "FROM totals t LEFT JOIN phase ph ON TRUE "
+    "UNION ALL "
+    "SELECT 1, c.direction * c.total_pp, c.clinic_label, c.docs0, c.docs1, "
+    "ROUND(100.0 * c.errs0 / NULLIF(c.docs0, 0), 1), "
+    "ROUND(100.0 * c.errs1 / NULLIF(c.docs1, 0), 1), ROUND(c.total_pp, 1), "
+    "ROUND(c.rate_pp, 1), ROUND(c.total_pp - c.rate_pp, 1), te.top_type "
+    "FROM contrib c LEFT JOIN top_error te ON te.clinic_label = c.clinic_label ) contribution "
+    # Клиники — по направлению общего изменения: первыми те, кто его и дал.
+    f'ORDER BY row_kind, sort_key DESC NULLS LAST, "{CONTRIBUTION_DOCS_PERIOD}" DESC'
+)
+
+CONTRIBUTION_DESCRIPTION = (
+    "Какие клиники сдвинули долю ошибок: период из фильтра «Обработано IPS» против опорного "
+    "периода фазы из справочника dim_control_chart_phases — той же базы, от которой "
+    "XmR-карта управленческого дашборда считает центр; фаза берётся по последней неделе "
+    "периода. Доля ошибок — отказы РЭМД и ошибки связи от документов с ответом РЭМД. Первая "
+    "строка — итог по всем клиникам с датами опорного периода; опорная доля в ней — "
+    "отношение сумм, а центр XmR — среднее недельных долей, поэтому они расходятся на "
+    "десятые доли процента. Вклад клиники — её превышение над опорной долей в периоде минус "
+    "то же превышение в опорном периоде, в процентных пунктах общей доли; вклады клиник в "
+    "сумме дают изменение итога. Вклад раскладывается на две части: «за счёт доли ошибок» — "
+    "клиника стала ошибаться чаще или реже; «за счёт объёма» — изменилась её доля в потоке "
+    "при прежней доле ошибок. У новых клиник и у пропавших из потока весь вклад — объёмный. "
+    "Клиники стоят по направлению общего изменения: первыми те, кто его дал. Основной тип "
+    "ошибки — самый частый тип по документам клиники за период. При выбранном типе ошибки "
+    "считается доля документов с этим типом. Если опорный период фазы ещё не закрыт, "
+    "сравнения нет, как и границ на XmR-карте."
+)
+
+
+def apply_clinic_error_contribution(dash: dict) -> None:
+    card = _tab_card(dash, CONTRIBUTION_NAME, "errors")
+    card["display"] = "table"
+    card["description"] = CONTRIBUTION_DESCRIPTION
+    card.pop("click_behavior", None)
+    card["dataset_query"] = {
+        "type": "native",
+        "database": 1,
+        "native": {
+            "query": CONTRIBUTION_QUERY,
+            "template-tags": {
+                key: deepcopy(DOCUMENTS_FILTER_TEMPLATE_TAGS[key])
+                for key in ("ips_date", "semd_type", "jid")
+            },
+        },
+    }
+    card["metabase-field-filters"] = {
+        key: deepcopy(DOCUMENTS_FILTER_FIELD_FILTERS[key])
+        for key in ("ips_date", "semd_type", "jid")
+    }
+    counts = {"decimals": 0, "number_separators": ", "}
+    shares = {"decimals": 1, "number_separators": ", ", "suffix": " %"}
+    points = {"decimals": 1, "number_separators": ", "}
+    card["visualization_settings"] = {
+        "table.columns": [{"enabled": True, "name": column} for column in CONTRIBUTION_COLUMNS],
+        "table.column_widths": list(CONTRIBUTION_COLUMN_WIDTHS),
+        "column_settings": {
+            _column_key(CONTRIBUTION_DOCS_BASE): dict(counts),
+            _column_key(CONTRIBUTION_DOCS_PERIOD): dict(counts),
+            _column_key(CONTRIBUTION_SHARE_BASE): dict(shares),
+            _column_key(CONTRIBUTION_SHARE_PERIOD): dict(shares),
+            _column_key(CONTRIBUTION_TOTAL): dict(points),
+            _column_key(CONTRIBUTION_RATE): dict(points),
+            _column_key(CONTRIBUTION_VOLUME): dict(points),
+        },
+        "table.column_formatting": [
+            {
+                "color": CONTRIBUTION_UP_BG,
+                "columns": [CONTRIBUTION_TOTAL],
+                "operator": ">",
+                "type": "single",
+                "value": 0,
+            },
+            {
+                "color": CONTRIBUTION_DOWN_BG,
+                "columns": [CONTRIBUTION_TOTAL],
+                "operator": "<",
+                "type": "single",
+                "value": 0,
+            },
+        ],
+    }
+
+
 def apply_01(dash: dict) -> None:
     ensure_dashboard_parameters(dash)
     dash["description"] = (
@@ -3160,17 +3447,7 @@ def apply_01(dash: dict) -> None:
         elif name == "Статусы за период":
             apply_status_period(card)
 
-        if name in MODEL_DRILL_BY_NAME:
-            target = MODEL_DRILL_TARGET_BY_NAME.get(name, DOCUMENTS_MODEL_REF)
-            card["click_behavior"] = build_model_drill(target, MODEL_DRILL_BY_NAME[name])
-            params = MODEL_DRILL_DASHBOARD_PARAMS.get(name)
-            if params:
-                fields = MODEL_PARAM_FIELDS[target]
-                card["metabase-model-drill-params"] = {key: fields[key] for key in params}
-        elif name in DRILL_BY_NAME and DRILL_BY_NAME[name]:
-            card["click_behavior"] = build_drill(DRILL_BY_NAME[name])
-        elif name in DRILL_BY_NAME:
-            card.pop("click_behavior", None)
+        apply_drill(card)
 
         if card.get("tab") == "operational":
             card.pop("click_behavior", None)
@@ -3202,6 +3479,9 @@ def apply_01(dash: dict) -> None:
     # После нормализации: вкладка «Отправленные» задаёт собственный блок фильтров
     # (pending_segment вместо status), который общий проход не должен переписывать.
     apply_sent_tab(dash)
+    apply_operational_status_row(dash)
+    # До отбора по типу ошибки: он дописывает условие в числитель обоих периодов таблицы.
+    apply_clinic_error_contribution(dash)
     apply_error_type_filters(dash)
     apply_operational_filters(dash)
 
@@ -4118,6 +4398,13 @@ def executive_overview_cards() -> list[dict]:
 # Недельная и месячная вкладки собираются одной функцией: состав, подписи и сетка
 # различаются только спецификацией грейна, поэтому вкладки не расходятся между собой.
 EXECUTIVE_XMR_NAME = "Контрольная карта (XmR): доля ошибок по неделям"
+# Неделя точки для перехода по клику. Дату из native-запроса Metabase передаёт в фильтр
+# одним днём: у столбца нет календарной единицы. Диапазон «с~по» строкой фильтр дат
+# принимает как есть. На графике столбец не выводится.
+XMR_WEEK_RANGE_COLUMN = "Период"
+XMR_WEEK_RANGE_SQL = (
+    "to_char(period_start, 'YYYY-MM-DD') || '~' || to_char(period_start + 6, 'YYYY-MM-DD')"
+)
 _EXECUTIVE_MINUTES_FORMAT = {"decimals": 1, "number_separators": ", ", "suffix": " мин"}
 _EXECUTIVE_DAYS_FORMAT = {"decimals": 1, "number_separators": ", "}
 
@@ -4307,7 +4594,7 @@ def _executive_xmr_card() -> dict:
             "line.missing": "none",
         },
     }
-    return _executive_period_card(
+    card = _executive_period_card(
         "week",
         EXECUTIVE_XMR_NAME,
         "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД и "
@@ -4323,19 +4610,31 @@ def _executive_xmr_card() -> dict:
         "±0,5 п.п., а фактический разброс недельных долей — ±3–4 п.п.; на истории она "
         "давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно "
         "поглощал сдвиг уровня. Срез по клинике пересчитывает центр и границы по опорным "
-        "неделям клиники; фильтр периода не действует — ряд за всю историю закрытых недель.",
+        "неделям клиники; фильтр периода не действует — ряд за всю историю закрытых недель. "
+        f"Клик по точке открывает дашборд «{INTEGRATION_DASHBOARD_NAME}» на вкладке «Анализ "
+        f"ошибок» за эту неделю: таблица «{CONTRIBUTION_NAME}» показывает, какие клиники дали "
+        "отклонение от того же опорного периода; срез по клинике переносится.",
         _xmr_query(
             "week",
             ' SELECT period_start AS "Неделя", ROUND(x, 1) AS "Доля ошибок, %", '
             'ROUND(cl, 1) AS "Центр, %", ROUND(ucl, 1) AS "Верхняя граница (UCL), %", '
             'ROUND(lcl, 1) AS "Нижняя граница (LCL), %", CASE WHEN signal_rules IS NOT NULL '
-            'THEN ROUND(x, 1) END AS "Сигнал, %" FROM signals ORDER BY period_start',
+            'THEN ROUND(x, 1) END AS "Сигнал, %", '
+            f"{XMR_WEEK_RANGE_SQL} AS \"{XMR_WEEK_RANGE_COLUMN}\" "
+            "FROM signals ORDER BY period_start",
         ),
         _executive_period_viz("week", series, "Доля ошибок, %", _EXECUTIVE_PCT_FORMAT),
         "line",
         (6, 0, 24, 7),
         0x22,
     )
+    card["click_behavior"] = build_dashboard_link(
+        INTEGRATION_DASHBOARD_NAME,
+        "errors",
+        columns={"ips_date_filter": XMR_WEEK_RANGE_COLUMN},
+        parameters={"jid_filter": ("jid_filter", "Клиника")},
+    )
+    return card
 
 
 def executive_periodic_cards(grain: str) -> list[dict]:
@@ -4675,8 +4974,8 @@ def restore_archive_top_semd(dash: dict) -> None:
         "sizeY": 6,
         "tab": "archive",
         "metabase-field-filters": ff,
-        "click_behavior": build_drill([("semd_type_filter", "СЭМД")]),
     }
+    apply_drill(card)
     idx = next(i for i, c in enumerate(dash["cards"]) if c.get("name") == "Всего клиник" and c.get("tab") == "archive")
     dash["cards"].insert(idx + 1, card)
 
