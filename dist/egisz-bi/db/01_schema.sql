@@ -410,6 +410,42 @@ ON CONFLICT (code) DO UPDATE SET
 
 DELETE FROM dim_sent_state WHERE code NOT IN ('pending', 'no_response');
 
+-- Фазы контрольных карт: отрезки с неизменными условиями работы сервиса. Центр и границы
+-- фазы считаются по её опорному периоду и продлеваются вперёд до следующей фазы. Опорный
+-- период задан датами, а не «последними N периодами»: границы закрытых периодов не должны
+-- зависеть от момента расчёта. Новая фаза заводится строкой здесь при смене условий
+-- работы, а не по наблюдаемому сдвигу — иначе сдвиг объявлялся бы нормой задним числом.
+CREATE TABLE IF NOT EXISTS dim_control_chart_phases (
+    period_grain text NOT NULL CHECK (period_grain IN ('week', 'month')),
+    phase_start date NOT NULL,
+    baseline_start date NOT NULL,
+    baseline_end date NOT NULL,
+    label text NOT NULL,
+    condition text NOT NULL,
+    PRIMARY KEY (period_grain, phase_start),
+    CHECK (baseline_start >= phase_start AND baseline_end >= baseline_start)
+);
+
+COMMENT ON TABLE dim_control_chart_phases IS
+'Фазы контрольных карт управленческого дашборда: грейн периода (week/month), начало фазы и опорный период (baseline_start..baseline_end — начала первого и последнего периода, включительно; понедельник или первое число по отчётному календарю). Центр и границы XmR считаются по опорному периоду фазы и действуют до начала следующей фазы. Состав фаз задаёт только этот файл схемы.';
+
+INSERT INTO dim_control_chart_phases (
+    period_grain, phase_start, baseline_start, baseline_end, label, condition
+)
+VALUES
+    -- Опорный период — первые четыре закрытые недели истории. Четыре точки дают мягкие
+    -- границы; расширение опорного периода — решение, оформляемое правкой этой строки.
+    ('week', DATE '2026-07-13', DATE '2026-07-13', DATE '2026-08-03', 'Начало истории',
+     'Условия работы на начало накопления истории DWH')
+ON CONFLICT (period_grain, phase_start) DO UPDATE SET
+    baseline_start = EXCLUDED.baseline_start,
+    baseline_end = EXCLUDED.baseline_end,
+    label = EXCLUDED.label,
+    condition = EXCLUDED.condition;
+
+DELETE FROM dim_control_chart_phases
+WHERE (period_grain, phase_start) NOT IN (('week', DATE '2026-07-13'));
+
 CREATE TABLE IF NOT EXISTS dim_licenses (
     id bigint PRIMARY KEY,
     service_type integer,

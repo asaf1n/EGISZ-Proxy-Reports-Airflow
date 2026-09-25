@@ -1,7 +1,7 @@
 {
   "name": "Управленческий дашборд",
   "width": "full",
-  "description": "Управленческий взгляд на сервис интеграции с ЕГИСЗ (грейн: JID / документ / состояние; без тела СЭМД). «Обзор» — ряды от ценности к риску: успешные СЭМД и качество регистрации → отказы, ошибки связи и «ответ не получен» → пульс за последние 7 дней → ориентировочные деньги → выручка под риском (списки клиник без успехов и замолчавших). Текстовых подписей у рядов нет: знаменатель и окно названы в имени карточки, подробности — в её описании. «Динамика по неделям» и «Динамика по месяцам» — доступность сервиса во времени за всю историю: контрольная карта XmR по закрытым неделям (центр — средняя доля ошибок, границы — средняя ± 2,66 × средний скользящий размах), состав исходов и структура ошибок по категориям. Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД + ошибка связи) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин rpt_documents_weekly / rpt_documents_monthly. Рублёвые карточки рассчитаны по плоской ставке 10 000 ₽/JID/мес и читаются как порядок величины: договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка подключения. Карточки за последние 7 и 30 дней, рублёвые карточки, список замолчавших и вкладки динамики на фильтр «Период» не реагируют, срез по клинике действует на все карточки дашборда.",
+  "description": "Управленческий взгляд на сервис интеграции с ЕГИСЗ (грейн: JID / документ / состояние; без тела СЭМД). «Обзор» открывается тремя статусами: растём ли (успешные СЭМД за последние 7 дней к предыдущим 7), в норме ли качество (сигнал контрольной карты XmR за последнюю закрытую неделю) и сколько выручки под риском. Ниже — ряды от ценности к риску: успешные СЭМД и качество регистрации → отказы, ошибки связи и «ответ не получен» → пульс за последние 7 дней → ориентировочные деньги → выручка под риском (тренд по неделям, списки клиник без успехов и замолчавших). Знаменатель и окно названы в имени карточки, подробности — в её описании. «Динамика по неделям» и «Динамика по месяцам» — вся история: состав исходов, отказы РЭМД и ошибки связи раздельно (у причин разные ответственные), время до ответа РЭМД, новые подключения, структура ошибок и сводка; на недельной вкладке — контрольная карта XmR с фазами (центр и границы по опорному периоду фазы из dim_control_chart_phases, правила серий). Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД + ошибка связи) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин rpt_documents_weekly / rpt_documents_monthly. Рублёвые карточки помечены «ориентир»: расчёт по плоской ставке 10 000 ₽/JID/мес читается как порядок величины — договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка подключения. Карточки за последние 7 и 30 дней, рублёвые карточки, тренд риска, список замолчавших и вкладки динамики на фильтр «Период» не реагируют, срез по клинике действует на все карточки дашборда.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -20,6 +20,124 @@
     }
   ],
   "cards": [
+    {
+      "name": "Успешных СЭМД за последние 7 дней",
+      "description": "Растём ли. Успешно зарегистрированные СЭМД за последние 7 полных суток (по вчерашний день: неполные текущие сутки занизили бы сравнение); «изменение» под числом — к предыдущим 7 суткам (ряд из 8 недельных окон с шагом в неделю). Недельное окно снимает разницу буден и выходных. Окно привязано к текущему дню: фильтр периода не действует, срез по клинике — действует.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 50, CURRENT_DATE - 1, '7 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - 57 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')::bigint AS \"Успешных СЭМД\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e30000-0000-4000-8000-000000000011",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "smartscalar",
+      "visualization_settings": {
+        "scalar.field": "Успешных СЭМД",
+        "column_settings": {
+          "[\"name\",\"Успешных СЭМД\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 0,
+      "col": 0,
+      "tab": "overview",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Сигнал XmR за последнюю закрытую неделю",
+      "description": "В норме ли качество. Сигнал контрольной карты XmR доли ошибок на последней закрытой неделе: «Нет» — неделя в пределах ожидаемого разброса своей фазы, «Да» — сработало правило (выход за границу; 8 подряд по одну сторону от центра; 2 из 3 за 2σ). Центр и границы — по опорному периоду фазы из dim_control_chart_phases; ряд и правила — на карте вкладки «Динамика по неделям». Фильтр периода не действует, срез по клинике — действует: границы считаются по опорным неделям клиники.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT CASE WHEN cl IS NULL THEN 'Нет опорного периода' WHEN signal_rules IS NULL THEN 'Нет' ELSE 'Да: ' || signal_rules END AS \"Сигнал XmR\" FROM signals ORDER BY period_start DESC LIMIT 1",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e30000-0000-4000-8000-00000000001a",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "scalar.field": "Сигнал XmR"
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 0,
+      "col": 8,
+      "tab": "overview",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents_weekly",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "MRR под риском за последние 30 дней, ₽ (ориентир)",
+      "description": "Сколько выручки под риском. Абонплата JID из двух рабочих списков Customer Success за последние 30 дней: замолчавшие (нет документов 7 суток) и клиники без успехов (от 10 документов и ни одного успешного СЭМД). JID, попавший в оба списка, считается один раз. Окна привязаны к текущему дню: фильтр периода не действует, поэтому сумма может отличаться от «MRR клиник без успехов», которая считается за выбранный период. Срез по клинике действует.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT (COUNT(DISTINCT jid) FILTER (WHERE jid IN (SELECT jid FROM silent) OR (ok = 0 AND docs >= 10)) * 10000)::numeric AS \"MRR под риском, ₽\" FROM recent",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e30000-0000-4000-8000-00000000001b",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "scalar",
+      "visualization_settings": {
+        "scalar.field": "MRR под риском, ₽",
+        "column_settings": {
+          "[\"name\",\"MRR под риском, ₽\"]": {
+            "decimals": 0,
+            "number_separators": ", ",
+            "suffix": " ₽"
+          }
+        }
+      },
+      "sizeX": 8,
+      "sizeY": 3,
+      "row": 0,
+      "col": 16,
+      "tab": "overview",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
     {
       "name": "Успешных СЭМД за период",
       "description": "COUNT(DISTINCT документ) со статусом «Успешно зарегистрирован» за период. Единственная метрика ценности сервиса — остальные карточки объясняют её движение. Документ относится к периоду по дате итога (обработано IPS), а не первой подачи.",
@@ -58,7 +176,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 0,
+      "row": 3,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -110,7 +228,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 0,
+      "row": 3,
       "col": 6,
       "tab": "overview",
       "metabase-field-filters": {
@@ -163,7 +281,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 0,
+      "row": 3,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -216,7 +334,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 0,
+      "row": 3,
       "col": 18,
       "tab": "overview",
       "metabase-field-filters": {
@@ -269,7 +387,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 3,
+      "row": 6,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -322,7 +440,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 3,
+      "row": 6,
       "col": 6,
       "tab": "overview",
       "metabase-field-filters": {
@@ -375,7 +493,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 3,
+      "row": 6,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -428,7 +546,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 3,
+      "row": 6,
       "col": 18,
       "tab": "overview",
       "metabase-field-filters": {
@@ -436,47 +554,6 @@
           "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
-        "jid": {
-          "table_ref": "public.rpt_documents",
-          "field_name": "clinic_label"
-        }
-      }
-    },
-    {
-      "name": "Успешных СЭМД за последние 7 дней",
-      "description": "Успешно зарегистрированные СЭМД за скользящие 7 суток на каждый день (окно шагает по дням, 14 точек). Недельное окно снимает разницу буден и выходных, поэтому «изменение» под числом — сдвиг недельного итога к окну, сдвинутому на день назад, а не колебание одного дня. Окно привязано к текущему дню: фильтр периода не действует, срез по клинике — действует.",
-      "dataset_query": {
-        "type": "native",
-        "native": {
-          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, '1 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - 20 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')::bigint AS \"Успешных СЭМД\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
-          "template-tags": {
-            "jid": {
-              "widget-type": "string/=",
-              "display-name": "Клиника",
-              "id": "05e30000-0000-4000-8000-000000000011",
-              "name": "jid",
-              "type": "dimension"
-            }
-          }
-        },
-        "database": 1
-      },
-      "display": "smartscalar",
-      "visualization_settings": {
-        "scalar.field": "Успешных СЭМД",
-        "column_settings": {
-          "[\"name\",\"Успешных СЭМД\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          }
-        }
-      },
-      "sizeX": 8,
-      "sizeY": 3,
-      "row": 6,
-      "col": 0,
-      "tab": "overview",
-      "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
@@ -513,10 +590,10 @@
           }
         }
       },
-      "sizeX": 8,
+      "sizeX": 12,
       "sizeY": 3,
-      "row": 6,
-      "col": 8,
+      "row": 9,
+      "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
@@ -554,10 +631,10 @@
           }
         }
       },
-      "sizeX": 8,
+      "sizeX": 12,
       "sizeY": 3,
-      "row": 6,
-      "col": 16,
+      "row": 9,
+      "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
@@ -572,12 +649,12 @@
       "visualization_settings": null,
       "sizeX": 24,
       "sizeY": 2,
-      "row": 9,
+      "row": 12,
       "col": 0,
       "tab": "overview"
     },
     {
-      "name": "MRR за последние 30 дней, ₽",
+      "name": "MRR за последние 30 дней, ₽ (ориентир)",
       "description": "Активные за последние 30 дней JID × ставка. Ориентир месячной выручки при текущей активной базе. Календарный месяц не берётся — иначе 1-го числа счётчик обнуляется.",
       "dataset_query": {
         "type": "native",
@@ -608,7 +685,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 11,
+      "row": 14,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -619,7 +696,7 @@
       }
     },
     {
-      "name": "ARR (MRR × 12), ₽",
+      "name": "ARR (MRR × 12), ₽ (ориентир)",
       "description": "MRR за последние 30 дней × 12. Годовой ориентир при сохранении текущей активной базы.",
       "dataset_query": {
         "type": "native",
@@ -650,7 +727,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 11,
+      "row": 14,
       "col": 6,
       "tab": "overview",
       "metabase-field-filters": {
@@ -691,7 +768,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 11,
+      "row": 14,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -702,7 +779,7 @@
       }
     },
     {
-      "name": "Стоимость успешного СЭМД, ₽",
+      "name": "Стоимость успешного СЭМД, ₽ (ориентир)",
       "description": "MRR за последние 30 дней / успешные СЭМД за те же 30 дней. Рост означает, что абонплата собирается, а ценность за неё не выдаётся.",
       "dataset_query": {
         "type": "native",
@@ -733,7 +810,7 @@
       },
       "sizeX": 6,
       "sizeY": 3,
-      "row": 11,
+      "row": 14,
       "col": 18,
       "tab": "overview",
       "metabase-field-filters": {
@@ -744,7 +821,7 @@
       }
     },
     {
-      "name": "MRR по дням за 90 дней, ₽",
+      "name": "MRR по дням за 90 дней, ₽ (ориентир)",
       "description": "MRR на конец каждого дня за последние 90 дней: активные за предыдущие 30 суток JID × ставка. Ступенька вниз — клиника, выпавшая из активной базы. Ряд начинается через 30 дней после первого дня истории: раньше окно ещё заполняется, и подъём был бы накоплением данных, а не ростом базы.",
       "dataset_query": {
         "type": "native",
@@ -795,7 +872,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 14,
+      "row": 17,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -856,7 +933,7 @@
       },
       "sizeX": 12,
       "sizeY": 6,
-      "row": 14,
+      "row": 17,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -867,7 +944,7 @@
       }
     },
     {
-      "name": "Сегменты клиник по объёму: MRR и ₽ за успешный СЭМД",
+      "name": "Сегменты клиник по объёму: MRR и ₽ за успешный СЭМД (ориентир)",
       "description": "JID по объёму потока за период. При плоской ставке выручка распределена по JID равномерно, а ценность — нет, поэтому «₽ за успешный СЭМД» растёт к спящим клиникам: это самая маржинальная и одновременно самая рисковая на отток выручка. Столбец «Доля успеха, %» показывает, различается ли качество сервиса между сегментами.",
       "dataset_query": {
         "type": "native",
@@ -926,7 +1003,7 @@
       },
       "sizeX": 24,
       "sizeY": 5,
-      "row": 20,
+      "row": 23,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -934,6 +1011,72 @@
           "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "MRR под риском по неделям, ₽ (ориентир)",
+      "description": "Абонплата под риском на конец каждой закрытой недели: замолчавшие (документы за 30 дней до конца недели, но ни одного за последние 7 суток) и клиники без успехов (от 10 документов за те же 30 дней и ни одного успешного СЭМД). JID из обоих списков относится к замолчавшим. Ряд начинается с недели, окно которой целиком лежит в истории. Фильтр периода не действует, срез по клинике — действует.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH daily AS (SELECT clinic_jid AS jid, ips_date::date AS day, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1, 2), bounds AS (SELECT (date_trunc('week', MIN(day) + 29))::date AS first_week, (date_trunc('week', CURRENT_DATE) - INTERVAL '7 days')::date AS last_week FROM daily), weeks AS (SELECT generate_series(bounds.first_week, bounds.last_week, INTERVAL '7 days')::date AS week_start FROM bounds), per_jid AS (SELECT weeks.week_start, daily.jid, SUM(daily.docs) AS docs, SUM(daily.ok) AS ok, MAX(daily.day) AS last_day FROM weeks JOIN daily ON daily.day >= weeks.week_start + 7 - 30 AND daily.day < weeks.week_start + 7 GROUP BY 1, 2) SELECT week_start AS \"Неделя\", (COUNT(jid) FILTER (WHERE last_day < week_start) * 10000)::bigint AS \"Замолчавшие, ₽\", (COUNT(jid) FILTER (WHERE last_day >= week_start AND ok = 0 AND docs >= 10) * 10000)::bigint AS \"Без успехов, ₽\" FROM per_jid GROUP BY week_start ORDER BY week_start",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e30000-0000-4000-8000-00000000001c",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "bar",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Неделя"
+        ],
+        "graph.metrics": [
+          "Замолчавшие, ₽",
+          "Без успехов, ₽"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Неделя",
+        "graph.y_axis.title_text": "MRR под риском, ₽",
+        "stackable.stack_type": "stacked",
+        "series_settings": {
+          "Замолчавшие, ₽": {
+            "color": "#A6C8E8"
+          },
+          "Без успехов, ₽": {
+            "color": "#E15759"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Замолчавшие, ₽\"]": {
+            "decimals": 0,
+            "number_separators": ", ",
+            "suffix": " ₽"
+          },
+          "[\"name\",\"Без успехов, ₽\"]": {
+            "decimals": 0,
+            "number_separators": ", ",
+            "suffix": " ₽"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 6,
+      "row": 28,
+      "col": 0,
+      "tab": "overview",
+      "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
@@ -978,7 +1121,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 25,
+      "row": 34,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -993,7 +1136,7 @@
       }
     },
     {
-      "name": "MRR клиник без успехов, ₽",
+      "name": "MRR клиник без успехов, ₽ (ориентир)",
       "description": "Абонплата JID, у которых за период от 10 документов и ноль успешно зарегистрированных СЭМД. Платят, но ценности не получают — очередь № 1 на отток. Порог объёма тот же, что у «Клиник без успехов».",
       "dataset_query": {
         "type": "native",
@@ -1031,7 +1174,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 25,
+      "row": 34,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -1108,7 +1251,7 @@
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 28,
+      "row": 37,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -1153,7 +1296,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 35,
+      "row": 44,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -1164,7 +1307,7 @@
       }
     },
     {
-      "name": "MRR замолчавших клиник, ₽",
+      "name": "MRR замолчавших клиник, ₽ (ориентир)",
       "description": "Абонплата замолчавших клиник: число замолчавших × ставка. Часть MRR за последние 30 дней, которая выпадет из активной базы, если поток не возобновится. Фильтр периода не действует.",
       "dataset_query": {
         "type": "native",
@@ -1195,7 +1338,7 @@
       },
       "sizeX": 12,
       "sizeY": 3,
-      "row": 35,
+      "row": 44,
       "col": 12,
       "tab": "overview",
       "metabase-field-filters": {
@@ -1249,7 +1392,7 @@
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 38,
+      "row": 47,
       "col": 0,
       "tab": "overview",
       "metabase-field-filters": {
@@ -1261,11 +1404,11 @@
     },
     {
       "name": "Статусы по неделям",
-      "description": "Состав исходов регистрации по неделям в долях от документов с ответом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые недели — при малом числе закрытых недель ряд короткий.",
+      "description": "Состав исходов регистрации по неделям в долях от документов с ответом РЭМД: успех + отказ РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые недели — при малом их числе ряд короткий.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка асинхронного ответа РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1280,16 +1423,36 @@
       },
       "display": "area",
       "visualization_settings": {
-        "graph.y_axis.title_text": "Доля документов, %",
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "Неделя",
+        "graph.dimensions": [
+          "Неделя"
+        ],
         "graph.metrics": [
           "Успешно",
-          "Ошибка асинхронного ответа РЭМД",
+          "Отказ РЭМД",
           "Ошибка связи"
         ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Неделя",
+        "graph.y_axis.title_text": "Доля документов, %",
+        "series_settings": {
+          "Успешно": {
+            "color": "#84BB4C"
+          },
+          "Отказ РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          }
+        },
         "column_settings": {
-          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Отказ РЭМД\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -1298,28 +1461,8 @@
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
-          },
-          "[\"name\",\"Успешно\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
           }
         },
-        "series_settings": {
-          "Ошибка асинхронного ответа РЭМД": {
-            "color": "#A989C5"
-          },
-          "Ошибка связи": {
-            "color": "#F2994A"
-          },
-          "Успешно": {
-            "color": "#84BB4C"
-          }
-        },
-        "graph.x_axis.scale": "timeseries",
-        "graph.dimensions": [
-          "Неделя"
-        ],
         "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
@@ -1336,11 +1479,11 @@
     },
     {
       "name": "Объём документов по неделям",
-      "description": "Объём документов по неделям в разрезе исхода (успех / с ошибкой) — знаменатель для интерпретации доли ошибок. Ряд «В обработке» — очередь ожидания на конец своей недели (МСК), поэтому значения закрытых недель не меняются. «Ответ не получен (утилизирован)» в объём не входит: ответа по этим документам уже не будет, они разбираются на вкладке «Отправленные».",
+      "description": "Объём документов по неделям в разрезе исхода (успех / отказ РЭМД / ошибка связи) — знаменатель для интерпретации долей. Ряд «В обработке» — очередь ожидания на конец своего недели (МСК), поэтому значения закрытых периодов не меняются. «Ответ не получен (утилизирован)» в объём не входит: ответа по этим документам уже не будет, они разбираются на вкладке «Отправленные».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_async_error)::bigint AS \"Отказ РЭМД\", SUM(docs_network_error)::bigint AS \"Ошибка связи\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1358,36 +1501,49 @@
         "graph.dimensions": [
           "Неделя"
         ],
+        "graph.metrics": [
+          "Успешно",
+          "Отказ РЭМД",
+          "Ошибка связи",
+          "В обработке"
+        ],
+        "graph.show_values": false,
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Неделя",
         "graph.y_axis.title_text": "Документов",
         "series_settings": {
-          "В обработке": {
-            "color": "#A6C8E8"
-          },
-          "С ошибкой": {
-            "color": "#E15759"
-          },
           "Успешно": {
             "color": "#84BB4C"
+          },
+          "Отказ РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          },
+          "В обработке": {
+            "color": "#A6C8E8"
           }
         },
-        "stackable.stack_type": "stacked",
         "column_settings": {
-          "[\"name\",\"С ошибкой\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"Отказ РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Ошибка связи\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"В обработке\"]": {
+            "decimals": 0,
+            "number_separators": ", "
           }
         },
-        "graph.metrics": [
-          "Успешно",
-          "С ошибкой",
-          "В обработке"
-        ]
+        "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -1403,11 +1559,11 @@
     },
     {
       "name": "Контрольная карта (XmR): доля ошибок по неделям",
-      "description": "XmR-карта индивидуальных значений: доля ошибок закрытой недели (docs_error / docs_total) против средней по всем закрытым неделям и границ «средняя ± 2,66 × средний скользящий размах |xₜ − xₜ₋₁|»; нижняя граница не опускается ниже нуля. Почему не p-карта: при 55–75 тыс. документов в неделю биномиальная σ равна 0,18 п.п., а фактический разброс недельных долей — 3,86 п.п.; коридор p̄ ± 3σ был в двадцать раз уже реального шума, и почти каждая неделя читалась как особая причина. XmR берёт разброс из самого ряда: точка вне границ — особая причина, внутри — ожидаемый разброс. Границы пересчитываются под выбранную клинику; фильтр периода не действует — ряд за всю историю закрытых недель. Первые недели истории могут быть неполными по накоплению журнала.",
+      "description": "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД и ошибки связи от документов с ответом РЭМД). Центр и границы «центр ± 2,66 × средний скользящий размах» считаются по опорному периоду фазы (справочник dim_control_chart_phases) и продлеваются вперёд до следующей фазы; нижняя граница не опускается ниже нуля. Фаза — отрезок с неизменными условиями работы: новая заводится при смене условий, а не по наблюдаемому сдвигу, поэтому границы закрытых недель не зависят от момента расчёта. Точка «Сигнал» — сработало правило внутри фазы: выход за границу; 8 подряд по одну сторону от центра; 2 из 3 за 2σ по одну сторону. Какое правило сработало — столбец «Сигнал XmR» сводки. Почему не p-карта: при 55–77 тыс. документов в неделю биномиальный коридор ±3σ — около ±0,5 п.п., а фактический разброс недельных долей — ±3–4 п.п.; на истории она давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно поглощал сдвиг уровня. Срез по клинике пересчитывает центр и границы по опорным неделям клиники; фильтр периода не действует — ряд за всю историю закрытых недель.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH weekly AS (SELECT week_start, SUM(docs_error)::bigint AS docs_error, SUM(docs_total)::bigint AS docs_total FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), series AS (SELECT week_start, docs_total, docs_error, 100.0 * docs_error / NULLIF(docs_total, 0) AS x FROM weekly), ranges AS (SELECT week_start, docs_total, docs_error, x, ABS(x - LAG(x) OVER (ORDER BY week_start)) AS mr FROM series), limits AS (SELECT week_start, docs_total, docs_error, x, AVG(x) OVER () AS x_bar, AVG(mr) OVER () AS mr_bar FROM ranges) SELECT week_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(x_bar, 1) AS \"Средняя, %\", ROUND(LEAST(100.0, x_bar + 2.66 * mr_bar), 1) AS \"Верхняя граница (UCL), %\", ROUND(GREATEST(0.0, x_bar - 2.66 * mr_bar), 1) AS \"Нижняя граница (LCL), %\" FROM limits ORDER BY week_start",
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT period_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(cl, 1) AS \"Центр, %\", ROUND(ucl, 1) AS \"Верхняя граница (UCL), %\", ROUND(lcl, 1) AS \"Нижняя граница (LCL), %\", CASE WHEN signal_rules IS NOT NULL THEN ROUND(x, 1) END AS \"Сигнал, %\" FROM signals ORDER BY period_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1425,37 +1581,55 @@
         "graph.dimensions": [
           "Неделя"
         ],
+        "graph.metrics": [
+          "Доля ошибок, %",
+          "Центр, %",
+          "Верхняя граница (UCL), %",
+          "Нижняя граница (LCL), %",
+          "Сигнал, %"
+        ],
         "graph.show_values": false,
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Неделя",
         "graph.y_axis.title_text": "Доля ошибок, %",
         "series_settings": {
-          "Верхняя граница (UCL), %": {
-            "color": "#F2994A",
-            "line.style": "dashed"
-          },
           "Доля ошибок, %": {
             "color": "#E15759",
             "line.interpolate": "linear",
             "line.size": "M",
             "line.style": "solid"
           },
+          "Центр, %": {
+            "color": "#7A7A7A",
+            "line.style": "dashed"
+          },
+          "Верхняя граница (UCL), %": {
+            "color": "#F2994A",
+            "line.style": "dashed"
+          },
           "Нижняя граница (LCL), %": {
             "color": "#F2994A",
             "line.style": "dashed"
           },
-          "Средняя, %": {
-            "color": "#7A7A7A",
-            "line.style": "dashed"
+          "Сигнал, %": {
+            "color": "#A32D2D",
+            "line.size": "L",
+            "line.marker_enabled": true,
+            "line.missing": "none"
           }
         },
         "column_settings": {
-          "[\"name\",\"Верхняя граница (UCL), %\"]": {
+          "[\"name\",\"Доля ошибок, %\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
           },
-          "[\"name\",\"Доля ошибок, %\"]": {
+          "[\"name\",\"Центр, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Верхняя граница (UCL), %\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -1465,27 +1639,148 @@
             "number_separators": ", ",
             "suffix": " %"
           },
-          "[\"name\",\"Средняя, %\"]": {
+          "[\"name\",\"Сигнал, %\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
           }
-        },
-        "graph.metrics": [
-          "Доля ошибок, %",
-          "Средняя, %",
-          "Верхняя граница (UCL), %",
-          "Нижняя граница (LCL), %"
-        ]
+        }
       },
       "sizeX": 24,
-      "sizeY": 6,
+      "sizeY": 7,
       "row": 6,
       "col": 0,
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents_weekly",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Ошибок связи по неделям, %",
+      "description": "Доля документов с ошибкой связи от документов с ответом РЭМД, закрытые недели. Своя шкала: доля в десятые доли процента в стеке «Статусов» не видна. Ошибка связи — сбой транспорта (VPN ГОСТ), отказ РЭМД — содержание СЭМД: у причин разные ответственные, поэтому доли разнесены. Разбор транспорта — дашборд «Интеграция с ЕГИСЗ».",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT week_start AS \"Неделя\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0) AS \"Ошибок связи, %\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "09e10000-0000-4000-8000-000000000062",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Неделя"
+        ],
+        "graph.metrics": [
+          "Ошибок связи, %"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Неделя",
+        "graph.y_axis.title_text": "Ошибок связи, %",
+        "series_settings": {
+          "Ошибок связи, %": {
+            "color": "#F2994A",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Ошибок связи, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 6,
+      "row": 13,
+      "col": 0,
+      "tab": "weekly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents_weekly",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Время до ответа РЭМД по неделям: медиана и 95-й перцентиль, мин",
+      "description": "Время от первой подачи документа до последнего ответа РЭМД (delivery_seconds) по документам с ответом РЭМД — успех или отказ; ошибка связи ответом РЭМД не является. Медиана — типичный документ, 95-й перцентиль — хвост ожидания. Период — по дате итога (обработано IPS), только закрытые недели. Шкала логарифмическая: медиана измеряется секундами, хвост — часами.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH calendar AS MATERIALIZED (SELECT public.report_timezone() AS tz) SELECT date_trunc('week', rpt_documents.ips_date AT TIME ZONE calendar.tz)::date AS \"Неделя\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM public.rpt_documents CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND rpt_documents.ips_date < (date_trunc('week', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "09e10000-0000-4000-8000-000000000072",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Неделя"
+        ],
+        "graph.metrics": [
+          "Медиана, мин",
+          "95-й перцентиль, мин"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Неделя",
+        "graph.y_axis.title_text": "Минут (логарифмическая шкала)",
+        "series_settings": {
+          "Медиана, мин": {
+            "color": "#509EE3",
+            "line.style": "solid"
+          },
+          "95-й перцентиль, мин": {
+            "color": "#7172AD",
+            "line.style": "dashed"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Медиана, мин\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " мин"
+          },
+          "[\"name\",\"95-й перцентиль, мин\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " мин"
+          }
+        },
+        "graph.y_axis.scale": "log"
+      },
+      "sizeX": 12,
+      "sizeY": 6,
+      "row": 13,
+      "col": 12,
+      "tab": "weekly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1515,42 +1810,51 @@
           "Неделя",
           "Категория ошибки"
         ],
+        "graph.metrics": [
+          "Документов с ошибкой"
+        ],
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Неделя",
         "graph.y_axis.title_text": "Документов с ошибкой",
         "series_settings": {
-          "Ошибки справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Ошибки связи": {
-            "color": "#499894"
-          },
           "Данные пациента": {
             "color": "#4E79A7"
-          },
-          "Ошибки получения файла ЭМД": {
-            "color": "#FF9DA7"
           },
           "Данные медработника": {
             "color": "#59A14F"
           },
-          "Ошибки организации / ИС": {
-            "color": "#76B7B2"
-          },
           "Ошибки структуры и валидации": {
             "color": "#B07AA1"
+          },
+          "Ошибки справочника НСИ": {
+            "color": "#EDC948"
           },
           "Ошибки регистрации в РЭМД": {
             "color": "#E15759"
           },
+          "Ошибки организации / ИС": {
+            "color": "#76B7B2"
+          },
+          "Ошибки получения файла ЭМД": {
+            "color": "#FF9DA7"
+          },
           "Ошибки ЭП и сертификатов": {
             "color": "#F28E2B"
           },
-          "Прочие": {
-            "color": "#BAB0AC"
-          },
           "Технические ошибки РЭМД": {
             "color": "#9C755F"
+          },
+          "Ошибки связи": {
+            "color": "#499894"
+          },
+          "Ошибки ИЭМК": {
+            "color": "#8CD17D"
+          },
+          "Ошибки ФРЛЛО": {
+            "color": "#D7B5A6"
+          },
+          "Прочие": {
+            "color": "#BAB0AC"
           }
         },
         "stackable.stack_type": "stacked",
@@ -1559,14 +1863,11 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        },
-        "graph.metrics": [
-          "Документов с ошибкой"
-        ]
+        }
       },
       "sizeX": 24,
       "sizeY": 6,
-      "row": 12,
+      "row": 19,
       "col": 0,
       "tab": "weekly",
       "metabase-field-filters": {
@@ -1577,12 +1878,65 @@
       }
     },
     {
-      "name": "Сводка по неделям",
-      "description": "Неделя, объём корпуса, успешные, с ошибкой, доля ошибок и её изменение к предыдущей неделе (п.п.). Единица — логический документ (текущая версия); неделя — понедельник МСК по дате обработки IPS; корпус — документы с ответом РЭМД (без «в обработке»). Текущая незакрытая неделя помечена «идёт». Вкладка показывает всю историю, фильтр «Обработано IPS» на неё не действует.",
+      "name": "Новые подключения по неделям",
+      "description": "Новые клиники (JID) по неделе первого документа: сколько подключилось, у скольких уже есть успешный СЭМД, медиана дней от первого документа до первого успешного СЭМД (по JID с успехом) и доля успеха по документам первых 30 дней от документов с ответом РЭМД. Доля заполняется, когда тридцатидневное окно закрыто у всех JID когорты. JID, приславшие первый документ в первые 30 дней истории DWH, в когорты не входят: начало истории у них — не дата подключения. Срез по клинике действует.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH weekly AS (SELECT week_start, BOOL_AND(is_complete_week) AS is_complete_week, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start), sli AS (SELECT week_start, is_complete_week, docs_total, docs_success, docs_error, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS sli_pct FROM weekly) SELECT week_start AS \"Неделя\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"С ошибкой\", sli_pct AS \"Доля ошибок, %\", ROUND(sli_pct - LAG(sli_pct) OVER (ORDER BY week_start), 1) AS \"Δ SLI, п.п./нед.\", CASE WHEN is_complete_week THEN 'закрыта' ELSE 'идёт' END AS \"Неделя закрыта\" FROM sli ORDER BY week_start DESC",
+          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM public.rpt_documents), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('week', first_doc.first_at AT TIME ZONE public.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(rpt_documents.registered_at) FILTER (WHERE rpt_documents.status = 'success') AS first_ok, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status = 'success' AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status IN ('success', 'async_error', 'network_error') AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN public.rpt_documents ON rpt_documents.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Неделя подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "09e10000-0000-4000-8000-000000000082",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Новых JID\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"С первым успехом\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"До первого успеха (медиана), дн.\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Доля успеха за первые 30 дней, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 5,
+      "row": 25,
+      "col": 0,
+      "tab": "weekly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Сводка по неделям",
+      "description": "Неделя, объём корпуса, успешные, отказы РЭМД и ошибки связи — в штуках и долях, итоговая доля ошибок и её изменение к предыдущему периоду (п.п.), сигнал контрольной карты (сработавшие правила). Отказ РЭМД — содержание СЭМД, ошибка связи — транспорт: у причин разные ответственные; итоговая доля ошибок — показатель уровня сервиса за закрытый период. Единица — логический документ (текущая версия); период — понедельник МСК по дате обработки IPS; корпус — документы с ответом РЭМД (без «в обработке»). Незакрытый период помечен «идёт». Вкладка показывает всю историю, фильтр «Обработано IPS» на неё не действует.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules), periods AS (SELECT week_start AS period_start, BOOL_AND(is_complete_week) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_async_error)::bigint AS docs_async_error, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Неделя\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_async_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_async_error / NULLIF(docs_total, 0), 1) AS \"Отказов РЭМД, %\", ROUND(100.0 * docs_network_error / NULLIF(docs_total, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./нед.\", signals.signal_rules AS \"Сигнал XmR\", CASE WHEN is_complete THEN 'закрыта' ELSE 'идёт' END AS \"Неделя закрыта\" FROM shares LEFT JOIN signals ON signals.period_start = shares.period_start ORDER BY shares.period_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1598,33 +1952,47 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Δ SLI, п.п./нед.\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " п.п."
-          },
           "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Доля ошибок, %\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"С ошибкой\"]": {
             "decimals": 0,
             "number_separators": ", "
           },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"Отказов РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Ошибок связи\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Отказов РЭМД, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибок связи, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Доля ошибок, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Δ доли ошибок, п.п./нед.\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " п.п."
           }
         }
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 18,
+      "row": 30,
       "col": 0,
       "tab": "weekly",
       "metabase-field-filters": {
@@ -1636,11 +2004,11 @@
     },
     {
       "name": "Статусы по месяцам",
-      "description": "Состав исходов регистрации по месяцам в долях от документов с ответом РЭМД: успех + ошибка асинхронного ответа РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые месяцы — при малом числе закрытых месяцев ряд короткий.",
+      "description": "Состав исходов регистрации по месяцам в долях от документов с ответом РЭМД: успех + отказ РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без результата) исключено. Только закрытые месяцы — при малом их числе ряд короткий.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка асинхронного ответа РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\", ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Ошибка связи\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1655,16 +2023,36 @@
       },
       "display": "area",
       "visualization_settings": {
-        "graph.y_axis.title_text": "Доля документов, %",
-        "graph.show_values": false,
-        "graph.x_axis.title_text": "Месяц",
+        "graph.dimensions": [
+          "Месяц"
+        ],
         "graph.metrics": [
           "Успешно",
-          "Ошибка асинхронного ответа РЭМД",
+          "Отказ РЭМД",
           "Ошибка связи"
         ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Месяц",
+        "graph.y_axis.title_text": "Доля документов, %",
+        "series_settings": {
+          "Успешно": {
+            "color": "#84BB4C"
+          },
+          "Отказ РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          }
+        },
         "column_settings": {
-          "[\"name\",\"Ошибка асинхронного ответа РЭМД\"]": {
+          "[\"name\",\"Успешно\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Отказ РЭМД\"]": {
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
@@ -1673,28 +2061,8 @@
             "decimals": 1,
             "number_separators": ", ",
             "suffix": " %"
-          },
-          "[\"name\",\"Успешно\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
           }
         },
-        "series_settings": {
-          "Ошибка асинхронного ответа РЭМД": {
-            "color": "#A989C5"
-          },
-          "Ошибка связи": {
-            "color": "#F2994A"
-          },
-          "Успешно": {
-            "color": "#84BB4C"
-          }
-        },
-        "graph.x_axis.scale": "timeseries",
-        "graph.dimensions": [
-          "Месяц"
-        ],
         "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
@@ -1711,11 +2079,11 @@
     },
     {
       "name": "Объём документов по месяцам",
-      "description": "Объём документов по месяцам в разрезе исхода (успех / с ошибкой) — знаменатель для интерпретации доли ошибок. Ряд «В обработке» — очередь ожидания на конец своего месяца (МСК), поэтому значения закрытых месяцев не меняются. «Ответ не получен (утилизирован)» в объём не входит: ответа по этим документам уже не будет, они разбираются на вкладке «Отправленные».",
+      "description": "Объём документов по месяцам в разрезе исхода (успех / отказ РЭМД / ошибка связи) — знаменатель для интерпретации долей. Ряд «В обработке» — очередь ожидания на конец своего месяца (МСК), поэтому значения закрытых периодов не меняются. «Ответ не получен (утилизирован)» в объём не входит: ответа по этим документам уже не будет, они разбираются на вкладке «Отправленные».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"С ошибкой\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_async_error)::bigint AS \"Отказ РЭМД\", SUM(docs_network_error)::bigint AS \"Ошибка связи\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1733,36 +2101,49 @@
         "graph.dimensions": [
           "Месяц"
         ],
+        "graph.metrics": [
+          "Успешно",
+          "Отказ РЭМД",
+          "Ошибка связи",
+          "В обработке"
+        ],
+        "graph.show_values": false,
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Месяц",
         "graph.y_axis.title_text": "Документов",
         "series_settings": {
-          "В обработке": {
-            "color": "#A6C8E8"
-          },
-          "С ошибкой": {
-            "color": "#E15759"
-          },
           "Успешно": {
             "color": "#84BB4C"
+          },
+          "Отказ РЭМД": {
+            "color": "#A989C5"
+          },
+          "Ошибка связи": {
+            "color": "#F2994A"
+          },
+          "В обработке": {
+            "color": "#A6C8E8"
           }
         },
-        "stackable.stack_type": "stacked",
         "column_settings": {
-          "[\"name\",\"С ошибкой\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"Отказ РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Ошибка связи\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"В обработке\"]": {
+            "decimals": 0,
+            "number_separators": ", "
           }
         },
-        "graph.metrics": [
-          "Успешно",
-          "С ошибкой",
-          "В обработке"
-        ]
+        "stackable.stack_type": "stacked"
       },
       "sizeX": 12,
       "sizeY": 6,
@@ -1772,6 +2153,133 @@
       "metabase-field-filters": {
         "jid": {
           "table_ref": "public.rpt_documents_monthly",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Ошибок связи по месяцам, %",
+      "description": "Доля документов с ошибкой связи от документов с ответом РЭМД, закрытые месяцы. Своя шкала: доля в десятые доли процента в стеке «Статусов» не видна. Ошибка связи — сбой транспорта (VPN ГОСТ), отказ РЭМД — содержание СЭМД: у причин разные ответственные, поэтому доли разнесены. Разбор транспорта — дашборд «Интеграция с ЕГИСЗ».",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "SELECT month_start AS \"Месяц\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0) AS \"Ошибок связи, %\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e20000-0000-4000-8000-000000000062",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Месяц"
+        ],
+        "graph.metrics": [
+          "Ошибок связи, %"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Месяц",
+        "graph.y_axis.title_text": "Ошибок связи, %",
+        "series_settings": {
+          "Ошибок связи, %": {
+            "color": "#F2994A",
+            "line.interpolate": "linear",
+            "line.size": "M",
+            "line.style": "solid"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Ошибок связи, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 12,
+      "sizeY": 6,
+      "row": 6,
+      "col": 0,
+      "tab": "monthly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents_monthly",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Время до ответа РЭМД по месяцам: медиана и 95-й перцентиль, мин",
+      "description": "Время от первой подачи документа до последнего ответа РЭМД (delivery_seconds) по документам с ответом РЭМД — успех или отказ; ошибка связи ответом РЭМД не является. Медиана — типичный документ, 95-й перцентиль — хвост ожидания. Период — по дате итога (обработано IPS), только закрытые месяцы. Шкала логарифмическая: медиана измеряется секундами, хвост — часами.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH calendar AS MATERIALIZED (SELECT public.report_timezone() AS tz) SELECT date_trunc('month', rpt_documents.ips_date AT TIME ZONE calendar.tz)::date AS \"Месяц\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM public.rpt_documents CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND rpt_documents.ips_date < (date_trunc('month', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e20000-0000-4000-8000-000000000072",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "line",
+      "visualization_settings": {
+        "graph.dimensions": [
+          "Месяц"
+        ],
+        "graph.metrics": [
+          "Медиана, мин",
+          "95-й перцентиль, мин"
+        ],
+        "graph.show_values": false,
+        "graph.x_axis.scale": "timeseries",
+        "graph.x_axis.title_text": "Месяц",
+        "graph.y_axis.title_text": "Минут (логарифмическая шкала)",
+        "series_settings": {
+          "Медиана, мин": {
+            "color": "#509EE3",
+            "line.style": "solid"
+          },
+          "95-й перцентиль, мин": {
+            "color": "#7172AD",
+            "line.style": "dashed"
+          }
+        },
+        "column_settings": {
+          "[\"name\",\"Медиана, мин\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " мин"
+          },
+          "[\"name\",\"95-й перцентиль, мин\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " мин"
+          }
+        },
+        "graph.y_axis.scale": "log"
+      },
+      "sizeX": 12,
+      "sizeY": 6,
+      "row": 6,
+      "col": 12,
+      "tab": "monthly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1801,42 +2309,51 @@
           "Месяц",
           "Категория ошибки"
         ],
+        "graph.metrics": [
+          "Документов с ошибкой"
+        ],
         "graph.x_axis.scale": "timeseries",
         "graph.x_axis.title_text": "Месяц",
         "graph.y_axis.title_text": "Документов с ошибкой",
         "series_settings": {
-          "Ошибки справочника НСИ": {
-            "color": "#EDC948"
-          },
-          "Ошибки связи": {
-            "color": "#499894"
-          },
           "Данные пациента": {
             "color": "#4E79A7"
-          },
-          "Ошибки получения файла ЭМД": {
-            "color": "#FF9DA7"
           },
           "Данные медработника": {
             "color": "#59A14F"
           },
-          "Ошибки организации / ИС": {
-            "color": "#76B7B2"
-          },
           "Ошибки структуры и валидации": {
             "color": "#B07AA1"
+          },
+          "Ошибки справочника НСИ": {
+            "color": "#EDC948"
           },
           "Ошибки регистрации в РЭМД": {
             "color": "#E15759"
           },
+          "Ошибки организации / ИС": {
+            "color": "#76B7B2"
+          },
+          "Ошибки получения файла ЭМД": {
+            "color": "#FF9DA7"
+          },
           "Ошибки ЭП и сертификатов": {
             "color": "#F28E2B"
           },
-          "Прочие": {
-            "color": "#BAB0AC"
-          },
           "Технические ошибки РЭМД": {
             "color": "#9C755F"
+          },
+          "Ошибки связи": {
+            "color": "#499894"
+          },
+          "Ошибки ИЭМК": {
+            "color": "#8CD17D"
+          },
+          "Ошибки ФРЛЛО": {
+            "color": "#D7B5A6"
+          },
+          "Прочие": {
+            "color": "#BAB0AC"
           }
         },
         "stackable.stack_type": "stacked",
@@ -1845,14 +2362,11 @@
             "decimals": 0,
             "number_separators": ", "
           }
-        },
-        "graph.metrics": [
-          "Документов с ошибкой"
-        ]
+        }
       },
       "sizeX": 24,
       "sizeY": 6,
-      "row": 6,
+      "row": 12,
       "col": 0,
       "tab": "monthly",
       "metabase-field-filters": {
@@ -1863,12 +2377,65 @@
       }
     },
     {
-      "name": "Сводка по месяцам",
-      "description": "Месяц, объём корпуса, успешные, с ошибкой, доля ошибок и её изменение к предыдущему месяцу (п.п.). Единица — логический документ (текущая версия); месяц — первое число месяца МСК по дате обработки IPS; корпус — документы с ответом РЭМД (без «в обработке»). Текущий незакрытый месяц помечен «идёт». Контрольная карта по месяцам появится после накопления 12 закрытых месяцев. Вкладка показывает всю историю, фильтр «Обработано IPS» на неё не действует.",
+      "name": "Новые подключения по месяцам",
+      "description": "Новые клиники (JID) по месяцу первого документа: сколько подключилось, у скольких уже есть успешный СЭМД, медиана дней от первого документа до первого успешного СЭМД (по JID с успехом) и доля успеха по документам первых 30 дней от документов с ответом РЭМД. Доля заполняется, когда тридцатидневное окно закрыто у всех JID когорты. JID, приславшие первый документ в первые 30 дней истории DWH, в когорты не входят: начало истории у них — не дата подключения. Срез по клинике действует.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH monthly AS (SELECT month_start, BOOL_AND(is_complete_month) AS is_complete_month, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start), sli AS (SELECT month_start, is_complete_month, docs_total, docs_success, docs_error, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS sli_pct FROM monthly) SELECT month_start AS \"Месяц\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"С ошибкой\", sli_pct AS \"Доля ошибок, %\", ROUND(sli_pct - LAG(sli_pct) OVER (ORDER BY month_start), 1) AS \"Δ SLI, п.п./мес.\", CASE WHEN is_complete_month THEN 'закрыт' ELSE 'идёт' END AS \"Месяц закрыт\" FROM sli ORDER BY month_start DESC",
+          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM public.rpt_documents), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('month', first_doc.first_at AT TIME ZONE public.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(rpt_documents.registered_at) FILTER (WHERE rpt_documents.status = 'success') AS first_ok, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status = 'success' AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status IN ('success', 'async_error', 'network_error') AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN public.rpt_documents ON rpt_documents.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Месяц подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
+          "template-tags": {
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "Клиника",
+              "id": "05e20000-0000-4000-8000-000000000082",
+              "name": "jid",
+              "type": "dimension"
+            }
+          }
+        },
+        "database": 1
+      },
+      "display": "table",
+      "visualization_settings": {
+        "column_settings": {
+          "[\"name\",\"Новых JID\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"С первым успехом\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"До первого успеха (медиана), дн.\"]": {
+            "decimals": 1,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Доля успеха за первые 30 дней, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          }
+        }
+      },
+      "sizeX": 24,
+      "sizeY": 5,
+      "row": 18,
+      "col": 0,
+      "tab": "monthly",
+      "metabase-field-filters": {
+        "jid": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "clinic_label"
+        }
+      }
+    },
+    {
+      "name": "Сводка по месяцам",
+      "description": "Месяц, объём корпуса, успешные, отказы РЭМД и ошибки связи — в штуках и долях, итоговая доля ошибок и её изменение к предыдущему периоду (п.п.). Отказ РЭМД — содержание СЭМД, ошибка связи — транспорт: у причин разные ответственные; итоговая доля ошибок — показатель уровня сервиса за закрытый период. Единица — логический документ (текущая версия); период — первое число месяца МСК по дате обработки IPS; корпус — документы с ответом РЭМД (без «в обработке»). Незакрытый период помечен «идёт». Контрольная карта по месяцам появится после накопления 12 закрытых месяцев. Вкладка показывает всю историю, фильтр «Обработано IPS» на неё не действует.",
+      "dataset_query": {
+        "type": "native",
+        "native": {
+          "query": "WITH periods AS (SELECT month_start AS period_start, BOOL_AND(is_complete_month) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_async_error)::bigint AS docs_async_error, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Месяц\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_async_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_async_error / NULLIF(docs_total, 0), 1) AS \"Отказов РЭМД, %\", ROUND(100.0 * docs_network_error / NULLIF(docs_total, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./мес.\", CASE WHEN is_complete THEN 'закрыт' ELSE 'идёт' END AS \"Месяц закрыт\" FROM shares ORDER BY shares.period_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1884,33 +2451,47 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Δ SLI, п.п./мес.\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " п.п."
-          },
           "[\"name\",\"Документов\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Доля ошибок, %\"]": {
-            "decimals": 1,
-            "number_separators": ", ",
-            "suffix": " %"
-          },
-          "[\"name\",\"С ошибкой\"]": {
             "decimals": 0,
             "number_separators": ", "
           },
           "[\"name\",\"Успешно\"]": {
             "decimals": 0,
             "number_separators": ", "
+          },
+          "[\"name\",\"Отказов РЭМД\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Ошибок связи\"]": {
+            "decimals": 0,
+            "number_separators": ", "
+          },
+          "[\"name\",\"Отказов РЭМД, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Ошибок связи, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Доля ошибок, %\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " %"
+          },
+          "[\"name\",\"Δ доли ошибок, п.п./мес.\"]": {
+            "decimals": 1,
+            "number_separators": ", ",
+            "suffix": " п.п."
           }
         }
       },
       "sizeX": 24,
       "sizeY": 7,
-      "row": 12,
+      "row": 23,
       "col": 0,
       "tab": "monthly",
       "metabase-field-filters": {

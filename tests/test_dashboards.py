@@ -876,6 +876,56 @@ def test_executive_dashboard_has_single_money_note() -> None:
     assert "Замолчавших клиник (нет документов 7 дней)" in names
 
 
+def test_executive_money_cards_are_marked_as_estimates() -> None:
+    """Рублёвые карточки считаются по плоской ставке: «ориентир» стоит в имени, а не только
+    в описании, — сумма не должна читаться как биллинг."""
+    dashboard = _executive_dashboard()
+    money = [
+        c["name"] for c in dashboard["cards"]
+        if c.get("display") != "text" and ("₽" in c["name"] or "MRR" in c["name"])
+    ]
+    assert len(money) == 9, money
+    assert all(name.endswith("(ориентир)") for name in money), money
+
+    retired = json.loads(Path("metabase/retired-objects.json").read_text(encoding="utf-8"))
+    for old in ("MRR за последние 30 дней, ₽", "ARR (MRR × 12), ₽", "MRR замолчавших клиник, ₽"):
+        assert old in retired["cards"], old
+
+
+def test_executive_overview_opens_with_three_statuses() -> None:
+    """Верхний ряд «Обзора» отвечает на три вопроса: растём ли, в норме ли качество,
+    сколько выручки под риском."""
+    overview = _tab_cards("overview", _executive_dashboard())
+    top = sorted((c["col"], c["name"]) for c in overview if c.get("row") == 0)
+    assert [name for _, name in top] == [
+        "Успешных СЭМД за последние 7 дней",
+        "Сигнал XmR за последнюю закрытую неделю",
+        "MRR под риском за последние 30 дней, ₽ (ориентир)",
+    ]
+    by_name = {c["name"]: c for c in overview}
+    growth, signal, risk = (by_name[name] for _, name in top)
+    assert all(c["sizeX"] == 8 for c in (growth, signal, risk))
+
+    # Неделя к неделе по полным суткам: неполные текущие сутки занизили бы сравнение.
+    growth_query = growth["dataset_query"]["native"]["query"]
+    assert growth["display"] == "smartscalar"
+    assert "CURRENT_DATE - 50, CURRENT_DATE - 1, '7 day'::interval" in growth_query
+
+    signal_query = signal["dataset_query"]["native"]["query"]
+    assert "public.dim_control_chart_phases" in signal_query
+    assert "ORDER BY period_start DESC LIMIT 1" in signal_query
+    assert signal["metabase-field-filters"]["jid"]["table_ref"] == "public.rpt_documents_weekly"
+
+    # JID из обоих рабочих списков считается один раз.
+    risk_query = risk["dataset_query"]["native"]["query"]
+    assert "jid IN (SELECT jid FROM silent) OR (ok = 0 AND docs >= 10)" in risk_query
+    assert "{{ips_date}}" not in risk_query
+
+    trend = by_name["MRR под риском по неделям, ₽ (ориентир)"]
+    assert trend["visualization_settings"]["stackable.stack_type"] == "stacked"
+    assert trend["visualization_settings"]["graph.metrics"] == ["Замолчавшие, ₽", "Без успехов, ₽"]
+
+
 def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     queries = _native_queries(dashboard)
@@ -1528,11 +1578,12 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
                     or "Суток с отправки" in col_key
                     or "Суток в очереди" in col_key
                     or "Дней в ожидании" in col_key
+                    or ", дн." in col_key
                 ):
                     expected_decimals = 1
                 elif (
                     "₽ за успешный СЭМД" in col_key
-                    and card_name == "Стоимость успешного СЭМД, ₽"
+                    and card_name == "Стоимость успешного СЭМД, ₽ (ориентир)"
                 ):
                     expected_decimals = 1
                 else:
@@ -2338,10 +2389,20 @@ def test_operational_monitoring_cards_have_no_drill_down() -> None:
 # ---------------------------------------------------------------------------
 
 # Витрины вкладки и число карточек с данными: у месяцев на одну меньше — контрольная
-# карта по месяцам снята до накопления 12 закрытых месяцев.
+# карта по месяцам появится после накопления 12 закрытых месяцев. Время до ответа РЭМД и
+# когорты подключений считаются на грейне документа: перцентили и первые документы JID
+# из периодных счётчиков не собираются.
 _PERIODIC_TABS = {
-    "weekly": ({"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly"}, 5),
-    "monthly": ({"public.rpt_documents_monthly", "public.rpt_error_breakdown_monthly"}, 4),
+    "weekly": (
+        {"public.rpt_documents_weekly", "public.rpt_error_breakdown_weekly",
+         "public.rpt_documents"},
+        8,
+    ),
+    "monthly": (
+        {"public.rpt_documents_monthly", "public.rpt_error_breakdown_monthly",
+         "public.rpt_documents"},
+        7,
+    ),
 }
 
 
@@ -2499,11 +2560,7 @@ def test_status_dynamics_are_stacked_area() -> None:
         assert card["display"] == "area", name
         viz = card["visualization_settings"]
         assert viz["stackable.stack_type"] == "stacked", name
-        assert viz["graph.metrics"] == [
-            "Успешно",
-            "Ошибка асинхронного ответа РЭМД",
-            "Ошибка связи",
-        ], name
+        assert viz["graph.metrics"] == ["Успешно", "Отказ РЭМД", "Ошибка связи"], name
         query = card["dataset_query"]["native"]["query"]
         assert table in query, name
         # Доли от одного знаменателя (docs_total) → в сумме 100 %.
@@ -2513,14 +2570,17 @@ def test_status_dynamics_are_stacked_area() -> None:
 
 
 def test_volume_dynamics_exclude_no_response() -> None:
-    """Объём по периодам: исходы с ответом плюс «В обработке». «Без ответа»
-    (docs_no_response) в динамику не выводится — эти документы ответа уже не получат."""
+    """Объём по периодам: исходы с ответом плюс «В обработке»; отказ РЭМД и ошибка связи —
+    отдельными рядами, у причин разные ответственные. «Без ответа» (docs_no_response) в
+    динамику не выводится — эти документы ответа уже не получат."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
     for name in ("Объём документов по неделям", "Объём документов по месяцам"):
         card = by_name[name]
         viz = card["visualization_settings"]
-        assert viz["graph.metrics"] == ["Успешно", "С ошибкой", "В обработке"], name
+        assert viz["graph.metrics"] == ["Успешно", "Отказ РЭМД", "Ошибка связи", "В обработке"]
         query = card["dataset_query"]["native"]["query"]
+        assert "SUM(docs_async_error)" in query and "SUM(docs_network_error)" in query, name
+        assert "SUM(docs_error)" not in query, name
         assert "SUM(docs_pending)" in query, name
         assert "docs_no_response" not in query, name
         assert "docs_sent" not in query, name
@@ -2557,7 +2617,8 @@ def test_weekly_sql_layer_contract() -> None:
 
 
 def test_periodic_sli_is_ratio_of_sums() -> None:
-    """SLI — отношение сумм за период, а не среднее от долей."""
+    """Доли сводки — отношение сумм за период, а не среднее от долей; отказы РЭМД и ошибки
+    связи разделены, итоговая доля ошибок остаётся показателем уровня сервиса."""
     by_name = {
         c.get("name"): c for c in _executive_dashboard()["cards"] if c.get("display") != "text"
     }
@@ -2566,47 +2627,79 @@ def test_periodic_sli_is_ratio_of_sums() -> None:
         ("Сводка по месяцам", "month_start"),
     ):
         summary_query = by_name[summary_name]["dataset_query"]["native"]["query"]
+        assert f"SELECT {period_field} AS period_start" in summary_query
         assert "ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1)" in summary_query
-        assert f"LAG(sli_pct) OVER (ORDER BY {period_field})" in summary_query
+        assert 'NULLIF(docs_total, 0), 1) AS "Отказов РЭМД, %"' in summary_query
+        assert 'NULLIF(docs_total, 0), 1) AS "Ошибок связи, %"' in summary_query
+        assert "LAG(error_pct) OVER (ORDER BY shares.period_start)" in summary_query
+    # Сигнал XmR есть только у недель: месячной карты нет до 12 закрытых месяцев.
+    assert '"Сигнал XmR"' in by_name["Сводка по неделям"]["dataset_query"]["native"]["query"]
+    assert '"Сигнал XmR"' not in by_name["Сводка по месяцам"]["dataset_query"]["native"]["query"]
 
 
 def test_weekly_control_chart_is_xmr() -> None:
-    """Контрольная карта — XmR по закрытым неделям: центр — средняя доля ошибок, границы —
-    средняя ± 2,66 × средний скользящий размах, LCL не ниже нуля. Биномиальная σ p-карты
-    при 55–75 тыс. документов в неделю в двадцать раз уже фактического разброса недель,
-    поэтому p-карта снята; месячной карты нет до 12 закрытых месяцев."""
+    """XmR по закрытым неделям с фазами: центр и средний скользящий размах — по опорному
+    периоду фазы из dim_control_chart_phases, границы продлеваются вперёд до следующей фазы.
+    Правила серий — внутри фазы, сигнал выводится отдельным рядом-маркером. p-карта снята:
+    биномиальный коридор ±0,5 п.п. против фактического разброса ±3–4 п.п.; месячной карты
+    нет до 12 закрытых месяцев."""
     by_name = {
         c.get("name"): c for c in _executive_dashboard()["cards"] if c.get("display") != "text"
     }
     assert "Контрольная p-карта: доля ошибок по неделям" not in by_name
     assert "Контрольная p-карта: доля ошибок по месяцам" not in by_name
+    assert not any("XmR" in name and "месяц" in name for name in by_name)
 
     control = by_name["Контрольная карта (XmR): доля ошибок по неделям"]
     query = control["dataset_query"]["native"]["query"]
-    assert "public.rpt_documents_weekly" in query
-    assert "is_complete_week" in query
+    assert "public.rpt_documents_weekly" in query and "is_complete_week" in query
     assert "SUM(docs_error)" in query and "SUM(docs_total)" in query
-    assert "ABS(x - LAG(x) OVER (ORDER BY week_start))" in query
-    assert "AVG(x) OVER ()" in query and "AVG(mr) OVER ()" in query
-    assert "x_bar + 2.66 * mr_bar" in query
-    assert "GREATEST(0.0, x_bar - 2.66 * mr_bar)" in query
-    assert "sqrt(" not in query and "PRECEDING" not in query
+    # Фазы — из справочника, а не из SQL карточки; размах не переходит границу фазы.
+    assert "public.dim_control_chart_phases" in query
+    assert "PARTITION BY ph.phase_start ORDER BY s.period_start" in query
+    assert "WHERE period_start BETWEEN baseline_start AND baseline_end" in query
+    # Незакрытый опорный период границ не даёт: иначе они менялись бы с моментом расчёта.
+    assert "AND baseline_end < date_trunc('week', now()" in query
+    assert "OVER ()" not in query and "sqrt(" not in query
+    assert "baseline.cl + 2.66 * baseline.mr_bar" in query
+    assert "GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar)" in query
+    # Правила серий.
+    assert "(x > ucl OR x < lcl) AS r_beyond" in query
+    assert "ROWS BETWEEN 7 PRECEDING AND CURRENT ROW" in query
+    assert "baseline.cl + 1.773 * baseline.mr_bar AS hi2" in query
+    assert "ROWS BETWEEN 2 PRECEDING AND CURRENT ROW" in query
     assert "{{ips_date}}" not in query and "{{jid}}" in query
-    assert "p-карта" in control["description"] and "XmR" in control["description"]
+    description = control["description"]
+    assert "p-карта" in description and "±0,5 п.п." in description
+    assert "dim_control_chart_phases" in description
 
     viz = control["visualization_settings"]
     assert viz["graph.metrics"] == [
         "Доля ошибок, %",
-        "Средняя, %",
+        "Центр, %",
         "Верхняя граница (UCL), %",
         "Нижняя граница (LCL), %",
+        "Сигнал, %",
     ]
     for metric in viz["graph.metrics"]:
         assert f'AS "{metric}"' in query, metric
+    assert viz["series_settings"]["Сигнал, %"]["line.missing"] == "none"
+    assert viz["series_settings"]["Сигнал, %"]["line.marker_enabled"] is True
 
     retired = json.loads(Path("metabase/retired-objects.json").read_text(encoding="utf-8"))
     assert "Контрольная p-карта: доля ошибок по неделям" in retired["cards"]
     assert "Контрольная p-карта: доля ошибок по месяцам" in retired["cards"]
+
+
+def test_control_chart_phases_are_state_declarative() -> None:
+    """Фазы задаёт только файл схемы: создание идемпотентно, строки приводятся к списку
+    файла. Опорный период — даты, а не «последние N периодов»."""
+    schema = Path("db/01_schema.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS dim_control_chart_phases" in schema
+    assert "ON CONFLICT (period_grain, phase_start) DO UPDATE SET" in schema
+    assert "DELETE FROM dim_control_chart_phases" in schema
+    assert "CHECK (baseline_start >= phase_start AND baseline_end >= baseline_start)" in schema
+    assert "('week', DATE '2026-07-13', DATE '2026-07-13', DATE '2026-08-03'" in schema
 
 
 def test_error_type_drill_uses_canonical_type() -> None:
