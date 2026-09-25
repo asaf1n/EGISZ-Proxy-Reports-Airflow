@@ -3022,6 +3022,60 @@ def apply_error_type_filters(dash: dict) -> None:
         }
 
 
+OPERATIONAL_EXTRA_FILTERS = {
+    "status": "[[AND {{status}}]]",
+    "pending_segment": "[[AND {{pending_segment}}]]",
+    # Документ отбирается один раз, сколько бы его ошибок ни подошло под выбранные типы.
+    "error_type": (
+        "[[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown "
+        "WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]"
+    ),
+}
+
+OPERATIONAL_EXTRA_FIELD_FILTERS = {
+    "status": DOCUMENTS_FILTER_FIELD_FILTERS["status"],
+    "pending_segment": {"table_ref": "public.rpt_documents", "field_name": "pending_segment_label"},
+    "error_type": {"table_ref": "public.rpt_error_breakdown", "field_name": "error_type"},
+}
+
+
+def apply_operational_filters(dash: dict) -> None:
+    """Все фильтры вкладки «Оперативный мониторинг» действуют на каждую её карточку.
+
+    Условие встаёт в отбор документов (первый блок фильтров по rpt_documents), поэтому
+    знаменатели долей считаются от того же отобранного набора, что и числители. Очередь
+    (карточка без периода) не трогается: это текущее состояние документов без исхода,
+    и её набор общий с карточками очереди вкладки «Отправленные». Одноимённые карточки
+    других вкладок — та же карточка Metabase и получают те же условия.
+    """
+    tag_defs = {
+        "status": DOCUMENTS_FILTER_TEMPLATE_TAGS["status"],
+        "pending_segment": SENT_FILTER_TEMPLATE_TAGS["pending_segment"],
+        "error_type": ERROR_TYPE_CLINIC_TEMPLATE_TAGS["error_type"],
+    }
+    operational_names = {c.get("name") for c in dash.get("cards", []) if c.get("tab") == "operational"}
+    for card in dash.get("cards", []):
+        native = card.get("dataset_query", {}).get("native")
+        if card.get("name") not in operational_names or not native:
+            continue
+        query = native["query"]
+        anchor = "[[AND {{jid}}]]"
+        if ("FROM public.rpt_documents" not in query or anchor not in query
+                or "{{ips_date}}" not in query):
+            continue
+        missing = [key for key in OPERATIONAL_EXTRA_FILTERS if "{{" + key + "}}" not in query]
+        if not missing:
+            continue
+        pos = query.index(anchor, query.index("FROM public.rpt_documents")) + len(anchor)
+        query = query[:pos] + "".join(" " + OPERATIONAL_EXTRA_FILTERS[k] for k in missing) + query[pos:]
+        native["query"] = query
+        tags = native.setdefault("template-tags", {})
+        field_filters = card.setdefault("metabase-field-filters", {})
+        for key in missing:
+            tags[key] = deepcopy(tag_defs[key])
+            field_filters[key] = deepcopy(OPERATIONAL_EXTRA_FIELD_FILTERS[key])
+
+
 def apply_01(dash: dict) -> None:
     ensure_dashboard_parameters(dash)
     dash["description"] = (
@@ -3139,6 +3193,7 @@ def apply_01(dash: dict) -> None:
     # (pending_segment вместо status), который общий проход не должен переписывать.
     apply_sent_tab(dash)
     apply_error_type_filters(dash)
+    apply_operational_filters(dash)
 
 
 # ── Управленческий дашборд, вкладка «Обзор» ──────────────────────────────────────────

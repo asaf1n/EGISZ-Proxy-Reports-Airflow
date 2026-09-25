@@ -84,7 +84,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\", error_text AS \"ns2_error\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
+          "query": "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\", error_text AS \"ns2_error\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -115,6 +115,21 @@
               "id": "f2000099-0099-4099-8099-000000000012",
               "name": "status",
               "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -221,6 +236,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -230,7 +253,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -253,6 +276,29 @@
               "id": "f2000099-0099-4099-8099-000000000010",
               "name": "semd_type",
               "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f2000099-0099-4099-8099-000000000012",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -337,6 +383,18 @@
         "jid": {
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -347,7 +405,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort",
+          "query": "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -370,6 +428,29 @@
               "id": "f2000099-0099-4099-8099-000000000011",
               "name": "jid",
               "required": false,
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f2000099-0099-4099-8099-000000000012",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -463,6 +544,18 @@
         "jid": {
           "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -472,7 +565,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -502,6 +595,22 @@
               "display-name": "Тип ошибки",
               "id": "fb050601-0601-4601-8601-000000000004",
               "name": "error_type",
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f2000099-0099-4099-8099-000000000012",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
               "type": "dimension"
             }
           }
@@ -631,6 +740,14 @@
         "error_type": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_type"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
         }
       }
     },
@@ -640,7 +757,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error'))::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -668,6 +785,21 @@
               "display-name": "Статус",
               "id": "fb040501-0501-4501-8501-000000000004",
               "name": "status",
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -767,6 +899,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -776,7 +916,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -804,6 +944,21 @@
               "display-name": "Статус",
               "id": "f2000002-0002-4002-8002-000000000016",
               "name": "status",
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -889,6 +1044,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -898,7 +1061,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -926,6 +1089,21 @@
               "display-name": "Статус",
               "id": "fb040401-0401-4401-8401-000000000004",
               "name": "status",
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -1032,6 +1210,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -1041,7 +1227,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), 35) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error','network_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), 35) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
           "template-tags": {
             "semd_type": {
               "id": "fc000004-0004-4004-8004-000000000010",
@@ -1073,6 +1259,21 @@
               "type": "dimension",
               "widget-type": "string/=",
               "display-name": "Статус"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
+              "type": "dimension"
             }
           }
         },
@@ -1154,6 +1355,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -1163,7 +1372,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', ips_date)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err FROM public.rpt_documents WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', ips_date)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err FROM public.rpt_documents WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1184,6 +1393,29 @@
               "display-name": "Тип СЭМД (код НСИ)",
               "id": "fb040301-0301-4301-8301-000000000003",
               "name": "semd_type",
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f2000099-0099-4099-8099-000000000012",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -1239,6 +1471,18 @@
         "semd_type": {
           "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       }
     },
@@ -2971,7 +3215,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown INNER JOIN period_docs USING (dwh_id))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3001,6 +3245,22 @@
               "display-name": "Тип ошибки",
               "id": "fb050601-0601-4601-8601-000000000004",
               "name": "error_type",
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f2000099-0099-4099-8099-000000000012",
+              "name": "status",
+              "required": false,
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
               "type": "dimension"
             }
           }
@@ -3130,6 +3390,14 @@
         "error_type": {
           "table_ref": "public.rpt_error_breakdown",
           "field_name": "error_type"
+        },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
         }
       }
     },
@@ -4301,7 +4569,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4329,6 +4597,21 @@
               "display-name": "Статус",
               "id": "f2000002-0002-4002-8002-000000000016",
               "name": "status",
+              "type": "dimension"
+            },
+            "pending_segment": {
+              "widget-type": "string/=",
+              "display-name": "Срок ожидания",
+              "id": "f2000099-0099-4099-8099-000000000014",
+              "name": "pending_segment",
+              "required": false,
+              "type": "dimension"
+            },
+            "error_type": {
+              "widget-type": "string/=",
+              "display-name": "Тип ошибки",
+              "id": "fb050601-0601-4601-8601-000000000004",
+              "name": "error_type",
               "type": "dimension"
             }
           }
@@ -4414,6 +4697,14 @@
         "status": {
           "table_ref": "public.rpt_documents",
           "field_name": "status_detail_label"
+        },
+        "pending_segment": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "pending_segment_label"
+        },
+        "error_type": {
+          "table_ref": "public.rpt_error_breakdown",
+          "field_name": "error_type"
         }
       },
       "metabase-model-drill-params": {
