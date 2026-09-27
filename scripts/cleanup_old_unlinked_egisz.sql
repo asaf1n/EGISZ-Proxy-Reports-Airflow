@@ -141,11 +141,7 @@ ANALYZE public.exchangelog_parse_attempts;
 ANALYZE public.exchangelog_raw;
 ANALYZE public.dim_message_document;
 
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
-REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
-REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
-REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
+SELECT public.refresh_report_marts();
 \else
 ROLLBACK;
 \echo dry run only; pass -v apply_cleanup=true to delete candidates

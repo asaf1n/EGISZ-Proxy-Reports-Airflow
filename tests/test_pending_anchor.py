@@ -99,8 +99,8 @@ def test_membership_and_segment_have_one_definition() -> None:
     # Предикат — сравнение трёх отметок времени, справочник он не читает.
     assert "IMMUTABLE" in membership
     assert "dim_pending_segments" not in membership
-    # Прежняя сигнатура снимается: иначе обе версии сосуществовали бы как перегрузки.
-    assert "DROP FUNCTION IF EXISTS public.is_pending_at(timestamptz, numeric, timestamptz);" in FUNCTIONS_SQL
+    # Одна сигнатура: вторая версия сосуществовала бы с первой как перегрузка.
+    assert FUNCTIONS_SQL.count("FUNCTION public.is_pending_at(") == 1
 
     segment = function_body("pending_segment_code_at")
     # Пороги остаются данными справочника: ужесточение делается UPDATE'ом.
@@ -126,10 +126,12 @@ def test_first_response_is_persisted_not_derived_from_last_callback() -> None:
     schema_sql = (ROOT / "db" / "01_schema.sql").read_text(encoding="utf-8")
     transform_sql = (ROOT / "db" / "03_transform.sql").read_text(encoding="utf-8")
 
-    assert "ADD COLUMN IF NOT EXISTS first_callback_at timestamptz" in schema_sql
+    documents_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS documents ("):]
+    assert "first_callback_at timestamptz," in documents_ddl[:documents_ddl.index(");")]
     assert "idx_documents_first_callback_at" in schema_sql
-    # Отметка только уменьшается: повторный ответ первого не отменяет.
-    assert transform_sql.count("first_callback_at = LEAST(") == 2
+    # Отметку ставит только асинхронный ответ и только уменьшает: повторный ответ первого
+    # не отменяет.
+    assert transform_sql.count("first_callback_at = LEAST(") == 1
     assert "MIN(f.log_date) OVER (PARTITION BY f.dwh_id)" in transform_sql
     assert "d.first_callback_at," in VIEWS_SQL
 

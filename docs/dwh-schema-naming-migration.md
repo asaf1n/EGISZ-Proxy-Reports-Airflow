@@ -38,11 +38,11 @@
 |---|---|
 | `etl_meta` | отметки конвейера, состояние разбора |
 | `raw_egisz` | копия журнала и реестров шлюза (Firebird `proxy_egisz`) |
-| `raw_nsi` | копии федеральных справочников НСИ (1461, 305) |
-| `stg_egisz` | разбор журнала, правила классификации, соответствия клиник |
+| `raw_nsi` | копии федеральных справочников НСИ (1461) |
+| `stg_egisz` | разбор журнала, текущие ошибки документа, соответствия клиник |
 | `stg_common` | межсистемные соответствия |
 | `mart_common` | согласованные измерения (организация) |
-| `mart_egisz` | факты, мосты, агрегаты домена |
+| `mart_egisz` | документы, сообщения обмена, справочники и агрегаты домена |
 | `mart_egisz_selfservice` | опубликованный слой для Metabase и ИИ |
 | `mart_egisz_admin` | контроль качества и эксплуатация |
 
@@ -65,7 +65,6 @@
 | `public.dim_licenses` | `raw_egisz.egisz_license` | строка `EGISZ_LICENSES` | |
 | `public.dim_organizations` | `raw_egisz.jperson` + `mart_common.dim_organization` | юридическое лицо | требует разделения, см. §3.1 |
 | `public.dim_nsi_organization` | `raw_nsi.organization_1461` | запись ФРМО | требует разделения, см. §3.1 |
-| `public.dim_nsi_error_code` | `raw_nsi.error_code_305` | код отказа НСИ | |
 | `public.dim_nsi_dictionary` | `raw_nsi.dictionary` | справочник НСИ (OID) | |
 | `public.dim_nsi_semd_guide` | `raw_nsi.semd_guide_638` | руководство по реализации СЭМД | |
 | `public.dim_nsi_semd_guide_alias` | `raw_nsi.semd_guide_alias_638` | синоним OID руководства | |
@@ -75,12 +74,9 @@
 
 | Сейчас | Предлагается | Грейн | Комментарий |
 |---|---|---|---|
-| `public.transactions` | `stg_egisz.exchange_event` | разобранная строка журнала, ключ (logid, log_date) | партиционировано по месяцам |
-| `public.dim_error_rules` | `stg_egisz.error_rule_mapping` | правило классификации | ведётся вручную |
-| `public.dim_error_type_group` | `stg_egisz.error_type_mapping` | канонический тип ошибки | единственный источник «тип → группа» |
+| `public.transactions` | `stg_egisz.exchange_message` | разобранная строка журнала, ключ (logid, log_date) | партиционировано по месяцам |
 | `public.dim_clinic_oid` | `stg_egisz.clinic_oid_mapping` | пара OID → JID | представление |
 | `public.dim_clinic_endpoint` | `stg_egisz.clinic_endpoint_mapping` | пара адрес → JID | представление |
-| `public.dim_nsi_error_code_alias` | `stg_common.nsi_error_code_alias` | псевдоним кода | управляемое соответствие |
 
 ### 2.5 Витринный слой
 
@@ -88,11 +84,8 @@
 |---|---|---|
 | `public.documents` | `mart_egisz.fact_document` | экземпляр (версия) СЭМД |
 | `public.document_attributes` | `mart_egisz.sat_document_attribute` | 1:1 к `fact_document`, персональные реквизиты |
-| `public.rpt_error_breakdown` | `mart_egisz.bridge_document_error` | пара документ × тип ошибки |
 | `public.rpt_documents_weekly` | `mart_egisz.agg_document_weekly` | неделя × клиника |
 | `public.rpt_documents_monthly` | `mart_egisz.agg_document_monthly` | месяц × клиника |
-| `public.rpt_error_breakdown_weekly` | `mart_egisz.agg_document_error_weekly` | неделя × клиника × категория |
-| `public.rpt_error_breakdown_monthly` | `mart_egisz.agg_document_error_monthly` | месяц × клиника × категория |
 | `public.dim_semd_types` | `mart_egisz.dim_semd_type` | тип СЭМД |
 | `public.dim_semd_guide_oid` | `mart_common.semd_guide_oid` | опубликованный OID руководства |
 | `public.rpt_semd_guides` | `mart_egisz.semd_guide` | вид документации |
@@ -101,10 +94,6 @@
 | `public.dim_pending_segments` | `mart_egisz.dim_pending_segment` | срок ожидания ответа |
 | `public.dim_sent_state` | `mart_egisz.dim_sent_state` | состояние отправки |
 
-`rpt_error_breakdown` по стандарту не агрегат: его строка — это пара «документ × тип
-ошибки», связь многие-ко-многим, то есть мост. Материализация сохраняется, обновление
-после трансформации в DAG остаётся без изменений.
-
 ### 2.6 Опубликованный слой
 
 | Сейчас | Предлагается |
@@ -112,12 +101,10 @@
 | `public.rpt_documents` | `mart_egisz_selfservice.document_current` |
 | `public.rpt_document_versions` | `mart_egisz_selfservice.document_version` |
 | `public.rpt_documents_sent` | `mart_egisz_selfservice.document_sent` |
-| `public.rpt_error_breakdown` | `mart_egisz_selfservice.document_error` |
 | `public.rpt_documents_weekly` | `mart_egisz_selfservice.document_weekly` |
 | `public.rpt_documents_monthly` | `mart_egisz_selfservice.document_monthly` |
-| `public.rpt_error_breakdown_weekly` | `mart_egisz_selfservice.document_error_weekly` |
-| `public.rpt_error_breakdown_monthly` | `mart_egisz_selfservice.document_error_monthly` |
-| `public.rpt_network_errors` | `mart_egisz_selfservice.network_error` |
+| `mart_egisz.agg_document_error_weekly` | `mart_egisz_selfservice.document_error_weekly` |
+| `mart_egisz.agg_document_error_monthly` | `mart_egisz_selfservice.document_error_monthly` |
 | `public.rpt_document_file_request` | `mart_egisz_selfservice.document_file_request` |
 | `public.rpt_clinic_nsi_mapping` | `mart_egisz_selfservice.clinic_nsi_mapping` |
 | `public.rpt_clinic_semd_activity` | `mart_egisz_selfservice.clinic_semd_activity` |
@@ -147,6 +134,31 @@
 - границы недель и месяцев, сроки ожидания, метки статусов → `mart_egisz`;
 - точки входа конвейера (`transform_raw_to_facts`, `refresh_report_marts`,
   `ensure_time_partitions`) → `etl_meta`.
+
+### 2.9 Выполнено: обработка ошибок (26.09.2026)
+
+Объекты обработки ошибок разложены по схемам вместе с переработкой модели ошибок
+([решение](dwh-error-taxonomy-audit-2026-09-26.md)). Справочники отнесены к витринному
+слою: в `stg_egisz` остаются только данные разбора.
+
+| Было | Стало | Грейн |
+|---|---|---|
+| `public.dim_nsi_error_code` | `mart_egisz.dim_nsi_error_code` | код НСИ 305 |
+| `public.dim_nsi_error_code_alias` | `mart_egisz.dim_nsi_error_code_alias` | синоним кода |
+| `public.dim_error_rules` | `mart_egisz.dim_error_rules` | правило классификации или шаг маскирования |
+| — | `mart_egisz.dim_error_category` | вид × категория |
+| `public.dim_error_type_group` | `mart_egisz.dim_error_type` | тип ошибки |
+| — | `stg_egisz.document_error_current` | ошибка текущего состояния документа |
+| — | `stg_egisz.message_error` | элемент ошибки разобранного сообщения |
+| `public.rpt_error_breakdown` | `mart_egisz_selfservice.document_error` | ошибка текущего состояния документа |
+| `public.rpt_network_errors` | `mart_egisz_selfservice.network_error` | ошибка связи |
+| `public.rpt_error_breakdown_weekly` | `mart_egisz.agg_document_error_weekly` | неделя × клиника × вид × категория |
+| `public.rpt_error_breakdown_monthly` | `mart_egisz.agg_document_error_monthly` | месяц × клиника × вид × категория |
+
+Элементы ошибки остаются в `transactions.error_details` до переноса таблицы в
+`stg_egisz.exchange_message`. Исходный текст ошибки хранится только в слое разбора; дашборды
+читают его оттуда по исключению до решения о доступе. `document_error` материализован прямо в опубликованном слое;
+это отступление от §2.6 закрывается вместе с пунктом 6 замечаний к стандарту.
 
 ## 3. Что требует решения до переезда
 
@@ -185,7 +197,7 @@
 ### 3.4 Срок хранения сырого слоя
 
 Журнал шлюза — 65 % базы и растёт. Срок хранения надо согласовать с потребностью в полном
-перерасчёте фактов: сейчас история пересчитывается из `exchangelog_raw` без повторного
+пересчёте документов и ошибок: сейчас история пересчитывается из `exchangelog_raw` без повторного
 обращения к Firebird, и если раздел журнала удалён, перерасчёт за этот период невозможен.
 Предложение: удерживать полный журнал 24 месяца, старшие разделы выгружать в архив.
 
@@ -240,9 +252,10 @@ Metabase: переименование объекта рвёт привязку 
    объект контура — накопительный снимок жизненного цикла документа: одна строка,
    несколько дат-этапов, строка обновляется. Предлагается добавить
    `fact_<entity>_lifecycle` с обязательным перечнем дат-этапов в описании.
-2. **Нет шаблона для потока событий в staging.** Шаблоны `_current`, `_change`,
-   `_history`, `_mapping`, `_reject` не покрывают нормализованный поток событий одного
-   источника. Предлагается `<entity>_event`.
+2. **Нет шаблона для потока сообщений в staging.** Шаблоны `_current`, `_change`,
+   `_history`, `_mapping`, `_reject` не покрывают разобранный поток сообщений обмена одного
+   источника. Единица обмена — сообщение, отдельных событий нет; предлагается
+   `<entity>_message`.
 3. **Нет шаблона для расширения один к одному.** Отдельная таблица атрибутов с иным
    профилем чувствительности — распространённый приём. Предлагается
    `sat_<entity>_<subject>`: термин принят в Data Vault и не вводит новой сущности.

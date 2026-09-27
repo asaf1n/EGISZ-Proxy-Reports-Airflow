@@ -37,6 +37,12 @@ ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
 GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 
+-- Схемы слоёв корпоративного стандарта: stg_egisz — данные разбора, mart_egisz —
+-- справочники и витрины, mart_egisz_selfservice — опубликованный слой.
+CREATE SCHEMA IF NOT EXISTS stg_egisz;
+CREATE SCHEMA IF NOT EXISTS mart_egisz;
+CREATE SCHEMA IF NOT EXISTS mart_egisz_selfservice;
+
 -- ---------------------------------------------------------------- section: tables
 -- ============================================================================
 -- 10_tables.sql — Tables, dim_semd_types seed, fact + indexes
@@ -44,7 +50,7 @@ GRANT USAGE, CREATE ON SCHEMA public TO egisz;
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- ============================================================================
 
--- Конвейер по существу ETL (выгрузка → загрузка → разбор в факты), поэтому таблица
+-- Конвейер по существу ETL (выгрузка → загрузка → разбор в сообщения и документы), поэтому таблица
 -- состояния называется etl_state. Курсор назван по фазе и объекту, по которому считает:
 -- extract_logid_cursor — позиция выгрузки в журнале шлюза (EXCHANGELOG.LOGID),
 -- extract_egmid_cursor — там же по реестру подач (EGISZ_MESSAGES.EGMID),
@@ -62,47 +68,6 @@ INSERT INTO etl_state (pipeline)
 VALUES ('egisz')
 ON CONFLICT (pipeline) DO NOTHING;
 
--- Каденция задач задаётся расписанием DAG, а не отметками в базе.
-DROP TABLE IF EXISTS etl_job_runs;
-
--- Stored-column migrations below may drop old names (result_msgid, request_msgid,
--- message_id, relates_to_id). Existing rpt objects from previous releases depend on
--- those columns, so remove report-layer dependents before ALTER TABLE ... DROP COLUMN.
-DROP VIEW IF EXISTS public.rpt_health_by_clinic CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_signals CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_message_registry_no_document CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_proxy_db CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_sync CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_versions CASCADE;
-DROP VIEW IF EXISTS public.rpt_network_errors CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_monthly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_monthly CASCADE;
-DO $$
-DECLARE
-    kind "char";
-BEGIN
-    SELECT c.relkind INTO kind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relname = 'rpt_error_breakdown';
-
-    IF kind = 'm' THEN
-        DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE;
-    ELSIF kind IS NOT NULL THEN
-        DROP VIEW public.rpt_error_breakdown CASCADE;
-    END IF;
-END $$;
-DROP VIEW IF EXISTS public.rpt_documents CASCADE;
-DROP VIEW IF EXISTS public.rpt_document_versions CASCADE;
-DROP VIEW IF EXISTS public.rpt_documents_sent CASCADE;
-DROP VIEW IF EXISTS public.rpt_document_file_request CASCADE;
-DROP VIEW IF EXISTS public.rpt_documents_waiting CASCADE;
-DROP VIEW IF EXISTS public.rpt_document_lineage CASCADE;
-DROP VIEW IF EXISTS public.rpt_clinic_semd_licenses CASCADE;
-DROP VIEW IF EXISTS public.rpt_clinic_semd_activity CASCADE;
-
 -- Реестр подач шлюза (EGISZ_MESSAGES): одна строка источника по EGMID.
 -- msgid — ключ подачи; document_uid — localUid РЭМД. Для ИЭМК document_uid не задан.
 CREATE TABLE IF NOT EXISTS dim_message_document (
@@ -114,9 +79,6 @@ CREATE TABLE IF NOT EXISTS dim_message_document (
     loaded_at timestamptz NOT NULL DEFAULT now()
 );
 
-ALTER TABLE dim_message_document DROP CONSTRAINT IF EXISTS dim_message_document_pkey;
-ALTER TABLE dim_message_document ALTER COLUMN msgid DROP NOT NULL;
-ALTER TABLE dim_message_document ALTER COLUMN document_uid DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dim_message_document_egmid_unique
     ON dim_message_document (source_egmid);
 
@@ -140,26 +102,20 @@ BEFORE INSERT OR UPDATE ON public.dim_message_document
 FOR EACH ROW
 EXECUTE FUNCTION public.dim_message_document_guard();
 
-UPDATE public.dim_message_document
-SET document_uid = NULL
-WHERE NULLIF(btrim(document_uid), '') IS NOT NULL
-  AND COALESCE(reply_to, '') ~ ':9921(\D|$)';
-
+-- URI вызова задаёт подсистему ЕГИСЗ: /emdr/callback — РЭМД, /ips/callback — ИЭМК.
+-- Партиции по месяцам createdate; ключ включает ключ партиционирования.
 CREATE TABLE IF NOT EXISTS exchangelog_raw (
-    logid bigint PRIMARY KEY,
+    logid bigint NOT NULL,
     logdate timestamptz,
-    createdate timestamptz,
+    createdate timestamptz NOT NULL DEFAULT now(),
     msgid text,
     logstate integer,
     logtext text,
     msgtext text,
     uri text,
-    loaded_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS createdate timestamptz;
--- URI вызова задаёт подсистему ЕГИСЗ: /emdr/callback — РЭМД, /ips/callback — ИЭМК.
-ALTER TABLE exchangelog_raw ADD COLUMN IF NOT EXISTS uri text;
+    loaded_at timestamptz DEFAULT now(),
+    PRIMARY KEY (logid, createdate)
+) PARTITION BY RANGE (createdate);
 
 -- Маркер попытки парсинга (по LOGID). parse_targets в transform_raw_to_facts должен
 -- отличать «ещё не парсили» от «парсили, но payload без реквизитов»: строки без
@@ -181,8 +137,6 @@ CREATE TABLE IF NOT EXISTS documents (
     result_logid bigint,
     document_created_at timestamptz,
     registered_at timestamptz,
-    error_types text,
-    error_text text,
     patient_hash text,
     doctor_hash text,
     request_logid bigint,
@@ -191,61 +145,33 @@ CREATE TABLE IF NOT EXISTS documents (
     last_callback_at timestamptz,
     last_status text,
     jid bigint,
+    org_oid text,
+    jid_resolve_method text,
+    attempt_count integer,
+    doc_number text,
+    document_group_id text,
+    document_group_confidence text,
+    semd_version_number integer,
+    superseded_by_dwh_id text,
+    supersedes_dwh_id text,
+    is_current_version boolean,
     updated_at timestamptz DEFAULT now()
 );
 
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS local_uid text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS emdr_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_code text;
-ALTER TABLE documents ALTER COLUMN semd_code DROP NOT NULL;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS status text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_details jsonb;
-COMMENT ON COLUMN documents.error_details IS
-    'Элементы последнего ответа: исходные code/message, отображаемый error_type и classification_type для категории. NULL означает, что архив ещё не перенесён; [] — ответ без ошибок.';
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS status_category text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS msgid text;
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'documents'
-                 AND column_name = 'result_msgid') THEN
-        EXECUTE 'UPDATE public.documents SET msgid = COALESCE(msgid, result_msgid) WHERE msgid IS NULL';
-    END IF;
-END $$;
-ALTER TABLE documents DROP COLUMN IF EXISTS result_msgid;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS relates_to_msgid text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS result_logid bigint;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_created_at timestamptz;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS registered_at timestamptz;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_types text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_text text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS patient_hash text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS doctor_hash text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS request_logid bigint;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_sent_at timestamptz;
--- Отметка первого ответа ЕГИСЗ. Выход документа из очереди обработки определяет именно
--- она: last_callback_at несёт последний ответ и перезаписывается каждым повторным
--- коллбэком, поэтому документ, отвеченный за секунды, числился бы в очереди до последнего
--- повтора.
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS first_callback_at timestamptz;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_callback_at timestamptz;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_status text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid bigint;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS org_oid text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS jid_resolve_method text;
--- Число подач документа в ЕГИСЗ (строк реестра dim_message_document на этот localUid).
--- Повторная подача не меняет localUid, поэтому счётчик живёт на экземпляре документа.
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS attempt_count integer;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
--- status_category удалён: полностью выводится из status, downstream-потребителей нет.
-ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
+COMMENT ON TABLE documents IS
+'Экземпляр (версия) СЭМД и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях transactions.';
+COMMENT ON COLUMN documents.first_callback_at IS
+'Время первого асинхронного ответа. Выход документа из очереди обработки определяет оно: last_callback_at перезаписывается каждым повторным ответом.';
+COMMENT ON COLUMN documents.last_callback_at IS
+'Время последнего асинхронного ответа, определившего статус. Ошибки текущего состояния документа — элементы этого ответа и ошибки связи после него.';
+COMMENT ON COLUMN documents.attempt_count IS
+'Число подач документа в ЕГИСЗ — строк реестра dim_message_document на этот localUid: повторная подача localUid не меняет.';
 
--- Слой версий/логического документа.
--- dwh_id (PK) — ЭКЗЕМПЛЯР/ВЕРСИЯ (localUid), меняется при каждой правке/ре-выгрузке.
--- Логический документ собирается по (clinic jid + тип СЭМД + documentNumber=PROTOCOLID).
--- Проверено на базе: пара (jid, doc_number) всегда несёт ровно ОДИН semd_code (это ключ
--- ДОКУМЕНТА, не случая), max 7 версий на группу; CDA setId в журнал не попадает и источником
--- не отдаётся — не используем.
+-- Слой версий логического документа.
+-- dwh_id (PK) — экземпляр/версия (localUid), меняется при каждой правке или ре-выгрузке.
+-- Логический документ собирается по (клиника jid + тип СЭМД + documentNumber = PROTOCOLID):
+-- пара (jid, doc_number) всегда несёт один semd_code, не больше 7 версий на группу;
+-- CDA setId в журнал не попадает и не используется.
 --   doc_number                 — PROTOCOLID (номер протокола/ИБ в МИС), ключ группировки версий
 --   document_group_id          — 'd:'||jid||'|'||semd||'|'||docnum (группа) либо dwh_id (singleton)
 --   document_group_confidence  — провенанс группы: 'doc_number' | 'singleton'
@@ -253,24 +179,15 @@ ALTER TABLE documents DROP COLUMN IF EXISTS status_category;
 --   superseded_by_dwh_id /     — цепочка версий между экземплярами
 --     supersedes_dwh_id
 --   is_current_version         — текущая (последняя) версия своей группы
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_number text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_group_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS document_group_confidence text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS semd_version_number integer;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS superseded_by_dwh_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS supersedes_dwh_id text;
-ALTER TABLE documents ADD COLUMN IF NOT EXISTS is_current_version boolean;
-
 CREATE TABLE IF NOT EXISTS dim_organizations (
     jid bigint PRIMARY KEY,
     name text,
     inn text,
     address text,
-    updated_at timestamptz DEFAULT now()
+    updated_at timestamptz DEFAULT now(),
+    fir_oid text,
+    nsi_name text
 );
-
-ALTER TABLE dim_organizations ADD COLUMN IF NOT EXISTS fir_oid text;
-ALTER TABLE dim_organizations ADD COLUMN IF NOT EXISTS nsi_name text;
 
 COMMENT ON COLUMN dim_organizations.name IS
 'Наименование организации из CASH/JPERSONS.';
@@ -344,15 +261,16 @@ INSERT INTO dim_document_status (code, label, sort_order, is_final)
 VALUES
     ('success', 'Успешно зарегистрирован', 1, true),
     ('async_error', 'Ошибка асинхронного ответа РЭМД', 2, true),
-    ('network_error', 'Ошибка связи', 3, true),
-    ('sent', 'Отправлено', 4, false)
+    ('sent', 'Отправлено', 3, false)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order,
-    is_final = EXCLUDED.is_final;
+    is_final = EXCLUDED.is_final
+WHERE (dim_document_status.label, dim_document_status.sort_order, dim_document_status.is_final)
+      IS DISTINCT FROM (EXCLUDED.label, EXCLUDED.sort_order, EXCLUDED.is_final);
 
 DELETE FROM dim_document_status
-WHERE code NOT IN ('success', 'async_error', 'network_error', 'sent');
+WHERE code NOT IN ('success', 'async_error', 'sent');
 
 -- Ступени возраста обработки для нефинального статуса 'sent'. Ступень ищется как первая
 -- по sort_order с max_age_minutes >= возраста; терминальная ступень (max_age_minutes IS NULL)
@@ -386,7 +304,11 @@ ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     max_age_minutes = EXCLUDED.max_age_minutes,
     sort_order = EXCLUDED.sort_order,
-    is_no_response = EXCLUDED.is_no_response;
+    is_no_response = EXCLUDED.is_no_response
+WHERE (dim_pending_segments.label, dim_pending_segments.max_age_minutes,
+       dim_pending_segments.sort_order, dim_pending_segments.is_no_response)
+      IS DISTINCT FROM
+      (EXCLUDED.label, EXCLUDED.max_age_minutes, EXCLUDED.sort_order, EXCLUDED.is_no_response);
 
 DELETE FROM dim_pending_segments
 WHERE code NOT IN ('p_5m', 'p_1h', 'p_6h', 'p_12h', 'p_24h', 'p_72h', 'p_7d', 'p_15d', 'p_over');
@@ -406,7 +328,9 @@ VALUES
     ('no_response', 'Ответ не получен (утилизирован)', 2)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
-    sort_order = EXCLUDED.sort_order;
+    sort_order = EXCLUDED.sort_order
+WHERE (dim_sent_state.label, dim_sent_state.sort_order)
+      IS DISTINCT FROM (EXCLUDED.label, EXCLUDED.sort_order);
 
 DELETE FROM dim_sent_state WHERE code NOT IN ('pending', 'no_response');
 
@@ -441,7 +365,11 @@ ON CONFLICT (period_grain, phase_start) DO UPDATE SET
     baseline_start = EXCLUDED.baseline_start,
     baseline_end = EXCLUDED.baseline_end,
     label = EXCLUDED.label,
-    condition = EXCLUDED.condition;
+    condition = EXCLUDED.condition
+WHERE (dim_control_chart_phases.baseline_start, dim_control_chart_phases.baseline_end,
+       dim_control_chart_phases.label, dim_control_chart_phases.condition)
+      IS DISTINCT FROM
+      (EXCLUDED.baseline_start, EXCLUDED.baseline_end, EXCLUDED.label, EXCLUDED.condition);
 
 DELETE FROM dim_control_chart_phases
 WHERE (period_grain, phase_start) NOT IN (('week', DATE '2026-07-13'));
@@ -465,26 +393,6 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
 -- ФНСИ выгружает НСИ 1520 с переставленными полями: GIT_LINK несёт OID руководства по реализации,
 -- а IMPLEMENTATION_GUIDE — ссылку на портал ЕГИСЗ. Колонка названа по содержанию, иначе соединение
 -- с реестром руководств выглядит соединением по ссылке и «исправляется» обратно первым же читателем.
-DO $$
-BEGIN
-    IF to_regclass('public.dim_semd_types') IS NOT NULL
-       AND EXISTS (
-           SELECT 1 FROM information_schema.columns
-           WHERE table_schema = 'public'
-             AND table_name = 'dim_semd_types'
-             AND column_name = 'git_link'
-       )
-       AND NOT EXISTS (
-           SELECT 1 FROM information_schema.columns
-           WHERE table_schema = 'public'
-             AND table_name = 'dim_semd_types'
-             AND column_name = 'ig_oid'
-       )
-    THEN
-        EXECUTE 'ALTER TABLE public.dim_semd_types RENAME COLUMN git_link TO ig_oid';
-    END IF;
-END $$;
-
 CREATE TABLE IF NOT EXISTS dim_semd_types (
     code text PRIMARY KEY,
     type_code text,
@@ -813,7 +721,14 @@ ON CONFLICT (code) DO UPDATE SET
     implementation_guide = EXCLUDED.implementation_guide,
     ig_oid = EXCLUDED.ig_oid,
     oid = EXCLUDED.code,
-    updated_at = now();
+    updated_at = now()
+WHERE (dim_semd_types.type_code, dim_semd_types.name, dim_semd_types.level,
+       dim_semd_types.format_code, dim_semd_types.start_date, dim_semd_types.end_date,
+       dim_semd_types.implementation_guide, dim_semd_types.ig_oid, dim_semd_types.oid)
+      IS DISTINCT FROM
+      (EXCLUDED.type_code, EXCLUDED.name, EXCLUDED.level,
+       EXCLUDED.format_code, EXCLUDED.start_date, EXCLUDED.end_date,
+       EXCLUDED.implementation_guide, EXCLUDED.ig_oid, EXCLUDED.code);
 
 UPDATE dim_semd_types
 SET oid = code
@@ -901,7 +816,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_dictionary_dict_oid
 -- наименований ошибок регистрационного пути. Наполнение — выгрузка ФНСИ, описания
 -- приводятся дословно (включая опечатки справочника): расхождение с оригиналом
 -- сделало бы сверку с ответом РЭМД неоднозначной.
-CREATE TABLE IF NOT EXISTS dim_nsi_error_code (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_error_code (
     nsi_error_code text PRIMARY KEY,
     nsi_error_id integer NOT NULL,
     nsi_error_description text NOT NULL,
@@ -911,12 +826,12 @@ CREATE TABLE IF NOT EXISTS dim_nsi_error_code (
     updated_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE dim_nsi_error_code IS
+COMMENT ON TABLE mart_egisz.dim_nsi_error_code IS
     'НСИ 1.2.643.5.1.13.13.99.2.305 «РЭМД. Классификатор кодов сообщений», версия 3.18';
 
 -- FRLLO_RELISE_POSITION_ERROR в справочнике задвоена (ID 85 и 88 с разными описаниями);
 -- берётся запись с меньшим ID.
-INSERT INTO dim_nsi_error_code (nsi_error_code, nsi_error_id, nsi_error_description, contour)
+INSERT INTO mart_egisz.dim_nsi_error_code (nsi_error_code, nsi_error_id, nsi_error_description, contour)
 VALUES
     ('ACCESS_DENIED', 1, 'У запрашивающей РМИС/МИС нет разрешения на получение документа', 'регистрация СЭМД'),
     ('ADDITIONAL_INFO_REQUIRED', 64, 'Для формирования запрошенного в рамках услуги "заказ справки он-лайн" документа недостаточно сведений, гражданину необходимо обратиться с личным визитом для прохождения дополнительных исследований', 'заказ справок онлайн'),
@@ -1051,20 +966,25 @@ ON CONFLICT (nsi_error_code) DO UPDATE SET
     contour = EXCLUDED.contour,
     oid = EXCLUDED.oid,
     version = EXCLUDED.version,
-    updated_at = now();
+    updated_at = now()
+WHERE (mart_egisz.dim_nsi_error_code.nsi_error_id, mart_egisz.dim_nsi_error_code.nsi_error_description,
+       mart_egisz.dim_nsi_error_code.contour, mart_egisz.dim_nsi_error_code.oid,
+       mart_egisz.dim_nsi_error_code.version)
+      IS DISTINCT FROM
+      (EXCLUDED.nsi_error_id, EXCLUDED.nsi_error_description, EXCLUDED.contour, EXCLUDED.oid, EXCLUDED.version);
 
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_error_code_contour ON dim_nsi_error_code (contour);
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_error_code_contour ON mart_egisz.dim_nsi_error_code (contour);
 
 -- РЭМД отдаёт RECIPIENT_*, тогда как в справочнике закреплено написание RECEPIENT_*.
 -- Синоним разрешается до сопоставления с правилами, поэтому правило заводится
 -- на каноничную мнемонику справочника.
-CREATE TABLE IF NOT EXISTS dim_nsi_error_code_alias (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_error_code_alias (
     alias text PRIMARY KEY,
-    nsi_error_code text NOT NULL REFERENCES dim_nsi_error_code (nsi_error_code),
+    nsi_error_code text NOT NULL REFERENCES mart_egisz.dim_nsi_error_code (nsi_error_code),
     updated_at timestamptz DEFAULT now()
 );
 
-INSERT INTO dim_nsi_error_code_alias (alias, nsi_error_code)
+INSERT INTO mart_egisz.dim_nsi_error_code_alias (alias, nsi_error_code)
 VALUES
     ('RECIPIENT_INFO_MISMATCH', 'RECEPIENT_INFO_MISMATCH'),
     ('RECIPIENT_SNILS_MISMATCH', 'RECEPIENT_SNILS_MISMATCH'),
@@ -1073,10 +993,11 @@ VALUES
     ('RECIPIENT_PATRONYMIC_MISMATCH', 'RECEPIENT_PATRONYMIC_MISMATCH')
 ON CONFLICT (alias) DO UPDATE SET
     nsi_error_code = EXCLUDED.nsi_error_code,
-    updated_at = now();
+    updated_at = now()
+WHERE mart_egisz.dim_nsi_error_code_alias.nsi_error_code IS DISTINCT FROM EXCLUDED.nsi_error_code;
 
 -- Наименования справочников ФНСИ по OID. Нужен только для подписи предмета отказа
--- (rpt_error_breakdown.error_type): РЭМД называет справочник одним OID, и без расшифровки
+-- (mart_egisz_selfservice.document_error): РЭМД называет справочник одним OID, и без расшифровки
 -- разбивка нечитаема.
 --
 -- Наполнение — снимок НСИ 1.2.643.5.1.13.13.99.2.805 «Реестр справочников, использующихся
@@ -1088,6 +1009,8 @@ ON CONFLICT (alias) DO UPDATE SET
 -- Реестр покрывает не все OID отказов: РЭМД ссылается и на справочники вне 805
 -- (например 1.2.643.5.1.13.13.11.1379). Присоединяется внешним соединением — OID без
 -- наименования показывается как есть, а не прячется из разбивки.
+-- Редакцию источника объявляет сид, а не умолчание колонки: умолчание существующей таблицы
+-- повторное применение схемы не меняет, и оно застыло бы на прежней редакции.
 CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
     oid text PRIMARY KEY,
     name text NOT NULL,
@@ -1097,17 +1020,8 @@ CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
     updated_at timestamptz DEFAULT now()
 );
 
--- Реестр развёрнут раньше этих колонок, поэтому они добавляются на месте. Редакция
--- источника умолчанием колонки не задаётся: на уже развёрнутой базе ADD COLUMN IF NOT
--- EXISTS ничего не делает, и умолчание застыло бы на прежней редакции.
-ALTER TABLE dim_nsi_dictionary ADD COLUMN IF NOT EXISTS short_name text;
-ALTER TABLE dim_nsi_dictionary
-    ADD COLUMN IF NOT EXISTS source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.805';
-ALTER TABLE dim_nsi_dictionary
-    ADD COLUMN IF NOT EXISTS source_version text NOT NULL DEFAULT '';
-
 COMMENT ON TABLE dim_nsi_dictionary IS
-    'Наименования справочников ФНСИ по OID для подписи предмета отказа (rpt_error_breakdown.error_type). Снимок НСИ 1.2.643.5.1.13.13.99.2.805: наименования дословны. Реестр не покрывает справочники вне 805 — недостающий OID показывается без расшифровки.';
+    'Наименования справочников ФНСИ по OID: атрибут nsi_dictionary_name ошибок документа (mart_egisz_selfservice.document_error). Снимок НСИ 1.2.643.5.1.13.13.99.2.805: наименования дословны. Реестр не покрывает справочники вне 805 — недостающий OID показывается без расшифровки.';
 COMMENT ON COLUMN dim_nsi_dictionary.name IS
     'Наименование из НСИ 805 дословно. Расхождение с источником сделало бы сверку неоднозначной.';
 COMMENT ON COLUMN dim_nsi_dictionary.short_name IS
@@ -1586,7 +1500,9 @@ ON CONFLICT (oid) DO UPDATE SET
     name = EXCLUDED.name,
     source_oid = EXCLUDED.source_oid,
     source_version = EXCLUDED.source_version,
-    updated_at = now();
+    updated_at = now()
+WHERE (dim_nsi_dictionary.name, dim_nsi_dictionary.source_oid, dim_nsi_dictionary.source_version)
+      IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.source_oid, EXCLUDED.source_version);
 
 -- Справочник, выведенный из обращения новой редакцией 805, обязан уйти из реестра: иначе
 -- подпись показывала бы наименование, которого в источнике уже нет. Редакция повторена
@@ -1608,9 +1524,9 @@ FROM (
 WHERE d.oid = c.oid AND d.short_name IS DISTINCT FROM c.short_name;
 
 CREATE TABLE IF NOT EXISTS transactions (
-    logid bigint PRIMARY KEY,
+    logid bigint NOT NULL,
+    log_date timestamptz NOT NULL,
     dwh_id text,
-    log_date timestamptz,
     msgid text,
     relates_to_msgid text,
     local_uid_semd text,
@@ -1620,291 +1536,51 @@ CREATE TABLE IF NOT EXISTS transactions (
     status text,
     message text,
     jid bigint,
+    jid_resolve_method text,
     semd_code text,
-    error_code text,
     creation_date timestamptz,
-    loaded_at timestamptz DEFAULT now()
-);
+    link_method text,
+    error_details jsonb,
+    patient_name_masked text,
+    snils_masked text,
+    doctor_name text,
+    patient_hash text,
+    doctor_hash text,
+    source_action text,
+    egisz_subsystem text,
+    xml_dwh_id text,
+    xml_local_uid text,
+    xml_emdr_id text,
+    xml_semd_code text,
+    xml_doc_number text,
+    xml_org_oid text,
+    xml_error_code text,
+    xml_message text,
+    xml_raw_status text,
+    xml_document_status text,
+    xml_creation_date timestamptz,
+    xml_patient_name text,
+    xml_snils text,
+    xml_doctor_name text,
+    xml_has_fault_marker boolean,
+    xml_has_error_ilike boolean,
+    xml_parsed_at timestamptz,
+    loaded_at timestamptz DEFAULT now(),
+    PRIMARY KEY (logid, log_date)
+) PARTITION BY RANGE (log_date);
 
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS dwh_id text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS creation_date timestamptz;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_type text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_json_text text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS error_details jsonb;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_name_masked text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS snils_masked text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_name text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS patient_hash text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS doctor_hash text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS message text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS jid_resolve_method text;
-DO $$
-DECLARE
-    has_msgid boolean;
-    has_source_norm boolean;
-    has_message_id boolean;
-    has_source_msgid boolean;
-    msgid_has_data boolean := false;
-BEGIN
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'msgid')
-      INTO has_msgid;
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'source_message_id_norm')
-      INTO has_source_norm;
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'message_id')
-      INTO has_message_id;
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'source_msgid')
-      INTO has_source_msgid;
-
-    IF has_msgid THEN
-        EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.transactions WHERE msgid IS NOT NULL LIMIT 1)'
-          INTO msgid_has_data;
-    END IF;
-
-    IF NOT has_msgid AND has_source_norm THEN
-        ALTER TABLE public.transactions RENAME COLUMN source_message_id_norm TO msgid;
-    ELSIF has_msgid AND NOT msgid_has_data AND has_source_norm THEN
-        ALTER TABLE public.transactions DROP COLUMN msgid;
-        ALTER TABLE public.transactions RENAME COLUMN source_message_id_norm TO msgid;
-    ELSIF NOT has_msgid AND has_message_id THEN
-        ALTER TABLE public.transactions RENAME COLUMN message_id TO msgid;
-    ELSIF has_msgid AND NOT msgid_has_data AND has_message_id THEN
-        ALTER TABLE public.transactions DROP COLUMN msgid;
-        ALTER TABLE public.transactions RENAME COLUMN message_id TO msgid;
-    ELSE
-        ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS msgid text;
-        IF has_source_norm THEN
-            EXECUTE 'UPDATE public.transactions SET msgid = source_message_id_norm WHERE msgid IS NULL AND source_message_id_norm IS NOT NULL';
-        END IF;
-        IF has_message_id THEN
-            EXECUTE 'UPDATE public.transactions SET msgid = message_id WHERE msgid IS NULL AND message_id IS NOT NULL';
-        END IF;
-        IF has_source_msgid THEN
-            EXECUTE 'UPDATE public.transactions SET msgid = NULLIF(regexp_replace(trim(both ''<>'' from btrim(source_msgid)), ''^urn:uuid:'', '''', ''i''), '''') WHERE msgid IS NULL AND source_msgid IS NOT NULL';
-        END IF;
-    END IF;
-END $$;
-ALTER TABLE transactions DROP COLUMN IF EXISTS source_msgid;
-ALTER TABLE transactions DROP COLUMN IF EXISTS source_message_id_norm;
-ALTER TABLE transactions DROP COLUMN IF EXISTS message_id;
-DO $$
-DECLARE
-    has_relates_to_msgid boolean;
-    has_xml_relates_to boolean;
-    has_relates_to_id boolean;
-    relates_to_has_data boolean := false;
-BEGIN
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'relates_to_msgid')
-      INTO has_relates_to_msgid;
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'xml_relates_to_id')
-      INTO has_xml_relates_to;
-    SELECT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema = 'public' AND table_name = 'transactions'
-                     AND column_name = 'relates_to_id')
-      INTO has_relates_to_id;
-
-    IF has_relates_to_msgid THEN
-        EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.transactions WHERE relates_to_msgid IS NOT NULL LIMIT 1)'
-          INTO relates_to_has_data;
-    END IF;
-
-    IF NOT has_relates_to_msgid AND has_xml_relates_to THEN
-        ALTER TABLE public.transactions RENAME COLUMN xml_relates_to_id TO relates_to_msgid;
-    ELSIF has_relates_to_msgid AND NOT relates_to_has_data AND has_xml_relates_to THEN
-        ALTER TABLE public.transactions DROP COLUMN relates_to_msgid;
-        ALTER TABLE public.transactions RENAME COLUMN xml_relates_to_id TO relates_to_msgid;
-    ELSIF NOT has_relates_to_msgid AND has_relates_to_id THEN
-        ALTER TABLE public.transactions RENAME COLUMN relates_to_id TO relates_to_msgid;
-    ELSIF has_relates_to_msgid AND NOT relates_to_has_data AND has_relates_to_id THEN
-        ALTER TABLE public.transactions DROP COLUMN relates_to_msgid;
-        ALTER TABLE public.transactions RENAME COLUMN relates_to_id TO relates_to_msgid;
-    ELSE
-        ALTER TABLE public.transactions ADD COLUMN IF NOT EXISTS relates_to_msgid text;
-        IF has_xml_relates_to THEN
-            EXECUTE 'UPDATE public.transactions SET relates_to_msgid = xml_relates_to_id WHERE relates_to_msgid IS NULL AND xml_relates_to_id IS NOT NULL';
-        END IF;
-        IF has_relates_to_id THEN
-            EXECUTE 'UPDATE public.transactions SET relates_to_msgid = relates_to_id WHERE relates_to_msgid IS NULL AND relates_to_id IS NOT NULL';
-        END IF;
-    END IF;
-END $$;
-ALTER TABLE transactions DROP COLUMN IF EXISTS relates_to_id;
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'transactions'
-                 AND column_name = 'xml_relates_to_id') THEN
-        ALTER TABLE public.transactions DROP COLUMN xml_relates_to_id;
-    END IF;
-END $$;
--- transactions.processed_at (ELT now()) → loaded_at: «обработано IPS» — это бизнес-дата
--- ips_date (rpt_documents), а это поле фиксирует момент загрузки строки в ELT.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'transactions'
-                 AND column_name = 'processed_at') THEN
-        ALTER TABLE public.transactions RENAME COLUMN processed_at TO loaded_at;
-    END IF;
-END $$;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS loaded_at timestamptz DEFAULT now();
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS source_action text;
--- Подсистема ЕГИСЗ ('РЭМД'|'ИЭМК'|NULL) — см. egisz_subsystem().
--- Переименование, а не пара «добавить + скопировать + удалить»: перенос значений
--- переписал бы каждую строку партиционированной таблицы, RENAME меняет только каталог.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'transactions'
-                 AND column_name = 'contour')
-       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_schema = 'public' AND table_name = 'transactions'
-                         AND column_name = 'egisz_subsystem') THEN
-        ALTER TABLE public.transactions RENAME COLUMN contour TO egisz_subsystem;
-    END IF;
-END $$;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS egisz_subsystem text;
-ALTER TABLE transactions DROP COLUMN IF EXISTS contour;
--- Правило связки ответа с документом.
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS link_method text;
-UPDATE public.transactions
-SET link_method = NULL
-WHERE egisz_subsystem = 'ИЭМК'
-  AND dwh_id IS NULL
-  AND link_method = 'message_registry_no_document';
--- Снятые реквизиты: callback_url дублировал LOGTEXT, semd_name всегда пуст
--- (наименование берётся из dim_semd_types), xml_jid потребителей не имеет.
-ALTER TABLE transactions DROP COLUMN IF EXISTS callback_url;
-ALTER TABLE transactions DROP COLUMN IF EXISTS semd_name;
-ALTER TABLE transactions DROP COLUMN IF EXISTS xml_jid;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_dwh_id text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_local_uid text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_emdr_id text;
-ALTER TABLE transactions DROP COLUMN IF EXISTS xml_relates_to_id;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_semd_code text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_doc_number text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_org_oid text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_error_code text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_message text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_raw_status text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_document_status text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_creation_date timestamptz;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_patient_name text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_snils text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_doctor_name text;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_fault_marker boolean;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_register_response boolean;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_register_result boolean;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_processing_marker boolean;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_has_error_ilike boolean;
-ALTER TABLE transactions ADD COLUMN IF NOT EXISTS xml_parsed_at timestamptz;
-
-DROP TABLE IF EXISTS public.dim_exchangelog_refs CASCADE;
-
--- ============================================================================
--- Range partitioning (monthly) for monotonic time-series tables.
--- PK must include the partition key: PostgreSQL enforces UNIQUE/PK only when
--- the partition column is part of the constraint. logid / logid
--- remain globally unique in practice; composite keys preserve ON CONFLICT upserts.
--- ============================================================================
-
-DO $$
-DECLARE
-    relkind "char";
-BEGIN
-    SELECT c.relkind
-    INTO relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'exchangelog_raw';
-
-    IF relkind IS NOT NULL AND relkind <> 'p' THEN
-        UPDATE public.exchangelog_raw
-        SET createdate = COALESCE(createdate, logdate, loaded_at, timestamptz '1970-01-01')
-        WHERE createdate IS NULL;
-
-        CREATE TABLE public.exchangelog_raw_partitioned (
-            logid bigint NOT NULL,
-            logdate timestamptz,
-            createdate timestamptz NOT NULL DEFAULT now(),
-            msgid text,
-            logstate integer,
-            logtext text,
-            msgtext text,
-            uri text,
-            loaded_at timestamptz DEFAULT now(),
-            PRIMARY KEY (logid, createdate)
-        ) PARTITION BY RANGE (createdate);
-
-        INSERT INTO public.exchangelog_raw_partitioned (
-            logid, logdate, createdate, msgid, logstate, logtext, msgtext, uri, loaded_at
-        )
-        SELECT
-            logid,
-            logdate,
-            COALESCE(createdate, logdate, loaded_at, timestamptz '1970-01-01'),
-            msgid,
-            logstate,
-            logtext,
-            msgtext,
-            uri,
-            loaded_at
-        FROM public.exchangelog_raw;
-
-        DROP TABLE public.exchangelog_raw;
-        ALTER TABLE public.exchangelog_raw_partitioned RENAME TO exchangelog_raw;
-    END IF;
-END
-$$;
-
-DO $$
-DECLARE
-    relkind "char";
-BEGIN
-    SELECT c.relkind
-    INTO relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'transactions';
-
-    IF relkind IS NOT NULL AND relkind <> 'p' THEN
-        UPDATE public.transactions
-        SET log_date = COALESCE(log_date, loaded_at, creation_date, now())
-        WHERE log_date IS NULL;
-
-        CREATE TABLE public.transactions_partitioned (
-            LIKE public.transactions INCLUDING DEFAULTS
-        ) PARTITION BY RANGE (log_date);
-
-        ALTER TABLE public.transactions_partitioned
-            DROP CONSTRAINT IF EXISTS transactions_pkey;
-        ALTER TABLE public.transactions_partitioned
-            ADD PRIMARY KEY (logid, log_date);
-        ALTER TABLE public.transactions_partitioned
-            ALTER COLUMN log_date SET NOT NULL;
-
-        INSERT INTO public.transactions_partitioned
-        SELECT *
-        FROM public.transactions;
-
-        DROP TABLE public.transactions;
-        ALTER TABLE public.transactions_partitioned RENAME TO transactions;
-    END IF;
-END
-$$;
+COMMENT ON TABLE transactions IS
+'Разобранное сообщение журнала шлюза: реквизиты payload (xml_*), связь с документом, исход асинхронного ответа и элементы ошибки. Строка — одна строка журнала (LOGID).';
+COMMENT ON COLUMN transactions.status IS
+'Исход асинхронного ответа: success либо error. Пусто у сообщения, которое асинхронным ответом не является, и у ответа с нераспознанным исходом.';
+COMMENT ON COLUMN transactions.message IS
+'Текст сообщения: при LOGSTATE = 3 — исходный текст шлюза, иначе текст из payload.';
+COMMENT ON COLUMN transactions.error_details IS
+'Элементы ошибки сообщения: item_no, error_kind (вид), error_code, error_text (исходный текст), error_type (тип из mart_egisz.dim_error_type), nsi_dictionary_oid. Пусто, если элементов нет.';
+COMMENT ON COLUMN transactions.egisz_subsystem IS
+'Контур обмена (РЭМД или ИЭМК), см. egisz_subsystem().';
+COMMENT ON COLUMN transactions.link_method IS
+'Правило связки ответа с документом.';
 
 -- Обслуживание месячных партиций. Партиции создаются на окно назад и вперёд от текущего
 -- месяца; DEFAULT-партиции нет намеренно: строка, осевшая в ней, запрещает последующее
@@ -1921,7 +1597,6 @@ $$;
 -- Перечень обслуживаемых таблиц берётся из системного каталога, а не задаётся списком:
 -- каталог уже знает, что партиционировано по диапазону времени, и второй перечень
 -- расходился бы с ним молча.
-DROP FUNCTION IF EXISTS public.ensure_time_partitions(integer, integer);
 CREATE OR REPLACE FUNCTION public.ensure_time_partitions(
     p_grid_months_back integer DEFAULT 12,
     p_grid_months_ahead integer DEFAULT 24
@@ -1998,81 +1673,10 @@ COMMENT ON FUNCTION public.ensure_time_partitions(integer, integer) IS
 'вперёд от текущего месяца; функция только создаёт партиции — хранение не ограничивает '
 'и ничего не удаляет.';
 
--- DEFAULT-партиции не используются: строки переносятся в месячные партиции,
--- DEFAULT-партиция отцепляется и удаляется после переноса строк. Отбор идёт по каталогу:
--- DEFAULT-партиция опознаётся своей границей, а не соглашением об имени.
-DO $$
-DECLARE
-    spec record;
-    moved bigint;
-    data_start timestamp;
-    data_end timestamp;
-    part_start timestamp;
-    part_end timestamp;
-    part_name text;
-BEGIN
-    FOR spec IN
-        SELECT parent.relname AS table_name,
-               child.relname AS default_name,
-               a.attname AS key_column
-        FROM pg_inherits i
-        JOIN pg_class child ON child.oid = i.inhrelid
-        JOIN pg_class parent ON parent.oid = i.inhparent
-        JOIN pg_namespace n ON n.oid = parent.relnamespace
-        JOIN pg_partitioned_table p ON p.partrelid = parent.oid
-        JOIN pg_attribute a ON a.attrelid = parent.oid AND a.attnum = p.partattrs[0]
-        WHERE n.nspname = 'public'
-          AND p.partstrat = 'r'
-          AND p.partnatts = 1
-          AND pg_get_expr(child.relpartbound, child.oid) = 'DEFAULT'
-    LOOP
-        EXECUTE format(
-            'SELECT count(*), date_trunc(''month'', timezone(''UTC'', min(%I))),'
-            ' date_trunc(''month'', timezone(''UTC'', max(%I))) FROM public.%I',
-            spec.key_column, spec.key_column, spec.default_name
-        ) INTO moved, data_start, data_end;
-
-        EXECUTE format('ALTER TABLE public.%I DETACH PARTITION public.%I',
-                       spec.table_name, spec.default_name);
-
-        IF moved > 0 AND data_start IS NOT NULL THEN
-            -- Диапазон берётся из самой отцепленной таблицы: после DETACH её строк
-            -- в родителе уже нет, и расчёт по родителю их не покроет.
-            part_start := data_start;
-            WHILE part_start <= data_end LOOP
-                part_end := part_start + INTERVAL '1 month';
-                part_name := format('%s_y%sm%s', spec.table_name,
-                                    to_char(part_start, 'YYYY'), to_char(part_start, 'MM'));
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_class c
-                    JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE n.nspname = 'public' AND c.relname = part_name
-                ) THEN
-                    EXECUTE format(
-                        'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
-                        part_name, spec.table_name,
-                        part_start AT TIME ZONE 'UTC', part_end AT TIME ZONE 'UTC'
-                    );
-                END IF;
-                part_start := part_end;
-            END LOOP;
-
-            EXECUTE format('INSERT INTO public.%I SELECT * FROM public.%I',
-                           spec.table_name, spec.default_name);
-        END IF;
-
-        EXECUTE format('DROP TABLE public.%I', spec.default_name);
-    END LOOP;
-END
-$$;
-
 SELECT public.ensure_time_partitions(12, 24);
 
--- msgid/logstate на raw не использовались ни одним запросом. createdate — ключ
--- партиционирования; logid — ключ watermark/transform (батч и lookback идут по LOGID,
--- без индекса на logid Postgres обходит все партиции на каждом JOIN).
-DROP INDEX IF EXISTS idx_exchangelog_raw_msgid;
-DROP INDEX IF EXISTS idx_exchangelog_raw_logstate;
+-- createdate — ключ партиционирования; logid — ключ watermark/transform (батч и lookback
+-- идут по LOGID, без индекса на logid Postgres обходит все партиции на каждом JOIN).
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
 CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logid ON exchangelog_raw (logid);
 CREATE INDEX IF NOT EXISTS idx_documents_semd_code ON documents (semd_code);
@@ -2093,7 +1697,6 @@ CREATE INDEX IF NOT EXISTS idx_documents_org_oid ON documents (org_oid) WHERE or
 CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON documents (first_sent_at);
 CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON documents (document_created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON documents (registered_at);
-DROP INDEX IF EXISTS idx_documents_callback_log_id;
 CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON documents (result_logid);
 -- Слой версий: rpt по умолчанию фильтрует по is_current_version; transform пересобирает
 -- группу по document_group_id для затронутых батчем экземпляров.
@@ -2118,34 +1721,16 @@ CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_active_mo
       AND parent_id IS NULL
       AND oid LIKE '1.2.643.5.1.13.13.12.2.%';
 
--- Инициализация слоя версий: документ без группы получает singleton-группу.
-UPDATE documents SET
-    document_group_id         = COALESCE(document_group_id, dwh_id),
-    document_group_confidence = COALESCE(document_group_confidence, 'singleton'),
-    semd_version_number       = COALESCE(semd_version_number, 1),
-    is_current_version        = COALESCE(is_current_version, true)
-WHERE is_current_version IS NULL OR document_group_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
 -- Составной ключ покрывает «последняя транзакция документа» (recompute_document_attributes
--- берёт её дважды на документ) и заменяет одиночный индекс по dwh_id.
-DROP INDEX IF EXISTS idx_transactions_dwh_id;
+-- берёт её дважды на документ) и выбор ошибок текущего состояния документа по времени.
 CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_recent
     ON transactions (dwh_id, log_date DESC, logid DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
 CREATE INDEX IF NOT EXISTS idx_transactions_jid ON transactions (jid);
--- Ненормализованные дубли нормализованных ключей и индексы под снятые правила привязки:
--- связывание идёт через dim_message_document и documents.emdr_id, поиска по этим
--- колонкам в transactions больше нет. На партиционированной таблице каждый такой индекс
--- множится на число партиций и оплачивается при вставке.
-DROP INDEX IF EXISTS idx_transactions_message_id;
-DROP INDEX IF EXISTS idx_transactions_local_uid;
-DROP INDEX IF EXISTS idx_transactions_local_uid_norm;
-DROP INDEX IF EXISTS idx_transactions_emdr_id;
-DROP INDEX IF EXISTS idx_transactions_relates_to;
-DROP INDEX IF EXISTS idx_transactions_source_message_id_norm;
-DROP INDEX IF EXISTS idx_transactions_xml_local_uid_norm;
-DROP INDEX IF EXISTS idx_transactions_xml_emdr_id_norm;
-CREATE INDEX IF NOT EXISTS idx_transactions_error_type ON transactions (error_type);
+-- Ошибки связи за период читаются по времени сообщения среди сообщений с элементами ошибки.
+CREATE INDEX IF NOT EXISTS idx_transactions_error_log_date
+    ON transactions (log_date) WHERE error_details IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_transactions_patient_hash ON transactions (patient_hash);
 CREATE INDEX IF NOT EXISTS idx_transactions_doctor_hash ON transactions (doctor_hash);
 -- Scoped semd backfill: DISTINCT ON (dwh_id) по последней транзакции с semd_code.
@@ -2157,66 +1742,14 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
 -- Сигнал здоровья читает последние размеченные ответы по LOGID.
-DROP INDEX IF EXISTS idx_transactions_link_method;
-DROP INDEX IF EXISTS idx_transactions_link_method_loaded_at;
 CREATE INDEX IF NOT EXISTS idx_transactions_link_method_logid
     ON transactions (link_method, logid DESC)
     WHERE link_method IS NOT NULL;
--- Индексы правил, не входящих в текущий контракт связывания.
-DROP INDEX IF EXISTS idx_transactions_source_action_gdf;
-DROP INDEX IF EXISTS idx_transactions_gdf_jid_logid;
 
 -- Реестр подач: связь msgid→document_uid и подсчёт попыток подачи документа.
-DROP INDEX IF EXISTS idx_dim_message_document_egmid;
 CREATE INDEX IF NOT EXISTS idx_dim_message_document_msgid
     ON dim_message_document (msgid, source_egmid DESC)
     WHERE msgid IS NOT NULL;
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND indexname = 'idx_dim_message_document_uid'
-          AND indexdef NOT ILIKE '%WHERE (document_uid IS NOT NULL)%'
-    ) THEN
-        DROP INDEX public.idx_dim_message_document_uid;
-    END IF;
-END $$;
 CREATE INDEX IF NOT EXISTS idx_dim_message_document_uid
     ON dim_message_document (document_uid)
     WHERE document_uid IS NOT NULL;
-
--- Инициализация отметки первого ответа по журналу ответов. Предикат самоограничен:
--- документ с ответом всегда несёт last_callback_at, поэтому после первого прогона строк
--- для заполнения не остаётся, а ожидающие ответа под него не подпадают. Документы,
--- ответы которых старше глубины хранения transactions, получают last_callback_at —
--- единственную известную отметку ответа.
-UPDATE documents d
-SET first_callback_at = LEAST(
-        COALESCE(cb.first_callback_at, d.last_callback_at),
-        COALESCE(d.last_callback_at, cb.first_callback_at)
-    )
-FROM (
-    SELECT dwh_id, min(log_date) AS first_callback_at
-    FROM transactions
-    WHERE status IN ('success', 'error')
-      AND NULLIF(btrim(dwh_id), '') IS NOT NULL
-    GROUP BY dwh_id
-) cb
-WHERE cb.dwh_id = d.dwh_id
-  AND d.first_callback_at IS NULL
-  AND d.last_callback_at IS NOT NULL;
-
-UPDATE documents
-SET first_callback_at = last_callback_at
-WHERE first_callback_at IS NULL
-  AND last_callback_at IS NOT NULL;
-
--- Инициализация маркера попытки парсинга по распарсенным строкам transactions.
-INSERT INTO exchangelog_parse_attempts (logid)
-SELECT logid FROM transactions WHERE xml_parsed_at IS NOT NULL
-ON CONFLICT (logid) DO NOTHING;
-
--- Статистика нужна планировщику анти-джойна parse_targets сразу после массового бэкфилла.
-ANALYZE exchangelog_parse_attempts;

@@ -1,6 +1,7 @@
 """Самодостаточный DAG: суточное обслуживание контура.
 
-Страховочная проверка полноты журнала и обслуживание партиций. Полнота обеспечивается
+Страховочная проверка полноты журнала, обслуживание партиций и пересчёт ошибок по
+текущим правилам, который запускается вручную. Полнота обеспечивается
 самой выгрузкой — отметка идёт только по непрерывному участку LOGID, — поэтому проверка
 при исправной работе завершается пропуском и служит подтверждением, а не ремонтом.
 
@@ -19,7 +20,7 @@ from typing import Any
 
 import psycopg2
 from airflow.exceptions import AirflowSkipException
-from airflow.sdk import Connection, dag, task
+from airflow.sdk import Connection, Param, dag, get_current_context, task
 from firebird.driver import connect
 from psycopg2.extras import execute_values
 
@@ -31,6 +32,17 @@ PROXY_CONN_ID = "proxy_egisz_fb"
 DWH_POOL = "dwh_postgres"
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext", "uri")
+
+# Порядок обязателен: опубликованные ошибки, недельный и месячный слои читают текущие
+# ошибки документа.
+REPORT_MARTS = (
+    "stg_egisz.document_error_current",
+    "mart_egisz_selfservice.document_error",
+    "public.rpt_documents_weekly",
+    "mart_egisz.agg_document_error_weekly",
+    "public.rpt_documents_monthly",
+    "mart_egisz.agg_document_error_monthly",
+)
 
 # Дефолты настроек DAG; переопределяются переменной окружения EGISZ_<KEY> (env, не Airflow Variables).
 DEFAULTS: dict[str, str | int] = {
@@ -242,6 +254,32 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
         con.set_session(autocommit=previous_autocommit)
 
 
+def _refresh_matview(con: psycopg2.extensions.connection, qualified_name: str) -> None:
+    """Refresh a materialized view after facts change.
+
+    CONCURRENTLY (needs the unique index + a populated matview) keeps dashboard reads
+    unblocked during the ~seconds-long rebuild; falls back to a plain refresh if the
+    matview was never populated. Runs in autocommit — REFRESH CONCURRENTLY cannot run
+    inside a transaction block.
+    """
+    con.commit()
+    previous_autocommit = con.autocommit
+    con.set_session(autocommit=True)
+    try:
+        with con.cursor() as cur:
+            try:
+                cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {qualified_name}")
+            except psycopg2.Error as exc:
+                log.warning(
+                    "CONCURRENTLY refresh of %s failed (%s); falling back to plain refresh",
+                    qualified_name,
+                    exc,
+                )
+                cur.execute(f"REFRESH MATERIALIZED VIEW {qualified_name}")
+    finally:
+        con.set_session(autocommit=previous_autocommit)
+
+
 def _dwh_connection():
     return connect_pg(Connection.get(DWH_CONN_ID))
 
@@ -441,6 +479,13 @@ def check_journal_window(
     catchup=False,
     max_active_runs=1,
     tags=["egisz", "elt", "dwh", "maintenance"],
+    params={
+        "reclassify_errors": Param(
+            False,
+            type="boolean",
+            description="Привести элементы ошибки к текущим правилам классификации и обновить витрины ошибок.",
+        ),
+    },
 )
 def egisz_maintenance_pipeline() -> None:
     # Ретраи гасят транзиентный DeadlockDetected: обслуживание пересекается с приёмом
@@ -483,8 +528,32 @@ def egisz_maintenance_pipeline() -> None:
         finally:
             pg_conn.close()
 
+    # Правила классификации меняются редко и вместе с накатом схемы, поэтому пересчёт
+    # запускается вручную параметром reclassify_errors; суточный прогон его пропускает.
+    # Приём на время пересчёта ставится на паузу: пересчёт переписывает элементы ошибки
+    # разобранных сообщений, которые приём обновляет.
+    @task(pool=DWH_POOL)
+    def reclassify_errors() -> int:
+        if not get_current_context()["params"].get("reclassify_errors"):
+            raise AirflowSkipException("Пересчёт ошибок запускается вручную параметром reclassify_errors.")
+        pg_conn = _dwh_connection()
+        try:
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT public.reclassify_error_details()")
+                updated = int(cur.fetchone()[0] or 0)
+            pg_conn.commit()
+            run_analyze(pg_conn, "ANALYZE public.transactions")
+            for matview in REPORT_MARTS:
+                _refresh_matview(pg_conn, matview)
+            run_analyze(pg_conn, *(f"ANALYZE {matview}" for matview in REPORT_MARTS))
+            log.info("Error reclassification updated %s message(s).", updated)
+            return updated
+        finally:
+            pg_conn.close()
+
     consistency_check()
     maintain_partitions()
+    reclassify_errors()
 
 
 egisz_maintenance_pipeline()

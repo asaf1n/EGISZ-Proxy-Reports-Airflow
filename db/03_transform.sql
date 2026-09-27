@@ -26,6 +26,7 @@
 CREATE OR REPLACE FUNCTION public.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     affected integer := 0;
@@ -160,7 +161,7 @@ BEGIN
 END;
 $$;
 
--- Разбор окна журнала (from_logid, to_logid] в факты.
+-- Разбор окна журнала (from_logid, to_logid] в разобранные сообщения и документы.
 --
 -- Правила связки ответа с документом:
 --   getDocumentFile — документ РЭМД по localUid из payload;
@@ -170,14 +171,13 @@ $$;
 --
 -- Окно строго ограничено (from_logid, to_logid]: связывание не зависит от префикса
 -- журнала, поэтому отсечение партиций по createdate работает на каждом батче.
-DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint, bigint);
-DROP FUNCTION IF EXISTS public.transform_raw_to_facts(bigint, bigint);
 CREATE OR REPLACE FUNCTION public.transform_raw_to_facts(
     from_logid bigint,
     to_logid bigint
 )
 RETURNS jsonb
 LANGUAGE plpgsql
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     affected integer := 0;
@@ -226,8 +226,7 @@ BEGIN
         xml_error_code, xml_message, xml_raw_status, xml_document_status,
         xml_creation_date,
         xml_patient_name, xml_snils, xml_doctor_name,
-        xml_has_fault_marker, xml_has_register_response, xml_has_register_result,
-        xml_has_processing_marker, xml_has_error_ilike,
+        xml_has_fault_marker, xml_has_error_ilike,
         xml_parsed_at, loaded_at
     )
     SELECT
@@ -253,9 +252,6 @@ BEGIN
         p.raw_snils,
         p.raw_doctor_name,
         p.has_fault_marker,
-        p.has_register_response,
-        p.has_register_result,
-        p.has_processing_marker,
         p.has_error_ilike,
         now(),
         now()
@@ -299,9 +295,6 @@ BEGIN
         xml_snils = COALESCE(EXCLUDED.xml_snils, public.transactions.xml_snils),
         xml_doctor_name = COALESCE(EXCLUDED.xml_doctor_name, public.transactions.xml_doctor_name),
         xml_has_fault_marker = COALESCE(EXCLUDED.xml_has_fault_marker, public.transactions.xml_has_fault_marker),
-        xml_has_register_response = COALESCE(EXCLUDED.xml_has_register_response, public.transactions.xml_has_register_response),
-        xml_has_register_result = COALESCE(EXCLUDED.xml_has_register_result, public.transactions.xml_has_register_result),
-        xml_has_processing_marker = COALESCE(EXCLUDED.xml_has_processing_marker, public.transactions.xml_has_processing_marker),
         xml_has_error_ilike = COALESCE(EXCLUDED.xml_has_error_ilike, public.transactions.xml_has_error_ilike),
         xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, public.transactions.xml_parsed_at),
         loaded_at = now();
@@ -363,12 +356,7 @@ BEGIN
             min(COALESCE(gr.createdate, gr.logdate)) AS sent_at,
             (array_agg(gr.logid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid))[1] AS request_logid,
             (array_agg(tx.msgid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid)
-                FILTER (WHERE tx.msgid IS NOT NULL))[1] AS sent_msgid,
-            bool_or(gr.logstate = 3) AS has_network_error,
-            max(gr.logid) FILTER (WHERE gr.logstate = 3) AS network_logid,
-            max(COALESCE(gr.createdate, gr.logdate)) FILTER (WHERE gr.logstate = 3) AS network_at,
-            (array_agg(COALESCE(NULLIF(btrim(gr.logtext), ''), NULLIF(btrim(gr.msgtext), ''), 'Сетевая ошибка') ORDER BY gr.logid DESC)
-                FILTER (WHERE gr.logstate = 3))[1] AS network_message
+                FILTER (WHERE tx.msgid IS NOT NULL))[1] AS sent_msgid
         FROM public.transactions tx
         JOIN batch_document_ids bd ON bd.xml_dwh_id = tx.xml_dwh_id
         JOIN public.exchangelog_raw gr ON gr.logid = tx.logid
@@ -400,38 +388,32 @@ BEGIN
             COALESCE(a.endpoint_text, '') || ' ' || COALESCE(reg.reply_to, '')
         ) r ON TRUE
     )
+    -- Запрос файла — шаг регистрации, а не её исход: документ получает нефинальный статус.
+    -- Сбой доставки запроса статус не меняет; его элемент хранится в разобранном сообщении.
     INSERT INTO public.documents (
         dwh_id, local_uid, semd_code,
         status, first_sent_at, request_logid, msgid,
-        result_logid, first_callback_at, last_callback_at, jid, org_oid, jid_resolve_method,
-        error_types, error_text, error_details,
+        jid, org_oid, jid_resolve_method,
         updated_at
     )
     SELECT
         a.dwh_id,
         a.local_uid,
         a.semd_code,
-        CASE WHEN a.has_network_error THEN 'network_error' ELSE public.document_status_nonfinal() END,
+        public.document_status_nonfinal(),
         a.sent_at,
         a.request_logid,
         a.sent_msgid,
-        CASE WHEN a.has_network_error THEN a.network_logid END,
-        CASE WHEN a.has_network_error THEN a.network_at END,
-        CASE WHEN a.has_network_error THEN a.network_at END,
         a.resolved_jid,
         a.org_oid,
         a.resolve_method,
-        CASE WHEN a.has_network_error THEN 'Сетевая ошибка' END,
-        CASE WHEN a.has_network_error THEN a.network_message END,
-        CASE WHEN a.has_network_error THEN public.error_details(jsonb_build_array(jsonb_build_object(
-            'code', 'INTEGRATION_LOGSTATE_3', 'message', a.network_message))) END,
         now()
     FROM document_resolved a
     WHERE a.dwh_id IS NOT NULL
       AND a.local_uid IS NOT NULL
       -- Код СЭМД не требуется: он дозагружается ниже из соседних сообщений документа.
       -- Клиника обязательна — без неё экземпляр не отображается ни в одном срезе.
-      AND (a.has_network_error OR a.resolved_jid IS NOT NULL)
+      AND a.resolved_jid IS NOT NULL
     ON CONFLICT (dwh_id) DO UPDATE SET
         local_uid = COALESCE(EXCLUDED.local_uid, public.documents.local_uid),
         semd_code = COALESCE(EXCLUDED.semd_code, public.documents.semd_code),
@@ -444,12 +426,6 @@ BEGIN
             THEN public.documents.status
             ELSE EXCLUDED.status
         END,
-        result_logid = COALESCE(EXCLUDED.result_logid, public.documents.result_logid),
-        first_callback_at = LEAST(
-            COALESCE(public.documents.first_callback_at, EXCLUDED.first_callback_at),
-            COALESCE(EXCLUDED.first_callback_at, public.documents.first_callback_at)
-        ),
-        last_callback_at = COALESCE(EXCLUDED.last_callback_at, public.documents.last_callback_at),
         jid = COALESCE(EXCLUDED.jid, public.documents.jid),
         org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
         jid_resolve_method = CASE
@@ -457,9 +433,6 @@ BEGIN
             THEN public.documents.jid_resolve_method
             ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
         END,
-        error_types = COALESCE(EXCLUDED.error_types, public.documents.error_types),
-        error_text = COALESCE(EXCLUDED.error_text, public.documents.error_text),
-        error_details = COALESCE(EXCLUDED.error_details, public.documents.error_details),
         msgid = CASE
             WHEN public.documents.status IN (SELECT public.document_status_final())
             THEN public.documents.msgid
@@ -488,8 +461,13 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM public.documents d WHERE d.dwh_id = tx.xml_dwh_id);
 
     -- ------------------------------------------------------------------
-    -- Ветка ответа: классификация ответа и привязка к документу.
+    -- Ветка ответа: исход асинхронного ответа, элементы ошибки и привязка к документу.
     -- ------------------------------------------------------------------
+    -- Пакет разбирается один раз: связанные сообщения обновляются вставкой ниже,
+    -- несвязанные получают исход и элементы ошибки отдельным обновлением, которое не
+    -- трогает реквизиты связывания.
+    DROP TABLE IF EXISTS pg_temp.batch_responses;
+    CREATE TEMP TABLE batch_responses AS
     WITH candidate_log_ids AS (
         SELECT r.logid
         FROM exchangelog_raw r
@@ -506,6 +484,7 @@ BEGIN
             r.logstate,
             r.logtext,
             r.msgtext,
+            tx.source_action,
             tx.msgid AS msgid,
             tx.relates_to_msgid,
             tx.xml_local_uid AS local_uid_xml,
@@ -523,10 +502,9 @@ BEGIN
             tx.xml_doctor_name AS raw_doctor_name,
             tx.xml_document_status AS document_status,
             tx.xml_has_fault_marker AS has_fault_marker,
-            tx.xml_has_register_response AS has_register_response,
-            tx.xml_has_register_result AS has_register_result,
-            tx.xml_has_processing_marker AS has_processing_marker,
-            tx.xml_has_error_ilike AS has_error_ilike
+            tx.xml_has_error_ilike AS has_error_ilike,
+            -- Статус асинхронного ответа ИЭМК передаётся атрибутом RegistryResponse.
+            substring(r.msgtext from 'ResponseStatusType:([A-Za-z]+)') AS registry_response_status
         FROM exchangelog_raw r
         JOIN candidate_log_ids c ON c.logid = r.logid
         JOIN public.transactions tx ON tx.logid = r.logid
@@ -534,7 +512,7 @@ BEGIN
           AND r.createdate < raw_cd_max
           AND tx.xml_parsed_at IS NOT NULL
           -- getDocumentFile — это отправка, её обрабатывает ветка выше; сюда она попадает
-          -- только сбоем связи (LOGSTATE=3), который является исходом отправки.
+          -- только сбоем доставки (LOGSTATE=3), чтобы сохранить элемент ошибки связи.
           AND (
               COALESCE(tx.source_action, '') <> 'getDocumentFile'
               OR r.logstate = 3
@@ -560,13 +538,15 @@ BEGIN
             r.logstate,
             r.logtext,
             r.msgtext,
+            r.source_action,
             r.msgid,
             r.relates_to_msgid,
-            COALESCE(
-                r.dwh_id_xml,
-                msg_ref.dwh_id,
-                emdr_ref.dwh_id
-            ) AS dwh_id,
+            -- Запрос файла уже зарегистрированного ЭМД (getDocumentFile с emdrId) — не шаг
+            -- регистрации: с документом его сбой доставки не связывается.
+            CASE
+                WHEN r.source_action = 'getDocumentFile' AND NULLIF(btrim(r.emdr_id), '') IS NOT NULL THEN NULL
+                ELSE COALESCE(r.dwh_id_xml, msg_ref.dwh_id, emdr_ref.dwh_id)
+            END AS dwh_id,
             CASE
                 WHEN r.dwh_id_xml IS NOT NULL THEN 'payload_local_uid'
                 WHEN msg_ref.dwh_id IS NOT NULL THEN 'message_registry'
@@ -580,10 +560,7 @@ BEGIN
             r.doc_number,
             r.org_oid,
             public.normalize_semd_code(r.kind_xml) AS semd_code,
-            CASE
-                WHEN r.logstate = 3 THEN 'INTEGRATION_LOGSTATE_3'
-                ELSE r.error_code
-            END AS error_code,
+            r.error_code,
             r.xml_message,
             r.raw_status,
             r.creation_date,
@@ -592,10 +569,8 @@ BEGIN
             r.raw_doctor_name,
             r.document_status,
             r.has_fault_marker,
-            r.has_register_response,
-            r.has_register_result,
-            r.has_processing_marker,
             r.has_error_ilike,
+            r.registry_response_status,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
         -- Ответ РЭМД: relatesToMessage -> document_uid реестра подач.
@@ -633,91 +608,96 @@ BEGIN
                 p.source_document_semd_code
             ) AS resolved_semd_code,
             public.classify_async_status(
-                p.logstate,
+                p.source_action,
                 p.raw_status,
                 p.document_status,
                 p.has_fault_marker,
-                p.has_register_response,
-                p.has_register_result,
-                p.has_processing_marker,
-                p.has_error_ilike
-            ) AS final_status,
-            CASE
-                WHEN p.logstate = 3 THEN 'Сетевая ошибка: ' || COALESCE(NULLIF(p.logtext, ''), 'нет деталей')
-                ELSE p.xml_message
-            END AS event_message
+                p.has_error_ilike,
+                p.registry_response_status
+            ) AS outcome,
+            CASE WHEN p.logstate = 3 THEN p.logtext ELSE p.xml_message END AS message_text
         FROM parsed p
         LEFT JOIN LATERAL public.resolve_document_jid(
             p.org_oid,
             COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '') || ' ' || COALESCE(p.registry_reply_to, '')
         ) res ON TRUE
     ),
-    with_errors AS (
-        SELECT
-            e.*,
-            -- errors_json нужен только для error-строк; для success/pending это всегда '[]',
-            -- поэтому не гоняем разбор по payload'у успешных ответов.
-            CASE
-                WHEN e.final_status = 'error' AND e.logstate = 3
-                THEN jsonb_build_array(jsonb_build_object(
-                    'code', 'INTEGRATION_LOGSTATE_3', 'message', e.event_message))
-                WHEN e.final_status = 'error'
-                THEN public.build_errors_json(e.final_status, e.error_code, e.event_message, e.msgtext)
-                ELSE '[]'::jsonb
-            END AS built_errors_json
+    items AS (
+        SELECT e.logid, i.item_no, i.error_kind, i.error_code, i.error_text
         FROM enriched e
+        CROSS JOIN LATERAL stg_egisz.error_items(
+            e.logstate, e.logtext, e.msgtext, e.outcome, e.error_code, e.xml_message
+        ) i
     ),
-    -- Классификация отказа дорогая: на каждый <item> идёт регекс-скан правил
-    -- dim_error_rules, и эта работа повторяется для одинаковых payload'ов внутри батча.
-    -- Считаем классификацию один раз на уникальный errors_json и приклеиваем обратно.
-    error_dict AS (
-        SELECT DISTINCT built_errors_json
-        FROM with_errors
-        WHERE final_status = 'error'
+    -- Классификация дорогая: на элемент идёт регекс-скан правил. Одинаковые элементы
+    -- внутри пакета классифицируются один раз.
+    item_keys AS MATERIALIZED (
+        SELECT DISTINCT error_kind, error_code, error_text
+        FROM items
     ),
-    error_details_dict AS MATERIALIZED (
-        SELECT built_errors_json, public.error_details(built_errors_json) AS details
-        FROM error_dict
+    classified AS (
+        SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
+        FROM item_keys k
+        CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c
     ),
-    error_interp AS (
+    details AS (
         SELECT
-            built_errors_json,
-            public.error_detail_types(details) AS error_type_dict,
-            details AS error_details_dict,
-            public.error_messages_row(built_errors_json) AS error_messages_dict
-        FROM error_details_dict
-    ),
-    with_bi_fields AS (
-        SELECT
-            e.*,
-            ei.error_type_dict,
-            ei.error_details_dict,
-            ei.error_messages_dict,
-            regexp_split_to_array(public.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
-            regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
-            public.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
-        FROM with_errors e
-        LEFT JOIN error_interp ei ON ei.built_errors_json = e.built_errors_json
+            i.logid,
+            jsonb_agg(jsonb_build_object(
+                'item_no', i.item_no,
+                'error_kind', i.error_kind,
+                'error_code', i.error_code,
+                'error_text', i.error_text,
+                'error_type', c.error_type,
+                'nsi_dictionary_oid', c.nsi_dictionary_oid
+            ) ORDER BY i.item_no) AS error_details
+        FROM items i
+        -- Сравнение массивов считает NULL равными и соединяется хешем или слиянием;
+        -- IS NOT DISTINCT FROM свёл бы соединение к перебору пар внутри вида ошибки.
+        JOIN classified c
+          ON ARRAY[c.error_kind, c.error_code, c.error_text] = ARRAY[i.error_kind, i.error_code, i.error_text]
+        GROUP BY i.logid
     )
+    SELECT
+        e.*,
+        d.error_details,
+        regexp_split_to_array(public.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
+        regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
+        public.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
+    FROM enriched e
+    LEFT JOIN details d ON d.logid = e.logid;
+
+    -- Тип без правила заводится в справочнике типов при первом появлении: категория
+    -- «Прочие» у асинхронного ответа, без категории у ошибки связи. Значения зоны
+    -- ответственности и повтора наследуются из справочника категорий.
+    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
+    SELECT DISTINCT ON (x.error_type)
+        x.error_type,
+        x.error_kind,
+        c.error_category,
+        c.responsibility,
+        c.is_retryable
+    FROM pg_temp.batch_responses b
+    CROSS JOIN LATERAL jsonb_to_recordset(b.error_details) AS x(error_kind text, error_type text)
+    JOIN mart_egisz.dim_error_category c
+      ON c.error_kind = x.error_kind
+     AND c.error_category IS NOT DISTINCT FROM
+         CASE WHEN x.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
+    WHERE x.error_type IS NOT NULL
+    ORDER BY x.error_type
+    ON CONFLICT (error_type) DO NOTHING;
+
     INSERT INTO transactions (
         logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
-        error_code, creation_date, loaded_at, link_method,
-        error_type, error_json_text, error_details,
+        creation_date, loaded_at, link_method, error_details,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
     SELECT
         e.logid, e.dwh_id, e.logdate, e.msgid, e.relates_to_msgid, e.local_uid_semd, e.emdr_id,
-        e.doc_number, e.org_oid, e.final_status, e.event_message,
-        e.resolved_jid, e.resolved_method, e.resolved_semd_code, e.error_code,
-        e.creation_date, now(), e.link_method,
-        CASE
-            WHEN e.final_status = 'error' AND e.logstate = 3 THEN 'Сетевая ошибка'
-            WHEN e.final_status = 'error'   THEN e.error_type_dict
-            ELSE NULL  -- success/pending/unknown: видимость через status, error_type не заполняется
-        END,
-        e.error_messages_dict,
-        COALESCE(e.error_details_dict, '[]'::jsonb),
+        e.doc_number, e.org_oid, e.outcome, e.message_text,
+        e.resolved_jid, e.resolved_method, e.resolved_semd_code,
+        e.creation_date, now(), e.link_method, e.error_details,
         CASE
             WHEN e.patient_parts IS NULL OR array_length(e.patient_parts, 1) IS NULL THEN '(нет данных)'
             ELSE substring(e.patient_parts[1] FROM 1 FOR 1) || '***'
@@ -739,8 +719,8 @@ BEGIN
             WHEN e.doctor_name_clean IS NULL THEN NULL
             ELSE md5(lower(e.doctor_name_clean))
         END
-    FROM with_bi_fields e
-    WHERE e.final_status IN ('success', 'error')
+    FROM pg_temp.batch_responses e
+    WHERE (e.outcome IS NOT NULL OR e.error_details IS NOT NULL)
       AND e.dwh_id IS NOT NULL
     ON CONFLICT (logid, log_date) DO UPDATE SET
         log_date = EXCLUDED.log_date,
@@ -756,12 +736,9 @@ BEGIN
         jid = EXCLUDED.jid,
         jid_resolve_method = EXCLUDED.jid_resolve_method,
         semd_code = EXCLUDED.semd_code,
-        error_code = EXCLUDED.error_code,
         creation_date = EXCLUDED.creation_date,
         loaded_at = now(),
         link_method = EXCLUDED.link_method,
-        error_type = EXCLUDED.error_type,
-        error_json_text = EXCLUDED.error_json_text,
         error_details = EXCLUDED.error_details,
         patient_name_masked = EXCLUDED.patient_name_masked,
         snils_masked = EXCLUDED.snils_masked,
@@ -770,6 +747,25 @@ BEGIN
         doctor_hash = EXCLUDED.doctor_hash;
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
+
+    -- Сообщение без связи с документом тоже хранит исход и элементы ошибки: сбой доставки
+    -- и отказ видны в разрезе периода независимо от того, найден ли документ.
+    UPDATE public.transactions tx
+    SET status = e.outcome,
+        message = e.message_text,
+        error_details = e.error_details,
+        loaded_at = now()
+    FROM pg_temp.batch_responses e
+    WHERE tx.logid = e.logid
+      AND tx.log_date = e.logdate
+      AND e.dwh_id IS NULL
+      AND (e.outcome IS NOT NULL OR e.error_details IS NOT NULL)
+      AND (tx.status, tx.message, tx.error_details)
+          IS DISTINCT FROM (e.outcome, e.message_text, e.error_details);
+    GET DIAGNOSTICS inserted_rows = ROW_COUNT;
+    affected := affected + inserted_rows;
+
+    DROP TABLE pg_temp.batch_responses;
 
     -- РЭМД-ответ с MSGID в EGISZ_MESSAGES и пустым DOCUMENTID.
     WITH registry_match AS (
@@ -836,14 +832,14 @@ BEGIN
     GET DIAGNOSTICS unlinked_rows = ROW_COUNT;
 
     -- ------------------------------------------------------------------
-    -- Перенос исхода на грейн документа.
+    -- Перенос исхода на грейн документа: статус выставляет только асинхронный ответ.
+    -- Сбой доставки статус не меняет — его элемент хранится в разобранном сообщении.
     -- ------------------------------------------------------------------
     INSERT INTO public.documents (
         dwh_id, local_uid, emdr_id, semd_code,
         status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
         first_callback_at, last_callback_at, last_status, jid, org_oid, jid_resolve_method,
-        error_types, error_text, error_details,
         patient_hash, doctor_hash, updated_at
     )
     SELECT DISTINCT ON (f.dwh_id)
@@ -851,12 +847,7 @@ BEGIN
         public.clean_text_value(f.local_uid_semd),
         public.clean_text_value(f.emdr_id),
         public.normalize_semd_code(f.semd_code),
-        CASE
-            WHEN f.status = 'success' THEN 'success'
-            WHEN f.status = 'error' AND f.error_type = 'Сетевая ошибка' THEN 'network_error'
-            WHEN f.status = 'error' THEN 'async_error'
-            ELSE public.document_status_nonfinal()
-        END,
+        CASE f.status WHEN 'success' THEN 'success' ELSE 'async_error' END,
         public.clean_text_value(f.msgid),
         public.clean_text_value(f.relates_to_msgid),
         f.logid,
@@ -870,9 +861,6 @@ BEGIN
         f.jid,
         f.org_oid,
         f.jid_resolve_method,
-        f.error_type,
-        NULLIF(btrim(f.error_json_text), ''),
-        f.error_details,
         f.patient_hash,
         f.doctor_hash,
         now()
@@ -880,6 +868,7 @@ BEGIN
     WHERE f.logid > from_logid
       AND f.logid <= to_logid
       AND f.dwh_id IS NOT NULL
+      AND f.status IN ('success', 'error')
     ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
     ON CONFLICT (dwh_id) DO UPDATE SET
         local_uid = COALESCE(EXCLUDED.local_uid, public.documents.local_uid),
@@ -913,24 +902,6 @@ BEGIN
             WHEN public.documents.jid_resolve_method = 'mo_uid'
             THEN public.documents.jid_resolve_method
             ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
-        END,
-        error_types = CASE
-            WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.error_types
-            ELSE public.documents.error_types
-        END,
-        error_text = CASE
-            WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.error_text
-            ELSE public.documents.error_text
-        END,
-        error_details = CASE
-            WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
-            THEN EXCLUDED.error_details
-            ELSE public.documents.error_details
         END,
         patient_hash = COALESCE(EXCLUDED.patient_hash, public.documents.patient_hash),
         doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.documents.doctor_hash),
@@ -1000,5 +971,88 @@ BEGIN
         'unlinked', unlinked_rows,
         'sends_without_clinic', skipped_no_clinic
     );
+END;
+$$;
+
+-- Приведение элементов ошибки к текущим правилам: после изменения правил или шагов
+-- маскирования типы в разобранных сообщениях пересчитываются по уникальным элементам
+-- (вид, код, исходный текст). Тип без правила заводится в справочнике, тип без правила,
+-- на который больше не ссылается ни один элемент, снимается. Запускается вручную задачей
+-- DAG обслуживания; приём на это время ставится на паузу.
+CREATE OR REPLACE FUNCTION public.reclassify_error_details()
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    updated integer := 0;
+BEGIN
+    DROP TABLE IF EXISTS pg_temp.reclassified;
+    CREATE TEMP TABLE reclassified AS
+    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
+    FROM (
+        SELECT DISTINCT e.error_kind, e.error_code, e.error_text
+        FROM public.transactions t
+        CROSS JOIN LATERAL jsonb_to_recordset(t.error_details)
+            AS e(error_kind text, error_code text, error_text text)
+        WHERE t.error_details IS NOT NULL
+    ) k
+    CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
+    -- Временные таблицы автоанализ не обрабатывает; без статистики план соединений слеп.
+    ANALYZE pg_temp.reclassified;
+
+    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
+    SELECT DISTINCT ON (r.error_type)
+        r.error_type, r.error_kind, c.error_category, c.responsibility, c.is_retryable
+    FROM pg_temp.reclassified r
+    JOIN mart_egisz.dim_error_category c
+      ON c.error_kind = r.error_kind
+     AND c.error_category IS NOT DISTINCT FROM
+         CASE WHEN r.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
+    WHERE r.error_type IS NOT NULL
+    ORDER BY r.error_type
+    ON CONFLICT (error_type) DO NOTHING;
+
+    -- Элементы разворачиваются в отдельный набор до соединения со справочником: внутри
+    -- LATERAL соединение уходило во вложенный цикл и перебирало справочник для каждого
+    -- сообщения. Сравнение массивов считает NULL равными и соединяется хешем.
+    WITH elements AS MATERIALIZED (
+        SELECT t2.logid, t2.log_date, e.item_no, e.error_kind, e.error_code, e.error_text
+        FROM public.transactions t2
+        CROSS JOIN LATERAL jsonb_to_recordset(t2.error_details)
+            AS e(item_no integer, error_kind text, error_code text, error_text text)
+        WHERE t2.error_details IS NOT NULL
+    ),
+    rebuilt AS (
+        SELECT
+            el.logid,
+            el.log_date,
+            jsonb_agg(jsonb_build_object(
+                'item_no', el.item_no,
+                'error_kind', el.error_kind,
+                'error_code', el.error_code,
+                'error_text', el.error_text,
+                'error_type', r.error_type,
+                'nsi_dictionary_oid', r.nsi_dictionary_oid
+            ) ORDER BY el.item_no) AS error_details
+        FROM elements el
+        JOIN pg_temp.reclassified r
+          ON ARRAY[r.error_kind, r.error_code, r.error_text] = ARRAY[el.error_kind, el.error_code, el.error_text]
+        GROUP BY el.logid, el.log_date
+    )
+    UPDATE public.transactions t
+    SET error_details = n.error_details
+    FROM rebuilt n
+    WHERE t.logid = n.logid
+      AND t.log_date = n.log_date
+      AND t.error_details IS DISTINCT FROM n.error_details;
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    DELETE FROM mart_egisz.dim_error_type d
+    WHERE d.rule_code IS NULL
+      AND NOT EXISTS (SELECT 1 FROM pg_temp.reclassified r WHERE r.error_type = d.error_type);
+
+    DROP TABLE pg_temp.reclassified;
+    RETURN updated;
 END;
 $$;

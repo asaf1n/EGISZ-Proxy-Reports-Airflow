@@ -243,8 +243,6 @@ def test_documents_ui_reads_document_grain_without_view_side_filters() -> None:
     assert "NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL" in transform_sql
     assert "egisz_xml_text" not in transform_sql
     assert "clinic_inn" in sql
-    assert "error_text" in sql
-    assert "error_types" in sql
 
 
 def test_service_dashboard_trends_are_hourly_with_period_filter() -> None:
@@ -364,8 +362,9 @@ def test_documents_view_exposes_canonical_status_label_and_code() -> None:
     # Канонические RU-лейблы задаются один раз в dim_document_status.
     assert "'Успешно зарегистрирован'" in tables_sql
     assert "'Ошибка асинхронного ответа РЭМД'" in tables_sql
-    assert "'Ошибка связи'" in tables_sql
     assert "'Отправлено'" in tables_sql
+    # Ошибка связи — вид ошибки, а не статус: статус определяет только асинхронный ответ.
+    assert "('network_error'" not in tables_sql
     assert "ds.label AS status_label" in sql
     assert "d.status" in sql
     assert "COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) AS ips_date" in sql
@@ -1149,7 +1148,6 @@ def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> 
     assert "doctor_hash" in sql
     assert "organization_oid" not in sql
     assert "clinic_oid" in sql
-    assert "clinic_jid_mismatch" in sql
     assert "JID (EGISZ_LICENSES)" not in sql
     assert "Токен gost" not in sql
 
@@ -1589,10 +1587,17 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
     assert not missing, "Numeric columns missing separator: " + ", ".join(missing)
 
 
-def test_network_errors_view_exposes_canonical_local_uid() -> None:
+def test_network_error_view_is_published_per_message() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "semd_local_uid" in sql
-    assert "CREATE OR REPLACE VIEW public.rpt_network_errors" in sql
+    view = sql[sql.index("CREATE VIEW mart_egisz_selfservice.network_error AS"):]
+    view = view[:view.index(";")]
+    elements = sql[sql.index("CREATE VIEW stg_egisz.message_error AS"):]
+    elements = elements[:elements.index(";")]
+    # Строка — одна ошибка связи по времени сообщения, в том числе без связи с документом.
+    assert "tx.log_date AS message_at" in elements
+    assert "FROM stg_egisz.message_error m" in view
+    assert "m.error_kind = 'Ошибка связи'" in view
+    assert "JOIN public.documents" not in view
 
 
 def test_sent_view_derives_states_from_dictionaries() -> None:
@@ -2686,10 +2691,10 @@ def test_weekly_sql_layer_contract() -> None:
     """Недельный слой: matview в 85, DROP в 60, REFRESH+ANALYZE в 90, include в init."""
     weekly = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "CREATE MATERIALIZED VIEW public.rpt_documents_weekly" in weekly
-    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown_weekly" in weekly
+    assert "CREATE MATERIALIZED VIEW mart_egisz.agg_document_error_weekly" in weekly
     assert "uq_rpt_documents_weekly" in weekly
     assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
-    assert "uq_rpt_error_breakdown_weekly" in weekly
+    assert "uq_agg_document_error_weekly" in weekly
     # Корпус SLI — документы с ответом; состояния отправки идут отдельными счётчиками
     # и считаются на конец своей недели (см. test_pending_anchor).
     assert "FILTER (WHERE d.status <> 'sent')" in weekly
@@ -2699,13 +2704,13 @@ def test_weekly_sql_layer_contract() -> None:
 
     drops = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;" in drops
-    assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;" in drops
+    assert "DROP MATERIALIZED VIEW IF EXISTS mart_egisz.agg_document_error_weekly CASCADE;" in drops
 
     finalize = Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;" in finalize
-    assert "REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;" in finalize
+    assert "REFRESH MATERIALIZED VIEW mart_egisz.agg_document_error_weekly;" in finalize
     assert "ANALYZE public.rpt_documents_weekly;" in finalize
-    assert "ANALYZE public.rpt_error_breakdown_weekly;" in finalize
+    assert "ANALYZE mart_egisz.agg_document_error_weekly;" in finalize
 
     init = Path("db/dwh_init.sql").read_text(encoding="utf-8")
     assert r"\i db/04_views.sql" in init

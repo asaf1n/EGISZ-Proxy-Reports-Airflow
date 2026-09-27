@@ -45,11 +45,8 @@ ORDER BY 1, 3
 
 
 def function_source() -> str:
-    """Текст ensure_time_partitions из модуля схемы — без ручного дублирования.
-
-    Слайс начинается с DROP: переименование параметров несовместимо с CREATE OR REPLACE.
-    """
-    start = SCHEMA_SQL.index("DROP FUNCTION IF EXISTS public.ensure_time_partitions")
+    """Текст ensure_time_partitions из модуля схемы — без ручного дублирования."""
+    start = SCHEMA_SQL.index("CREATE OR REPLACE FUNCTION public.ensure_time_partitions")
     end = SCHEMA_SQL.index("\n$$;", start) + len("\n$$;")
     return SCHEMA_SQL[start:end]
 

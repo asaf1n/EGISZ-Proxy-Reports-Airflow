@@ -29,7 +29,8 @@ def test_clinic_nsi_mapping_view_contract() -> None:
     schema_sql = Path("db/01_schema.sql").read_text(encoding="utf-8")
     views_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
-    assert "ALTER TABLE dim_organizations ADD COLUMN IF NOT EXISTS nsi_name text;" in schema_sql
+    organizations_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS dim_organizations ("):]
+    assert "nsi_name text" in organizations_ddl[:organizations_ddl.index(");")]
     assert "CREATE TABLE IF NOT EXISTS dim_nsi_organization" in schema_sql
     assert "source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1461'" in schema_sql
     assert "parent_id text" in schema_sql

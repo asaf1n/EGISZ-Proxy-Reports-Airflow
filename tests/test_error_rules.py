@@ -1,18 +1,21 @@
-"""Регрессионные тесты классификатора ошибок против живого PostgreSQL.
+"""Регрессионные тесты обработки ошибок против живого PostgreSQL.
 
 Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_egisz);
 без переменной модуль целиком скипается — как и остальной suite, не зависящий от внешних
-сервисов. Фикстура идемпотентно применяет db/02_functions.sql из working tree, поэтому тесты
-проверяют именно текущий код правил, а не состояние базы на момент последнего dwh_init.
+сервисов. Фикстура идемпотентно применяет db/02_functions.sql из working tree поверх схемы
+db/01_schema.sql, поэтому тесты проверяют текущий код правил, а не состояние базы на момент
+последнего наката.
 
-Ожидаемые наименования типов — формулировки справочника ФНСИ 1.2.643.5.1.13.13.99.2.305:
-расхождение теста и справочника означает расхождение таксономии с федеральным
+Ожидаемые наименования типов — формулировки классификатора ФНСИ 1.2.643.5.1.13.13.99.2.305:
+расхождение теста и справочника означает расхождение классификации с федеральным
 классификатором.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -29,28 +32,40 @@ pytestmark = pytest.mark.skipif(not DSN, reason="EGISZ_TEST_PG_DSN not set; live
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
 SCHEMA_SQL = (DB_DIR / "01_schema.sql").read_text(encoding="utf-8")
 
+ASYNC = "Ошибка асинхронного ответа"
+NETWORK = "Ошибка связи"
+
 # Редакция НСИ 805, из которой взят реестр наименований справочников.
 NSI_DICTIONARY_SOURCE = ("1.2.643.5.1.13.13.99.2.805", "6.19")
 NSI_DICTIONARY_SIZE = 465
 
 RESPONSIBILITY_DOMAIN = ("клиника", "МИС", "интегратор", "РЭМД", "смешанная")
-CODE_NAMESPACES = ("НСИ 305", "IHE XDS", "шлюз")
+
+# Категории — группы причин. Вид («Ошибка связи»), контур (ИЭМК) и контур НСИ (ФРЛЛО)
+# категориями не являются.
+CATEGORIES = (
+    "Технические ошибки ЕГИСЗ",
+    "Ошибки получения файла ЭМД",
+    "Ошибки структуры и валидации",
+    "Ошибки справочника НСИ",
+    "Данные пациента",
+    "Данные медработника",
+    "Ошибки ЭП и сертификатов",
+    "Ошибки организации / ИС",
+    "Ошибки регистрации",
+    "Прочие",
+)
 
 # Коды-зонтики: их описание в ФНСИ («Ошибка валидации значения», «Непредвиденная ошибка»)
-# не несёт диагностики, поэтому blanket-правило яруса 2 для них не заводится — причина
-# читается из текста ярусами 3–4.
+# не несёт диагностики, поэтому правило яруса 2 для них не заводится — причина читается из
+# текста ярусами 3–4.
 UMBRELLA_CODES = ("VALIDATION_ERROR", "RUNTIME_ERROR")
-
-# Категории, чьи отказы приходят вне НСИ 305: ИЭМК отвечает errorCode IHE XDS, сбой
-# транспорта фиксирует шлюз. Мнемоники классификатора 305 у их типов быть не может.
-NON_NSI_CATEGORIES = ("Ошибки ИЭМК", "Ошибки связи")
 
 
 @pytest.fixture(scope="module")
 def con():
     con = connect_pg(DSN)
     with con.cursor() as cur:
-        # Функции разбора, словарь правил и классификация собраны в один модуль схемы.
         cur.execute((DB_DIR / "02_functions.sql").read_text(encoding="utf-8"))
     con.commit()
     yield con
@@ -64,183 +79,189 @@ def one(con, sql: str, *params):
         return cur.fetchone()[0]
 
 
-# --- Корпус: (code, message, ожидаемые атомы, ожидаемые категории) ---------------------
-# Сообщения — обезличенные образцы из архива callback (persist-значения заменены на […]).
+def classify(con, code: str | None, text: str | None, kind: str = ASYNC) -> tuple[str | None, str | None]:
+    with con.cursor() as cur:
+        cur.execute("SELECT error_type, nsi_dictionary_oid FROM stg_egisz.classify_error(%s, %s, %s)",
+                    (kind, code, text))
+        return cur.fetchone()
+
+
+def category(con, error_type: str | None) -> str | None:
+    with con.cursor() as cur:
+        cur.execute("SELECT error_category FROM mart_egisz.dim_error_type WHERE error_type = %s", (error_type,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def items(con, logstate: int | None, logtext: str | None, msgtext: str | None,
+          outcome: str | None, error_code: str | None = None, error_message: str | None = None):
+    with con.cursor() as cur:
+        cur.execute(
+            "SELECT item_no, error_kind, error_code, error_text "
+            "FROM stg_egisz.error_items(%s, %s, %s, %s, %s, %s)",
+            (logstate, logtext, msgtext, outcome, error_code, error_message),
+        )
+        return cur.fetchall()
+
+
+# --- Корпус: (code, message, ожидаемый тип, ожидаемая категория) ------------------------
+# Сообщения — обезличенные образцы из архива ответов (значения заменены на […]). Категория
+# None — тип без правила: его заводит в справочнике разбор журнала при первом появлении.
 CORPUS = [
-    # --- Ярус 2: код закрывает разбор, трактовка — наименование из ФНСИ ---------------
+    # --- Ярус 2: код закрывает разбор, тип — наименование из ФНСИ ------------------------
     ("PATIENT_MPI_MISMATCH",
      "Указанное значение [Фамилия] [Имя] не соответствует данным ГИП [—]. Пациент найден по локальному идентификатору",
-     ["Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП"],
-     ["Данные пациента"]),
+     "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП",
+     "Данные пациента"),
     ("PERSON_POST_IN_FRMR_MISMATCH",
      "Указанная должность сотрудника со СНИЛС [111] не соответствует занимаемой им должности в организации [222] по данным ФРМР.",
-     ["Переданная должность сотрудника не соответствует должности, зарегистрированной в ФРМР"],
-     ["Данные медработника"]),
+     "Переданная должность сотрудника не соответствует должности, зарегистрированной в ФРМР",
+     "Данные медработника"),
     ("NOT_UNIQUE_PROVIDED_ID", "",
-     ["Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован"],
-     ["Ошибки регистрации в РЭМД"]),
+     "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован", "Ошибки регистрации"),
     ("NO_SNILS", "СНИЛС пациента в составе сведений о пациенте обязателен для данного вида документов",
-     ["Наличие СНИЛС пациента не соответствует требованиям вида документов"], ["Данные пациента"]),
+     "Наличие СНИЛС пациента не соответствует требованиям вида документов", "Данные пациента"),
     ("RESTRICT_NEW_VERSION", "Для ЭМД 230 запрещена регистрация новых версий",
-     ["Для вида документа запрещено регистрировать новую версию"], ["Ошибки регистрации в РЭМД"]),
+     "Для вида документа запрещено регистрировать новую версию", "Ошибки регистрации"),
     ("WRONG_CREATION_DATE", "Дата создания документа не может быть позднее даты регистрации",
-     ["Дата создания документа больше даты регистрации"], ["Ошибки регистрации в РЭМД"]),
+     "Дата создания документа больше даты регистрации", "Ошибки регистрации"),
     ("RATE_LIMIT", "Доступ к сервису временно запрещён - превышен лимит запросов",
-     ["Достигнут защитный лимит, просьба повторить через минуту или позже"], ["Технические ошибки РЭМД"]),
+     "Достигнут защитный лимит, просьба повторить через минуту или позже", "Технические ошибки ЕГИСЗ"),
     ("RMIS_ERROR", "Ошибка получения файла ЭМД из файлового хранилища: Error in getDocumentFile by SOAP",
-     ["Ошибка ответа от сервиса системы в getDocumentFileResponse, предоставляющей документ"],
-     ["Ошибки получения файла ЭМД"]),
+     "Ошибка ответа от сервиса системы в getDocumentFileResponse, предоставляющей документ",
+     "Ошибки получения файла ЭМД"),
     # Файл получен, но не является валидным XML: код побеждает текстовый ярус
-    # «файлового хранилища» — регресс подмены типа.
+    # «файлового хранилища».
     ("INVALID_CONTENT", "Ошибка получения файла ЭМД из файлового хранилища: Переданный файл не является валидным XML файлом",
-     ["Из предоставляющей РМИС/МИС передан документ, формат файла которого не соответствует требованиям вида документов"],
-     ["Ошибки структуры и валидации"]),
+     "Из предоставляющей РМИС/МИС передан документ, формат файла которого не соответствует требованиям вида документов",
+     "Ошибки структуры и валидации"),
     ("DOC_DATE_MISMATCH_CERT_NOT_AFTER", "Сертификат МО недействителен на дату создания документа",
-     ["Сертификат ЭП недействителен на дату создания документа (документ создан позже окончания срока действия сертификата)"],
-     ["Ошибки ЭП и сертификатов"]),
+     "Сертификат ЭП недействителен на дату создания документа (документ создан позже окончания срока действия сертификата)",
+     "Ошибки ЭП и сертификатов"),
     ("INVALID_DOCTOR_NAME",
      "Имя [Иван] медицинского работника в запросе на регистрацию отличается от имени [Иоан] в СЭМД. СНИЛС [111]",
-     ["Имя медицинского работника в запросе на регистрацию отличается от имени в СЭМД"],
-     ["Данные медработника"]),
-
-    # --- Трактовки по описанию ФНСИ ---------------------------------------------------
+     "Имя медицинского работника в запросе на регистрацию отличается от имени в СЭМД",
+     "Данные медработника"),
     ("CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "Не удалось построить цепочку сертификатов",
-     ["Не удалось построить цепочку сертификатов до аккредитованного удостоверяющего центра"],
-     ["Ошибки ЭП и сертификатов"]),
+     "Не удалось построить цепочку сертификатов до аккредитованного удостоверяющего центра",
+     "Ошибки ЭП и сертификатов"),
     ("INVALID_DICTIONARY_OID", "Справочник OID [1.2.643.5.1.13.13.11.105978]. Справочник с указанным кодом отсутствует",
-     ["Справочник с указанным кодом отсутствует"], ["Ошибки справочника НСИ"]),
+     "Справочник с указанным кодом отсутствует", "Ошибки справочника НСИ"),
     ("INVALID_DICTIONARY_VERSION", "Справочник OID [1.2.643.5.1.13.13.99.2.197]. Версия [4.31] недопустима для документа вида [227].",
-     ["Версия справочника недопустима для данного вида документа"], ["Ошибки справочника НСИ"]),
+     "Версия справочника недопустима для данного вида документа", "Ошибки справочника НСИ"),
     ("XML_VALIDATION_ERROR", "Ошибка трансформации",
-     ["Ошибка при трансформации СЭМД для проверки (Schematron)"], ["Ошибки структуры и валидации"]),
+     "Ошибка при трансформации СЭМД для проверки (Schematron)", "Ошибки структуры и валидации"),
     ("SIGNATURE_VERIFICATION_ERROR", "Проверка подписи завершилась отрицательно",
-     ["Подпись не верна"], ["Ошибки ЭП и сертификатов"]),
-    ("OBJECT_NOT_FOUND", "Запись не найдена",
-     ["Не найдена запись справочника"], ["Ошибки справочника НСИ"]),
+     "Подпись не верна", "Ошибки ЭП и сертификатов"),
+    ("OBJECT_NOT_FOUND", "Запись не найдена", "Не найдена запись справочника", "Ошибки справочника НСИ"),
     ("ROLE_OCCURRENCE_MISMATCH", "Роль подписанта не соответствует",
-     ["Число ЭП сотрудников с требуемой ролью не соответствует требованиям вида документов"],
-     ["Ошибки ЭП и сертификатов"]),
+     "Число ЭП сотрудников с требуемой ролью не соответствует требованиям вида документов",
+     "Ошибки ЭП и сертификатов"),
     # CA_INACCESSIBILITY и текст «Удостоверяющий центр недоступен» — одна причина.
     ("CA_INACCESSIBILITY", "Удостоверяющий центр сертификата недоступен: Время ожидания истекло.",
-     ["Адрес OCSP-службы не указан или недоступен, CRL также недоступен"], ["Ошибки ЭП и сертификатов"]),
+     "Адрес OCSP-службы не указан или недоступен, CRL также недоступен", "Ошибки ЭП и сертификатов"),
     ("", "Удостоверяющий центр сертификата недоступен: Время ожидания истекло.",
-     ["Адрес OCSP-службы не указан или недоступен, CRL также недоступен"], ["Ошибки ЭП и сертификатов"]),
-
-    # --- Коды, ранее не заведённые: утекали в широкие текстовые фолбэки ---------------
+     "Адрес OCSP-службы не указан или недоступен, CRL также недоступен", "Ошибки ЭП и сертификатов"),
     ("PERSONAL_SIG_CERT_NOT_ACTUAL_ON_DOC_CREATION_DT", "",
-     ["Сертификат сотрудника недействителен на дату создания документа"], ["Ошибки ЭП и сертификатов"]),
+     "Сертификат сотрудника недействителен на дату создания документа", "Ошибки ЭП и сертификатов"),
     ("DUPLICATE_PATIENT_FOUND", "",
-     ["По локальному идентификатору в ГИП найдено более одной записи"], ["Данные пациента"]),
-    # РЭМД отдаёт RECIPIENT_*, справочник закрепляет RECEPIENT_* — синоним разрешается
-    # до сопоставления, поэтому правило одно.
+     "По локальному идентификатору в ГИП найдено более одной записи", "Данные пациента"),
+    # РЭМД отдаёт RECIPIENT_*, справочник закрепляет RECEPIENT_*: синоним разрешается до
+    # сопоставления, поэтому правило одно.
     ("RECIPIENT_INFO_MISMATCH", "Получатель [111] из запроса на регистрацию сведений не найден в СЭМД",
-     ["Получатель из запроса на регистрацию сведений не найден в СЭМД"], ["Данные пациента"]),
+     "Получатель из запроса на регистрацию сведений не найден в СЭМД", "Данные пациента"),
     ("RECEPIENT_INFO_MISMATCH", "",
-     ["Получатель из запроса на регистрацию сведений не найден в СЭМД"], ["Данные пациента"]),
-    # Синтетический код шлюза: сбой транспорта до РЭМД, ответа нет.
-    ("INTEGRATION_LOGSTATE_3", "Сетевая ошибка: Synapse TCP/IP Socket error 11001: Host not found",
-     ["Сетевая ошибка"], ["Ошибки связи"]),
+     "Получатель из запроса на регистрацию сведений не найден в СЭМД", "Данные пациента"),
 
-    # --- Ошибки схематрона: разделены по конкретной проверке (§5.8 регламента) --------
+    # --- Схематрон: разделён по конкретной проверке (§5.8 регламента) -------------------
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-19. Элемент ClinicalDocument/recordTarget/patientRole/addr/address:Type"
      " должен иметь не пустое значение атрибута @code. Путь: /ClinicalDocument[1]/recordTarget[1]",
-     ["Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям"], ["Данные пациента"]),
+     "Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям", "Данные пациента"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-18. Элемент ClinicalDocument/recordTarget/patientRole/addr"
      " должен иметь 1 элемент address:Type. Путь: /ClinicalDocument[1]/recordTarget[1]",
-     ["Адрес пациента: не указан тип адреса (address:Type)"], ["Данные пациента"]),
+     "Адрес пациента: не указан тип адреса (address:Type)", "Данные пациента"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-17. Элемент ClinicalDocument/recordTarget/patientRole"
      " должен иметь 1 или 2 элемента addr. Путь: /ClinicalDocument[1]/recordTarget[1]",
-     ["Адрес пациента: недопустимое число элементов addr"], ["Данные пациента"]),
+     "Адрес пациента: недопустимое число элементов addr", "Данные пациента"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-2: Элемент streetAddressLine должен содержать не пустое текстовое наполнение",
-     ["Адрес пациента: составляющая адреса не заполнена"], ["Данные пациента"]),
+     "Адрес пациента: составляющая адреса не заполнена", "Данные пациента"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-9. Элемент ClinicalDocument/recordTarget/patientRole/id[2]"
      " не должен иметь атрибут @nullFlavor. Путь: /ClinicalDocument[1]/recordTarget[1]",
-     ["Идентификатор пациента: недопустимый атрибут @nullFlavor"], ["Данные пациента"]),
+     "Идентификатор пациента: недопустимый атрибут @nullFlavor", "Данные пациента"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-4.1.1.1: Элемент telecom обязан содержать один атрибут @value с не пустым значением",
-     ["Контактные данные: не заполнен атрибут @value элемента telecom"], ["Ошибки структуры и валидации"]),
+     "Контактные данные: не заполнен атрибут @value элемента telecom", "Ошибки структуры и валидации"),
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: Допустимые значения для элементов functionCode[1]: CHAIRMAN, COMMISSIONER",
-     ["Значение элемента не входит в перечень допустимых"], ["Ошибки структуры и валидации"]),
+     "Значение элемента не входит в перечень допустимых", "Ошибки структуры и валидации"),
     ("VALIDATION_ERROR", "Ошибка валидации Schematron: экзотическое требование без известных элементов",
-     ["Ошибка Schematron-валидации"], ["Ошибки структуры и валидации"]),
+     "Ошибка Schematron-валидации", "Ошибки структуры и валидации"),
 
-    # --- Валидация по XSD (§5.7 регламента) ------------------------------------------
+    # --- Валидация по XSD (§5.7 регламента) --------------------------------------------
     ("VALIDATION_ERROR",
      "Ошибка валидации СЭМД: cvc-complex-type.2.4.a: Invalid content was found starting with element id",
-     ["XSD: недопустимый элемент или нарушен порядок элементов"], ["Ошибки структуры и валидации"]),
+     "XSD: недопустимый элемент или нарушен порядок элементов", "Ошибки структуры и валидации"),
     ("VALIDATION_ERROR",
      "Ошибка валидации СЭМД: cvc-complex-type.3.2.2: Attribute 'nullFlavor' is not allowed to appear in element 'telecom'.",
-     ["XSD: недопустимый атрибут элемента"], ["Ошибки структуры и валидации"]),
+     "XSD: недопустимый атрибут элемента", "Ошибки структуры и валидации"),
     ("VALIDATION_ERROR",
      "Ошибка валидации СЭМД: cvc-datatype-valid.1.2.1: '5 ml' is not a valid value of union type 'real'.",
-     ["XSD: значение не соответствует типу элемента"], ["Ошибки структуры и валидации"]),
+     "XSD: значение не соответствует типу элемента", "Ошибки структуры и валидации"),
 
-    # --- Кросс-валидация запроса и СЭМД (§5.2–5.5 регламента) ------------------------
+    # --- Кросс-валидация запроса и СЭМД (§5.2–5.5 регламента) --------------------------
     ("", "Уникальный идентификатор документа в ЭМД [abc] отличается от уникального идентификатора документа в запросе на регистрацию сведений [def]",
-     ["Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию"],
-     ["Ошибки регистрации в РЭМД"]),
+     "Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию",
+     "Ошибки регистрации"),
     ("VALIDATION_ERROR", "СНИЛС  пациента в ЭМД [111] отличается от СНИЛС пациента в запросе на регистрацию сведений [222]",
-     ["СНИЛС пациента в ЭМД не совпадает с запросом на регистрацию"], ["Данные пациента"]),
+     "СНИЛС пациента в ЭМД не совпадает с запросом на регистрацию", "Данные пациента"),
     ("VALIDATION_ERROR", "Организация [ООО Клиника] не привязана к РМИС [42]",
-     ["Организация не привязана к РМИС"], ["Ошибки организации / ИС"]),
+     "Организация не привязана к РМИС", "Ошибки организации / ИС"),
     ("VALIDATION_ERROR", "Недопустимые символы в имени 'Фамилия (девичья)'",
-     ["ФИО пациента содержит недопустимые символы"], ["Данные пациента"]),
+     "ФИО пациента содержит недопустимые символы", "Данные пациента"),
     ("VALUE_MISMATCH_METADATA_AND_CERTIFICATE",
      "В ФРМР не найдена актуальная на дату создания документа карточка МР c данными из сертификата подписи МО",
-     ["Подписант из сертификата не найден в ФРМР"], ["Данные медработника"]),
+     "Подписант из сертификата не найден в ФРМР", "Данные медработника"),
     ("RUNTIME_ERROR", "Не удается провести проверку ФРМР",
-     ["Проверяющая подсистема РЭМД недоступна"], ["Технические ошибки РЭМД"]),
+     "Проверяющая подсистема РЭМД недоступна", "Технические ошибки ЕГИСЗ"),
 
-    # --- Контур ИЭМК: код из атрибута RegistryError/errorCode ------------------------
+    # --- Контур ИЭМК: код из атрибута RegistryError/errorCode --------------------------
     ("XDSDictionaryValidationError", "Element representedCustodianOrganization. MO code [1.2.643] is not actual.",
-     ["ИЭМК: данные не соответствуют справочнику НСИ"], ["Ошибки ИЭМК"]),
+     "ИЭМК: данные не соответствуют справочнику НСИ", "Ошибки справочника НСИ"),
     ("XDSRepositoryError", "Internal error in repository",
-     ["ИЭМК: внутренняя ошибка репозитория"], ["Ошибки ИЭМК"]),
+     "ИЭМК: внутренняя ошибка репозитория", "Технические ошибки ЕГИСЗ"),
     ("XDSDocumentUniqueIdError", "Association [RPLC] targetId with unique ID [E13B85998D5A] not found in repository",
-     ["ИЭМК: заменяемый документ не найден (замена версии)"], ["Ошибки ИЭМК"]),
+     "ИЭМК: заменяемый документ не найден (замена версии)", "Ошибки регистрации"),
     ("XDSDocumentUniqueIdError", "malformed unique id",
-     ["ИЭМК: некорректный идентификатор документа"], ["Ошибки ИЭМК"]),
-    ("XDSRegistryBusy", "", ["ИЭМК: сервис временно недоступен"], ["Ошибки ИЭМК"]),
+     "ИЭМК: некорректный идентификатор документа", "Ошибки регистрации"),
+    ("XDSRegistryBusy", "", "ИЭМК: сервис временно недоступен", "Технические ошибки ЕГИСЗ"),
     ("", "[CRE-122]: PAT-001; Пациент не определен: [СНИЛС [111] не валидно контрольное число]",
-     ["ИЭМК: пациент не определён"], ["Ошибки ИЭМК"]),
+     "ИЭМК: пациент не определён", "Данные пациента"),
 
-    # --- Остаток: формулировка отказа показывается как тип ---------------------------
-    ("", "совершенно нераспознаваемый текст", ["совершенно нераспознаваемый текст"], ["Прочие"]),
+    # --- Без правила: тип — текст с замаскированными значениями -------------------------
+    ("", "совершенно нераспознаваемый текст", "совершенно нераспознаваемый текст", None),
     ("VALIDATION_ERROR",
      "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x",
-     ["Неизвестная проверка со СНИЛС […] и OID […]."], ["Прочие"]),
-    # Код вне классификатора и без текста — остаток, по которому строится health-сигнал.
-    ("SOME_UNSEEN_CODE", "", ["Код: SOME_UNSEEN_CODE"], ["Прочие"]),
+     "Неизвестная проверка со СНИЛС […] и OID […].", None),
+    # Код вне классификатора и без текста типа не получает: элемент виден в контроле
+    # качества, а не скрыт подставленным наименованием.
+    ("SOME_UNSEEN_CODE", "", None, None),
 ]
 
 
-@pytest.mark.parametrize("code,message,expected_atoms,expected_cats", CORPUS)
-def test_error_item_atoms_corpus(con, code, message, expected_atoms, expected_cats):
-    atoms = one(con, "SELECT public.error_item_atoms(%s, %s)", code, message)
-    assert atoms == expected_atoms
-    # Категория — JOIN к dim_error_type_group; формулировки вне словаря — «Прочие».
-    cats = [
-        one(
-            con,
-            """SELECT COALESCE(
-                   (SELECT g.error_category FROM dim_error_type_group g WHERE g.error_type = %s),
-                   'Прочие')""",
-            a,
-        )
-        for a in atoms
-    ]
-    assert cats == expected_cats
+@pytest.mark.parametrize("code,message,expected_type,expected_category", CORPUS)
+def test_classification_corpus(con, code, message, expected_type, expected_category):
+    error_type, _ = classify(con, code, message)
+    assert error_type == expected_type
+    assert category(con, error_type) == expected_category
 
 
-# --- Коллизии ярусов: паразитные вторые типы устранены -------------------------------
+# --- Коллизии ярусов: один тип на элемент -------------------------------------------------
 COLLISIONS = [
-    # точное code-правило против текстового
     ("ASYNC_RESPONSE_TIMEOUT", "Превышен таймаут ожидания асинхронного ответа",
      "Превышено ожидание асинхронного ответа от проверяющей системы"),
     ("PERSON_POST_IN_FRMR_MISMATCH",
@@ -250,7 +271,6 @@ COLLISIONS = [
      "Организация не найдена в ФРМО"),
     ("NO_ORG_ON_DATE", "Element providerOrganization. MO code: [1.2.643] is not actual. Delete date is 2026-06-27",
      "МО недействительна на дату создания документа"),
-    # соседние адресные проверки не должны срабатывать одновременно
     ("VALIDATION_ERROR",
      "Ошибка валидации Schematron: У1-21. Элемент ClinicalDocument/recordTarget/patientRole/addr/address:Type"
      " должен иметь не пустое значение атрибута @codeSystemVersion. Путь: /ClinicalDocument[1]",
@@ -260,219 +280,118 @@ COLLISIONS = [
 
 @pytest.mark.parametrize("code,message,expected_single", COLLISIONS)
 def test_tiered_matching_yields_single_type(con, code, message, expected_single):
-    atoms = one(con, "SELECT public.error_item_atoms(%s, %s)", code, message)
-    assert atoms == [expected_single]
+    assert classify(con, code, message)[0] == expected_single
 
 
 def test_code_rules_win_over_text_rules(con):
-    """Ярус кода закрывает разбор: текстовое правило не может подменить трактовку,
-    заданную классификатором ФНСИ."""
-    atoms = one(con, "SELECT public.error_item_atoms(%s, %s)",
-                "GET_DOCUMENT_FILE_ERROR", "Ошибка получения файла ЭМД из файлового хранилища: Статус ответа МИС [error]")
-    assert atoms == ["Ошибка при получении файла документа из предоставляющей системы"]
+    """Ярус кода закрывает разбор: текстовое правило не подменяет тип, заданный
+    классификатором ФНСИ."""
+    assert classify(con, "GET_DOCUMENT_FILE_ERROR",
+                    "Ошибка получения файла ЭМД из файлового хранилища: Статус ответа МИС [error]")[0] == \
+        "Ошибка при получении файла документа из предоставляющей системы"
 
 
-def test_error_classify_dedups_and_joins(con):
-    result = one(con, """SELECT public.error_classify(
-        '[{"code":"NO_SNILS","message":""},
-          {"code":"PATIENT_MPI_MISMATCH","message":"не соответствует данным ГИП"}]'::jsonb)""")
-    assert result == (
+def test_rule_type_replaces_readable_message(con):
+    """Тип элемента с правилом — наименование правила. Годится ли текст сообщения в тип,
+    решают при пополнении правил, а не при разборе."""
+    message = "СНИЛС пациента в составе сведений о пациенте обязателен для данного вида документов"
+    assert classify(con, "NO_SNILS", message)[0] == \
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
-        " · не соответствует данным ГИП"
-    )
 
 
-def test_error_classify_empty_message_known_code(con):
-    result = one(con, """SELECT public.error_classify(
-        '[{"code":"NOT_UNIQUE_PROVIDED_ID","message":""}]'::jsonb)""")
-    assert result == "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован"
+# --- Маскирование текста без правила -----------------------------------------------------
 
-
-@pytest.mark.parametrize("code,message", [
-    # Истёкший сертификат организации покрыт описанием кода в НСИ 305: «один из
-    # сертификатов цепочки не действителен».
-    ("CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "Срок действия сертификата организации истек или еще не наступил"),
-    ("NO_SNILS", "СНИЛС пациента в составе сведений о пациенте обязателен для данного вида документов"),
-    ("OBJECT_NOT_FOUND", "Подразделение не существовало на дату создания документа"),
-])
-def test_readable_message_is_not_rephrased(con, code, message):
-    import json
-
-    details = one(con, "SELECT public.error_details(%s::jsonb)",
-                  json.dumps([{"code": code, "message": message}]))
-    assert details[0]["error_type"] == message
-    assert details[0]["message"] == message
-    assert details[0]["code"] == code
-    assert details[0]["classification_type"] == one(
-        con, "SELECT public.error_item_atoms(%s, %s)", code, message)[0]
-
-
-@pytest.mark.parametrize("code,message,expected", [
-    ("XDSPatientRegistrationError",
-     "[CRE-013]: PAT-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
+@pytest.mark.parametrize("message,expected", [
+    ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.12345], patientId: [B1234567-B123-4C12-8A1B-1234E12DDFFA])",
-     "ИЭМК: Пациент не определен: СНИЛС […] не валидно контрольное число"),
-    ("XDSPatientRegistrationError",
-     "[CRE-013]: PAT-001; Пациент не определен: [СНИЛС [12345678] не соответствует формату \\d{11}];"
+     "Пациент не определен: СНИЛС […] не валидно контрольное число"),
+    ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678] не соответствует формату \\d{11}];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.1234], patientId: [DFD1F2A3-4EEF-5B6A-A7E8-9CC01C23BC45])",
-     "ИЭМК: Пациент не определен: СНИЛС […] не соответствует формату (11 цифр)"),
-    ("VALSYS_REJECT",
-     "Ошибки валидации в ФРМСС: [code: DUPLICATE, description: Свидетельство с номером 123456789 и серией 12"
+     "Пациент не определен: СНИЛС […] не соответствует формату (11 цифр)"),
+    ("Ошибки валидации в ФРМСС: [code: DUPLICATE, description: Свидетельство с номером 123456789 и серией 12"
      " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа.].",
      "Ошибки валидации в ФРМСС (DUPLICATE): Свидетельство с номером […] и серией […]"
      " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа."),
-    ("VALSYS_REJECT",
-     "Ошибки валидации в ФРМСС: [code: MSSCERT, description: Внутренняя ошибка сервиса ФРМСС,"
+    ("Ошибки валидации в ФРМСС: [code: MSSCERT, description: Внутренняя ошибка сервиса ФРМСС,"
      " уникальный идентификатор ошибки: a1a2f3f4-d56d-78ba-bd9f-e0b12db34a56].",
      "Ошибки валидации в ФРМСС (MSSCERT): Внутренняя ошибка сервиса ФРМСС"),
 ])
-def test_wrapped_responses_are_unwrapped(con, code, message, expected):
-    import json
-
-    details = one(con, "SELECT public.error_details(%s::jsonb)",
-                  json.dumps([{"code": code, "message": message}]))
-    assert details[0]["error_type"] == expected
+def test_wrapped_responses_are_unwrapped(con, message, expected):
+    assert classify(con, "", message)[0] == expected
 
 
-def test_gip_mismatch_keeps_attribute_name_and_hides_values(con):
-    details = one(con, """SELECT public.error_details(
-        '[{"code":"PATIENT_MPI_MISMATCH","message":"Указанное значение [Имя пациента] [Петрова Анна] не соответствует данным ГИП [Петрова А.]. Пациент найден по локальному идентификатору"}]'::jsonb)""")
-    assert details[0]["error_type"] == (
-        "Указанное значение [Имя пациента] […] не соответствует данным ГИП […]."
-        " Пациент найден по локальному идентификатору")
+def test_attribute_name_survives_bracket_masking(con):
+    """«Указанное значение [Имя пациента] …» называет, что именно не совпало: реквизит
+    остаётся, значения скрываются."""
+    assert classify(con, "", "Указанное значение [Имя пациента] [Петрова Анна] отличается от сведений [Петрова А.]")[0] == \
+        "Указанное значение [Имя пациента] […] отличается от сведений […]"
 
 
 @pytest.mark.parametrize("code,message,leak", [
-    ("SIGNATURE_VERIFICATION_ERROR",
-     "ЭП МО не верна: Validation failed for the target: serial: 1a2b subject: CN=Иванова Анна Петровна, EMAILADDRESS=ivanova@example.ru",
-     "Иванова"),
-    ("", "Дата рождения сотрудника со СНИЛС [111] (1975-07-21) не соответствует данным ФРМР [222]",
-     "1975-07-21"),
+    ("", "ЭП МО не верна: Validation failed for the target: serial: 1a2b subject: CN=Иванова Анна Петровна,"
+         " EMAILADDRESS=ivanova@example.ru", "Иванова"),
+    ("", "Дата рождения сотрудника со СНИЛС [111] (1975-07-21) не соответствует данным ФРМР [222]", "1975-07-21"),
     ("", "Недопустимые символы в имени 'Петрова (сидорова)'", "Петрова"),
+    ("", "Неверный формат e-mail 'Ivanov.I.I@example.ru '", "Ivanov"),
+    ("", "Адрес ivanov@example.ru недоступен", "ivanov@"),
 ])
 def test_error_type_carries_no_instance_values(con, code, message, leak):
-    """Тип ошибки уходит в фильтры и сводки дашбордов, в том числе клиентских."""
-    import json
-
-    details = one(con, "SELECT public.error_details(%s::jsonb)",
-                  json.dumps([{"code": code, "message": message}]))
-    assert details and all(leak not in d["error_type"] for d in details)
-    assert all(d["message"] == message for d in details)
+    """Тип уходит в фильтры и сводки дашбордов, в том числе клиентских."""
+    error_type, _ = classify(con, code, message)
+    assert error_type and leak not in error_type
 
 
-def test_machine_message_still_uses_interpretation(con):
-    details = one(con, """SELECT public.error_details(
-        '[{"code":"XDSRepositoryError","message":"Internal error"}]'::jsonb)""")
-    assert details[0]["error_type"] == details[0]["classification_type"]
-    assert details[0]["error_type"] != "Internal error"
+def test_masking_strips_document_values(con):
+    error_type, _ = classify(con, "VALIDATION_ERROR",
+                             "Проверка без правила: элемент [x] со СНИЛС 11122233344"
+                             " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
+    assert "11122233344" not in error_type
+    assert "1.2.643.5.1.13.13" not in error_type
+    assert "Путь:" not in error_type
 
 
-def test_gateway_status_retains_transport_classification(con):
-    details = one(con, """SELECT public.error_details(
-        '[{"code":"INTEGRATION_LOGSTATE_3","message":"Сетевая ошибка: соединение прервано"}]'::jsonb)""")
-    assert details[0]["error_type"] == "Сетевая ошибка"
-    assert details[0]["classification_type"] == "Сетевая ошибка"
+def test_network_error_type_is_masked_gateway_text(con):
+    assert classify(con, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out", NETWORK)[0] == \
+        "Synapse TCP/IP Socket error 10060: Connection timed out"
+    assert classify(con, "500", "Error while receiving data from service: https://gost-123.example.ru:9945/api"
+                    " Error code: 500", NETWORK)[0] == \
+        "Error while receiving data from service: <endpoint> Error code: 500"
 
 
-def test_error_details_keep_dictionary_with_its_own_item(con):
-    import json
+# --- Элементы ошибки сообщения ------------------------------------------------------------
 
-    oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
-    payload = [{"code": "INVALID_DICTIONARY_VERSION", "message":
-                f"Справочник OID [{oid}]. Версия [1] недопустима для документа вида [227]. Требуется использовать версии: [2]"}
-               for oid in oids]
-    details = one(con, "SELECT public.error_details(%s::jsonb)", json.dumps(payload))
-    assert [x["nsi_dictionary_oid"] for x in details] == oids
-    assert [x["message"] for x in details] == [x["message"] for x in payload]
+def test_delivery_failure_is_a_network_error_item(con):
+    assert items(con, 3, "Synapse TCP/IP Socket error 11001: Host not found", None, None) == [
+        (0, NETWORK, "11001", "Synapse TCP/IP Socket error 11001: Host not found")]
+    assert items(con, 3, "Error while receiving data from service: https://x Error code: 503", None, None)[0][2] == "503"
 
 
-def test_literal_separator_in_message_is_not_an_error_boundary(con):
-    details = one(con, """SELECT public.error_details(
-        '[{"code":"VALIDATION_ERROR","message":"Поле не заполнено · проверка документа"}]'::jsonb)""")
-    assert len(details) == 1
-    assert details[0]["error_type"] == "Поле не заполнено · проверка документа"
+def test_undelivered_response_keeps_both_kinds(con):
+    """Сбой доставки ответа не отменяет отказа в этом же ответе."""
+    payload = "<registerDocumentResult><status>error</status><item><code>NO_SNILS</code><message>м</message></item></registerDocumentResult>"
+    assert items(con, 3, "Synapse TCP/IP Socket error 10060: Connection timed out", payload, "error") == [
+        (0, NETWORK, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out"),
+        (1, ASYNC, "NO_SNILS", "м"),
+    ]
 
 
-def test_reporting_keeps_individual_errors_and_full_nsi_labels(con):
-    import json
-    import uuid
-
-    ids = [str(uuid.uuid4()), str(uuid.uuid4())]
-    message = "Срок действия сертификата организации истек или еще не наступил"
-    certificate = {"code": "CANT_BUILD_CERT_CHAIN_TO_ACCREDITED_CA_CERT", "message": message}
-    oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
-    dictionaries = [{"code": "INVALID_DICTIONARY_VERSION", "message":
-                     f"Справочник OID [{oid}]. Версия [1] недопустима для документа вида [227]. Требуется использовать версии: [2]"}
-                    for oid in oids]
-    with con.cursor() as cur:
-        cur.execute("SAVEPOINT reporting_case")
-        try:
-            for doc_id, payload in zip(ids, [dictionaries + [certificate, certificate], [certificate]]):
-                cur.execute("""
-                    INSERT INTO documents (dwh_id, status, last_callback_at, error_details, error_types)
-                    SELECT %s, 'async_error', now(), details, public.error_detail_types(details)
-                    FROM (SELECT public.error_details(%s::jsonb) AS details) d
-                """, (doc_id, json.dumps(payload)))
-            # Проверяется определение поставляемой витрины без REFRESH общего архива.
-            cur.execute("SELECT pg_get_viewdef('public.rpt_error_breakdown', true)")
-            view_sql = cur.fetchone()[0].rstrip().rstrip(';')
-            cur.execute("SELECT dwh_id, error_type, nsi_dictionary_oid, nsi_dictionary_name "
-                        "FROM (" + view_sql + ") b WHERE dwh_id = ANY(%s)", (ids,))
-            rows = cur.fetchall()
-            assert len(rows) == 4
-            assert {row[0] for row in rows if row[1] == message} == set(ids)
-            for row in rows:
-                if row[2]:
-                    assert row[2] in oids
-                    assert row[3]
-                    assert row[1].endswith(f" (НСИ: {row[3]}, OID {row[2]})")
-        finally:
-            cur.execute("ROLLBACK TO SAVEPOINT reporting_case")
-            cur.execute("RELEASE SAVEPOINT reporting_case")
+def test_success_response_items_are_kept(con):
+    payload = ("<registerDocumentResult><status>success</status><emdrId>1</emdrId>"
+               "<item><code>VALIDATION_ERROR</code><message>м</message></item></registerDocumentResult>")
+    assert items(con, 0, None, payload, "success") == [(1, ASYNC, "VALIDATION_ERROR", "м")]
 
 
-# --- Нормализация остатка --------------------------------------------------------------
-
-def test_remd_error_type_strips_document_values(con):
-    """Тип не должен нести значения конкретного документа: иначе каждый отказ становится
-    отдельной строкой витрины. Полный текст остаётся в error_text."""
-    label = one(con, "SELECT public.remd_error_type(%s)",
-                "Ошибка валидации Schematron: У1-21. Элемент [x] со СНИЛС 11122233344"
-                " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
-    assert "11122233344" not in label
-    assert "1.2.643.5.1.13.13" not in label
-    assert "Путь:" not in label
-    assert "У1-21" not in label
-    assert one(con, "SELECT public.remd_error_type(%s)", "") == "(без текста)"
+def test_request_message_has_no_response_items(con):
+    assert items(con, 0, None, "<item><code>X</code></item>", None) == []
 
 
-def test_remd_error_type_masks_quoted_values_and_email(con):
-    """Отказ без правила идёт в тип своей формулировкой — в ней фамилии и почта."""
-    assert one(con, "SELECT public.remd_error_type(%s)",
-               "Неверный формат e-mail 'Ivanov.I.I@example.ru '") == "Неверный формат e-mail '[…]'"
-    assert one(con, "SELECT public.remd_error_type(%s)",
-               "Адрес ivanov@example.ru недоступен") == "Адрес <e-mail> недоступен"
+def test_error_items_support_namespaced_items_with_attributes(con):
+    payload = ('<ns2:errors><ns2:item attr="x"><ns2:code>NO_SNILS</ns2:code>'
+               "<ns2:message>СНИЛС отсутствует</ns2:message></ns2:item></ns2:errors>")
+    assert items(con, 0, None, payload, "error") == [(1, ASYNC, "NO_SNILS", "СНИЛС отсутствует")]
 
 
-def test_uncovered_message_surfaces_as_text(con):
-    """Формулировка без правила показывается как есть."""
-    atoms = one(con, "SELECT public.error_item_atoms(%s, %s)",
-                "VALIDATION_ERROR", "Совершенно новая проверка РЭМД")
-    assert atoms == ["Совершенно новая проверка РЭМД"]
-
-
-# --- Парсинг payload -------------------------------------------------------------------
-
-def test_xml_error_items_supports_namespaced_items_with_attributes(con):
-    payload = (
-        '<ns2:errors><ns2:item attr="x"><ns2:code>NO_SNILS</ns2:code>'
-        "<ns2:message>СНИЛС отсутствует</ns2:message></ns2:item></ns2:errors>"
-    )
-    items = one(con, "SELECT public.xml_error_items(%s)", payload)
-    assert items == [{"code": "NO_SNILS", "message": "СНИЛС отсутствует"}]
-
-
-def test_xml_registry_errors_extracts_attrs_in_any_order(con):
+def test_error_items_read_registry_errors_in_any_attribute_order(con):
     payload = (
         "<rs:RegistryResponse><rs:RegistryErrorList>"
         '<rs:RegistryError severity="urn:e" errorCode="XDSDictionaryValidationError"'
@@ -480,28 +399,37 @@ def test_xml_registry_errors_extracts_attrs_in_any_order(con):
         '<rs:RegistryError codeContext="Internal error in repository" errorCode="XDSRepositoryError"/>'
         "</rs:RegistryErrorList></rs:RegistryResponse>"
     )
-    items = one(con, "SELECT public.xml_registry_errors(%s)", payload)
-    assert items == [
-        {"code": "XDSDictionaryValidationError", "message": 'Значение "X" не найдено'},
-        {"code": "XDSRepositoryError", "message": "Internal error in repository"},
+    assert items(con, 0, None, payload, "error") == [
+        (1, ASYNC, "XDSDictionaryValidationError", 'Значение "X" не найдено'),
+        (2, ASYNC, "XDSRepositoryError", "Internal error in repository"),
     ]
 
 
-def test_build_errors_json_falls_back_to_registry_errors(con):
-    payload = (
-        "<rs:RegistryResponse>"
-        '<rs:RegistryError errorCode="XDSRepositoryError" codeContext="Internal error"/>'
-        "</rs:RegistryResponse>"
-    )
-    items = one(con, "SELECT public.build_errors_json('error', NULL, NULL, %s)", payload)
-    assert items == [{"code": "XDSRepositoryError", "message": "Internal error"}]
-    # обычные <item> имеют приоритет над RegistryError
-    both = (
-        "<x><item><code>NO_SNILS</code><message>m</message></item>"
-        '<rs:RegistryError errorCode="XDSRepositoryError" codeContext="c"/></x>'
-    )
-    items = one(con, "SELECT public.build_errors_json('error', NULL, NULL, %s)", both)
-    assert items == [{"code": "NO_SNILS", "message": "m"}]
+def test_items_take_priority_over_registry_errors_and_fallback(con):
+    both = ("<x><item><code>NO_SNILS</code><message>m</message></item>"
+            '<rs:RegistryError errorCode="XDSRepositoryError" codeContext="c"/></x>')
+    assert items(con, 0, None, both, "error") == [(1, ASYNC, "NO_SNILS", "m")]
+    # Ответ об ошибке без элементов: код и текст ответа.
+    assert items(con, 0, None, "<soap:Fault/>", "error", "SERVER", "текст") == [(1, ASYNC, "SERVER", "текст")]
+
+
+# --- Исход асинхронного ответа ------------------------------------------------------------
+
+@pytest.mark.parametrize("action,raw_status,document_status,fault,error_ilike,registry_status,expected", [
+    ("sendRegisterDocumentResult", "success", None, False, False, None, "success"),
+    ("sendRegisterDocumentResult", "error", None, False, True, None, "error"),
+    ("sendRegisterDocumentResult", "", "Зарегистрировано", False, False, None, "success"),
+    ("urn:ihe:iti:2007:ProvideAndRegisterDocumentSet-bAsyncResponse", "", None, False, False, "Success", "success"),
+    ("urn:ihe:iti:2007:ProvideAndRegisterDocumentSet-bAsyncResponse", "", None, False, False, "Failure", "error"),
+    # Запрос — не асинхронный ответ: исхода нет, сбой его доставки статус не меняет.
+    ("getDocumentFile", "", None, False, False, None, None),
+    ("registerDocument", "", None, True, True, None, None),
+    # Нераспознанный асинхронный ответ исхода не получает и виден в контроле качества.
+    ("sendRegisterDocumentResult", "processing", None, False, False, None, None),
+])
+def test_async_outcome(con, action, raw_status, document_status, fault, error_ilike, registry_status, expected):
+    assert one(con, "SELECT public.classify_async_status(%s, %s, %s, %s, %s, %s)",
+               action, raw_status, document_status, fault, error_ilike, registry_status) == expected
 
 
 def test_parse_exchangelog_row_extracts_faultcode_last(con):
@@ -514,218 +442,184 @@ def test_parse_exchangelog_row_extracts_faultcode_last(con):
     assert row == "VALIDATION_ERROR"
 
 
-# --- Соответствие федеральному классификатору ------------------------------------------
+# --- Соответствие федеральному классификатору --------------------------------------------
 
 def test_every_nsi_code_is_covered_by_a_rule(con):
-    """Каждая мнемоника ФНСИ, кроме зонтичных кодов, закрыта правилом яруса 2 —
-    отказ по любому коду классификатора получает наименование справочника."""
+    """Каждая мнемоника ФНСИ, кроме зонтичных кодов, закрыта правилом яруса 2."""
     uncovered = one(con, """
         SELECT array_agg(c.nsi_error_code ORDER BY c.nsi_error_code)
-        FROM dim_nsi_error_code c
-        WHERE NOT EXISTS (SELECT 1 FROM dim_error_rules r
-                          WHERE r.is_active AND r.nsi_error_code = c.nsi_error_code)
+        FROM mart_egisz.dim_nsi_error_code c
+        WHERE NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
+                          WHERE r.rule_kind = 'классификация' AND r.nsi_error_code = c.nsi_error_code)
     """)
     assert sorted(uncovered or []) == sorted(UMBRELLA_CODES)
 
 
-def test_no_rule_invents_a_code_outside_the_dictionary(con):
-    """Правило с кодом обязано объявить пространство имён, а для контура РЭМД — ссылаться
-    на существующую мнемонику ФНСИ. Внешний ключ не даёт завести выдуманный код."""
+def test_code_rules_reference_the_dictionary(con):
+    """Правило с кодом НСИ сопоставляет ровно свою мнемонику; правило контура ИЭМК
+    мнемоники НСИ не несёт."""
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE (match_code IS NOT NULL) <> (code_namespace IS NOT NULL)
-           OR (code_namespace IS NOT NULL AND code_namespace NOT IN %s)
-           OR ((code_namespace IS NOT DISTINCT FROM 'НСИ 305') <> (nsi_error_code IS NOT NULL))
-    """, CODE_NAMESPACES) == 0
-    # для контура РЭМД сопоставляемый код и мнемоника справочника — одно и то же значение
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE nsi_error_code IS NOT NULL AND match_code IS DISTINCT FROM nsi_error_code
+    """) == 0
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE code_namespace = 'НСИ 305' AND match_code IS DISTINCT FROM nsi_error_code
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE match_code LIKE 'XDS%%' AND nsi_error_code IS NOT NULL
     """) == 0
 
 
 def test_nsi_dictionary_matches_published_revision(con):
-    assert one(con, "SELECT count(*) FROM dim_nsi_error_code") == 127
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code") == 127
     assert one(con, """
-        SELECT count(*) FROM dim_nsi_error_code
+        SELECT count(*) FROM mart_egisz.dim_nsi_error_code
         WHERE oid <> '1.2.643.5.1.13.13.99.2.305' OR version <> '3.18'
     """) == 0
-    # синоним обязан вести на существующую мнемонику и не совпадать с ней
-    assert one(con, "SELECT count(*) FROM dim_nsi_error_code_alias WHERE alias = nsi_error_code") == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code_alias WHERE alias = nsi_error_code") == 0
 
 
 def test_types_carry_nsi_code_when_rule_is_code_gated(con):
-    """Тип, рождённый правилом с кодом ФНСИ, обязан нести этот код: витрина показывает
-    мнемонику рядом с наименованием."""
     assert one(con, """
-        SELECT count(*) FROM dim_error_type_group g
-        WHERE g.nsi_error_code IS NULL
-          AND EXISTS (SELECT 1 FROM dim_error_rules r
-                      WHERE r.is_active AND r.interpretation = g.error_type
-                        AND r.code_namespace = 'НСИ 305')
+        SELECT count(*) FROM mart_egisz.dim_error_type t
+        JOIN mart_egisz.dim_error_rules r ON r.rule_code = t.rule_code
+        WHERE r.nsi_error_code IS NOT NULL AND t.nsi_error_code IS DISTINCT FROM r.nsi_error_code
     """) == 0
 
 
-def test_text_rules_declare_umbrella_code(con):
-    """Ярус 3–4 срабатывает только без совпадения на ярусе 2, то есть под зонтичным кодом.
-    Правило контура регистрации обязано его объявить; правило ИЭМК/шлюза — не может: его
-    код лежит вне НСИ 305. Кодовые ярусы 1–2 знают свою мнемонику, зонтик им не нужен."""
+# --- Инварианты справочников ------------------------------------------------------------
+
+def test_categories_are_cause_groups(con):
+    assert set(one(con, """
+        SELECT array_agg(error_category) FROM mart_egisz.dim_error_category
+        WHERE error_kind = 'Ошибка асинхронного ответа'
+    """)) == set(CATEGORIES)
+    # У вида «Ошибка связи» категорий нет.
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE match_tier >= 3 AND error_category NOT IN %s
-          AND COALESCE(parent_nsi_error_code, '') NOT IN %s
-    """, NON_NSI_CATEGORIES, UMBRELLA_CODES) == 0
-    assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE error_category IN %s AND parent_nsi_error_code IS NOT NULL
-    """, NON_NSI_CATEGORIES) == 0
-    assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE parent_nsi_error_code IS NOT NULL
-          AND (match_tier <= 2 OR nsi_error_code IS NOT NULL)
+        SELECT count(*) FROM mart_egisz.dim_error_category
+        WHERE error_kind = 'Ошибка связи' AND error_category IS NOT NULL
     """) == 0
 
 
-def test_every_type_reports_a_refusal_code(con):
-    """Тип регистрационного контура показывает мнемонику отказа — свою либо зонтичную.
-    Пусто остаётся только там, где мнемоники в НСИ 305 нет: ИЭМК или транспорт."""
-    missing = one(con, """
-        SELECT array_agg(g.error_type ORDER BY g.error_type)
-        FROM dim_error_type_group g
-        WHERE COALESCE(g.nsi_error_code, g.parent_nsi_error_code) IS NULL
-          AND g.error_category NOT IN %s
-          AND g.error_type <> 'Неизвестная ошибка'
-    """, NON_NSI_CATEGORIES)
-    assert (missing or []) == []
-
-
-# --- Инварианты словарей ---------------------------------------------------------------
-
-def test_every_active_interpretation_is_canonical(con):
+def test_every_rule_interpretation_is_a_type_with_its_category(con):
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules r
-        WHERE r.is_active AND NOT EXISTS (
-            SELECT 1 FROM dim_error_type_group g WHERE g.error_type = r.interpretation)
+        SELECT count(*) FROM mart_egisz.dim_error_rules r
+        WHERE r.rule_kind = 'классификация' AND NOT EXISTS (
+            SELECT 1 FROM mart_egisz.dim_error_type t
+            WHERE t.error_type = r.interpretation AND t.error_category = r.error_category)
     """) == 0
 
 
-def test_dictionary_has_no_orphan_types(con):
-    """Тип, переставший порождаться правилами, снимается прунингом: иначе он остаётся
-    в словаре и продолжает раздавать категорию строкам витрины."""
+def test_dictionary_has_no_orphan_rule_types(con):
     assert one(con, """
-        SELECT count(*) FROM dim_error_type_group g
-        WHERE g.error_type <> 'Неизвестная ошибка'
-          AND NOT EXISTS (SELECT 1 FROM dim_error_rules r
-                          WHERE r.is_active AND r.interpretation = g.error_type)
+        SELECT count(*) FROM mart_egisz.dim_error_type t
+        WHERE t.rule_code IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
+                          WHERE r.rule_kind = 'классификация' AND r.interpretation = t.error_type)
     """) == 0
 
 
-def test_type_names_carry_no_document_values(con):
-    """Наименование типа не должно содержать плейсхолдеров значений из описаний ФНСИ:
-    «Справочник OID [], версия []» как имя типа нечитаемо."""
+def test_rule_type_names_carry_no_document_values(con):
     assert one(con, """
-        SELECT count(*) FROM dim_error_type_group
-        WHERE error_type LIKE '%[%' OR error_type LIKE '%]%'
+        SELECT count(*) FROM mart_egisz.dim_error_type
+        WHERE rule_code IS NOT NULL AND (error_type LIKE '%%[%%' OR error_type LIKE '%%]%%')
     """) == 0
 
 
 def test_every_type_has_responsibility_and_retryable(con):
     assert one(con, """
-        SELECT count(*) FROM dim_error_type_group
-        WHERE responsibility IS NULL OR is_retryable IS NULL
-           OR responsibility NOT IN %s
+        SELECT count(*) FROM mart_egisz.dim_error_type
+        WHERE responsibility IS NULL OR is_retryable IS NULL OR responsibility NOT IN %s
     """, RESPONSIBILITY_DOMAIN) == 0
 
 
 def test_all_patterns_compile(con):
     # ~* форсирует компиляцию каждого регекспа; невалидный ARE уронит запрос
-    assert one(con, "SELECT count(*) FROM dim_error_rules r WHERE ('' ~* r.match_pattern) IS NULL") == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules r WHERE ('' ~* r.match_pattern) IS NULL") == 0
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_rules r
+        WHERE r.rule_kind = 'маскирование'
+          AND regexp_replace('x', r.match_pattern, r.replacement, r.match_flags) IS NULL
+    """) == 0
+
+
+def test_masking_steps_have_distinct_order(con):
+    assert one(con, """
+        SELECT count(*) FROM (
+            SELECT apply_order FROM mart_egisz.dim_error_rules
+            WHERE rule_kind = 'маскирование' GROUP BY apply_order HAVING count(*) > 1) d
+    """) == 0
 
 
 def test_tier_matches_code_presence(con):
-    assert one(con, "SELECT count(*) FROM dim_error_rules WHERE (match_tier <= 2) <> (match_code IS NOT NULL)") == 0
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE rule_kind = 'классификация' AND (match_tier <= 2) <> (match_code IS NOT NULL)
+    """) == 0
 
 
 def test_tier2_patterns_are_catch_all(con):
-    assert one(con, "SELECT count(*) FROM dim_error_rules WHERE match_tier = 2 AND match_pattern <> '(?is).*'") == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules WHERE match_tier = 2 AND match_pattern <> '(?is).*'") == 0
 
 
 def test_match_codes_are_uppercase(con):
-    # Движок сравнивает с upper(btrim(code)).
-    assert one(con, "SELECT count(*) FROM dim_error_rules WHERE match_code IS NOT NULL AND match_code <> upper(match_code)") == 0
+    # Классификация сравнивает с upper(btrim(code)).
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules WHERE match_code <> upper(match_code)") == 0
 
 
 def test_no_duplicate_code_rules_within_tier2(con):
-    # два активных code-only правила на один код дали бы недетерминированную пару типов
     assert one(con, """
         SELECT count(*) FROM (
-            SELECT match_code FROM dim_error_rules
-            WHERE is_active AND match_tier = 2
+            SELECT match_code FROM mart_egisz.dim_error_rules
+            WHERE match_tier = 2
             GROUP BY match_code HAVING count(DISTINCT interpretation) > 1
         ) d
     """) == 0
 
 
 def test_umbrella_codes_keep_text_refinements(con):
-    """Документирует, почему VALIDATION_ERROR и RUNTIME_ERROR не покрыты ярусом 2:
-    blanket-правило закрыло бы текстовые ярусы, которые и несут диагностику."""
-    assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE match_tier = 2 AND match_code IN %s
-    """, UMBRELLA_CODES) == 0
-    atoms = one(con, "SELECT public.error_item_atoms(%s, %s)",
-                "RUNTIME_ERROR", "Ошибка получения файла ЭМД из файлового хранилища: internal_error")
-    assert atoms == ["Ошибка при получении файла документа из предоставляющей системы"]
+    """VALIDATION_ERROR и RUNTIME_ERROR не покрыты ярусом 2: сплошное правило закрыло бы
+    текстовые ярусы, которые и несут диагностику."""
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules WHERE match_tier = 2 AND match_code IN %s",
+               UMBRELLA_CODES) == 0
+    assert classify(con, "RUNTIME_ERROR", "Ошибка получения файла ЭМД из файлового хранилища: internal_error")[0] == \
+        "Ошибка при получении файла документа из предоставляющей системы"
 
 
 def test_iemk_interpretations_have_prefix(con):
-    # Контракт наименования: все типы контура ИЭМК начинаются с «ИЭМК: » —
-    # в витринах контур ошибки читается прямо из типа.
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE is_active AND error_category = 'Ошибки ИЭМК'
-          AND interpretation NOT LIKE 'ИЭМК: %'
-    """) == 0
-    assert one(con, """
-        SELECT count(*) FROM dim_error_type_group
-        WHERE error_category = 'Ошибки ИЭМК' AND error_type NOT LIKE 'ИЭМК: %'
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE match_code LIKE 'XDS%%' AND interpretation NOT LIKE 'ИЭМК: %%'
     """) == 0
 
 
 def test_no_nested_patterns_within_tier(con):
-    """Эвристика на скрытые дубли: два активных правила одного яруса с одним match_code,
-    где паттерн одного — подстрока паттерна другого (кроме пар с одинаковым типом —
-    они легальны и дедуплицируются движком)."""
+    """Эвристика на скрытые дубли: два правила одного яруса с одним match_code, где шаблон
+    одного — подстрока шаблона другого (пары с одинаковым типом легальны)."""
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules a
-        JOIN dim_error_rules b ON b.is_active AND a.is_active
-            AND a.rule_code < b.rule_code
-            AND a.match_tier = b.match_tier
-            AND a.match_code IS NOT DISTINCT FROM b.match_code
-            AND a.interpretation <> b.interpretation
-            AND a.match_pattern <> '(?is).*'
-            AND (position(a.match_pattern IN b.match_pattern) > 0
-                 OR position(b.match_pattern IN a.match_pattern) > 0)
+        SELECT count(*) FROM mart_egisz.dim_error_rules a
+        JOIN mart_egisz.dim_error_rules b
+          ON a.rule_kind = 'классификация' AND b.rule_kind = 'классификация'
+         AND a.rule_code < b.rule_code
+         AND a.match_tier = b.match_tier
+         AND a.match_code IS NOT DISTINCT FROM b.match_code
+         AND a.interpretation <> b.interpretation
+         AND a.match_pattern <> '(?is).*'
+         AND (position(a.match_pattern IN b.match_pattern) > 0
+              OR position(b.match_pattern IN a.match_pattern) > 0)
     """) == 0
 
 
-# --- Справочник НСИ как признак разбивки ----------------------------------------------
-# Тип ошибки очищен от значений в скобках, поэтому отказы по разным справочникам
-# в нём неразличимы. Справочник извлекается из формулировки шаблоном
-# dim_error_rules.nsi_dictionary_pattern и становится признаком rpt_error_breakdown.
+# --- Справочник НСИ как атрибут ошибки -------------------------------------------------
 
 DICTIONARY_MESSAGES = [
     ("Справочник OID [1.2.643.5.1.13.13.99.2.197]. Версия [4.45] недопустима для документа"
      " вида [227]. Требуется использовать версии: [4.46]", "1.2.643.5.1.13.13.99.2.197"),
-    # Другой случай того же справочника — значение обязано совпасть: это признак класса.
     ("Справочник OID [1.2.643.5.1.13.13.99.2.197]. Версия [4.38] недопустима для документа"
      " вида [227]. Требуется использовать версии: [4.45]", "1.2.643.5.1.13.13.99.2.197"),
-    # Захватывается справочник, а НЕ код элемента: код принадлежит отдельному документу.
+    # Захватывается справочник, а не код элемента: код принадлежит отдельному документу.
     ("Справочник OID [1.2.643.5.1.13.13.11.1005], версия [2.27]. Элемент с кодом [M51.1+] отсутствует.",
      "1.2.643.5.1.13.13.11.1005"),
     ("Справочник OID [1.2.643.5.1.13.13.11.1070]. Элемент с кодом [A04.20.001.001] отсутствует.",
      "1.2.643.5.1.13.13.11.1070"),
-    # Вторая формулировка того же класса.
     ("Запись справочника [1.2.643.5.1.13.13.11.1066] с идентификатором [114] не найдена",
      "1.2.643.5.1.13.13.11.1066"),
     # Отказы вне класса: шаблон обязан молчать, иначе признак поехал бы на чужие типы.
@@ -738,26 +632,30 @@ DICTIONARY_MESSAGES = [
 
 @pytest.mark.parametrize("message,expected", DICTIONARY_MESSAGES)
 def test_dictionary_pattern_extracts_dictionary_oid(con, message, expected):
-    """Из формулировки берётся справочник, а не значение конкретного документа."""
-    # Скалярный подзапрос: у чужой формулировки совпадения нет и признак пуст — так же,
-    # как LEFT JOIN в rpt_error_breakdown.
     assert one(con, """
         SELECT (
             SELECT (regexp_match(%s, p.nsi_dictionary_pattern))[1]
-            FROM (SELECT DISTINCT nsi_dictionary_pattern FROM dim_error_rules
-                  WHERE is_active AND nsi_dictionary_pattern IS NOT NULL) p
+            FROM (SELECT DISTINCT nsi_dictionary_pattern FROM mart_egisz.dim_error_rules
+                  WHERE nsi_dictionary_pattern IS NOT NULL) p
             WHERE %s ~ p.nsi_dictionary_pattern
             LIMIT 1
         )
     """, message, message) == expected
 
 
+def test_classification_returns_dictionary_of_its_own_element(con):
+    oids = ["1.2.643.5.1.13.13.99.2.197", "1.2.643.5.1.13.13.11.1005"]
+    for oid in oids:
+        _, found = classify(con, "INVALID_DICTIONARY_VERSION",
+                            f"Справочник OID [{oid}]. Версия [1] недопустима для документа вида [227].")
+        assert found == oid
+
+
 def test_dictionary_pattern_consistent_within_type(con):
-    """Шаблон — свойство класса, а не отдельного правила: правила одной формулировки
-    обязаны объявлять один шаблон, иначе признак зависел бы от того, чьё правило сработало."""
     assert one(con, """
         SELECT count(*) FROM (
-            SELECT interpretation FROM dim_error_rules WHERE is_active
+            SELECT interpretation FROM mart_egisz.dim_error_rules
+            WHERE rule_kind = 'классификация'
             GROUP BY interpretation
             HAVING count(DISTINCT COALESCE(nsi_dictionary_pattern, '')) > 1
         ) x
@@ -765,33 +663,58 @@ def test_dictionary_pattern_consistent_within_type(con):
 
 
 def test_dictionary_pattern_has_single_capture_group(con):
-    """Справочник читается первой группой захвата: лишние группы сдвинули бы значение,
-    а отсутствие группы молча дало бы NULL."""
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE is_active AND nsi_dictionary_pattern IS NOT NULL
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE nsi_dictionary_pattern IS NOT NULL
           AND length(nsi_dictionary_pattern) - length(replace(nsi_dictionary_pattern, '([', '')) <> 2
     """) == 0
 
 
 def test_dictionary_pattern_declared_for_dictionary_class(con):
-    """Класс отказов справочника НСИ обязан объявлять шаблон: без него разбивка снова
-    схлопывается в «какой-то справочник»."""
     assert one(con, """
-        SELECT count(*) FROM dim_error_rules
-        WHERE is_active AND error_category = 'Ошибки справочника НСИ'
-          AND nsi_dictionary_pattern IS NULL
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE error_category = 'Ошибки справочника НСИ' AND nsi_dictionary_pattern IS NULL
     """) == 0
 
 
-# --- Реестр наименований справочников ФНСИ --------------------------------------------
-# Реестр — снимок НСИ 805; его единственный потребитель — подпись предмета отказа
-# в rpt_error_breakdown.error_type.
+# --- Текущие ошибки документа ------------------------------------------------------------
 
+def test_current_errors_follow_last_async_response(con):
+    """Ошибки текущего состояния — элементы последнего асинхронного ответа и ошибки связи
+    после него; сбой доставки до ответа к текущему состоянию не относится."""
+    if one(con, "SELECT to_regclass('stg_egisz.document_error_current')") is None:
+        pytest.skip("витрина текущих ошибок не построена; проверять нечего")
+    doc = str(uuid.uuid4())
+
+    def element(kind: str, code: str, text: str, item_no: int) -> dict[str, object]:
+        return {"item_no": item_no, "error_kind": kind, "error_code": code, "error_text": text,
+                "error_type": text, "nsi_dictionary_oid": None}
+
+    rows = [
+        (-9_000_000_001, "3 hours", None, [element(NETWORK, "10060", "до ответа", 0)]),
+        (-9_000_000_002, "2 hours", "error", [element(ASYNC, "NO_SNILS", "отказ", 1)]),
+        (-9_000_000_003, "1 hour", None, [element(NETWORK, "11001", "после ответа", 0)]),
+    ]
+    with con.cursor() as cur:
+        cur.execute("SAVEPOINT current_errors")
+        try:
+            for logid, age, status, details in rows:
+                cur.execute(
+                    "INSERT INTO transactions (logid, log_date, dwh_id, status, error_details) "
+                    "VALUES (%s, now() - %s::interval, %s, %s, %s::jsonb)",
+                    (logid, age, doc, status, json.dumps(details)))
+            cur.execute("SELECT pg_get_viewdef('stg_egisz.document_error_current'::regclass, true)")
+            view_sql = cur.fetchone()[0].rstrip().rstrip(";")
+            cur.execute("SELECT error_text FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no", (doc,))
+            assert [r[0] for r in cur.fetchall()] == ["отказ", "после ответа"]
+        finally:
+            cur.execute("ROLLBACK TO SAVEPOINT current_errors")
+            cur.execute("RELEASE SAVEPOINT current_errors")
+
+
+# --- Реестр наименований справочников ФНСИ ---------------------------------------------
 
 def test_nsi_dictionary_matches_published_805_revision(con):
-    """Реестр обязан совпадать с опубликованной редакцией целиком: наименования подписи
-    берутся дословно, а расхождение с источником сделало бы сверку неоднозначной."""
     assert one(con, "SELECT count(*) FROM dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
     assert one(con, """
         SELECT count(*) FROM dim_nsi_dictionary
@@ -801,8 +724,6 @@ def test_nsi_dictionary_matches_published_805_revision(con):
 
 
 def test_nsi_dictionary_agrees_with_805_snapshot(con):
-    """Реестр вписан литералами, потому что снимок 805 наполняется скриптом уже после
-    наката схемы. Разойтись с ним он всё равно не имеет права."""
     if one(con, "SELECT count(*) FROM dim_nsi_semd_guide_dictionary") == 0:
         pytest.skip("снимок НСИ 805 не загружен; сверять нечего")
     assert one(con, """
@@ -814,48 +735,36 @@ def test_nsi_dictionary_agrees_with_805_snapshot(con):
 
 
 def test_nsi_dictionary_short_name_only_shortens(con):
-    """Краткая подпись существует ради читаемости витрины. Запись, которая не короче
-    официального наименования, означает, что в подпись пролезло второе написание."""
     assert one(con, """
         SELECT count(*) FROM dim_nsi_dictionary
         WHERE short_name IS NOT NULL
           AND (btrim(short_name) = '' OR length(short_name) >= length(name))
     """) == 0
-    assert one(con, """
-        SELECT short_name FROM dim_nsi_dictionary
-        WHERE oid = '1.2.643.5.1.13.13.11.1005'
-    """) == "МКБ-10"
+    assert one(con, "SELECT short_name FROM dim_nsi_dictionary WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
 
 
-def test_error_breakdown_labels_every_registered_dictionary(con):
-    """Подпись показывает голый OID только для справочника вне 805. OID, заведённый в
-    реестре, обязан быть расшифрован — иначе соединение подписи потеряно."""
-    # Витрину пересоздаёт 04_views.sql; модуль правил её не строит и на голой базе не найдёт.
-    if one(con, "SELECT to_regclass('public.rpt_error_breakdown')") is None:
-        pytest.skip("витрина rpt_error_breakdown не построена; проверять нечего")
+def test_document_error_names_every_registered_dictionary(con):
+    """Наименование справочника пусто только у OID вне 805."""
+    if one(con, "SELECT to_regclass('mart_egisz_selfservice.document_error')") is None:
+        pytest.skip("витрина ошибок документа не построена; проверять нечего")
     assert one(con, """
-        SELECT count(*) FROM rpt_error_breakdown b
-        WHERE b.nsi_dictionary_oid IS NOT NULL
-          AND b.nsi_dictionary_name IS NULL
-          AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = b.nsi_dictionary_oid)
-    """) == 0
-    # В подписи нужны OID и полное наименование, даже если есть короткое.
-    assert one(con, """
-        SELECT count(*) FROM rpt_error_breakdown b
-        JOIN dim_nsi_dictionary d ON d.oid = b.nsi_dictionary_oid
-        WHERE b.error_type NOT LIKE '% (НСИ: ' || d.name || ', OID ' || d.oid || ')'
+        SELECT count(*) FROM mart_egisz_selfservice.document_error e
+        WHERE e.nsi_dictionary_oid IS NOT NULL
+          AND e.nsi_dictionary_name IS NULL
+          AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = e.nsi_dictionary_oid)
     """) == 0
 
 
 def test_nsi_dictionary_schema_contract() -> None:
     """Комментарий к таблице — единственное место, где записано назначение реестра и его
-    потребитель. Ссылка на несуществующий объект уже однажды пережила снятие витрины."""
+    потребитель."""
     assert "CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (" in SCHEMA_SQL
     assert "COMMENT ON TABLE dim_nsi_dictionary IS" in SCHEMA_SQL
     assert "COMMENT ON COLUMN dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
     assert "rpt_error_messages" not in SCHEMA_SQL
-    assert "ADD COLUMN IF NOT EXISTS short_name text" in SCHEMA_SQL
-    # редакция объявляется сидом, а не умолчанием колонки: на развёрнутой базе
-    # ADD COLUMN IF NOT EXISTS не срабатывает и умолчание застыло бы на прежней редакции
+    assert "rpt_error_breakdown" not in SCHEMA_SQL
+    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS dim_nsi_dictionary ("):]
+    assert "short_name text," in dictionary_ddl[:dictionary_ddl.index(");")]
+    # редакция объявляется сидом, а не умолчанием колонки
     assert "SELECT v.oid, v.name, '%s'" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
     assert "DELETE FROM dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL

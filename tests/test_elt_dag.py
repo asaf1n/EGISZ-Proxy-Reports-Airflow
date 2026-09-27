@@ -186,17 +186,17 @@ def test_dag_files_are_self_contained_units() -> None:
 
 
 def test_report_marts_refresh_matches_sql_layer() -> None:
-    """Список обновляемых витрин в DAG-ах совпадает с матвью недельного и месячного слоёв."""
+    """Список обновляемых витрин в DAG совпадает с материализованными представлениями
+    модуля и порядком их обновления в refresh_report_marts()."""
     views_sql = (PARTS_DIR / "04_views.sql").read_text(encoding="utf-8")
-    periodic_sql = sql_section(views_sql, "weekly") + sql_section(views_sql, "monthly")
-    declared = set(re.findall(r"CREATE MATERIALIZED VIEW (public\.\w+)", periodic_sql))
+    declared = set(re.findall(r"CREATE MATERIALIZED VIEW ([a-z_]+\.\w+)", views_sql))
 
-    # Список витрин живёт только в DAG, который их обновляет: разбивка ошибок и
-    # построенный над ней периодический слой.
     marts = load_dag_module("egisz_etl_dag").REPORT_MARTS
-    assert set(marts) == declared | {"public.rpt_error_breakdown"}
-    # Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
-    assert marts[0] == "public.rpt_error_breakdown"
+    assert set(marts) == declared
+    # Порядок обязателен: опубликованные ошибки и периодический слой читают текущие
+    # ошибки документа — тот же порядок, что в refresh_report_marts().
+    refresh = views_sql.split("CREATE OR REPLACE FUNCTION public.refresh_report_marts()")[1].split("$$;")[0]
+    assert re.findall(r"REFRESH MATERIALIZED VIEW ([a-z_]+\.\w+);", refresh) == list(marts)
 
     # Идемпотентность каркаса: DROP, CREATE и первичное наполнение — в одном модуле схемы.
     drops = views_sql
@@ -217,7 +217,7 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
     # REFRESH CONCURRENTLY в DAG-ах требует уникального индекса на каждой витрине.
     for matview in declared:
         table = matview.split(".", 1)[1]
-        assert re.search(rf"CREATE UNIQUE INDEX[^;]+ON {matview}\b", periodic_sql), table
+        assert re.search(rf"CREATE UNIQUE INDEX[^;]+ON {matview}\b", views_sql), matview
 
 
 def test_all_dag_files_compile() -> None:
@@ -320,6 +320,7 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
         "refresh_marts",
         "consistency_check",
         "maintain_partitions",
+        "reclassify_errors",
     }
 
     assert {t.task_id for t in etl.tasks} == {
@@ -332,6 +333,7 @@ def test_dags_expose_expected_tasks_and_dependencies() -> None:
     assert {t.task_id for t in maintenance.tasks} == {
         "consistency_check",
         "maintain_partitions",
+        "reclassify_errors",
     }
 
     # Реестр подач и справочники наполняются до transform; витрины — после него.

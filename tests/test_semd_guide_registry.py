@@ -152,10 +152,12 @@ def test_semd_guide_schema_contract() -> None:
         assert f"COMMENT ON TABLE {table} IS" in SCHEMA_SQL
 
 
-def test_guide_oid_rename_is_idempotent() -> None:
-    """Колонка названа по содержанию, а переименование должно выдерживать повторный накат."""
-    assert "RENAME COLUMN git_link TO ig_oid" in SCHEMA_SQL
-    assert "AND column_name = 'ig_oid'" in SCHEMA_SQL
+def test_guide_oid_column_is_named_by_content() -> None:
+    """Колонка названа по содержанию: выгрузка ФНСИ кладёт OID руководства в GIT_LINK."""
+    semd_types_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS dim_semd_types ("):]
+    semd_types_ddl = semd_types_ddl[:semd_types_ddl.index(");")]
+    assert "ig_oid text," in semd_types_ddl
+    assert "git_link" not in semd_types_ddl
     assert (
         "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, "
         "start_date, end_date, implementation_guide, ig_oid)" in SCHEMA_SQL

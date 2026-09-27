@@ -5,72 +5,34 @@
 
 -- ---------------------------------------------------------------- section: drop_dependents
 -- ============================================================================
--- 60_drop_dependents.sql — DROP dependent views/marts before re-creating them.
--- CREATE OR REPLACE VIEW не меняет состав колонок, поэтому rpt-слой дропается
--- целиком и собирается заново в 80–90.
+-- Отчётный слой пересобирается целиком: CREATE OR REPLACE VIEW не меняет состав колонок,
+-- поэтому представления и материализованные представления удаляются и создаются заново.
 -- ============================================================================
 
 DROP VIEW IF EXISTS public.rpt_health_by_clinic CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_signals CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_message_registry_no_document CASCADE;
-DROP VIEW IF EXISTS public.rpt_health_proxy_db CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_sync CASCADE;
 DROP VIEW IF EXISTS public.rpt_health_versions CASCADE;
-DROP VIEW IF EXISTS public.rpt_network_errors CASCADE;
--- Недельный (85_views_weekly) и месячный (86_views_monthly) слои зависят от
--- rpt_documents/rpt_error_breakdown —
--- дропаем до них. Эти объекты никогда не существовали как plain VIEW, relkind-обход
--- (как у rpt_error_breakdown ниже) не нужен.
+DROP VIEW IF EXISTS mart_egisz_selfservice.network_error CASCADE;
+DROP VIEW IF EXISTS stg_egisz.message_error CASCADE;
+-- Недельный и месячный слои читают rpt_documents и текущие ошибки документа —
+-- удаляются до них.
 DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_weekly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mart_egisz.agg_document_error_weekly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_monthly CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS public.rpt_error_breakdown_monthly CASCADE;
--- rpt_error_breakdown — MATERIALIZED VIEW. DROP VIEW IF EXISTS / DROP MATERIALIZED VIEW
--- IF EXISTS подавляют только отсутствие объекта, но НЕ несовпадение типа (VIEW vs MATVIEW),
--- поэтому дропаем по фактическому relkind.
-DO $$
-DECLARE
-    kind "char";
-BEGIN
-    SELECT c.relkind INTO kind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relname = 'rpt_error_breakdown';
-
-    IF kind = 'm' THEN
-        DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE;
-    ELSIF kind IS NOT NULL THEN
-        DROP VIEW public.rpt_error_breakdown CASCADE;
-    END IF;
-END $$;
+DROP MATERIALIZED VIEW IF EXISTS mart_egisz.agg_document_error_monthly CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mart_egisz_selfservice.document_error CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS stg_egisz.document_error_current CASCADE;
 DROP VIEW IF EXISTS public.rpt_documents CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_versions CASCADE;
 DROP VIEW IF EXISTS public.rpt_documents_sent CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_file_request CASCADE;
--- Снятое имя представления отправленных документов.
-DROP VIEW IF EXISTS public.rpt_documents_waiting CASCADE;
 DROP VIEW IF EXISTS public.rpt_document_lineage CASCADE;
 DROP VIEW IF EXISTS public.rpt_clinic_nsi_mapping CASCADE;
--- Снятое имя витрины типов СЭМД по лицензиям.
-DROP VIEW IF EXISTS public.rpt_clinic_semd_licenses CASCADE;
 DROP VIEW IF EXISTS public.rpt_clinic_semd_activity CASCADE;
 DROP VIEW IF EXISTS public.rpt_semd_dictionaries CASCADE;
 DROP VIEW IF EXISTS public.rpt_semd_guides CASCADE;
-
--- Классификация даёт документу два поля: error_types (канонические типы,
--- error_classify) и error_text (исходные <message>, error_messages_row).
--- Объекты вне текущего контракта классификации.
-DROP FUNCTION IF EXISTS public.error_interpretation_schematron_chunk(text);
-DROP FUNCTION IF EXISTS public.error_interpretation_item(text, text);
-DROP FUNCTION IF EXISTS public.error_interpretation_row(jsonb);
-DROP FUNCTION IF EXISTS public.error_atom_normalize(text);
-DROP FUNCTION IF EXISTS public.canonical_error_atom(text);
-DROP FUNCTION IF EXISTS public.canonical_error_list(text);
-DROP FUNCTION IF EXISTS public.error_category(text);
-ALTER TABLE public.documents DROP COLUMN IF EXISTS error_summary;
-ALTER TABLE public.transactions DROP COLUMN IF EXISTS error_summary;
--- Снятая таблица правил классификации.
-DROP TABLE IF EXISTS public.error_interpretation_rules;
 
 -- ---------------------------------------------------------------- section: document_attributes
 -- ============================================================================
@@ -88,35 +50,9 @@ CREATE TABLE IF NOT EXISTS public.document_attributes (
     doctor_name text,
     patient_hash text,
     doctor_hash text,
-    updated_at timestamptz DEFAULT now()
+    updated_at timestamptz DEFAULT now(),
+    egisz_subsystem text
 );
-
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS request_msgid;
-
--- egisz_subsystem — подсистема ЕГИСЗ документа.
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public' AND table_name = 'document_attributes'
-                 AND column_name = 'contour')
-       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                       WHERE table_schema = 'public' AND table_name = 'document_attributes'
-                         AND column_name = 'egisz_subsystem') THEN
-        ALTER TABLE public.document_attributes RENAME COLUMN contour TO egisz_subsystem;
-    END IF;
-END $$;
-ALTER TABLE public.document_attributes ADD COLUMN IF NOT EXISTS egisz_subsystem text;
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS contour;
-
--- Реквизиты, снятые вместе с отказом от EGISZ_LICENSES в резолве:
---   clinic_oid_jpersons — JPERSONS.FIR_OID источником не заполняется;
---   clinic_oid_license  — OID берётся из содержания обмена (documents.org_oid);
---   message_endpoint    — адрес искали в теле ответа, где его нет (0 заполненных строк);
---   clinic_jid_mismatch — считается в rpt_document_versions поверх dim_clinic_oid.
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_oid_jpersons;
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_oid_license;
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS message_endpoint;
-ALTER TABLE public.document_attributes DROP COLUMN IF EXISTS clinic_jid_mismatch;
 
 CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
     ON public.document_attributes (updated_at);
@@ -125,6 +61,7 @@ CREATE INDEX IF NOT EXISTS idx_document_attributes_updated_at
 CREATE OR REPLACE FUNCTION public.recompute_document_attributes(p_dwh_ids text[] DEFAULT NULL)
 RETURNS bigint
 LANGUAGE plpgsql
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     refreshed bigint := 0;
@@ -237,6 +174,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.recompute_document_jids(p_dwh_ids text[] DEFAULT NULL)
 RETURNS bigint
 LANGUAGE plpgsql
+SET search_path = public, pg_temp
 AS $$
 DECLARE
     affected_dwh_ids text[] := ARRAY[]::text[];
@@ -304,14 +242,6 @@ BEGIN
 END;
 $$;
 
--- Параметр по умолчанию покрывает полный проход.
-DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui();
-DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[]);
-
--- error_text на грейне документа принадлежит последнему ответу и проставляется
--- в transform вместе со статусом.
-DROP FUNCTION IF EXISTS public.repair_document_error_text();
-
 -- ---------------------------------------------------------------- section: rpt_documents
 -- ============================================================================
 -- 80_views_rpt.sql — reporting views for Metabase (rpt_*)
@@ -342,11 +272,6 @@ SELECT
         WHEN ds.is_final THEN ds.sort_order
         ELSE ds.sort_order + ss.sort_order - 1
     END AS status_detail_sort,
-    -- Коллация задана явно: база развёрнута с lc_ctype = C, где ILIKE складывает регистр
-    -- только для латиницы, и отбор «содержит» по кириллице молча терял строки
-    -- («справочник» находил 364 документа вместо 10 325). Корневая коллация выбрана
-    -- вместо русской: текст отказа смешанный — кириллица, латиница, пути XPath.
-    d.error_text COLLATE "und-x-icu" AS error_text,
     public.normalize_semd_code(d.semd_code) AS semd_code,
     st.name AS semd_name,
     CASE
@@ -369,7 +294,7 @@ SELECT
     a.clinic_host,
     -- OID из обмена не найден в реестре медорганизаций: клиника определена по адресу или
     -- пришла с OID, которого нет ни в одной лицензии. Признак живой — реестр меняется
-    -- справочником, а не фактами документа.
+    -- справочником, а не данными документа.
     (NULLIF(btrim(d.org_oid), '') IS NOT NULL AND oid_ref.jid IS NULL) AS clinic_oid_unknown,
     -- msgid — собственный MSGID текущего события документа; relates_to_msgid —
     -- корреляционный MSGID из XML relatesToMessage/relatesTo.
@@ -399,7 +324,6 @@ SELECT
     d.registered_at,
     d.first_sent_at,
     d.first_callback_at,
-    d.error_types COLLATE "und-x-icu" AS error_types,
     -- Число подач документа в ЕГИСЗ по реестру шлюза: повторная подача не меняет localUid,
     -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
     COALESCE(d.attempt_count, 1) AS attempt_count,
@@ -539,103 +463,155 @@ COMMENT ON VIEW public.rpt_document_file_request IS
 
 -- ---------------------------------------------------------------- section: transport
 
-CREATE OR REPLACE VIEW public.rpt_network_errors AS
+-- Элементы ошибки хранятся в разобранных сообщениях transactions: отчётный слой читает
+-- их только в этом разделе.
+
+-- Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки
+-- связи после него; у документа без асинхронного ответа — все его ошибки связи. Время
+-- последнего ответа берётся из тех же разобранных сообщений. Строка — одна ошибка
+-- документа; error_no нумерует ошибки документа по порядку сообщений.
+CREATE MATERIALIZED VIEW stg_egisz.document_error_current AS
+WITH last_response AS (
+    SELECT t.dwh_id, max(t.log_date) AS responded_at
+    FROM public.transactions t
+    WHERE t.dwh_id IS NOT NULL
+      AND t.status IN ('success', 'error')
+    GROUP BY t.dwh_id
+)
+SELECT
+    tx.dwh_id,
+    row_number() OVER (PARTITION BY tx.dwh_id ORDER BY tx.log_date, tx.logid, e.item_no)::integer AS error_no,
+    tx.log_date AS message_at,
+    tx.egisz_subsystem,
+    tx.source_action,
+    e.error_kind,
+    e.error_code,
+    e.error_text COLLATE "und-x-icu" AS error_text,
+    e.error_type,
+    e.nsi_dictionary_oid
+FROM public.transactions tx
+LEFT JOIN last_response lr ON lr.dwh_id = tx.dwh_id
+CROSS JOIN LATERAL jsonb_to_recordset(tx.error_details)
+    AS e(item_no integer, error_kind text, error_code text, error_text text, error_type text, nsi_dictionary_oid text)
+WHERE tx.dwh_id IS NOT NULL
+  AND tx.error_details IS NOT NULL
+  AND tx.log_date >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_error_current
+    ON stg_egisz.document_error_current (dwh_id, error_no);
+CREATE INDEX IF NOT EXISTS idx_document_error_current_type
+    ON stg_egisz.document_error_current (error_type);
+
+COMMENT ON MATERIALIZED VIEW stg_egisz.document_error_current IS
+'Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки связи после него. Строка — одна ошибка документа, ключ (dwh_id, error_no) общий с mart_egisz_selfservice.document_error. error_text — исходный текст: в опубликованный слой он не выносится, дашборды до решения о доступе читают его отсюда. Обновляется refresh_report_marts() после transform.';
+
+-- Элементы ошибки всех разобранных сообщений по времени сообщения, в том числе без связи с
+-- документом. Исходный текст остаётся в слое разбора (стандарт хранилища, §2): дашборды до
+-- решения о доступе читают его отсюда. Коллация текстов задана явно: база развёрнута с
+-- lc_ctype = C, где ILIKE складывает регистр только для латиницы, и отбор «содержит» по
+-- кириллице молча терял строки; корневая — потому что текст смешанный.
+CREATE VIEW stg_egisz.message_error AS
+SELECT
+    tx.log_date AS message_at,
+    tx.dwh_id,
+    tx.jid AS clinic_jid,
+    public.normalize_semd_code(tx.semd_code) AS semd_code,
+    tx.egisz_subsystem,
+    tx.source_action,
+    e.item_no,
+    e.error_kind,
+    e.error_code,
+    e.error_text COLLATE "und-x-icu" AS error_text,
+    e.error_type COLLATE "und-x-icu" AS error_type,
+    e.nsi_dictionary_oid
+FROM public.transactions tx
+CROSS JOIN LATERAL jsonb_to_recordset(tx.error_details)
+    AS e(item_no integer, error_kind text, error_code text, error_text text, error_type text, nsi_dictionary_oid text)
+WHERE tx.error_details IS NOT NULL;
+
+COMMENT ON VIEW stg_egisz.message_error IS
+'Элементы ошибки разобранных сообщений по времени сообщения. Строка — один элемент; dwh_id пуст у сообщения без связи с документом. error_text — исходный текст: публикуется в дашборды отсюда по исключению из правил стандарта до решения о доступе.';
+
+-- Опубликованные ошибки текущего состояния документа: тип, вид, категория, код и атрибуты
+-- справочников вместе с реквизитами документа. Исходный текст остаётся в слое разбора
+-- (stg_egisz.document_error_current, тот же ключ). Материализовано: анализ ошибок читает
+-- его на каждом фильтре. Коллация типа задана явно: база развёрнута с lc_ctype = C, где
+-- ILIKE складывает регистр только для латиницы, и отбор «содержит» по кириллице молча
+-- терял строки. Корневая коллация выбрана вместо русской: текст смешанный.
+CREATE MATERIALIZED VIEW mart_egisz_selfservice.document_error AS
 SELECT
     r.ips_date,
-    r.logid,
-    r.msgid,
-    r.dwh_id,
-    r.semd_local_uid,
-    r.relates_to_msgid,
-    r.clinic_host,
+    c.dwh_id,
+    c.error_no,
+    r.status,
+    r.status_label,
     r.clinic_jid,
     r.clinic_name,
     r.clinic_label,
     r.semd_code,
-    r.semd_name,
     r.semd_label,
-    public.network_error_type(r.error_text) AS network_error_type,
-    r.error_text,
-    r.error_types,
-    r.semd_emdr_id,
-    da.egisz_subsystem
-FROM public.rpt_documents r
--- Подсистема зафиксирована на грейне документа (document_attributes): отчётный слой
--- не читает message-грейн напрямую (контракт «rpt только поверх documents/dims»).
-LEFT JOIN public.document_attributes da ON da.dwh_id = r.dwh_id
-WHERE r.status = 'network_error';
-
-COMMENT ON VIEW public.rpt_network_errors IS
-'Ошибки связи proxy_egisz: document-grain (status=network_error). egisz_subsystem — подсистема ЕГИСЗ (РЭМД/ИЭМК).';
-
--- МАТЕРИАЛИЗОВАННОЕ представление: грейн «тип×документ»; все карточки вкладки
--- «Анализ ошибок» читают его. Обновляется в конце transform (extract/reconcile DAG) →
--- свежесть та же, что у фактов. См. refresh_error_breakdown().
--- Построение в два дешёвых шага:
---   1) atom_types — дедуп (dwh_id, тип) на УЗКИХ данных прямо из documents
---      (один LEFT JOIN к dim_error_type_group);
---   2) JOIN rpt_documents 1:1 по dwh_id — display-колонки добавляются ПОСЛЕ дедупа.
--- Атом вне словаря — это формулировка отказа, не покрытая правилом: пропускаем её
--- как есть в категорию «Прочие».
-CREATE MATERIALIZED VIEW public.rpt_error_breakdown AS
--- error_details сохраняет связь сообщения, классификации и OID одного элемента ответа.
-WITH doc_details AS (
-    SELECT doc.dwh_id, e.error_type AS base_error_type, e.classification_type,
-           e.nsi_dictionary_oid, e.code
-    FROM public.documents doc
-    CROSS JOIN LATERAL jsonb_to_recordset(doc.error_details)
-        AS e(error_type text, classification_type text, nsi_dictionary_oid text, code text)
-    WHERE doc.status IN ('async_error', 'network_error')
-      AND NULLIF(btrim(e.error_type), '') IS NOT NULL
-),
-atom_types AS (
-    SELECT DISTINCT ON (d.dwh_id, d.base_error_type, d.nsi_dictionary_oid)
-        d.dwh_id, d.base_error_type, d.classification_type, d.nsi_dictionary_oid,
-        COALESCE(g.error_category, 'Прочие') AS error_category,
-        COALESCE(g.responsibility, 'смешанная') AS responsibility,
-        COALESCE(g.is_retryable, false) AS is_retryable,
-        COALESCE(g.nsi_error_code, g.parent_nsi_error_code) AS nsi_error_code,
-        c.nsi_error_description, g.error_code, g.code_namespace
-    FROM doc_details d
-    LEFT JOIN public.dim_error_type_group g ON g.error_type = d.classification_type
-    LEFT JOIN public.dim_nsi_error_code c
-      ON c.nsi_error_code = COALESCE(g.nsi_error_code, g.parent_nsi_error_code)
-    ORDER BY d.dwh_id, d.base_error_type, d.nsi_dictionary_oid, d.classification_type
-)
-SELECT
-    r.ips_date, a.dwh_id, r.clinic_jid, r.clinic_name, r.clinic_label,
-    r.semd_code, r.semd_label,
-    -- Справочник — в скобках: ' · ' разделяет разные типы в documents.error_types,
-    -- и подпись с тем же разделителем читается как несколько склеенных типов.
-    (a.base_error_type || CASE WHEN a.nsi_dictionary_oid IS NOT NULL
-        THEN ' (НСИ: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'
-        ELSE '' END) COLLATE "und-x-icu" AS error_type,
-    a.base_error_type COLLATE "und-x-icu" AS base_error_type,
-    a.error_category, a.responsibility, a.is_retryable,
-    a.nsi_error_code, a.nsi_error_description, a.error_code, a.code_namespace,
-    a.nsi_dictionary_oid, nd.name AS nsi_dictionary_name,
-    a.classification_type
-FROM atom_types a
-INNER JOIN public.rpt_documents r ON r.dwh_id = a.dwh_id
-LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = a.nsi_dictionary_oid
+    c.message_at,
+    c.egisz_subsystem,
+    c.source_action,
+    c.error_kind,
+    t.error_category,
+    c.error_type COLLATE "und-x-icu" AS error_type,
+    c.error_code,
+    n.nsi_error_code,
+    n.nsi_error_description,
+    c.nsi_dictionary_oid,
+    nd.name AS nsi_dictionary_name,
+    t.responsibility,
+    t.is_retryable
+FROM stg_egisz.document_error_current c
+JOIN public.rpt_documents r ON r.dwh_id = c.dwh_id
+LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+LEFT JOIN mart_egisz.dim_nsi_error_code_alias a ON a.alias = upper(btrim(c.error_code))
+LEFT JOIN mart_egisz.dim_nsi_error_code n
+  ON n.nsi_error_code = COALESCE(a.nsi_error_code, upper(btrim(c.error_code)))
+LEFT JOIN public.dim_nsi_dictionary nd ON nd.oid = c.nsi_dictionary_oid
 WITH DATA;
 
--- UNIQUE индекс нужен для REFRESH ... CONCURRENTLY; грейн = (dwh_id, error_type).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_error_breakdown
-    ON public.rpt_error_breakdown (dwh_id, error_type);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_ips_date ON public.rpt_error_breakdown (ips_date);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_type ON public.rpt_error_breakdown (error_type);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_category ON public.rpt_error_breakdown (error_category);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_clinic_jid ON public.rpt_error_breakdown (clinic_jid);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_semd_code ON public.rpt_error_breakdown (semd_code);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_responsibility ON public.rpt_error_breakdown (responsibility);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_nsi_error_code ON public.rpt_error_breakdown (nsi_error_code);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_error_code ON public.rpt_error_breakdown (error_code);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_base_error_type
-    ON public.rpt_error_breakdown (base_error_type);
+-- Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_error
+    ON mart_egisz_selfservice.document_error (dwh_id, error_no);
+CREATE INDEX IF NOT EXISTS idx_document_error_ips_date ON mart_egisz_selfservice.document_error (ips_date);
+CREATE INDEX IF NOT EXISTS idx_document_error_type ON mart_egisz_selfservice.document_error (error_type);
+CREATE INDEX IF NOT EXISTS idx_document_error_category ON mart_egisz_selfservice.document_error (error_category);
+CREATE INDEX IF NOT EXISTS idx_document_error_kind ON mart_egisz_selfservice.document_error (error_kind);
+CREATE INDEX IF NOT EXISTS idx_document_error_clinic_jid ON mart_egisz_selfservice.document_error (clinic_jid);
+CREATE INDEX IF NOT EXISTS idx_document_error_semd_code ON mart_egisz_selfservice.document_error (semd_code);
+CREATE INDEX IF NOT EXISTS idx_document_error_responsibility ON mart_egisz_selfservice.document_error (responsibility);
 
-COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown IS
-'Одна строка на документ и отдельный тип ошибки. Читаемый текст имеет приоритет; технический текст интерпретируется. НСИ: OID и полное наименование. base_error_type — тип без подписи НСИ для отбора в documents.error_types; classification_type — ключ dim_error_type_group. Источник — сохранённые documents.error_details.';
+COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error IS
+'Ошибки текущего состояния документа (текущие версии). Строка — одна ошибка документа: error_type — тип с замаскированными значениями; вид, категория, код и атрибуты справочников. Исходный текст — в stg_egisz.document_error_current по тому же ключу (dwh_id, error_no). Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют.';
+
+-- Ошибки связи за период: шлюз не доставил сообщение. Строка — одна ошибка связи, в том
+-- числе в сообщениях без связи с документом. Исходный текст — в stg_egisz.message_error.
+CREATE VIEW mart_egisz_selfservice.network_error AS
+SELECT
+    m.message_at,
+    m.dwh_id,
+    m.clinic_jid,
+    o.name AS clinic_name,
+    COALESCE(NULLIF(btrim(m.clinic_jid::text), ''), '—')
+        || ' · ' ||
+    COALESCE(NULLIF(btrim(o.name), ''), '—') AS clinic_label,
+    m.semd_code,
+    m.egisz_subsystem,
+    m.source_action,
+    m.error_type,
+    m.error_code,
+    t.responsibility,
+    t.is_retryable
+FROM stg_egisz.message_error m
+LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = m.error_type
+LEFT JOIN public.dim_organizations o ON o.jid = m.clinic_jid
+WHERE m.error_kind = 'Ошибка связи';
+
+COMMENT ON VIEW mart_egisz_selfservice.network_error IS
+'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Исходный текст — в stg_egisz.message_error.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT
@@ -716,7 +692,7 @@ LEFT JOIN public.dim_organizations o ON o.jid = f.clinic_jid
 LEFT JOIN public.dim_semd_types st ON st.code = f.semd_code;
 
 COMMENT ON VIEW public.rpt_clinic_semd_activity IS
-'Типы СЭМД в обмене клиники: грейн (clinic_jid, semd_code) по фактам документов; последняя отправка, последняя регистрация и число документов.';
+'Типы СЭМД в обмене клиники: грейн (clinic_jid, semd_code) по документам; последняя отправка, последняя регистрация и число документов.';
 
 -- ---------------------------------------------------------------- section: semd_guides
 -- ============================================================================
@@ -800,8 +776,8 @@ COMMENT ON VIEW public.rpt_semd_dictionaries IS
 -- ---------------------------------------------------------------- section: weekly
 -- ============================================================================
 -- 85_views_weekly.sql — недельный слой динамики для дашборда «Динамика по
--- неделям». Идемпотентность — как у rpt_error_breakdown: DROP в 60, CREATE
--- здесь, REFRESH + ANALYZE в 90.
+-- неделям». Идемпотентность — как у всего отчётного слоя: DROP в начале модуля,
+-- CREATE здесь, REFRESH + ANALYZE в конце.
 --
 -- Неделя = понедельник по отчётному календарю. Пояс берётся у report_timezone()
 -- и применяется ОДИН раз: ips_date — timestamptz, сдвиг задаёт стену календаря до
@@ -829,9 +805,8 @@ SELECT
     d.clinic_label,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status <> 'sent')::bigint AS docs_total,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'success')::bigint AS docs_success,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS docs_error,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_async_error,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'network_error')::bigint AS docs_network_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.has_network_error)::bigint AS docs_network_error,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
@@ -844,6 +819,12 @@ FROM (
         r.clinic_label,
         r.status,
         r.first_sent_at,
+        -- Ошибка связи хранится рядом со статусом: документ учитывается по ней, если она
+        -- есть в текущем состоянии документа.
+        EXISTS (
+            SELECT 1 FROM stg_egisz.document_error_current c
+            WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
+        ) AS has_network_error,
         date_trunc('week', r.ips_date AT TIME ZONE public.report_timezone())::date AS week_start
     FROM public.rpt_documents r
     WHERE r.ips_date IS NOT NULL
@@ -867,33 +848,42 @@ CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_week ON public.rpt_documents_week
 CREATE INDEX IF NOT EXISTS idx_rpt_docs_weekly_clinic_jid ON public.rpt_documents_weekly (clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_documents_weekly IS
-'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своей недели (МСК), для открытой недели — на текущий момент: строки закрытых недель не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
+'Недельная витрина документов: грейн (week_start = понедельник МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_network_error — документы с ошибкой связи в текущем состоянии; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своей недели (МСК), для открытой недели — на текущий момент: строки закрытых недель не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
 
--- Недельная структура ошибок по категориям (уровень сообщений): документ с
--- несколькими категориями учитывается в каждой — сумма долей категорий может
--- превышать 100 % от числа документов; это контракт панели структуры.
-CREATE MATERIALIZED VIEW public.rpt_error_breakdown_weekly AS
+-- Недельная структура ошибок текущего состояния по виду и категории: документ с
+-- несколькими категориями учитывается в каждой — сумма долей категорий может превышать
+-- 100 % от числа документов; это контракт панели структуры. Учитываются отказы
+-- (статус «Ошибка асинхронного ответа РЭМД») и ошибки связи: элементы ошибки в
+-- подтверждении регистрации статус не меняют и в структуру отказов не входят.
+CREATE MATERIALIZED VIEW mart_egisz.agg_document_error_weekly AS
 SELECT
-    date_trunc('week', b.ips_date AT TIME ZONE public.report_timezone())::date AS week_start,
-    b.clinic_jid,
-    MAX(b.clinic_name) AS clinic_name,
-    b.clinic_label,
-    b.error_category,
-    COUNT(DISTINCT b.dwh_id)::bigint AS docs_with_category,
-    (date_trunc('week', b.ips_date AT TIME ZONE public.report_timezone())::date
+    date_trunc('week', r.ips_date AT TIME ZONE public.report_timezone())::date AS week_start,
+    r.clinic_jid,
+    MAX(r.clinic_name) AS clinic_name,
+    r.clinic_label,
+    c.error_kind,
+    t.error_category,
+    COUNT(DISTINCT c.dwh_id)::bigint AS docs_with_category,
+    (date_trunc('week', r.ips_date AT TIME ZONE public.report_timezone())::date
         < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_week
-FROM public.rpt_error_breakdown b
-WHERE b.ips_date IS NOT NULL
-GROUP BY 1, b.clinic_jid, b.clinic_label, b.error_category
+FROM stg_egisz.document_error_current c
+JOIN public.rpt_documents r ON r.dwh_id = c.dwh_id
+LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+WHERE r.ips_date IS NOT NULL
+  AND (r.status = 'async_error' OR c.error_kind = 'Ошибка связи')
+GROUP BY 1, r.clinic_jid, r.clinic_label, c.error_kind, t.error_category
 WITH DATA;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_error_breakdown_weekly
-    ON public.rpt_error_breakdown_weekly (week_start, clinic_label, error_category);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_weekly_week ON public.rpt_error_breakdown_weekly (week_start);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_weekly_category ON public.rpt_error_breakdown_weekly (error_category);
+-- У вида «Ошибка связи» категория пуста: ключ сравнивает пустые значения как равные.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agg_document_error_weekly
+    ON mart_egisz.agg_document_error_weekly (week_start, clinic_label, error_kind, error_category) NULLS NOT DISTINCT;
+CREATE INDEX IF NOT EXISTS idx_agg_document_error_weekly_week
+    ON mart_egisz.agg_document_error_weekly (week_start);
+CREATE INDEX IF NOT EXISTS idx_agg_document_error_weekly_category
+    ON mart_egisz.agg_document_error_weekly (error_category);
 
-COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_weekly IS
-'Недельная структура ошибок: грейн (week_start, клиника, error_category); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после rpt_error_breakdown.';
+COMMENT ON MATERIALIZED VIEW mart_egisz.agg_document_error_weekly IS
+'Недельная структура ошибок: грейн (week_start, клиника, вид, категория); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после текущих ошибок документа.';
 
 -- ---------------------------------------------------------------- section: monthly
 -- ============================================================================
@@ -922,9 +912,8 @@ SELECT
     d.clinic_label,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status <> 'sent')::bigint AS docs_total,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'success')::bigint AS docs_success,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS docs_error,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_async_error,
-    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'network_error')::bigint AS docs_network_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS docs_error,
+    COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.has_network_error)::bigint AS docs_network_error,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent')::bigint AS docs_sent,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND NOT seg.is_no_response)::bigint AS docs_pending,
     COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'sent' AND seg.is_no_response)::bigint AS docs_no_response,
@@ -937,6 +926,12 @@ FROM (
         r.clinic_label,
         r.status,
         r.first_sent_at,
+        -- Ошибка связи хранится рядом со статусом: документ учитывается по ней, если она
+        -- есть в текущем состоянии документа.
+        EXISTS (
+            SELECT 1 FROM stg_egisz.document_error_current c
+            WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
+        ) AS has_network_error,
         date_trunc('month', r.ips_date AT TIME ZONE public.report_timezone())::date AS month_start
     FROM public.rpt_documents r
     WHERE r.ips_date IS NOT NULL
@@ -960,49 +955,61 @@ CREATE INDEX IF NOT EXISTS idx_rpt_docs_monthly_month ON public.rpt_documents_mo
 CREATE INDEX IF NOT EXISTS idx_rpt_docs_monthly_clinic_jid ON public.rpt_documents_monthly (clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW public.rpt_documents_monthly IS
-'Месячная витрина документов: грейн (month_start = первое число месяца МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своего месяца (МСК), для открытого месяца — на текущий момент: строки закрытых месяцев не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
+'Месячная витрина документов: грейн (month_start = первое число месяца МСК по ips_date, клиника). Корпус SLI = docs_total (status <> sent); docs_success + docs_error = docs_total; docs_network_error — документы с ошибкой связи в текущем состоянии; docs_pending + docs_no_response = docs_sent. Состояния отправки считаются на конец своего месяца (МСК), для открытого месяца — на текущий момент: строки закрытых месяцев не меняются между обновлениями. Обновляется refresh_report_marts() после transform.';
 
--- Месячная структура ошибок по категориям (уровень сообщений): документ с
--- несколькими категориями учитывается в каждой — сумма долей категорий может
--- превышать 100 % от числа документов; это контракт панели структуры.
-CREATE MATERIALIZED VIEW public.rpt_error_breakdown_monthly AS
+-- Месячная структура ошибок текущего состояния по виду и категории: документ с
+-- несколькими категориями учитывается в каждой — сумма долей категорий может превышать
+-- 100 % от числа документов; это контракт панели структуры. Учитываются отказы
+-- (статус «Ошибка асинхронного ответа РЭМД») и ошибки связи: элементы ошибки в
+-- подтверждении регистрации статус не меняют и в структуру отказов не входят.
+CREATE MATERIALIZED VIEW mart_egisz.agg_document_error_monthly AS
 SELECT
-    date_trunc('month', b.ips_date AT TIME ZONE public.report_timezone())::date AS month_start,
-    b.clinic_jid,
-    MAX(b.clinic_name) AS clinic_name,
-    b.clinic_label,
-    b.error_category,
-    COUNT(DISTINCT b.dwh_id)::bigint AS docs_with_category,
-    (date_trunc('month', b.ips_date AT TIME ZONE public.report_timezone())::date
+    date_trunc('month', r.ips_date AT TIME ZONE public.report_timezone())::date AS month_start,
+    r.clinic_jid,
+    MAX(r.clinic_name) AS clinic_name,
+    r.clinic_label,
+    c.error_kind,
+    t.error_category,
+    COUNT(DISTINCT c.dwh_id)::bigint AS docs_with_category,
+    (date_trunc('month', r.ips_date AT TIME ZONE public.report_timezone())::date
         < date_trunc('month', now() AT TIME ZONE public.report_timezone())::date) AS is_complete_month
-FROM public.rpt_error_breakdown b
-WHERE b.ips_date IS NOT NULL
-GROUP BY 1, b.clinic_jid, b.clinic_label, b.error_category
+FROM stg_egisz.document_error_current c
+JOIN public.rpt_documents r ON r.dwh_id = c.dwh_id
+LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+WHERE r.ips_date IS NOT NULL
+  AND (r.status = 'async_error' OR c.error_kind = 'Ошибка связи')
+GROUP BY 1, r.clinic_jid, r.clinic_label, c.error_kind, t.error_category
 WITH DATA;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_rpt_error_breakdown_monthly
-    ON public.rpt_error_breakdown_monthly (month_start, clinic_label, error_category);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_monthly_month ON public.rpt_error_breakdown_monthly (month_start);
-CREATE INDEX IF NOT EXISTS idx_rpt_eb_monthly_category ON public.rpt_error_breakdown_monthly (error_category);
+-- У вида «Ошибка связи» категория пуста: ключ сравнивает пустые значения как равные.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_agg_document_error_monthly
+    ON mart_egisz.agg_document_error_monthly (month_start, clinic_label, error_kind, error_category) NULLS NOT DISTINCT;
+CREATE INDEX IF NOT EXISTS idx_agg_document_error_monthly_month
+    ON mart_egisz.agg_document_error_monthly (month_start);
+CREATE INDEX IF NOT EXISTS idx_agg_document_error_monthly_category
+    ON mart_egisz.agg_document_error_monthly (error_category);
 
-COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown_monthly IS
-'Месячная структура ошибок: грейн (month_start, клиника, error_category); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после rpt_error_breakdown.';
+COMMENT ON MATERIALIZED VIEW mart_egisz.agg_document_error_monthly IS
+'Месячная структура ошибок: грейн (month_start, клиника, вид, категория); docs_with_category = COUNT(DISTINCT dwh_id) — документ учитывается в каждой своей категории. Обновляется refresh_report_marts() после текущих ошибок документа.';
 
 -- Обновление отчётных витрин одним вызовом — контракт, на который ссылаются COMMENT'ы
--- витрин. Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
+-- витрин. Порядок обязателен: опубликованные ошибки, недельный и месячный слои читают
+-- текущие ошибки документа.
 -- Внутри функции обновление неконкурентное — REFRESH ... CONCURRENTLY запрещён в
 -- транзакционном блоке; штатный приём обновляет витрины задачей refresh_marts, которая
 -- идёт CONCURRENTLY и не блокирует чтение дашбордов.
 CREATE OR REPLACE FUNCTION public.refresh_report_marts()
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = public, pg_temp
 AS $$
 BEGIN
-    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
+    REFRESH MATERIALIZED VIEW stg_egisz.document_error_current;
+    REFRESH MATERIALIZED VIEW mart_egisz_selfservice.document_error;
     REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
-    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
+    REFRESH MATERIALIZED VIEW mart_egisz.agg_document_error_weekly;
     REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
-    REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
+    REFRESH MATERIALIZED VIEW mart_egisz.agg_document_error_monthly;
 END;
 $$;
 
@@ -1024,7 +1031,7 @@ fact_24h AS (
         d.jid::text AS clinic_jid,
         MAX(COALESCE(NULLIF(o.name, ''), 'Клиника JID: ' || d.jid::text)) AS clinic_name,
         COUNT(DISTINCT d.dwh_id)::bigint AS docs_cnt,
-        COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status IN ('async_error', 'network_error'))::bigint AS err_cnt
+        COUNT(DISTINCT d.dwh_id) FILTER (WHERE d.status = 'async_error')::bigint AS err_cnt
     FROM public.documents d
     CROSS JOIN anchor
     LEFT JOIN public.dim_organizations o ON o.jid = d.jid
@@ -1051,7 +1058,7 @@ SELECT
 FROM fact_24h f
 LEFT JOIN sent_without_response q ON q.clinic_jid = f.clinic_jid;
 
--- Сопоставление отметок конвейера с фактами DWH: докуда журнал выгружен, докуда разобран
+-- Сопоставление отметок конвейера с данными DWH: докуда журнал выгружен, докуда разобран
 -- и куда дошли документы. Сам шлюз здесь не проверяется.
 CREATE OR REPLACE VIEW public.rpt_health_sync AS
 SELECT
@@ -1108,7 +1115,7 @@ COMMENT ON VIEW public.rpt_health_message_registry_no_document IS
 
 CREATE OR REPLACE VIEW public.rpt_health_signals AS
 WITH anchor AS (
-    SELECT MAX(COALESCE(last_callback_at, first_sent_at, document_created_at)) AS last_fact_ts
+    SELECT MAX(COALESCE(last_callback_at, first_sent_at, document_created_at)) AS last_event_ts
     FROM public.documents
 ),
 -- Доля ответов ЕГИСЗ, которые не удалось связать с документом, за последний час приёма.
@@ -1153,10 +1160,30 @@ no_response_after AS (
 -- Отказы, чью формулировку ни одно правило не распознало: они видны в разборе текстом,
 -- и каждая такая строка — кандидат на новое правило либо на код, отсутствующий в ФНСИ.
 uncovered_types AS (
-    SELECT DISTINCT b.dwh_id
-    FROM public.rpt_error_breakdown b
-    LEFT JOIN public.dim_error_type_group g ON g.error_type = b.classification_type
-    WHERE g.error_type IS NULL
+    SELECT DISTINCT c.dwh_id
+    FROM stg_egisz.document_error_current c
+    JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+    WHERE c.error_kind = 'Ошибка асинхронного ответа'
+      AND t.rule_code IS NULL
+),
+-- Элемент ошибки без строки в справочнике типов — сбой архитектуры: тип заводится при
+-- разборе, и расхождение означает, что элементы не приведены к текущим правилам.
+untyped_errors AS (
+    SELECT COUNT(*) AS cnt
+    FROM stg_egisz.document_error_current c
+    LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+    WHERE t.error_type IS NULL
+),
+-- Асинхронный ответ, исход которого не распознан, не отбрасывается молча: он остаётся без
+-- исхода и считается здесь за последние сутки приёма.
+unrecognized_responses AS (
+    SELECT COUNT(*) AS cnt
+    FROM public.transactions t
+    WHERE t.log_date >= now() - INTERVAL '1 day'
+      AND t.source_action IN ('sendRegisterDocumentResult',
+                              'urn:ihe:iti:2007:ProvideAndRegisterDocumentSet-bAsyncResponse')
+      AND t.xml_parsed_at IS NOT NULL
+      AND t.status IS NULL
 ),
 -- Полнота выгрузки журнала. Шлюз нумерует EXCHANGELOG непрерывно, поэтому число
 -- пропущенных LOGID между краями загруженного диапазона — прямая мера потерь. Это тот же
@@ -1213,7 +1240,7 @@ SELECT * FROM (
     VALUES
         ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM public.documents), 'документов', 'documents', 'Контроль поступления СЭМД в DWH'),
         ('sent_24h', 'Отправлено без ответа > 24ч', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours'), 'документов', 'documents.status=sent', 'Проверить клиники без ответа ЕГИСЗ и транспортный канал'),
-        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM public.documents WHERE status = 'network_error'), 'документов', 'documents.status=network_error', 'Разобрать top формулировок и последние события в дашборде 02'),
+        ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM stg_egisz.document_error_current WHERE error_kind = 'Ошибка связи'), 'документов', 'stg_egisz.document_error_current, вид «Ошибка связи»', 'Разобрать типы ошибок связи в mart_egisz_selfservice.network_error'),
         ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM public.documents WHERE status = 'async_error'), 'документов', 'documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('no_response_backlog',
          'Документы без ответа',
@@ -1235,8 +1262,22 @@ SELECT * FROM (
          END,
          (SELECT COUNT(*)::numeric FROM uncovered_types),
          'документов',
-         'rpt_error_breakdown вне dim_error_type_group',
+         'stg_egisz.document_error_current: тип без правила классификации',
          'Разобрать формулировки на вкладке «Анализ ошибок» и завести правило в dim_error_rules'),
+        ('untyped_errors',
+         'Элементы ошибки без типа в справочнике',
+         CASE WHEN (SELECT cnt FROM untyped_errors) >= 1 THEN 'red' ELSE 'green' END,
+         (SELECT cnt FROM untyped_errors)::numeric,
+         'элементов',
+         'stg_egisz.document_error_current вне mart_egisz.dim_error_type',
+         'Выполнить пересчёт ошибок: элементы не приведены к текущим правилам'),
+        ('unrecognized_async_responses',
+         'Асинхронные ответы с нераспознанным исходом',
+         CASE WHEN (SELECT cnt FROM unrecognized_responses) >= 1 THEN 'red' ELSE 'green' END,
+         (SELECT cnt FROM unrecognized_responses)::numeric,
+         'ответов за сутки',
+         'transactions: асинхронный ответ без исхода',
+         'Разобрать ответ и дополнить распознавание исхода в classify_async_status'),
         ('unknown_clinics',
          'JID без записи в справочнике организаций',
          CASE
@@ -1289,15 +1330,15 @@ SELECT * FROM (
          'РЭМД: relatesToMessage найден в EGISZ_MESSAGES, DOCUMENTID пустой',
          'Проверить заполнение DOCUMENTID в EGISZ_MESSAGES РЭМД'),
         ('data_freshness',
-         'Свежесть данных (последний факт)',
+         'Свежесть данных (последнее событие документа)',
          CASE
-             WHEN (SELECT last_fact_ts FROM anchor) IS NULL THEN 'red'
-             WHEN (SELECT last_fact_ts FROM anchor) >= now() - INTERVAL '1 hour'  THEN 'green'
-             WHEN (SELECT last_fact_ts FROM anchor) >= now() - INTERVAL '24 hours' THEN 'yellow'
+             WHEN (SELECT last_event_ts FROM anchor) IS NULL THEN 'red'
+             WHEN (SELECT last_event_ts FROM anchor) >= now() - INTERVAL '1 hour'  THEN 'green'
+             WHEN (SELECT last_event_ts FROM anchor) >= now() - INTERVAL '24 hours' THEN 'yellow'
              ELSE 'red'
          END,
-         ROUND(EXTRACT(EPOCH FROM (now() - COALESCE((SELECT last_fact_ts FROM anchor), now()))) / 60.0, 1)::numeric,
-         'минут с последнего факта',
+         ROUND(EXTRACT(EPOCH FROM (now() - COALESCE((SELECT last_event_ts FROM anchor), now()))) / 60.0, 1)::numeric,
+         'минут с последнего события документа',
          'documents.last_callback_at/first_sent_at',
          'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
@@ -1401,14 +1442,9 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM public.document_attributes) THEN
         PERFORM public.recompute_document_attributes(NULL::text[]);
         PERFORM public.recompute_document_versions(NULL::text[]);
-        -- Матпредставления созданы в 80/85/86 с данными; пересобираем после сборки
-        -- атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
-        -- Порядок обязателен: разбивка ошибок перед периодическими витринами.
-        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown;
-            REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;
-        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_weekly;
-        REFRESH MATERIALIZED VIEW public.rpt_documents_monthly;
-        REFRESH MATERIALIZED VIEW public.rpt_error_breakdown_monthly;
+        -- Материализованные представления созданы выше с данными; пересобираем после
+        -- сборки атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
+        PERFORM public.refresh_report_marts();
     END IF;
 END
 $$;
@@ -1417,10 +1453,11 @@ ANALYZE public.exchangelog_raw;
 ANALYZE public.documents;
 ANALYZE public.transactions;
 ANALYZE public.document_attributes;
-ANALYZE public.rpt_error_breakdown;
+ANALYZE stg_egisz.document_error_current;
+ANALYZE mart_egisz_selfservice.document_error;
 ANALYZE public.rpt_documents_weekly;
-ANALYZE public.rpt_error_breakdown_weekly;
+ANALYZE mart_egisz.agg_document_error_weekly;
 ANALYZE public.rpt_documents_monthly;
-ANALYZE public.rpt_error_breakdown_monthly;
+ANALYZE mart_egisz.agg_document_error_monthly;
 
 \echo 'DWH init complete: egisz owns all public-schema objects in dwh_egisz'

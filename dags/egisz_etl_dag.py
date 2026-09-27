@@ -1,4 +1,4 @@
-"""Самодостаточный DAG: EXCHANGELOG и реестр подач → exchangelog_raw → факты DWH.
+"""Самодостаточный DAG: EXCHANGELOG и реестр подач → exchangelog_raw → сообщения и документы DWH.
 
 Канонический исходник — этот файл: он разворачивается на целевые контуры как есть,
 без установки дополнительных пакетов. Общие функции (подключения, курсоры, витрины)
@@ -29,13 +29,15 @@ DWH_POOL = "dwh_postgres"
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext", "uri")
 
-# Порядок обязателен: недельный и месячный слои читают rpt_error_breakdown.
+# Порядок обязателен: опубликованные ошибки, недельный и месячный слои читают текущие
+# ошибки документа.
 REPORT_MARTS = (
-    "public.rpt_error_breakdown",
+    "stg_egisz.document_error_current",
+    "mart_egisz_selfservice.document_error",
     "public.rpt_documents_weekly",
-    "public.rpt_error_breakdown_weekly",
+    "mart_egisz.agg_document_error_weekly",
     "public.rpt_documents_monthly",
-    "public.rpt_error_breakdown_monthly",
+    "mart_egisz.agg_document_error_monthly",
 )
 
 ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}
@@ -881,7 +883,7 @@ def transform_exchangelog_batch(
 ) -> TransformResult:
     """exchangelog_raw → documents/transactions; двигает отметку разбора.
 
-    Отметка разбора считает по exchangelog_raw: докуда raw превращена в факты. Верхняя
+    Отметка разбора считает по exchangelog_raw: докуда raw разобрана. Верхняя
     граница — отметка выгрузки: только до неё журнал заведомо вычитан без пропусков.
 
     Обе отметки читаются из etl_state, а не приходят от выгрузки: сорванная выгрузка
@@ -1035,8 +1037,8 @@ def egisz_etl_pipeline() -> None:
         finally:
             pg_conn.close()
 
-    # Витрины обновляются там же, где меняется их основание, — иначе слой со «свежестью
-    # фактов» отстаёт от фактов.
+    # Витрины обновляются там же, где меняется их основание, — иначе витрины отстают от
+    # документов.
     @task(
         pool=DWH_POOL,
         retries=2,

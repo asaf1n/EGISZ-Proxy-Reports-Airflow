@@ -186,89 +186,102 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert 'f.clinic_jid AS "JID Клиники"' in sql
 
 
-def test_error_matching_matches_all_rules_independently() -> None:
+def test_error_classification_takes_one_rule_per_element() -> None:
+    """Элемент получает ровно один тип: первый ярус с совпадением, внутри яруса — правило
+    с меньшим rule_code."""
     sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
-    assert "error_matching_rule_labels" in sql
-    assert "ORDER BY r.rule_code" in sql
-    matching_fn = sql.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
-    assert "LIMIT 1" not in matching_fn
+    classify = sql.split("CREATE OR REPLACE FUNCTION stg_egisz.classify_error")[1].split("$$;")[0]
+    assert "FOR v_tier IN 1..4 LOOP" in classify
+    assert "ORDER BY r.rule_code\n            LIMIT 1;" in classify
+    assert "error_matching_rule_labels" not in sql
+    assert "error_item_atoms" not in sql
 
 
-def test_error_matching_is_tiered() -> None:
-    """Ярусный матчинг: победа первого яруса (min match_tier), внутри яруса — все
-    совпадения с дедупом интерпретаций."""
-    parts = DWH_INIT_SQL_PATH.parent
-    rules = (parts / "02_functions.sql").read_text(encoding="utf-8")
-    assert "match_tier" in rules
-    assert "chk_dim_error_rules_match_tier" in rules
-    # таксономия: зона ответственности и повторяемость с CHECK-доменом
-    assert "responsibility" in rules
-    assert "is_retryable" in rules
-    assert "chk_dim_error_type_group_responsibility" in rules
-    fns = (parts / "02_functions.sql").read_text(encoding="utf-8")
-    matching_fn = fns.split("error_matching_rule_labels")[1].split("error_item_atoms")[0]
-    assert "FOR tier IN 1..4 LOOP" in matching_fn
-    assert "IF cardinality(labels) > 0 THEN" in matching_fn
-    # ИЭМК: RegistryError (атрибуты) парсится отдельной веткой build_errors_json
-    assert "CREATE OR REPLACE FUNCTION public.xml_registry_errors" in fns
-    build_fn = fns.split("CREATE OR REPLACE FUNCTION public.build_errors_json")[1].split("$$;")[0]
-    assert "xml_registry_errors" in build_fn
+def test_error_rules_dictionary_contract() -> None:
+    """Справочник правил несёт классификацию по ярусам и шаги маскирования; зона
+    ответственности и признак повтора наследуются от категории."""
+    rules = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules" in rules
+    assert "chk_dim_error_rules_kind" in rules
+    assert "(match_tier <= 2) = (match_code IS NOT NULL)" in rules
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_category" in rules
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_type" in rules
+    assert "responsibility IN ('клиника', 'МИС', 'интегратор', 'РЭМД', 'смешанная')" in rules
+    assert "is_active" not in rules
+    items = rules.split("CREATE OR REPLACE FUNCTION stg_egisz.error_items")[1].split("$$;")[0]
+    assert "RegistryError" in items
+    assert "codeContext" in items
     # faultcode: локальная часть в UPPERCASE, последним в COALESCE error_code
-    parsing = (parts / "02_functions.sql").read_text(encoding="utf-8")
-    assert "faultcode" in parsing
-    assert "COALESCE(v_error_code_xml, v_code_xml, v_faultcode)" in parsing
+    assert "faultcode" in rules
+    assert "COALESCE(v_error_code_xml, v_code_xml, v_faultcode)" in rules
 
 
-def test_rpt_error_breakdown_exposes_responsibility() -> None:
+def test_document_error_exposes_responsibility() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split(
-        "COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
-    assert "responsibility" in breakdown
-    assert "is_retryable" in breakdown
+    view = sql.split("CREATE MATERIALIZED VIEW mart_egisz_selfservice.document_error AS")[1].split(
+        "COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error")[0]
+    assert "t.responsibility" in view
+    assert "t.is_retryable" in view
 
 
-def test_error_classify_uses_atomic_item_atoms() -> None:
-    sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE FUNCTION public.error_item_atoms" in sql
-    classify = sql.split("CREATE OR REPLACE FUNCTION public.error_classify")[1].split("$$;")[0]
-    assert "error_detail_types(public.error_details(p_errors))" in classify
-    details = sql.split("CREATE OR REPLACE FUNCTION public.error_details(")[1].split("$$;")[0]
-    assert "error_item_atoms" in details
-    assert "error_item_label(item->>'code', message_text, class_type)" in details
-    assert "error_interpretation_type" not in classify
+def test_transform_extracts_and_classifies_elements_once_per_batch() -> None:
+    transform = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
+    assert "CROSS JOIN LATERAL stg_egisz.error_items(" in transform
+    assert "item_keys AS MATERIALIZED" in transform
+    assert "CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c" in transform
+    assert "error_classify" not in transform
+    assert "build_errors_json" not in transform
 
 
-def test_rpt_error_breakdown_is_materialized_and_splits_error_types() -> None:
+def test_document_error_is_materialized_over_current_state() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    # Матвью: горячая витрина «Анализ ошибок» предрассчитана и индексирована.
-    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
-    breakdown = sql.split("CREATE MATERIALIZED VIEW public.rpt_error_breakdown")[1].split("COMMENT ON MATERIALIZED VIEW public.rpt_error_breakdown")[0]
-    assert "' · '" in breakdown
-    # Канонизация set-based: LEFT JOIN к словарю (без построчных подзапросов).
-    assert "dim_error_type_group" in breakdown
-    assert "public.documents doc" in breakdown
-    assert "jsonb_to_recordset" in breakdown
-    assert "d.classification_type" in breakdown
-    assert "' (НСИ: ' || COALESCE(nd.name || ', ', '') || 'OID ' || a.nsi_dictionary_oid || ')'" in breakdown
-    assert "' · OID '" not in breakdown
-    assert "несколько справочников" not in breakdown
+    current = sql.split("CREATE MATERIALIZED VIEW stg_egisz.document_error_current AS")[1].split(
+        "COMMENT ON MATERIALIZED VIEW stg_egisz.document_error_current")[0]
+    assert "t.status IN ('success', 'error')" in current
+    assert "tx.log_date >= COALESCE(lr.responded_at, '-infinity'::timestamptz)" in current
+    assert "jsonb_to_recordset(tx.error_details)" in current
+    view = sql.split("CREATE MATERIALIZED VIEW mart_egisz_selfservice.document_error AS")[1].split(
+        "COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error")[0]
+    assert "FROM stg_egisz.document_error_current c" in view
+    assert "LEFT JOIN mart_egisz.dim_error_type t" in view
+    # Справочник — атрибут ошибки, а не часть наименования типа.
+    assert "' · '" not in view
+    assert "(НСИ:" not in view
     # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
-    assert "uq_rpt_error_breakdown" in sql
-    # Дроп обоих видов объекта + REFRESH после transform.
-    drops = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    assert "DROP MATERIALIZED VIEW public.rpt_error_breakdown CASCADE" in drops
+    assert "ON mart_egisz_selfservice.document_error (dwh_id, error_no)" in sql
+    assert "rpt_error_breakdown" not in sql
 
 
-def test_rpt_documents_exposes_error_types_list_only() -> None:
-    """rpt_document_versions (база rpt_documents) отдаёт полный список error_types
-    как есть из documents; отбор по типу идёт через rpt_error_breakdown.
-    rpt_documents = тот же проекшн, отфильтрованный по is_current_version."""
+def test_source_error_text_stays_in_parsing_layer() -> None:
+    """Исходный текст ошибки в опубликованный слой не выносится: дашборды до решения о
+    доступе читают его из слоя разбора по исключению из правил стандарта."""
+    sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
+
+    def body(start: str, end: str) -> str:
+        return sql.split(start)[1].split(end)[0]
+
+    current = body("CREATE MATERIALIZED VIEW stg_egisz.document_error_current AS",
+                   "COMMENT ON MATERIALIZED VIEW stg_egisz.document_error_current")
+    message = body("CREATE VIEW stg_egisz.message_error AS", "COMMENT ON VIEW stg_egisz.message_error")
+    document = body("CREATE MATERIALIZED VIEW mart_egisz_selfservice.document_error AS",
+                    "COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error")
+    network = body("CREATE VIEW mart_egisz_selfservice.network_error AS",
+                   "COMMENT ON VIEW mart_egisz_selfservice.network_error")
+
+    assert 'e.error_text COLLATE "und-x-icu" AS error_text' in current
+    assert 'e.error_text COLLATE "und-x-icu" AS error_text' in message
+    assert "error_text" not in document
+    assert "error_text" not in network
+    assert "FROM stg_egisz.message_error m" in network
+
+
+def test_rpt_documents_carries_no_error_columns() -> None:
+    """Ошибки документа — отдельная витрина: у документной витрины нет колонок текста и
+    типа ошибки."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     rpt = sql.split("CREATE OR REPLACE VIEW public.rpt_document_versions")[1].split("COMMENT ON VIEW public.rpt_document_versions")[0]
-    assert "d.error_types" in rpt
-    assert "canonical_error_list" not in rpt
-    assert "AS error_type," not in rpt
-    assert "split_part(" not in rpt
+    assert "error_types" not in rpt
+    assert "error_text" not in rpt
 
 
 def test_document_version_layer_groups_by_doc_number() -> None:
@@ -279,6 +292,7 @@ def test_document_version_layer_groups_by_doc_number() -> None:
     transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
     rpt = (parts / "04_views.sql").read_text(encoding="utf-8")
     health = (parts / "04_views.sql").read_text(encoding="utf-8")
+    documents_contract = tables.split("CREATE TABLE IF NOT EXISTS documents (", 1)[1].split(");", 1)[0]
 
     for col in (
         "doc_number",
@@ -289,7 +303,7 @@ def test_document_version_layer_groups_by_doc_number() -> None:
         "supersedes_dwh_id",
         "is_current_version",
     ):
-        assert f"ADD COLUMN IF NOT EXISTS {col}" in tables
+        assert f"    {col} " in documents_contract
 
     assert "CREATE OR REPLACE FUNCTION public.recompute_document_versions" in transform
     assert "lower(btrim(d.doc_number))" in transform
@@ -317,7 +331,6 @@ def test_response_links_to_document_through_message_registry() -> None:
     assert "msgid text PRIMARY KEY" not in tables
     assert "document_uid text NOT NULL" not in tables
     assert "idx_dim_message_document_egmid_unique" in tables
-    assert "ALTER TABLE dim_message_document ALTER COLUMN document_uid DROP NOT NULL" in tables
     assert "CREATE OR REPLACE FUNCTION public.dim_message_document_guard" in tables
     assert "COALESCE(NEW.reply_to, '') ~ ':9921" in tables
     assert "CREATE TRIGGER trg_dim_message_document_guard" in tables
@@ -337,10 +350,9 @@ def test_response_links_to_document_through_message_registry() -> None:
     assert "'unlinked'" in transform
     assert "AND reg.document_uid IS NULL" in transform
     assert "tx.egisz_subsystem IS DISTINCT FROM 'ИЭМК'" in transform
-    assert "SET link_method = NULL" in tables
     assert "NOT EXISTS (\n          SELECT 1\n          FROM public.dim_message_document m" in transform
     # Индексы вне текущего правила связки отсутствуют.
-    assert "DROP INDEX IF EXISTS idx_transactions_gdf_jid_logid" in tables
+    assert "idx_transactions_gdf_jid_logid" not in tables
     assert "AND t.jid IS NULL" not in transform
     # Агрегация реквизитов ограничена документами батча, не всем архивом.
     assert "batch_document_ids" in transform
@@ -403,11 +415,8 @@ def test_parse_attempts_marker_prevents_reparse_of_uninsertable_rows() -> None:
     transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
 
     assert "CREATE TABLE IF NOT EXISTS exchangelog_parse_attempts" in tables
-    # Бэкфилл маркера из уже распарсенных строк transactions: без него первый
-    # полножурнальный lookback перепарсил бы весь архив, а не только «мусор».
-    assert "INSERT INTO exchangelog_parse_attempts (logid)" in tables
-    assert "SELECT logid FROM transactions WHERE xml_parsed_at IS NOT NULL" in tables
-    assert "ANALYZE exchangelog_parse_attempts" in tables
+    # Схема описывает конечное состояние: разовое наполнение маркера в ней не живёт.
+    assert "INSERT INTO exchangelog_parse_attempts" not in tables
 
     # Обе ветки parse_targets отбирают кандидатов по маркеру, не по transactions.
     parse_targets = transform.split("parse_targets AS (")[1].split("INSERT INTO public.transactions")[0]
@@ -435,8 +444,7 @@ def test_document_attributes_maintained_without_enriched_mart() -> None:
     assert "recompute_document_attributes" in transform_sql
     # Параметр по умолчанию покрывает полный проход.
     assert "CREATE OR REPLACE FUNCTION public.reconcile_document_attributes" not in core_sql
-    assert "DROP FUNCTION IF EXISTS public.reconcile_document_attributes_ui()" in core_sql
-    assert "DROP FUNCTION IF EXISTS public.reconcile_document_attributes(text[])" in core_sql
+    assert "reconcile_document_attributes" not in core_sql
     assert "CREATE MATERIALIZED VIEW public.v_documents_daily_ui" not in sql
     assert "CREATE MATERIALIZED VIEW public.v_egisz_documents_daily_ui" not in sql
 
@@ -474,8 +482,6 @@ def test_rpt_documents_view_has_expected_columns() -> None:
         "clinic_inn",
         "clinic_oid_unknown",
         "semd_emdr_id",
-        "error_types",
-        "error_text",
     ):
         assert column in rpt_sql
     core_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
@@ -510,10 +516,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_semd" in sql
     # Функциональные XML-индексы по msgtext не используются transform (parse-once в transactions).
-    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_local_uid_norm" in sql
-    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_document_id_norm" in sql
-    assert "DROP INDEX IF EXISTS idx_exchangelog_raw_xml_message_id_norm" in sql
-    assert "CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_xml" not in sql
+    assert "idx_exchangelog_raw_xml" not in sql
     assert "candidate_log_ids AS" in sql
     assert "CREATE OR REPLACE FUNCTION public.parse_exchangelog_row" in sql
     assert "CROSS JOIN LATERAL public.parse_exchangelog_row" in transform_sql
@@ -522,15 +525,13 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "tx.xml_dwh_id AS dwh_id_xml" in transform_sql
     assert "COALESCE(r.local_uid_xml, msg_ref.local_uid) AS local_uid_semd" in transform_sql
     assert "public.clean_text_value(d.local_uid)" in sql
-    # status_category удалён как выводимый из status; transform им больше не управляет,
-    # а развёрнутые БД чистятся идемпотентным DROP COLUMN.
-    assert "status_category = CASE" not in sql
-    assert "status_category," not in sql
-    assert "DROP COLUMN IF EXISTS status_category" in sql
+    # status_category выводится из status и в схеме не объявлен.
+    assert "status_category" not in sql
     assert "document_attributes AS" in transform_sql
     assert "document_resolved AS" in transform_sql
     assert "resolve_document_jid" in transform_sql
-    assert "AND (a.has_network_error OR a.resolved_jid IS NOT NULL)" in transform_sql
+    assert "AND a.resolved_jid IS NOT NULL" in transform_sql
+    assert "has_network_error" not in transform_sql
     assert "SELECT DISTINCT ON (f.dwh_id)" in sql
     assert "public.normalize_semd_code(r.kind_xml) AS semd_code" in sql
     assert "src_doc.semd_code AS source_document_semd_code" in sql
@@ -582,34 +583,32 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
     # Наименования типов — формулировки классификатора ФНСИ 1.2.643.5.1.13.13.99.2.305.
-    assert "dim_nsi_error_code" in sql
+    assert "mart_egisz.dim_nsi_error_code" in sql
     assert "1.2.643.5.1.13.13.99.2.305" in sql
     assert "Адрес пациента: атрибуты элемента address:Type не соответствуют требованиям" in sql
     assert "Данные пациента с переданным локальным идентификатором отличаются от зарегистрированных в ГИП" in sql
     assert "Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован" in sql
     assert "Ошибка при получении файла документа из предоставляющей системы" in sql
-    assert "Ошибка асинхронного ответа" in sql
     # Трактовки, разошедшиеся со справочником, сняты вместе с выдуманными кодами.
     assert "Не указан адрес пациента" not in sql
     assert "Срок действия сертификата организации истек" not in sql
     assert "ORGANIZATION_NOT_REGISTERED" not in sql
     assert "CA_UNAVAILABLE" not in sql
-    assert "Отказ РЭМД" not in sql
     assert "Отказ РЭМД (ns2status: error)" not in sql
-    assert "Сетевая ошибка: " in sql
-    assert "'Сетевая ошибка'" in sql
-    assert "ошибка связи (транспорт)" not in sql
+    # Ошибка связи — вид ошибки с исходным текстом шлюза; ни синтетического кода, ни
+    # подставленных формулировок.
+    assert "INTEGRATION_LOGSTATE_3" not in sql
+    assert "Сетевая ошибка: " not in sql
+    assert "'Сетевая ошибка'" not in sql
+    assert "'нет деталей'" not in sql
+    assert "'Неизвестная ошибка'" not in sql
+    assert "'(без текста)'" not in sql
     assert "Наименование СЭМД отсутствует в справочнике СЭМД" in sql
-    assert "Наименование СЭМД отсутствует в НСИ 1520" not in sql
-    assert "CREATE OR REPLACE FUNCTION public.network_error_type" in sql
-    assert "dim_error_rules" in sql
-    assert "CREATE MATERIALIZED VIEW public.rpt_error_breakdown" in sql
-    assert 'AS "Ошибки JSON raw"' not in sql
-    assert "error_messages_row" in sql
-    assert "WHEN e.final_status = 'error' AND e.logstate = 3" in transform_sql
-    assert "'code', 'INTEGRATION_LOGSTATE_3', 'message', e.event_message" in transform_sql
-    assert "FROM public.documents d" in sql
-    assert "WHERE r.status = 'network_error'" in sql
+    assert "CREATE OR REPLACE FUNCTION stg_egisz.error_items" in sql
+    assert "CREATE OR REPLACE FUNCTION stg_egisz.classify_error" in sql
+    assert "CREATE MATERIALIZED VIEW mart_egisz_selfservice.document_error" in sql
+    assert "CREATE VIEW mart_egisz_selfservice.network_error" in sql
+    assert "CASE WHEN p.logstate = 3 THEN p.logtext ELSE p.xml_message END AS message_text" in transform_sql
     assert "fact_egisz_channel_errors" not in transform_sql
 
 
@@ -617,58 +616,52 @@ def test_dwh_init_sql_keeps_only_three_reported_emd_statuses() -> None:
     sql = _read_dwh_init_sql()
     transform_sql = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
 
-    # Синхронный ответ (шаг 4 схемы регистрации) = только приём запроса ('accepted');
-    # регистрация подтверждается асинхронным callback'ом.
-    assert "приём запроса на регистрацию (шаг 4 схемы)" in sql
-    assert "COALESCE(p_document_status, '') ~* 'зарегистр'" in sql
-    assert "'RegisterDocumentResponse'" in sql
-    assert "THEN 'success'" in sql
-    assert "THEN 'accepted'" in sql
+    # Статус документа определяет асинхронный ответ; сбой доставки статусом не является.
+    classify = sql.split("CREATE OR REPLACE FUNCTION public.classify_async_status")[1].split("$$;")[0]
+    assert "p_source_action = 'sendRegisterDocumentResult'" in classify
+    assert "COALESCE(p_document_status, '') ~* 'зарегистр'" in classify
+    assert "ResponseStatusType" not in classify
+    assert "p_registry_response_status = 'Success'" in classify
+    assert "p_logstate" not in classify
+    assert "'accepted'" not in classify
+    assert "'unknown'" not in classify
     assert "CREATE TABLE IF NOT EXISTS dim_document_status" in sql
     assert "('success', 'Успешно зарегистрирован'" in sql
-    assert "('network_error', 'Ошибка связи'" in sql
     assert "('async_error', 'Ошибка асинхронного ответа РЭМД'" in sql
     assert "('sent', 'Отправлено'" in sql
+    assert "'network_error'" not in sql
     # Код нефинального статуса не дублируется литералом в ветвях transform.
     assert "ELSE 'waiting'" not in sql
     assert "public.document_status_nonfinal()" in transform_sql
     assert "ds.label AS status_label" in sql
     assert "WHEN d.status = 'success' THEN 'Успешно зарегистрирован'" not in sql
-    assert "WHERE e.final_status IN ('success', 'error')" in sql
+    assert "AND f.status IN ('success', 'error')" in transform_sql
+    assert "CASE f.status WHEN 'success' THEN 'success' ELSE 'async_error' END" in transform_sql
     assert "NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL" in transform_sql
     parsing_sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
-    drop_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "CREATE OR REPLACE FUNCTION public.resolve_document_jid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_mo_uid" in parsing_sql
     assert "CREATE OR REPLACE FUNCTION public.jid_from_host" in parsing_sql
     assert "egisz_xml_text" not in transform_sql
     assert "outbound_ref.dwh_id" not in sql
-    # Ответ связывается с документом по реестру подач; самосоединение по journal-MSGID
-    # и позиционная догадка «последний getDocumentFile клиники» сняты.
+    # Ответ связывается с документом по реестру подач.
     assert "msg_ref.dwh_id" in transform_sql
     assert "exch_ref" not in transform_sql
     assert "gdf_events AS" not in transform_sql
     assert "gdf_ref" not in transform_sql
     assert "exchangelog_raw er" not in transform_sql
-    assert "CREATE TABLE IF NOT EXISTS dim_exchangelog_refs" not in sql
-    assert "INSERT INTO public.dim_exchangelog_refs" not in transform_sql
+    assert "dim_exchangelog_refs" not in sql
     assert "xml_parsed_at" in sql
-    assert "CREATE TABLE IF NOT EXISTS dim_egisz_message_refs" not in sql
-    assert "DROP TABLE IF EXISTS public.dim_egisz_message_refs" not in drop_sql
+    assert "dim_egisz_message_refs" not in sql
     assert "status = 'sent'" in sql
-    assert "f.error_json_text" in sql
-    assert "error_messages_row" in transform_sql
-    assert "COALESCE(NULLIF(btrim(f.error_json_text), ''), f.message)" not in transform_sql
+    # Строковые сводки ошибок сняты: элементы хранит разобранное сообщение.
+    assert "error_json_text" not in sql
+    assert "error_messages_row" not in sql
     assert ", message, jid, jid_resolve_method, semd_code" in sql
-    assert "error_message," not in transform_sql
-    assert "error_message =" not in transform_sql
     rpt_sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
     assert "NULLIF(btrim(d.dwh_id), '') IS NOT NULL" in rpt_sql
     assert "DWH_ID" not in rpt_sql
-    assert "public.clean_text_value(t.message_id),\n        t.logid::text" not in sql
-    assert "public.clean_text_value(t.msgid),\n        t.logid::text" not in sql
     assert "pending_source AS" not in sql
-    assert "WHEN e.final_status = 'success' THEN 'Успешно'" not in sql
 
 
 def test_dwh_init_sql_does_not_keep_legacy_egisz_messages_staging() -> None:
@@ -972,7 +965,8 @@ def test_dwh_init_sql_partitions_time_series_tables() -> None:
     assert "PARTITION OF public.exchangelog_raw DEFAULT" not in sql
     assert "PARTITION OF public.transactions DEFAULT" not in sql
     assert "CREATE OR REPLACE FUNCTION public.ensure_time_partitions" in sql
-    assert "relkind <> 'p'" in sql
+    # Схема объявляет партиционированные таблицы сразу, без конверсии из обычных.
+    assert "relkind <> 'p'" not in sql
     assert "ON CONFLICT (logid, log_date) DO UPDATE SET" in transform_sql
     assert "ON CONFLICT (logid, log_date)" in transform_sql
 
