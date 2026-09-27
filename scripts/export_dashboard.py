@@ -234,7 +234,7 @@ def is_volatile_click_behavior(behavior: dict | None) -> bool:
 
 def is_model_compiled_native(query: str) -> bool:
     """Query Builder on a model is returned by the API as native SQL over __mb_source."""
-    return '"__mb_source"' in query or '"public"."rpt_documents"' in query
+    return '"__mb_source"' in query or '"serving_egisz"."documents_current"' in query
 
 
 def apply_provisioning_metadata(card_obj: dict, prior: dict | None, tags: dict, live_viz: dict) -> None:

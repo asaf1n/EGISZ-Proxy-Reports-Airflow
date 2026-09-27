@@ -84,7 +84,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_error.error_type, ' · ' ORDER BY document_error.error_type) FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = latest.dwh_id ) AS \"Типы ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_error_current c WHERE c.dwh_id = latest.dwh_id ) AS \"ns2_error\" FROM latest ORDER BY latest.ips_date DESC",
+          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = latest.dwh_id ) AS \"Типы ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) AS \"ns2_error\" FROM latest ORDER BY latest.ips_date DESC",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -222,27 +222,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -253,7 +253,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
+          "query": "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] GROUP BY ips_date::date, status_detail_label, status_detail_sort ORDER BY ips_date::date, status_detail_sort",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -364,27 +364,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -396,7 +396,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort",
+          "query": "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -517,27 +517,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -548,7 +548,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(document_error.error_category, document_error.error_kind) AS cat, document_error.error_type AS typ, document_error.responsibility AS resp, document_error.is_retryable AS retryable, document_error.dwh_id AS dwh_id FROM mart_egisz_selfservice.document_error INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM mart_egisz_selfservice.document_error INNER JOIN period_docs USING (dwh_id) WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи'))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM serving_egisz.documents_current WHERE status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(document_errors.error_category, document_errors.error_kind) AS cat, document_errors.error_type AS typ, document_errors.responsibility AS resp, document_errors.is_retryable AS retryable, document_errors.dwh_id AS dwh_id FROM serving_egisz.document_errors INNER JOIN period_docs pd ON pd.dwh_id = document_errors.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM serving_egisz.document_errors INNER JOIN period_docs USING (dwh_id) WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи'))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -709,27 +709,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         }
       }
@@ -740,7 +740,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE status IN ('success', 'async_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(semd_label), ''), 'Неизвестно') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" FROM serving_egisz.documents_current WHERE status IN ('success', 'async_error') AND COALESCE(NULLIF(TRIM(semd_label), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -868,27 +868,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -899,7 +899,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -1013,27 +1013,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -1044,7 +1044,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='success')::bigint AS \"Успешно\", COUNT(DISTINCT dwh_id) FILTER (WHERE status='async_error')::bigint AS \"Отказ РЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='pending')::bigint AS \"В обработке\", COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" FROM serving_egisz.documents_current WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] [[AND {{status}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -1179,27 +1179,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -1210,7 +1210,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM public.rpt_documents WHERE status IN ('success','async_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), 35) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status FROM serving_egisz.documents_current WHERE status IN ('success','async_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), per_clinic AS ( SELECT clinic_jid::text AS jid, LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), 35) AS lbl, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS errs FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), ranked AS ( SELECT jid, lbl, errs, total, ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn FROM per_clinic WHERE errs > 0 ), bounds AS ( SELECT 8 AS top_n ), top AS ( SELECT r.jid, r.lbl, r.errs, r.total FROM ranked r, bounds b WHERE r.rn <= b.top_n ), tail AS ( SELECT COUNT(r.jid)::int AS cnt, COALESCE(SUM(r.errs), 0)::bigint AS errs, COALESCE(SUM(r.total), 0)::numeric AS total FROM ranked r, bounds b WHERE r.rn > b.top_n ) SELECT * FROM ( SELECT jid AS \"JID Клиники\", lbl AS \"Клиника\", errs AS \"Документов\", ROUND(100.0 * errs / NULLIF(total, 0), 1) AS \"% ошибок\" FROM top UNION ALL SELECT NULL::text, 'Прочие (' || t.cnt || ')', t.errs, ROUND(100.0 * t.errs / NULLIF(t.total, 0), 1) FROM tail t WHERE t.cnt > 0 ) u ORDER BY \"Документов\" DESC",
           "template-tags": {
             "semd_type": {
               "id": "fc000004-0004-4004-8004-000000000010",
@@ -1324,27 +1324,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -1355,7 +1355,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH d AS ( SELECT date_trunc('day', ips_date)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS err FROM public.rpt_documents WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
+          "query": "WITH d AS ( SELECT date_trunc('day', ips_date)::date AS day, COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS cnt, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS err FROM serving_egisz.documents_current WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{semd_type}}]] GROUP BY 1, 2 ) SELECT day AS \"День\", clinic AS \"Клиника\", ROUND(100.0 * err / NULLIF(cnt, 0), 1) AS \"Доля ошибок, %\" FROM d ORDER BY 1, 2",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1444,27 +1444,27 @@
       "tab": "operational",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -1476,7 +1476,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH sent AS ( SELECT dwh_id, EXTRACT(EPOCH FROM (first_callback_at - first_sent_at)) AS answer_seconds FROM public.rpt_documents WHERE first_sent_at IS NOT NULL AND first_callback_at IS NOT NULL AND first_callback_at >= first_sent_at [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'Получен ответ' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM sent UNION ALL SELECT -g.sort_order::int, regexp_replace(g.label, '^до ', '< '), COUNT(DISTINCT s.dwh_id) FILTER (WHERE s.answer_seconds <= g.max_age_minutes * 60)::bigint FROM public.dim_pending_segments g CROSS JOIN sent s WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
+          "query": "WITH sent AS ( SELECT dwh_id, EXTRACT(EPOCH FROM (first_callback_at - first_sent_at)) AS answer_seconds FROM serving_egisz.documents_current WHERE first_sent_at IS NOT NULL AND first_callback_at IS NOT NULL AND first_callback_at >= first_sent_at [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT -1000 AS step_sort, 'Получен ответ' AS \"Этап\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM sent UNION ALL SELECT -g.sort_order::int, regexp_replace(g.label, '^до ', '< '), COUNT(DISTINCT s.dwh_id) FILTER (WHERE s.answer_seconds <= g.max_age_minutes * 60)::bigint FROM mart_egisz.dim_pending_segments g CROSS JOIN sent s WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label ORDER BY 1",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1516,26 +1516,26 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         }
       }
     },
     {
       "name": "Отказы по часам: связь и асинхронный ответ",
-      "description": "Почасовые доли документов с ошибкой асинхронного ответа РЭМД и с ошибкой связи (%). Ошибка асинхронного ответа — исход: её доля от документов с ответом РЭМД за час, отправленные без ответа в знаменатель не входят. Ошибка связи статус не меняет: её доля от всех документов часа, включая документы без ответа. Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS».",
+      "description": "Почасовые доли документов с ошибкой асинхронного ответа РЭМД и с ошибкой связи (%). Ошибка асинхронного ответа — исход: её доля от документов с ответом РЭМД за час, отправленные без ответа в знаменатель не входят. Ошибка связи статус не меняет: её доля от всех документов часа, включая документы без ответа. Ось — «Дата обработки» (`documents_current`), период — фильтр «Обработано IPS».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND document_error.error_kind = 'Ошибка связи')) / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent'), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" FROM public.rpt_documents WHERE ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('hour', ips_date) AS \"Час\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND document_errors.error_kind = 'Ошибка связи')) / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent'), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" FROM serving_egisz.documents_current WHERE ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1611,15 +1611,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         }
       }
@@ -1630,7 +1630,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT document_error.error_kind AS \"Вид ошибки\", COUNT(DISTINCT document_error.dwh_id)::bigint AS \"Документов\" FROM mart_egisz_selfservice.document_error WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 2 DESC",
+          "query": "SELECT document_errors.error_kind AS \"Вид ошибки\", COUNT(DISTINCT document_errors.dwh_id)::bigint AS \"Документов\" FROM serving_egisz.document_errors WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1699,15 +1699,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "clinic_label"
         }
       },
@@ -1741,7 +1741,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Сигнал\", \"Уровень\", \"Значение\", \"Единица\", \"База расчёта\", \"Что делать\" FROM public.rpt_health_signals WHERE \"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h') ORDER BY CASE \"Уровень\" WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'green' THEN 2 ELSE 3 END, \"Код сигнала\"",
+          "query": "SELECT \"Сигнал\", \"Уровень\", \"Значение\", \"Единица\", \"База расчёта\", \"Что делать\" FROM mart_egisz_admin.health_signals WHERE \"Код сигнала\" NOT IN ('queue_24h', 'pending_backlog_24h') ORDER BY CASE \"Уровень\" WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'green' THEN 2 ELSE 3 END, \"Код сигнала\"",
           "template-tags": {}
         },
         "database": 1
@@ -1808,7 +1808,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Проверка\", \"Количество\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Количество\"\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT NULLIF(BTRIM(clinic_oid::text), '')) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM public.rpt_documents\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
+          "query": "SELECT \"Проверка\", \"Количество\" FROM (\n  SELECT 1 AS ord, 'Документов без JID' AS \"Проверка\",\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(clinic_jid::text), '') IS NULL\n    )::bigint AS \"Количество\"\n  FROM serving_egisz.documents_current\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 2, 'OID вне реестра медорганизаций',\n    COUNT(DISTINCT NULLIF(BTRIM(clinic_oid::text), '')) FILTER (\n      WHERE clinic_oid_unknown = true\n    )::bigint\n  FROM serving_egisz.documents_current\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 3, 'Без localUid СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_local_uid::text), '') IS NULL\n    )::bigint\n  FROM serving_egisz.documents_current\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 4, 'Без кода СЭМД',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE NULLIF(BTRIM(semd_code::text), '') IS NULL\n    )::bigint\n  FROM serving_egisz.documents_current\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n  UNION ALL\n  SELECT 5, 'Успех без даты обработки',\n    COUNT(DISTINCT dwh_id) FILTER (\n      WHERE status = 'success' AND ips_date IS NULL\n    )::bigint\n  FROM serving_egisz.documents_current\n  WHERE status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n) q ORDER BY ord",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1882,15 +1882,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         }
       }
@@ -1901,7 +1901,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (\n  SELECT\n    rpt_documents.ips_date AS \"Дата обработки\",\n    rpt_documents.status_detail_label AS \"Статус\",\n    rpt_documents.clinic_label AS \"Клиника\",\n    rpt_documents.semd_code AS \"Код СЭМД\",\n    rpt_documents.semd_name AS \"Наименование СЭМД\",\n    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN rpt_documents.clinic_oid_unknown\n      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из обмена\",\n    COALESCE(NULLIF(BTRIM(rpt_document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN rpt_documents.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM public.rpt_documents\n  INNER JOIN public.rpt_document_lineage\n    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n  WHERE rpt_documents.status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
+          "query": "WITH base AS (\n  SELECT\n    documents_current.ips_date AS \"Дата обработки\",\n    documents_current.status_detail_label AS \"Статус\",\n    documents_current.clinic_label AS \"Клиника\",\n    documents_current.semd_code AS \"Код СЭМД\",\n    documents_current.semd_name AS \"Наименование СЭМД\",\n    documents_current.semd_local_uid AS \"localUid СЭМД\",\n    document_lineage.clinic_jid::text AS \"JID Клиники\",\n    CASE\n      WHEN documents_current.clinic_oid_unknown\n      THEN '↯ ' || document_lineage.clinic_oid_xml\n      ELSE COALESCE(NULLIF(btrim(document_lineage.clinic_oid_xml), ''), '—')\n    END AS \"OID из обмена\",\n    COALESCE(NULLIF(BTRIM(document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n    COALESCE(NULLIF(btrim(document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n    COALESCE(NULLIF(btrim(document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n      CASE WHEN NULLIF(BTRIM(documents_current.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n      CASE WHEN documents_current.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n      CASE WHEN NULLIF(BTRIM(documents_current.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n      CASE WHEN NULLIF(BTRIM(documents_current.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n      CASE WHEN documents_current.status = 'success' AND documents_current.ips_date IS NULL THEN 'успех без даты' END\n    )) AS \"Нарушения\"\n  FROM serving_egisz.documents_current\n  INNER JOIN mart_egisz_admin.document_lineage\n    ON document_lineage.dwh_id = documents_current.dwh_id\n  WHERE documents_current.status IN ('success', 'async_error')\n    [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n)\nSELECT *\nFROM base\nWHERE \"Нарушения\" <> ''\nORDER BY \"Дата обработки\" DESC NULLS LAST\nLIMIT 1000",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2065,15 +2065,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         }
       }
@@ -2084,7 +2084,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT date_trunc('day', message_at)::date AS \"День\", COUNT(*)::bigint AS \"Ошибок связи\" FROM mart_egisz_selfservice.network_error WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
+          "query": "SELECT date_trunc('day', message_at)::date AS \"День\", COUNT(*)::bigint AS \"Ошибок связи\" FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2137,15 +2137,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "message_at"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "semd_label"
         }
       }
@@ -2156,7 +2156,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_clinic AS ( SELECT clinic_label AS lbl, COUNT(*)::bigint AS cnt FROM mart_egisz_selfservice.network_error WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Ошибок связи\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_clinic AS ( SELECT clinic_label AS lbl, COUNT(*)::bigint AS cnt FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_clinic ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Клиника\", SUM(r.cnt)::bigint AS \"Ошибок связи\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2211,15 +2211,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "message_at"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "semd_label"
         }
       }
@@ -2230,7 +2230,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_kind AS ( SELECT error_type AS lbl, COUNT(*)::bigint AS cnt FROM mart_egisz_selfservice.network_error WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки связи\", SUM(r.cnt)::bigint AS \"Ошибок связи\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
+          "query": "WITH per_kind AS ( SELECT error_type AS lbl, COUNT(*)::bigint AS cnt FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ), ranked AS ( SELECT lbl, cnt, ROW_NUMBER() OVER (ORDER BY cnt DESC) AS rn FROM per_kind ), tail AS ( SELECT COALESCE(SUM(cnt), 0)::bigint AS tail_cnt FROM ranked WHERE rn > 8 ) SELECT CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END AS \"Тип ошибки связи\", SUM(r.cnt)::bigint AS \"Ошибок связи\" FROM ranked r CROSS JOIN tail t GROUP BY CASE WHEN r.rn <= 8 THEN r.lbl ELSE 'Остальные (' || t.tail_cnt::text || ')' END ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2285,26 +2285,26 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "message_at"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "semd_label"
         }
       }
     },
     {
       "name": "Последние сбои транспорта",
-      "description": "Последние 50 ошибок связи за период для L2: тип, фрагмент исходного текста шлюза, LOGID и MSGID сообщения. Текст — из слоя разбора (stg_egisz.message_error).",
+      "description": "Последние 50 ошибок связи за период для L2: тип, фрагмент исходного текста шлюза, LOGID и MSGID сообщения. Текст — из слоя разбора (stg_egisz.message_errors).",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH latest AS ( SELECT message_at, logid, msgid, clinic_label, error_type FROM mart_egisz_selfservice.network_error WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY message_at DESC LIMIT 50 ) SELECT latest.message_at AS \"Время сообщения\", latest.clinic_label AS \"Клиника\", latest.error_type AS \"Тип\", ( SELECT LEFT(m.error_text, 140) FROM stg_egisz.message_error m WHERE m.logid = latest.logid AND m.message_at = latest.message_at AND m.error_kind = 'Ошибка связи' ) AS \"Сообщение\", latest.logid::text AS \"LOGID\", latest.msgid AS \"MSGID\" FROM latest ORDER BY latest.message_at DESC",
+          "query": "WITH latest AS ( SELECT message_at, logid, msgid, clinic_label, error_type FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY message_at DESC LIMIT 50 ) SELECT latest.message_at AS \"Время сообщения\", latest.clinic_label AS \"Клиника\", latest.error_type AS \"Тип\", ( SELECT LEFT(m.error_text, 140) FROM stg_egisz.message_errors m WHERE m.logid = latest.logid AND m.message_at = latest.message_at AND m.error_kind = 'Ошибка связи' ) AS \"Сообщение\", latest.logid::text AS \"LOGID\", latest.msgid AS \"MSGID\" FROM latest ORDER BY latest.message_at DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2350,15 +2350,15 @@
       "tab": "service",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "message_at"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "semd_label"
         }
       }
@@ -2370,7 +2370,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM serving_egisz.documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2485,23 +2485,23 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_local_uid"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "pending_segment_label"
         }
       }
@@ -2513,7 +2513,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM serving_egisz.documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2573,23 +2573,23 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_local_uid"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "pending_segment_label"
         }
       }
@@ -2601,7 +2601,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM public.rpt_documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM serving_egisz.documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2716,35 +2716,35 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "semd_local_uid"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents_sent",
+          "table_ref": "serving_egisz.documents_sent",
           "field_name": "pending_segment_label"
         }
       }
     },
     {
       "name": "Недоставленные в клинику (ошибка связи шлюз-МО)",
-      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_error_current).",
+      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_errors_current).",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_error_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT COUNT(DISTINCT public.rpt_documents.dwh_id)::bigint AS \"Документов\" FROM latest_errors JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id WHERE public.rpt_documents.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]",
+          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT COUNT(DISTINCT serving_egisz.documents_current.dwh_id)::bigint AS \"Документов\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2797,31 +2797,31 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_local_uid"
         }
       }
     },
     {
       "name": "Документы: недоставленные в клинику (ошибка связи шлюз-МО)",
-      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_error_current).",
+      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_errors_current).",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_error_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT public.rpt_documents.semd_local_uid AS \"localUid СЭМД\", public.rpt_documents.semd_code AS \"Код СЭМД\", public.rpt_documents.semd_name AS \"Наименование СЭМД\", public.rpt_documents.clinic_jid::text AS \"JID Клиники\", public.rpt_documents.clinic_label AS \"Клиника\", public.rpt_documents.first_sent_at AS \"Дата отправки\", public.rpt_documents.ips_date AS \"Дата ответа ЕГИСЗ\", public.rpt_documents.status_detail_label AS \"Результат ЕГИСЗ\", public.rpt_documents.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки доставки\", LEFT(COALESCE(latest_errors.error_text, ''), 180) AS \"Текст ошибки доставки\" FROM latest_errors JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id WHERE public.rpt_documents.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
+          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT serving_egisz.documents_current.semd_local_uid AS \"localUid СЭМД\", serving_egisz.documents_current.semd_code AS \"Код СЭМД\", serving_egisz.documents_current.semd_name AS \"Наименование СЭМД\", serving_egisz.documents_current.clinic_jid::text AS \"JID Клиники\", serving_egisz.documents_current.clinic_label AS \"Клиника\", serving_egisz.documents_current.first_sent_at AS \"Дата отправки\", serving_egisz.documents_current.ips_date AS \"Дата ответа ЕГИСЗ\", serving_egisz.documents_current.status_detail_label AS \"Результат ЕГИСЗ\", serving_egisz.documents_current.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки доставки\", LEFT(COALESCE(latest_errors.error_text, ''), 180) AS \"Текст ошибки доставки\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2926,19 +2926,19 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_local_uid"
         }
       }
@@ -2949,7 +2949,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]])::bigint AS errs FROM public.rpt_documents WHERE status IN ('success','async_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
+          "query": "WITH per_code AS ( SELECT semd_label AS label, COUNT(DISTINCT dwh_id)::bigint AS total, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]])::bigint AS errs FROM serving_egisz.documents_current WHERE status IN ('success','async_error') AND NULLIF(TRIM(semd_label), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ), ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn FROM per_code WHERE errs > 0 ) SELECT CASE WHEN rn <= 8 THEN label ELSE 'Прочие' END AS \"СЭМД\", SUM(errs)::bigint AS \"Документов\", ROUND(100.0 * SUM(errs) / NULLIF(SUM(total), 0), 1) AS \"%\" FROM ranked GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3036,19 +3036,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       },
@@ -3081,7 +3081,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT document_error.semd_code AS t, document_error.error_type AS k, document_error.dwh_id AS doc FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{error_type}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_error.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
+          "query": "WITH base AS ( SELECT document_errors.semd_code AS t, document_errors.error_type AS k, document_errors.dwh_id AS doc FROM serving_egisz.document_errors WHERE 1=1 [[AND {{error_type}}]] AND (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_errors.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), per_pair AS ( SELECT b.t, b.k, COUNT(DISTINCT b.doc)::bigint AS docs FROM base b GROUP BY 1, 2 ), ranked_pair AS ( SELECT p.t, p.k, p.docs, r.total, r.rn AS semd_rn, ROW_NUMBER() OVER (PARTITION BY p.t ORDER BY p.docs DESC, p.k) AS type_rn FROM per_pair p JOIN ranked_semd r ON r.t = p.t ) SELECT t AS \"СЭМД\", k AS \"Тип ошибки\", docs AS \"Документов\" FROM ranked_pair WHERE semd_rn <= 15 AND type_rn <= 5 ORDER BY semd_rn, t, type_rn",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3156,19 +3156,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       },
@@ -3201,7 +3201,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(document_error.error_category, document_error.error_kind) AS cat, document_error.error_type AS typ, document_error.responsibility AS resp, document_error.is_retryable AS retryable, document_error.dwh_id AS dwh_id FROM mart_egisz_selfservice.document_error INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM mart_egisz_selfservice.document_error INNER JOIN period_docs USING (dwh_id) WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи'))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM serving_egisz.documents_current WHERE status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] [[AND {{pending_segment}}]] ), eb AS ( SELECT COALESCE(document_errors.error_category, document_errors.error_kind) AS cat, document_errors.error_type AS typ, document_errors.responsibility AS resp, document_errors.is_retryable AS retryable, document_errors.dwh_id AS dwh_id FROM serving_egisz.document_errors INNER JOIN period_docs pd ON pd.dwh_id = document_errors.dwh_id WHERE 1=1 [[AND {{error_type}}]] AND (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM serving_egisz.document_errors INNER JOIN period_docs USING (dwh_id) WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи'))::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), per_type AS ( SELECT cat, typ, resp, retryable, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM eb GROUP BY 1, 2, 3, 4 ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", resp AS \"Зона ответственности\", CASE WHEN retryable THEN 'да' ELSE 'нет' END AS \"Устраняется повтором\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * cnt / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM per_type ORDER BY cnt DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -3362,27 +3362,27 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         }
       }
@@ -3393,7 +3393,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT document_error.error_type AS \"Тип ошибки\", COALESCE(document_error.error_category, document_error.error_kind) AS \"Категория ошибки\", COUNT(DISTINCT document_error.dwh_id)::bigint AS \"Документов\" FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{error_type}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
+          "query": "SELECT document_errors.error_type AS \"Тип ошибки\", COALESCE(document_errors.error_category, document_errors.error_kind) AS \"Категория ошибки\", COUNT(DISTINCT document_errors.dwh_id)::bigint AS \"Документов\" FROM serving_egisz.document_errors WHERE 1=1 [[AND {{error_type}}]] AND (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ORDER BY 3 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4069,19 +4069,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -4093,7 +4093,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM public.rpt_documents WHERE status IN ('success', 'async_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT document_error.error_type, document_error.nsi_dictionary_oid, COALESCE(document_error.nsi_error_code, document_error.error_code, '—') AS error_code, document_error.clinic_label, document_error.clinic_jid::text AS clinic_jid, document_error.dwh_id FROM mart_egisz_selfservice.document_error INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, nsi_dictionary_oid, error_code, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4, 5 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.nsi_dictionary_oid AS \"OID справочника\", ec.clinic_label AS \"Клиника\", ec.error_code AS \"Код отказа\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
+          "query": "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid FROM serving_egisz.documents_current WHERE status IN ('success', 'async_error') AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), base AS ( SELECT document_errors.error_type, document_errors.nsi_dictionary_oid, COALESCE(document_errors.nsi_error_code, document_errors.error_code, '—') AS error_code, document_errors.clinic_label, document_errors.clinic_jid::text AS clinic_jid, document_errors.dwh_id FROM serving_egisz.document_errors INNER JOIN period_docs pd ON pd.dwh_id = document_errors.dwh_id WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') [[AND {{error_type}}]] ), error_clinic AS ( SELECT error_type, nsi_dictionary_oid, error_code, clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count FROM base GROUP BY 1, 2, 3, 4, 5 ), clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs FROM period_docs GROUP BY clinic_jid ) SELECT ec.error_type AS \"Тип ошибки\", ec.nsi_dictionary_oid AS \"OID справочника\", ec.clinic_label AS \"Клиника\", ec.error_code AS \"Код отказа\", ec.clinic_jid AS \"JID Клиники\", ec.doc_count AS \"Документов\", ROUND(100.0 * ec.doc_count / NULLIF(ct.total_docs, 0), 1) AS \"% ошибок\" FROM error_clinic ec JOIN clinic_totals ct ON ct.clinic_jid = ec.clinic_jid ORDER BY ec.doc_count DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4209,19 +4209,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       },
@@ -4277,7 +4277,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]])::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% ошибок\" FROM public.rpt_documents WHERE status IN ('success', 'async_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) > 0 ORDER BY 4 DESC, 5 DESC",
+          "query": "SELECT COALESCE(NULLIF(TRIM(clinic_jid::text), ''), 'Неизвестно') AS \"JID Клиники\", COALESCE(MAX(NULLIF(TRIM(clinic_name::text), '')), 'Неизвестно') AS \"Клиника\", COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error'))::bigint AS \"Всего\", COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]])::bigint AS \"Ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]]) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% ошибок\" FROM serving_egisz.documents_current WHERE status IN ('success', 'async_error') AND COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' AND COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 3 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]]) > 0 ORDER BY 4 DESC, 5 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4397,30 +4397,30 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
     },
     {
       "name": "% ошибок: тип ошибки × тип СЭМД",
-      "description": "Срез **тип ошибки × тип СЭМД (код · НСИ)** по ошибкам документов (`mart_egisz_selfservice.document_error`): отказы РЭМД и ошибки связи. Метрика: COUNT(DISTINCT «ID»). «% ошибок» = документы с этим типом ошибки к документам с ЛЮБОЙ ошибкой в этом типе СЭМД (знаменатель — COUNT(DISTINCT документ) по типу СЭМД, без двойного счёта документов с несколькими ошибками). Сортировка — по объёму, затем по доле. Без ограничения числа строк.",
+      "description": "Срез **тип ошибки × тип СЭМД (код · НСИ)** по ошибкам документов (`serving_egisz.document_errors`): отказы РЭМД и ошибки связи. Метрика: COUNT(DISTINCT «ID»). «% ошибок» = документы с этим типом ошибки к документам с ЛЮБОЙ ошибкой в этом типе СЭМД (знаменатель — COUNT(DISTINCT документ) по типу СЭМД, без двойного счёта документов с несколькими ошибками). Сортировка — по объёму, затем по доле. Без ограничения числа строк.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH pairs AS ( SELECT document_error.error_type AS err, document_error.semd_code AS semd, COUNT(DISTINCT document_error.dwh_id)::bigint AS docs FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{error_type}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_error.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT document_error.semd_code AS semd, COUNT(DISTINCT document_error.dwh_id)::numeric AS total FROM mart_egisz_selfservice.document_error WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_error.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
+          "query": "WITH pairs AS ( SELECT document_errors.error_type AS err, document_errors.semd_code AS semd, COUNT(DISTINCT document_errors.dwh_id)::bigint AS docs FROM serving_egisz.document_errors WHERE 1=1 [[AND {{error_type}}]] AND (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_errors.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1, 2 ), semd_totals AS ( SELECT document_errors.semd_code AS semd, COUNT(DISTINCT document_errors.dwh_id)::numeric AS total FROM serving_egisz.document_errors WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') AND NULLIF(TRIM(document_errors.semd_code), '') IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] GROUP BY 1 ) SELECT p.err AS \"Тип ошибки\", p.semd AS \"Код СЭМД\", p.docs AS \"Документов\", ROUND(100.0 * p.docs / NULLIF(t.total, 0), 1) AS \"% ошибок\" FROM pairs p JOIN semd_totals t ON t.semd = p.semd ORDER BY 3 DESC, 4 DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -4519,19 +4519,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "clinic_label"
         },
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "semd_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       }
@@ -4542,7 +4542,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
+          "query": "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ), totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id)::bigint AS cnt FROM filtered GROUP BY clinic_jid, clinic_label ) SELECT \"JID Клиники\", \"Клиника\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM per_clinic ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4656,27 +4656,27 @@
       "tab": "archive",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "pending_segment": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "pending_segment_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       },
@@ -4710,7 +4710,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS ( SELECT semd_label, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT semd_label AS \"СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
+          "query": "WITH base AS ( SELECT semd_label, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] GROUP BY 1 ), totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) SELECT semd_label AS \"СЭМД\", cnt AS \"Документов\", ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS \"%\" FROM base ORDER BY cnt DESC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4802,19 +4802,19 @@
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         }
       },
@@ -4848,7 +4848,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -4928,35 +4928,35 @@
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_local_uid"
         },
         "relates_to": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "relates_to_msgid"
         },
         "emdr_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_emdr_id"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "log_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "logid"
         }
       }
@@ -4967,7 +4967,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT first_sent_at::date AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE first_sent_at::date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY first_sent_at::date ORDER BY first_sent_at::date ASC",
+          "query": "SELECT first_sent_at::date AS \"Дата\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE first_sent_at::date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] GROUP BY first_sent_at::date ORDER BY first_sent_at::date ASC",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5066,35 +5066,35 @@
       "tab": "archive",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_local_uid"
         },
         "relates_to": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "relates_to_msgid"
         },
         "emdr_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_emdr_id"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "log_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "logid"
         }
       }
@@ -5105,7 +5105,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT clinic_jid)::bigint AS \"Клиник\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
+          "query": "SELECT COUNT(DISTINCT clinic_jid)::bigint AS \"Клиник\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]]",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5185,35 +5185,35 @@
       "tab": "archive",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "local_uid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_local_uid"
         },
         "relates_to": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "relates_to_msgid"
         },
         "emdr_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_emdr_id"
         },
         "status": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "status_detail_label"
         },
         "log_id": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "logid"
         }
       }
@@ -5403,7 +5403,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT \"Дата события\", \"LOGID\", \"Метод\", \"Статус ответа\", \"Метод связки\", \"Подсистема ЕГИСЗ\", \"MSGID сообщения\", \"relatesTo MSGID\", \"EGMID EGISZ_MESSAGES\", \"Дата EGISZ_MESSAGES\", \"dwh_id\", \"localUid\", \"emdrId\", \"Код СЭМД\", \"JID Клиники\", \"Клиника\", \"Сообщение\", \"replyTo EGISZ_MESSAGES\" FROM public.rpt_health_message_registry_no_document ORDER BY \"Дата события\" DESC NULLS LAST, \"LOGID\"::bigint DESC LIMIT 200",
+          "query": "SELECT \"Дата события\", \"LOGID\", \"Метод\", \"Статус ответа\", \"Метод связки\", \"Подсистема ЕГИСЗ\", \"MSGID сообщения\", \"relatesTo MSGID\", \"EGMID EGISZ_MESSAGES\", \"Дата EGISZ_MESSAGES\", \"dwh_id\", \"localUid\", \"emdrId\", \"Код СЭМД\", \"JID Клиники\", \"Клиника\", \"Сообщение\", \"replyTo EGISZ_MESSAGES\" FROM mart_egisz_admin.health_message_registry_no_document ORDER BY \"Дата события\" DESC NULLS LAST, \"LOGID\"::bigint DESC LIMIT 200",
           "template-tags": {}
         },
         "database": 1
@@ -5510,7 +5510,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id)::bigint AS \"Документов в очереди\" FROM points p LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at FROM serving_egisz.documents_current CROSS JOIN win w WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts AND (serving_egisz.documents_current.first_sent_at >= w.start_ts OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id)::bigint AS \"Документов в очереди\" FROM points p LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(c.first_sent_at, p.ts) WHERE serving_egisz.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5541,15 +5541,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -5583,7 +5583,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), threshold AS ( SELECT max_age_minutes AS minutes FROM public.dim_pending_segments WHERE code = 'p_24h' ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)::bigint AS \"Ожидают > 24 часов\" FROM points p CROSS JOIN threshold t LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at FROM serving_egisz.documents_current CROSS JOIN win w WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts AND (serving_egisz.documents_current.first_sent_at >= w.start_ts OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), threshold AS ( SELECT max_age_minutes AS minutes FROM mart_egisz.dim_pending_segments WHERE code = 'p_24h' ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)::bigint AS \"Ожидают > 24 часов\" FROM points p CROSS JOIN threshold t LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(c.first_sent_at, p.ts) WHERE serving_egisz.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5614,15 +5614,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -5656,7 +5656,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue WHERE segment_sort = (SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response)",
+          "query": "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.clinic_label, COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, mart_egisz.dim_pending_segments.code AS segment_code, mart_egisz.dim_pending_segments.sort_order AS segment_sort, mart_egisz.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, now()) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue WHERE segment_sort = (SELECT MAX(sort_order) FROM mart_egisz.dim_pending_segments WHERE NOT is_no_response)",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5687,15 +5687,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -5721,7 +5721,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT ROUND(MAX(age_minutes) / 1440.0, 1) AS \"Суток в очереди\" FROM queue",
+          "query": "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.clinic_label, COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, mart_egisz.dim_pending_segments.code AS segment_code, mart_egisz.dim_pending_segments.sort_order AS segment_sort, mart_egisz.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, now()) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT ROUND(MAX(age_minutes) / 1440.0, 1) AS \"Суток в очереди\" FROM queue",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5752,15 +5752,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -5786,7 +5786,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH slices AS ( SELECT 'Сейчас' AS slice, 1 AS slice_sort, now() AS ts UNION ALL SELECT 'Неделю назад', 2, now() - INTERVAL '7 days' ), queue AS ( SELECT s.slice, s.slice_sort, public.rpt_documents.dwh_id, EXTRACT(EPOCH FROM (s.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents CROSS JOIN slices s JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, s.ts) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, s.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT slice, COUNT(DISTINCT dwh_id) AS total FROM queue GROUP BY 1 ) SELECT regexp_replace(g.label, '^до ', 'дольше ') AS \"Срок ожидания\", q.slice AS \"Срез\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > g.max_age_minutes) / NULLIF(MAX(t.total), 0), 1) AS \"Ещё ждут, %\" FROM public.dim_pending_segments g CROSS JOIN queue q JOIN totals t ON t.slice = q.slice WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label, q.slice, q.slice_sort ORDER BY q.slice_sort, g.sort_order",
+          "query": "WITH slices AS ( SELECT 'Сейчас' AS slice, 1 AS slice_sort, now() AS ts UNION ALL SELECT 'Неделю назад', 2, now() - INTERVAL '7 days' ), queue AS ( SELECT s.slice, s.slice_sort, serving_egisz.documents_current.dwh_id, EXTRACT(EPOCH FROM (s.ts - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current CROSS JOIN slices s JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, s.ts) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, s.ts) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] ), totals AS ( SELECT slice, COUNT(DISTINCT dwh_id) AS total FROM queue GROUP BY 1 ) SELECT regexp_replace(g.label, '^до ', 'дольше ') AS \"Срок ожидания\", q.slice AS \"Срез\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > g.max_age_minutes) / NULLIF(MAX(t.total), 0), 1) AS \"Ещё ждут, %\" FROM mart_egisz.dim_pending_segments g CROSS JOIN queue q JOIN totals t ON t.slice = q.slice WHERE NOT g.is_no_response GROUP BY g.sort_order, g.label, q.slice, q.slice_sort ORDER BY q.slice_sort, g.sort_order",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5809,11 +5809,11 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         }
       },
@@ -5858,7 +5858,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_5m')::bigint AS \"до 5 минут\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_1h')::bigint AS \"до 1 часа\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_6h')::bigint AS \"до 6 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_12h')::bigint AS \"до 12 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_24h')::bigint AS \"до 24 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_72h')::bigint AS \"до 3 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_7d')::bigint AS \"до 7 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_15d')::bigint AS \"до 15 суток\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\" FROM queue GROUP BY 1 ORDER BY \"Всего\" DESC, 1",
+          "query": "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.clinic_label, COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, mart_egisz.dim_pending_segments.code AS segment_code, mart_egisz.dim_pending_segments.sort_order AS segment_sort, mart_egisz.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, now()) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT clinic_label AS \"Клиника\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_5m')::bigint AS \"до 5 минут\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_1h')::bigint AS \"до 1 часа\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_6h')::bigint AS \"до 6 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_12h')::bigint AS \"до 12 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_24h')::bigint AS \"до 24 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_72h')::bigint AS \"до 3 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_7d')::bigint AS \"до 7 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_15d')::bigint AS \"до 15 суток\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\" FROM queue GROUP BY 1 ORDER BY \"Всего\" DESC, 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -5889,15 +5889,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -6040,7 +6040,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT semd_code AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_5m')::bigint AS \"до 5 минут\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_1h')::bigint AS \"до 1 часа\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_6h')::bigint AS \"до 6 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_12h')::bigint AS \"до 12 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_24h')::bigint AS \"до 24 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_72h')::bigint AS \"до 3 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_7d')::bigint AS \"до 7 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_15d')::bigint AS \"до 15 суток\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\" FROM queue GROUP BY 1 ORDER BY \"Всего\" DESC, 1",
+          "query": "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.clinic_label, COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, mart_egisz.dim_pending_segments.code AS segment_code, mart_egisz.dim_pending_segments.sort_order AS segment_sort, mart_egisz.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, now()) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT semd_code AS \"Код СЭМД\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_5m')::bigint AS \"до 5 минут\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_1h')::bigint AS \"до 1 часа\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_6h')::bigint AS \"до 6 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_12h')::bigint AS \"до 12 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_24h')::bigint AS \"до 24 часов\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_72h')::bigint AS \"до 3 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_7d')::bigint AS \"до 7 суток\", COUNT(DISTINCT dwh_id) FILTER (WHERE segment_code = 'p_15d')::bigint AS \"до 15 суток\", COUNT(DISTINCT dwh_id)::bigint AS \"Всего\" FROM queue GROUP BY 1 ORDER BY \"Всего\" DESC, 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6071,15 +6071,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -6222,7 +6222,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT now() - INTERVAL '7 days' AS start_ts, now() AS end_ts ), scope AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts, w.end_ts FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at > w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), flags AS ( SELECT s.dwh_id, public.is_pending_at(s.first_sent_at, s.first_callback_at, s.start_ts) AS in_start, public.is_pending_at(s.first_sent_at, s.first_callback_at, s.end_ts) AS in_end, (s.first_sent_at > s.start_ts) AS arrived, g_start.is_no_response AS terminal_start, g_end.is_no_response AS terminal_end FROM scope s JOIN public.dim_pending_segments g_start ON g_start.code = public.pending_segment_code_at(s.first_sent_at, s.start_ts) JOIN public.dim_pending_segments g_end ON g_end.code = public.pending_segment_code_at(s.first_sent_at, s.end_ts) ), moves AS ( SELECT COUNT(DISTINCT dwh_id) FILTER (WHERE in_start AND NOT terminal_start AND NOT arrived) AS opening, COUNT(DISTINCT dwh_id) FILTER (WHERE arrived) AS arrived, COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) AND NOT in_end) AS answered, COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) AND in_end AND terminal_end) AS utilized FROM flags ) SELECT 1 AS step_sort, 'Очередь на начало' AS \"Этап\", opening::bigint AS \"Документов\" FROM moves UNION ALL SELECT 2, 'Поступило', arrived::bigint FROM moves UNION ALL SELECT 3, 'Получили ответ', -answered::bigint FROM moves UNION ALL SELECT 4, 'Утилизировано', -utilized::bigint FROM moves ORDER BY 1",
+          "query": "WITH win AS ( SELECT now() - INTERVAL '7 days' AS start_ts, now() AS end_ts ), scope AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts, w.end_ts FROM serving_egisz.documents_current CROSS JOIN win w WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts AND (serving_egisz.documents_current.first_sent_at > w.start_ts OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), flags AS ( SELECT s.dwh_id, serving_egisz.is_pending_at(s.first_sent_at, s.first_callback_at, s.start_ts) AS in_start, serving_egisz.is_pending_at(s.first_sent_at, s.first_callback_at, s.end_ts) AS in_end, (s.first_sent_at > s.start_ts) AS arrived, g_start.is_no_response AS terminal_start, g_end.is_no_response AS terminal_end FROM scope s JOIN mart_egisz.dim_pending_segments g_start ON g_start.code = serving_egisz.pending_segment_code_at(s.first_sent_at, s.start_ts) JOIN mart_egisz.dim_pending_segments g_end ON g_end.code = serving_egisz.pending_segment_code_at(s.first_sent_at, s.end_ts) ), moves AS ( SELECT COUNT(DISTINCT dwh_id) FILTER (WHERE in_start AND NOT terminal_start AND NOT arrived) AS opening, COUNT(DISTINCT dwh_id) FILTER (WHERE arrived) AS arrived, COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) AND NOT in_end) AS answered, COUNT(DISTINCT dwh_id) FILTER (WHERE (arrived OR (in_start AND NOT terminal_start)) AND in_end AND terminal_end) AS utilized FROM flags ) SELECT 1 AS step_sort, 'Очередь на начало' AS \"Этап\", opening::bigint AS \"Документов\" FROM moves UNION ALL SELECT 2, 'Поступило', arrived::bigint FROM moves UNION ALL SELECT 3, 'Получили ответ', -answered::bigint FROM moves UNION ALL SELECT 4, 'Утилизировано', -utilized::bigint FROM moves ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6245,11 +6245,11 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         }
       },
@@ -6287,7 +6287,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE public.report_timezone()) - INTERVAL '11 weeks' AS start_wall, date_trunc('week', now() AT TIME ZONE public.report_timezone()) AS last_wall, now() AS end_ts ), points AS ( SELECT gs::date AS week_start, LEAST((gs + INTERVAL '7 days') AT TIME ZONE public.report_timezone(), w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), thresholds AS ( SELECT MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d, MAX(max_age_minutes) FILTER (WHERE NOT is_no_response) AS m_open FROM public.dim_pending_segments ) SELECT p.week_start AS \"Неделя\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_24h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 24 часов, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_72h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 3 суток, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_7d) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 7 суток, %\" FROM points p CROSS JOIN thresholds t LEFT JOIN LATERAL ( SELECT public.rpt_documents.dwh_id, EXTRACT(EPOCH FROM (p.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents WHERE public.rpt_documents.first_sent_at <= p.ts AND public.rpt_documents.first_sent_at >= p.ts - (t.m_open * INTERVAL '1 minute') AND (public.rpt_documents.first_callback_at IS NULL OR public.rpt_documents.first_callback_at > p.ts) [[AND {{semd_type}}]] [[AND {{jid}}]] ) q ON TRUE GROUP BY p.week_start ORDER BY p.week_start",
+          "query": "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone()) - INTERVAL '11 weeks' AS start_wall, date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone()) AS last_wall, now() AS end_ts ), points AS ( SELECT gs::date AS week_start, LEAST((gs + INTERVAL '7 days') AT TIME ZONE serving_egisz.report_timezone(), w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), thresholds AS ( SELECT MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d, MAX(max_age_minutes) FILTER (WHERE NOT is_no_response) AS m_open FROM mart_egisz.dim_pending_segments ) SELECT p.week_start AS \"Неделя\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_24h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 24 часов, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_72h) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 3 суток, %\", ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_7d) / NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS \"> 7 суток, %\" FROM points p CROSS JOIN thresholds t LEFT JOIN LATERAL ( SELECT serving_egisz.documents_current.dwh_id, EXTRACT(EPOCH FROM (p.ts - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current WHERE serving_egisz.documents_current.first_sent_at <= p.ts AND serving_egisz.documents_current.first_sent_at >= p.ts - (t.m_open * INTERVAL '1 minute') AND (serving_egisz.documents_current.first_callback_at IS NULL OR serving_egisz.documents_current.first_callback_at > p.ts) [[AND {{semd_type}}]] [[AND {{jid}}]] ) q ON TRUE GROUP BY p.week_start ORDER BY p.week_start",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6310,11 +6310,11 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         }
       },
@@ -6372,7 +6372,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH queue AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.clinic_label, COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, public.dim_pending_segments.code AS segment_code, public.dim_pending_segments.sort_order AS segment_sort, public.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes FROM public.rpt_documents JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) WHERE public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, now()) AND NOT public.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT segment_label AS \"Срок ожидания\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue GROUP BY segment_label, segment_sort ORDER BY segment_sort",
+          "query": "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.clinic_label, COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, mart_egisz.dim_pending_segments.code AS segment_code, mart_egisz.dim_pending_segments.sort_order AS segment_sort, mart_egisz.dim_pending_segments.label AS segment_label, EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, now()) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] ) SELECT segment_label AS \"Срок ожидания\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM queue GROUP BY segment_label, segment_sort ORDER BY segment_sort",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6403,15 +6403,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -6453,7 +6453,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id)::bigint AS \"Документов в очереди\" FROM points p LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at FROM serving_egisz.documents_current CROSS JOIN win w WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts AND (serving_egisz.documents_current.first_sent_at >= w.start_ts OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id)::bigint AS \"Документов в очереди\" FROM points p LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(c.first_sent_at, p.ts) WHERE serving_egisz.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6484,15 +6484,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -6526,7 +6526,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at FROM public.rpt_documents CROSS JOIN win w WHERE public.rpt_documents.first_sent_at <= w.end_ts AND (public.rpt_documents.first_sent_at >= w.start_ts OR public.is_pending_at(public.rpt_documents.first_sent_at, public.rpt_documents.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), threshold AS ( SELECT max_age_minutes AS minutes FROM public.dim_pending_segments WHERE code = 'p_24h' ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)::bigint AS \"Ожидают > 24 часов\" FROM points p CROSS JOIN threshold t LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN public.dim_pending_segments ON public.dim_pending_segments.code = public.pending_segment_code_at(c.first_sent_at, p.ts) WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT public.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
+          "query": "WITH win AS ( SELECT date_trunc('day', now()) - INTERVAL '13 days' AS start_ts, now() AS end_ts ), points AS ( SELECT gs AS day_start, LEAST(gs + INTERVAL '1 day', w.end_ts) AS ts FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), candidates AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at FROM serving_egisz.documents_current CROSS JOIN win w WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts AND (serving_egisz.documents_current.first_sent_at >= w.start_ts OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, serving_egisz.documents_current.first_callback_at, w.start_ts)) [[AND {{semd_type}}]] [[AND {{jid}}]] ), threshold AS ( SELECT max_age_minutes AS minutes FROM mart_egisz.dim_pending_segments WHERE code = 'p_24h' ) SELECT p.day_start::date AS \"Дата\", COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)::bigint AS \"Ожидают > 24 часов\" FROM points p CROSS JOIN threshold t LEFT JOIN LATERAL ( SELECT c.dwh_id, EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes FROM candidates c JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = serving_egisz.pending_segment_code_at(c.first_sent_at, p.ts) WHERE serving_egisz.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) AND NOT mart_egisz.dim_pending_segments.is_no_response [[AND {{pending_segment}}]] ) q ON TRUE GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6557,15 +6557,15 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "pending_segment": {
-          "table_ref": "public.dim_pending_segments",
+          "table_ref": "mart_egisz.dim_pending_segments",
           "field_name": "label"
         }
       },
@@ -6599,7 +6599,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH errors AS ( SELECT FLOOR(EXTRACT(EPOCH FROM (now() - message_at)) / 86400)::int AS days_back, COUNT(*)::bigint AS docs FROM mart_egisz_selfservice.network_error WHERE message_at > now() - INTERVAL '14 days' AND message_at <= now() [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ) SELECT now() - k * INTERVAL '1 day' AS \"Сутки по\", COALESCE(e.docs, 0)::bigint AS \"Ошибок связи\" FROM generate_series(13, 0, -1) AS k LEFT JOIN errors e ON e.days_back = k ORDER BY 1",
+          "query": "WITH errors AS ( SELECT FLOOR(EXTRACT(EPOCH FROM (now() - message_at)) / 86400)::int AS days_back, COUNT(*)::bigint AS docs FROM serving_egisz.network_errors WHERE message_at > now() - INTERVAL '14 days' AND message_at <= now() [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ) SELECT now() - k * INTERVAL '1 day' AS \"Сутки по\", COALESCE(e.docs, 0)::bigint AS \"Ошибок связи\" FROM generate_series(13, 0, -1) AS k LEFT JOIN errors e ON e.days_back = k ORDER BY 1",
           "template-tags": {
             "semd_type": {
               "widget-type": "string/=",
@@ -6622,11 +6622,11 @@
       },
       "metabase-field-filters": {
         "semd_type": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "mart_egisz_selfservice.network_error",
+          "table_ref": "serving_egisz.network_errors",
           "field_name": "clinic_label"
         }
       },
@@ -6660,7 +6660,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz ), period AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) AS errs, MAX(ips_date) AS last_at FROM public.rpt_documents WHERE ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), phase AS MATERIALIZED ( SELECT ph.baseline_start, ph.baseline_end, ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts, (ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts FROM calendar c CROSS JOIN LATERAL ( SELECT baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= ( SELECT date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date FROM period ) ORDER BY phase_start DESC LIMIT 1 ) ph WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date ), baseline AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]) AS errs FROM public.rpt_documents CROSS JOIN phase WHERE ips_date >= phase.from_ts AND ips_date < phase.to_ts [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), clinics AS ( SELECT COALESCE(p.clinic_label, b.clinic_label) AS clinic_label, COALESCE(b.docs, 0) AS docs0, COALESCE(b.errs, 0) AS errs0, COALESCE(p.docs, 0) AS docs1, COALESCE(p.errs, 0) AS errs1 FROM period p FULL JOIN baseline b ON b.clinic_label = p.clinic_label WHERE EXISTS (SELECT 1 FROM phase) ), totals AS ( SELECT SUM(docs0) AS n0, SUM(docs1) AS n1, SUM(errs0)::numeric / NULLIF(SUM(docs0), 0) AS p0, SUM(errs1)::numeric / NULLIF(SUM(docs1), 0) AS p1 FROM clinics ), contrib AS ( SELECT c.*, 100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) - (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp, CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) * (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0) ELSE 0 END AS rate_pp, SIGN(t.p1 - t.p0) AS direction FROM clinics c CROSS JOIN totals t ), top_error AS ( SELECT clinic_label, top_type FROM ( SELECT public.rpt_documents.clinic_label, document_error.error_type AS top_type, ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_label ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn FROM public.rpt_documents JOIN mart_egisz_selfservice.document_error ON document_error.dwh_id = public.rpt_documents.dwh_id WHERE document_error.status = 'async_error' AND document_error.error_kind = 'Ошибка асинхронного ответа' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1, 2 ) ranked WHERE rn = 1 ) SELECT \"Клиника\", \"Документов с ответом, опорный период\", \"Документов с ответом, период\", \"Доля ошибок, опорный период, %\", \"Доля ошибок, период, %\", \"Вклад, п.п.\", \"За счёт доли ошибок, п.п.\", \"За счёт объёма, п.п.\", \"Основной тип ошибки за период\" FROM ( SELECT 0 AS row_kind, NULL::numeric AS sort_key, CASE WHEN NOT EXISTS (SELECT 1 FROM period) THEN 'Нет документов за период' WHEN ph.baseline_start IS NULL THEN 'Нет закрытого опорного периода фазы' ELSE 'Итого (опорный период ' || to_char(ph.baseline_start, 'DD.MM') || '–' || to_char(ph.baseline_end + 6, 'DD.MM.YYYY') || ')' END AS \"Клиника\", t.n0 AS \"Документов с ответом, опорный период\", t.n1 AS \"Документов с ответом, период\", ROUND(100 * t.p0, 1) AS \"Доля ошибок, опорный период, %\", ROUND(100 * t.p1, 1) AS \"Доля ошибок, период, %\", ROUND(100 * (t.p1 - t.p0), 1) AS \"Вклад, п.п.\", (SELECT ROUND(SUM(rate_pp), 1) FROM contrib) AS \"За счёт доли ошибок, п.п.\", (SELECT ROUND(SUM(total_pp - rate_pp), 1) FROM contrib) AS \"За счёт объёма, п.п.\", NULL::text AS \"Основной тип ошибки за период\" FROM totals t LEFT JOIN phase ph ON TRUE UNION ALL SELECT 1, c.direction * c.total_pp, c.clinic_label, c.docs0, c.docs1, ROUND(100.0 * c.errs0 / NULLIF(c.docs0, 0), 1), ROUND(100.0 * c.errs1 / NULLIF(c.docs1, 0), 1), ROUND(c.total_pp, 1), ROUND(c.rate_pp, 1), ROUND(c.total_pp - c.rate_pp, 1), te.top_type FROM contrib c LEFT JOIN top_error te ON te.clinic_label = c.clinic_label ) contribution ORDER BY row_kind, sort_key DESC NULLS LAST, \"Документов с ответом, период\" DESC",
+          "query": "WITH calendar AS MATERIALIZED ( SELECT serving_egisz.report_timezone() AS tz ), period AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]]) AS errs, MAX(ips_date) AS last_at FROM serving_egisz.documents_current WHERE ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), phase AS MATERIALIZED ( SELECT ph.baseline_start, ph.baseline_end, ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts, (ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts FROM calendar c CROSS JOIN LATERAL ( SELECT baseline_start, baseline_end FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= ( SELECT date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date FROM period ) ORDER BY phase_start DESC LIMIT 1 ) ph WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date ), baseline AS ( SELECT clinic_label, COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error' [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]]) AS errs FROM serving_egisz.documents_current CROSS JOIN phase WHERE ips_date >= phase.from_ts AND ips_date < phase.to_ts [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), clinics AS ( SELECT COALESCE(p.clinic_label, b.clinic_label) AS clinic_label, COALESCE(b.docs, 0) AS docs0, COALESCE(b.errs, 0) AS errs0, COALESCE(p.docs, 0) AS docs1, COALESCE(p.errs, 0) AS errs1 FROM period p FULL JOIN baseline b ON b.clinic_label = p.clinic_label WHERE EXISTS (SELECT 1 FROM phase) ), totals AS ( SELECT SUM(docs0) AS n0, SUM(docs1) AS n1, SUM(errs0)::numeric / NULLIF(SUM(docs0), 0) AS p0, SUM(errs1)::numeric / NULLIF(SUM(docs1), 0) AS p1 FROM clinics ), contrib AS ( SELECT c.*, 100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) - (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp, CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) * (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0) ELSE 0 END AS rate_pp, SIGN(t.p1 - t.p0) AS direction FROM clinics c CROSS JOIN totals t ), top_error AS ( SELECT clinic_label, top_type FROM ( SELECT serving_egisz.documents_current.clinic_label, document_errors.error_type AS top_type, ROW_NUMBER() OVER (PARTITION BY serving_egisz.documents_current.clinic_label ORDER BY COUNT(DISTINCT document_errors.dwh_id) DESC, document_errors.error_type) AS rn FROM serving_egisz.documents_current JOIN serving_egisz.document_errors ON document_errors.dwh_id = serving_egisz.documents_current.dwh_id WHERE document_errors.status = 'async_error' AND document_errors.error_kind = 'Ошибка асинхронного ответа' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1, 2 ) ranked WHERE rn = 1 ) SELECT \"Клиника\", \"Документов с ответом, опорный период\", \"Документов с ответом, период\", \"Доля ошибок, опорный период, %\", \"Доля ошибок, период, %\", \"Вклад, п.п.\", \"За счёт доли ошибок, п.п.\", \"За счёт объёма, п.п.\", \"Основной тип ошибки за период\" FROM ( SELECT 0 AS row_kind, NULL::numeric AS sort_key, CASE WHEN NOT EXISTS (SELECT 1 FROM period) THEN 'Нет документов за период' WHEN ph.baseline_start IS NULL THEN 'Нет закрытого опорного периода фазы' ELSE 'Итого (опорный период ' || to_char(ph.baseline_start, 'DD.MM') || '–' || to_char(ph.baseline_end + 6, 'DD.MM.YYYY') || ')' END AS \"Клиника\", t.n0 AS \"Документов с ответом, опорный период\", t.n1 AS \"Документов с ответом, период\", ROUND(100 * t.p0, 1) AS \"Доля ошибок, опорный период, %\", ROUND(100 * t.p1, 1) AS \"Доля ошибок, период, %\", ROUND(100 * (t.p1 - t.p0), 1) AS \"Вклад, п.п.\", (SELECT ROUND(SUM(rate_pp), 1) FROM contrib) AS \"За счёт доли ошибок, п.п.\", (SELECT ROUND(SUM(total_pp - rate_pp), 1) FROM contrib) AS \"За счёт объёма, п.п.\", NULL::text AS \"Основной тип ошибки за период\" FROM totals t LEFT JOIN phase ph ON TRUE UNION ALL SELECT 1, c.direction * c.total_pp, c.clinic_label, c.docs0, c.docs1, ROUND(100.0 * c.errs0 / NULLIF(c.docs0, 0), 1), ROUND(100.0 * c.errs1 / NULLIF(c.docs1, 0), 1), ROUND(c.total_pp, 1), ROUND(c.rate_pp, 1), ROUND(c.total_pp - c.rate_pp, 1), te.top_type FROM contrib c LEFT JOIN top_error te ON te.clinic_label = c.clinic_label ) contribution ORDER BY row_kind, sort_key DESC NULLS LAST, \"Документов с ответом, период\" DESC",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -6697,19 +6697,19 @@
       },
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "ips_date"
         },
         "semd_type": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "public.rpt_documents",
+          "table_ref": "serving_egisz.documents_current",
           "field_name": "clinic_label"
         },
         "error_type": {
-          "table_ref": "mart_egisz_selfservice.document_error",
+          "table_ref": "serving_egisz.document_errors",
           "field_name": "error_type"
         }
       },

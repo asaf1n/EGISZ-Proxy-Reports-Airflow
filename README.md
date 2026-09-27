@@ -77,13 +77,13 @@ sequenceDiagram
 
 | Срез | Содержание | Витрина / представление |
 | ---- | ---------- | ----------------------- |
-| Отправка и состояния | Объёмы, состояния, динамика по клиникам и типам СЭМД | `rpt_documents` |
-| Обратная связь | Отправленные без ответа, корреляция подачи и ответа | `rpt_documents_sent`, `rpt_documents` |
-| Ошибки | Вид, категория и тип ошибки, вклад клиник в изменение доли ошибок против опорного периода фазы, ошибки связи за скользящие сутки | `mart_egisz_selfservice.document_error`, `mart_egisz_selfservice.network_error`, `rpt_documents`, `dim_control_chart_phases` |
-| Полнота | Атрибуты документа, `emdrId`, расхождения JID | `rpt_documents`, `document_attributes` |
-| Версии | Текущая версия, полный аудит попыток, контроль группировки | `rpt_documents`, `rpt_document_versions`, `rpt_health_versions` |
-| Недельная динамика | SLI по неделям, контрольная карта XmR с фазами, отказы РЭМД и ошибки связи раздельно, время до ответа РЭМД, новые подключения, структура ошибок по категориям | `rpt_documents_weekly`, `mart_egisz.agg_document_error_weekly`, `rpt_documents`, `dim_control_chart_phases` |
-| Загрузка данных | Позиции выгрузки и разбора, необработанный raw, контрольные показатели | `rpt_health_*`, `etl_state` |
+| Отправка и состояния | Объёмы, состояния, динамика по клиникам и типам СЭМД | `serving_egisz.documents_current` |
+| Обратная связь | Отправленные без ответа, корреляция подачи и ответа | `serving_egisz.documents_sent`, `serving_egisz.documents_current` |
+| Ошибки | Вид, категория и тип ошибки, вклад клиник в изменение доли ошибок против опорного периода фазы, ошибки связи за скользящие сутки | `serving_egisz.document_errors`, `serving_egisz.network_errors`, `serving_egisz.documents_current`, `mart_egisz.dim_control_chart_phases` |
+| Полнота | Атрибуты документа, `emdrId`, расхождения JID | `serving_egisz.documents_current`, `mart_egisz.document_attributes` |
+| Версии | Текущая версия, полный аудит попыток, контроль группировки | `serving_egisz.documents_current`, `serving_egisz.document_versions`, `mart_egisz_admin.health_versions` |
+| Недельная динамика | SLI по неделям, контрольная карта XmR с фазами, отказы РЭМД и ошибки связи раздельно, время до ответа РЭМД, новые подключения, структура ошибок по категориям | `serving_egisz.documents_weekly`, `serving_egisz.document_errors_weekly`, `serving_egisz.documents_current`, `mart_egisz.dim_control_chart_phases` |
+| Загрузка данных | Позиции выгрузки и разбора, необработанный raw, контрольные показатели | `mart_egisz_admin.health_*`, `etl_meta.egisz_etl_state` |
 
 ---
 
@@ -109,18 +109,18 @@ flowchart LR
     end
 
     subgraph DWH["dwh_egisz (PostgreSQL) — преобразование"]
-        RAW[(exchangelog_raw)]
-        TX[(transactions)]
-        DOC[(documents<br/>document_attributes)]
-        DIM[(dim_* — справочники,<br/>коды НСИ, правила ошибок)]
-        RPT[[rpt_*, mart_egisz* — представления<br/>и материализованные витрины]]
-        ST[(etl_state — позиции)]
+        RAW[(raw_egisz — журнал<br/>и реестр подач)]
+        TX[(stg_egisz — разобранные<br/>сообщения и ошибки)]
+        DOC[(mart_egisz — документы)]
+        DIM[(mart_egisz — справочники,<br/>коды НСИ, правила ошибок)]
+        RPT[[serving_egisz, mart_egisz_admin —<br/>представления и витрины]]
+        ST[(etl_meta.egisz_* — позиции)]
     end
 
     MB[Metabase<br/>6 дашбордов · 5 моделей]
 
     EL --> T1 --> RAW
-    EM --> T2 --> DIM
+    EM --> T2 --> RAW
     JP --> T3 --> DIM
     LIC --> T3
     RAW --> T4 --> TX --> DOC
@@ -137,7 +137,7 @@ flowchart LR
 | --------- | ---- |
 | `proxy_egisz` (Firebird) | Журнал обмена, реестр подач и справочники — источник, доступ только на чтение |
 | Airflow | Два DAG: приём и разбор журнала, суточное обслуживание |
-| `dwh_egisz` (PostgreSQL) | Raw, разобранные сообщения, документы, справочники, правила ошибок, отчётный слой |
+| `dwh_egisz` (PostgreSQL) | Слои `raw_egisz` → `stg_egisz` → `mart_egisz` → `serving_egisz`, эксплуатационные представления `mart_egisz_admin`, состояние конвейера в `etl_meta` |
 | Metabase | Шесть дашбордов и пять моделей поверх отчётного слоя |
 
 Служебные базы Airflow и Metabase отделены от `dwh_egisz`.
@@ -166,7 +166,7 @@ flowchart LR
 
 `EGISZ_MESSAGES` хранит реестр подач IPS. `MSGID` содержит идентификатор исходящего сообщения, `REPLYTO` — endpoint клиники, `DOCUMENTID` — localUid для РЭМД. Для ИЭМК связь ответа с подачей строится по `MSGID`; `document_uid` не заполняется.
 
-`EXCHANGELOG` содержит входящие вызовы ЕГИСЗ→шлюз. Исходящий `registerDocument` и синхронный ответ на него находятся вне этой таблицы; связь асинхронного ответа с документом строится через `dim_message_document` (см. §«Связывание сообщений»).
+`EXCHANGELOG` содержит входящие вызовы ЕГИСЗ→шлюз. Исходящий `registerDocument` и синхронный ответ на него находятся вне этой таблицы; связь асинхронного ответа с документом строится через реестр подач `stg_egisz.message_registry` (см. §«Связывание сообщений»).
 
 Правила выборки:
 
@@ -190,11 +190,11 @@ flowchart LR
 
 | Задача | Действие |
 | ------ | -------- |
-| `extract_exchangelog` | `EXCHANGELOG` → `exchangelog_raw` по курсору журнала |
-| `extract_registry` | `EGISZ_MESSAGES` → `dim_message_document` по курсору реестра |
+| `extract_exchangelog` | `EXCHANGELOG` → `raw_egisz.exchangelog` по курсору журнала |
+| `extract_registry` | `EGISZ_MESSAGES` → `raw_egisz.egisz_messages` по курсору реестра |
 | `sync_dictionaries` | `JPERSONS` → `dim_organizations`, `EGISZ_LICENSES` → `dim_licenses`; при изменениях пересчитывает JID документов |
 | `transform` | Разбор сообщений журнала: исход асинхронного ответа, элементы ошибки, записи по документам |
-| `refresh_marts` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` по шести витринам. Порядок обязателен: первой обновляется `stg_egisz.document_error_current`, её читают витрина ошибок документа, недельный и месячный слои |
+| `refresh_marts` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` по шести витринам. Порядок обязателен: первой обновляется `stg_egisz.document_errors_current`, её читают витрина ошибок документа, недельный и месячный слои |
 
 ### `egisz_maintenance_dag` — раз в сутки
 
@@ -224,14 +224,14 @@ flowchart LR
 
 ## Парсинг и нормализация
 
-Каждая строка `exchangelog_raw` парсится один раз функцией `parse_exchangelog_row(msgtext, msgid, logtext)`.
+Каждая строка `raw_egisz.exchangelog` парсится один раз функцией `stg_egisz.parse_exchangelog_row(msgtext, msgid, logtext)`.
 
 | Этап | Что фиксируется |
 | ---- | --------------- |
-| Разбор XML | Результат записывается в `transactions` (`xml_*`) |
-| Маркер попытки | LOGID попадает в узкую таблицу `exchangelog_parse_attempts` |
-| Строки без реквизитов | `msgid`/`localUid`/`emdrId`/`getDocumentFile` не найдены; строка получает маркер попытки и остаётся вне `transactions` |
-| Дальнейшая сборка | Читает только `transactions`, поэтому широкое окно проверки полноты не разбирает уже просмотренные строки повторно |
+| Разбор XML | Результат записывается в `stg_egisz.exchange_messages` (`xml_*`) |
+| Маркер попытки | LOGID попадает в узкую таблицу `etl_meta.egisz_exchangelog_parse_attempts` |
+| Строки без реквизитов | `msgid`/`localUid`/`emdrId`/`getDocumentFile` не найдены; строка получает маркер попытки и остаётся вне `stg_egisz.exchange_messages` |
+| Дальнейшая сборка | Читает только `stg_egisz.exchange_messages`, поэтому широкое окно проверки полноты не разбирает уже просмотренные строки повторно |
 
 Утилиты (`db/02_functions.sql`):
 
@@ -253,18 +253,18 @@ flowchart LR
 | Поле | Источник | Правило |
 | ---- | -------- | ------- |
 | `msgid` | `<messageId>` / `MSGID` | Собственный MSGID текущего сообщения |
-| `relates_to_msgid` | `<relatesToMessage>` / `<relatesTo>` | Связанный MSGID из XML; используется для поиска подачи в `dim_message_document` |
+| `relates_to_msgid` | `<relatesToMessage>` / `<relatesTo>` | Связанный MSGID из XML; используется для поиска подачи в `stg_egisz.message_registry` |
 | Локальный ID РЭМД | `<localUid>` / `DOCUMENTID` | `DOCUMENTID` не применяется к ИЭМК |
 | ID в РЭМД | `<emdrId>` | |
 | OID организации | `<organization>` | → `dim_clinic_oid` → JID (см. ниже) |
 | Код / название СЭМД | `<kind>`, `<name>` | Название также из `dim_semd_types` (НСИ `1.2.643.5.1.13.13.11.1520`); там же `ig_oid` — OID руководства по реализации, который выгрузка ФНСИ кладёт в поле `GIT_LINK`, а ссылку на портал — в `IMPLEMENTATION_GUIDE` |
-| Элементы ошибки | `<item>` (`<code>`, `<message>`), `RegistryError` ИЭМК; при `LOGSTATE = 3` — `LOGTEXT` | → `transactions.error_details` (см. §«Классификация ошибок») |
-| Дата создания | `<creationDateTime>` | `safe_cast_timestamptz` |
+| Элементы ошибки | `<item>` (`<code>`, `<message>`), `RegistryError` ИЭМК; при `LOGSTATE = 3` — `LOGTEXT` | → `stg_egisz.exchange_messages.error_details` (см. §«Классификация ошибок») |
+| Дата создания | `<creationDateTime>` | Пустое значение — NULL, иначе приведение к `timestamptz` |
 | Номер протокола | `<documentNumber>` / `PROTOCOLID` | → `doc_number`; ключ группировки версий (см. §«Версии и идентичность документа») |
 
 Разбор различает два уровня. **Исход асинхронного ответа** относится к одному сообщению журнала, **статус документа** — итог по цепочке сообщений одной подачи.
 
-**Исход асинхронного ответа** (`classify_async_status`) определяется только для асинхронного ответа: `sendRegisterDocumentResult` РЭМД и `ProvideAndRegisterDocumentSet-bAsyncResponse` ИЭМК. Значения — `success` и `error`. У РЭМД успех — «Зарегистрировано» в `<documentStatus>` или статус `ok`/`success`; отказ — статус с признаком ошибки или SOAP Fault. У ИЭМК исход берётся из `ResponseStatusType`: `Success` — успех, `Failure` и `PartialSuccess` — отказ. `LOGSTATE` на исход не влияет. Запрос, синхронный ответ и нераспознанный асинхронный ответ исхода не получают; нераспознанные ответы видны сигналом `unrecognized_async_responses` в `rpt_health_signals`.
+**Исход асинхронного ответа** (`classify_async_status`) определяется только для асинхронного ответа: `sendRegisterDocumentResult` РЭМД и `ProvideAndRegisterDocumentSet-bAsyncResponse` ИЭМК. Значения — `success` и `error`. У РЭМД успех — «Зарегистрировано» в `<documentStatus>` или статус `ok`/`success`; отказ — статус с признаком ошибки или SOAP Fault. У ИЭМК исход берётся из `ResponseStatusType`: `Success` — успех, `Failure` и `PartialSuccess` — отказ. `LOGSTATE` на исход не влияет. Запрос, синхронный ответ и нераспознанный асинхронный ответ исхода не получают; нераспознанные ответы видны сигналом `unrecognized_async_responses` в `mart_egisz_admin.health_signals`.
 
 **Статус документа** в `documents` — три значения справочника `dim_document_status`:
 
@@ -293,18 +293,18 @@ flowchart LR
 
 ## Связывание сообщений
 
-Журнал шлюза содержит входящие вызовы ЕГИСЗ→шлюз. Исходящее сообщение, которым IPS подаёт документ (`registerDocument` в РЭМД, `ProvideAndRegisterDocumentSet-b` в ИЭМК), хранится в реестре подач. Асинхронный ответ содержит `relatesToMessage` / `relatesTo`, ссылающийся на подачу; связь ответа с документом строится через `dim_message_document`.
+Журнал шлюза содержит входящие вызовы ЕГИСЗ→шлюз. Исходящее сообщение, которым IPS подаёт документ (`registerDocument` в РЭМД, `ProvideAndRegisterDocumentSet-b` в ИЭМК), хранится в реестре подач. Асинхронный ответ содержит `relatesToMessage` / `relatesTo`, ссылающийся на подачу; связь ответа с документом строится через реестр подач `stg_egisz.message_registry`.
 
 | Уровень | Ключ | Источник |
 | ------- | ---- | -------- |
 | Сообщение журнала | `logid` | `EXCHANGELOG` |
-| Подача документа (попытка) | `msgid` | `EGISZ_MESSAGES` → `dim_message_document` |
+| Подача документа (попытка) | `msgid` | `EGISZ_MESSAGES` → `raw_egisz.egisz_messages` (разбор — `stg_egisz.message_registry`) |
 | Экземпляр документа РЭМД | `dwh_id` = `lower(localUid)` | `DOCUMENTID` реестра либо payload запроса |
 | Логический документ | `document_group_id` | `jid` + `semd_code` + `doc_number` |
 
 `msgid → document_uid` однозначен; на один документ приходится несколько `msgid` — по одному на попытку подачи. Число подач хранится в `documents.attempt_count` и выводится на вкладке «Отправленные».
 
-Правила привязки проверяются по порядку; первое сработавшее определяет `transactions.link_method`.
+Правила привязки проверяются по порядку; первое сработавшее определяет `stg_egisz.exchange_messages.link_method`.
 
 ```mermaid
 flowchart TD
@@ -321,7 +321,7 @@ flowchart TD
 
 Для контура ИЭМК ключом реестра служит `msgid` подачи: `document_uid` там не заполняется.
 
-Две метки означают потерю связи исхода с документом и выводятся в `rpt_health_signals`. `message_registry_no_document` — ответ, связанный с записью реестра без `DOCUMENTID`. `unlinked` — ответ, для которого записи в реестре нет вовсе. Доля считается по последним 500 размеченным ответам **в порядке LOGID**: окно следует порядку журнала независимо от времени приёма, поэтому не пустеет при неровном темпе загрузки.
+Две метки означают потерю связи исхода с документом и выводятся в `mart_egisz_admin.health_signals`. `message_registry_no_document` — ответ, связанный с записью реестра без `DOCUMENTID`. `unlinked` — ответ, для которого записи в реестре нет вовсе. Доля считается по последним 500 размеченным ответам **в порядке LOGID**: окно следует порядку журнала независимо от времени приёма, поэтому не пустеет при неровном темпе загрузки.
 
 Ответ может создать запись в `documents` до события отправки: ЕГИСЗ отклоняет часть документов до запроса файла, и наблюдаемым событием остаётся сам ответ.
 
@@ -335,19 +335,19 @@ flowchart TD
 
 | Уровень | Объект | Что происходит |
 | ------- | ------ | -------------- |
-| Сообщение | `transactions` | `transform_raw_to_facts` разбирает новые строки `exchangelog_raw`: поля `xml_*`, исход асинхронного ответа, элементы ошибки, `jid` для `getDocumentFile` |
+| Сообщение | `stg_egisz.exchange_messages` | `transform_raw_to_facts` разбирает новые строки `raw_egisz.exchangelog`: поля `xml_*`, исход асинхронного ответа, элементы ошибки, `jid` для `getDocumentFile` |
 | Экземпляр документа | `documents` | UPSERT по `dwh_id = lower(localUid)`; строки одной отправки сходятся в запись по правилам из §«Связывание сообщений» |
 | Группа версий | `document_group_id` | `recompute_document_versions(dwh_ids)` пересчитывает цепочку `supersedes_*` и флаг `is_current_version` для батча и соседей по группе |
 
 На уровне `documents` накапливаются `first_sent_at`, `last_callback_at`, `registered_at`, `attempt_count`, итоговый `status`, `jid`. Ошибки документа в `documents` не хранятся: они остаются элементами разобранных сообщений (см. §«Классификация ошибок»). Уровень записи — **версия отправки**: правка СЭМД меняет `localUid` и создаёт новый экземпляр (см. §«Версии и идентичность документа»).
 
-Повторный разбор той же строки пропускается по маркеру `exchangelog_parse_attempts`. Маркер пишется на весь просканированный диапазон, включая отфильтрованные строки. Для `getDocumentFile` JID определяется один раз за жизнь строки: `resolve_document_jid` вызывается при разборе, без повторного чтения payload регулярным выражением.
+Повторный разбор той же строки пропускается по маркеру `etl_meta.egisz_exchangelog_parse_attempts`. Маркер пишется на весь просканированный диапазон, включая отфильтрованные строки. Для `getDocumentFile` JID определяется один раз за жизнь строки: `resolve_document_jid` вызывается при разборе, без повторного чтения payload регулярным выражением.
 
 Пересчёт групп версий вызывается в конце `transform_raw_to_facts` — для документов батча и их соседей по группе. Отдельного полного прохода в регламенте нет: он нужен только при первичном наполнении отчётного слоя на существующий архив и выполняется накатом схемы.
 
 Разделение LOGID документа: `request_logid` — запрос файла (`getDocumentFile`), `result_logid` — последний асинхронный ответ. `msgid` — собственный MSGID текущего события документа; `relates_to_msgid` заполняется только из XML `relatesToMessage` / `relatesTo`.
 
-`document_attributes` (1:1 к экземпляру): OID происхождения, host, endpoint, `egisz_subsystem` (последнее непустое значение по строкам документа), BI-маски. Обновляется инкрементально в конце `transform_raw_to_facts` по документам батча.
+`mart_egisz.document_attributes` (1:1 к экземпляру): OID происхождения, host, endpoint, `egisz_subsystem` (последнее непустое значение по строкам документа), BI-маски. Обновляется инкрементально в конце `transform_raw_to_facts` по документам батча.
 
 ### Учёт отправленных
 
@@ -357,7 +357,7 @@ flowchart TD
 | -------- | --------------- |
 | `getDocumentFile` + запись в `EGISZ_MESSAGES` | Документ попадает в состояние отправки |
 | `getDocumentFile` без строки реестра | Остаётся транспортной диагностикой и не создаёт `sent` |
-| `getDocumentFile` с заполненным `emdrId` | Запрос файла уже зарегистрированного ЭМД: повторной отправки нет, документ не создаётся и к документу не привязывается. Такие строки уходят в `rpt_document_file_request` и на дашборд «История запроса документов» |
+| `getDocumentFile` с заполненным `emdrId` | Запрос файла уже зарегистрированного ЭМД: повторной отправки нет, документ не создаётся и к документу не привязывается. Такие строки уходят в `serving_egisz.document_file_requests` и на дашборд «История запроса документов» |
 
 В отчётном слое `sent` раскрывается **сроком ожидания** и **состоянием отправки**. Оба выводятся на чтении и в `documents` не хранятся.
 
@@ -396,8 +396,8 @@ stateDiagram-v2
 
 | Потребитель | Момент |
 | ----------- | ------ |
-| `rpt_documents`, `rpt_documents_sent` | `now()` — очередь на момент чтения |
-| `rpt_documents_weekly` / `rpt_documents_monthly` | конец своей недели или месяца, для открытого периода — `now()`; строки закрытого периода не меняются между обновлениями витрин |
+| `serving_egisz.documents_current`, `serving_egisz.documents_sent` | `now()` — очередь на момент чтения |
+| `serving_egisz.documents_weekly` / `serving_egisz.documents_monthly` | конец своей недели или месяца, для открытого периода — `now()`; строки закрытого периода не меняются между обновлениями витрин |
 | Карточки очереди на дашбордах | `now()`; фильтр периода к состоянию на момент неприменим и в наименованиях карточек оговорён как «(без фильтра периода)» |
 
 **Лестница сроков ожидания** — справочник `dim_pending_segments`, возраст отсчитывается от `first_sent_at`:
@@ -411,7 +411,7 @@ stateDiagram-v2
 
 **Набор документов очереди един для всех карточек**: документ отправлен, первого ответа на момент нет, срок ожидания в пределах лестницы. Документы за терминальным порогом в очередь не входят нигде — им посвящена отдельная пара карточек.
 
-**Полнота данных во времени.** Курсоры `etl_state` идут по `LOGID` журнала, а не по времени события, поэтому по ним нельзя судить о свежести. Её показывает отдельный сигнал `data_freshness` («Свежесть данных (последнее событие документа)», `rpt_health_signals`): возраст самого нового события в `documents` — `now()` минус максимум по `last_callback_at`, `first_sent_at` и дате создания документа. Срез очереди за период читается вместе с этим сигналом.
+**Полнота данных во времени.** Курсоры `etl_meta.egisz_etl_state` идут по `LOGID` журнала, а не по времени события, поэтому по ним нельзя судить о свежести. Её показывает отдельный сигнал `data_freshness` («Свежесть данных (последнее событие документа)», `mart_egisz_admin.health_signals`): возраст самого нового события в `documents` — `now()` минус максимум по `last_callback_at`, `first_sent_at` и дате создания документа. Срез очереди за период читается вместе с этим сигналом.
 
 **Правило отображения:**
 
@@ -443,7 +443,7 @@ stateDiagram-v2
 | Экземпляр / версия | UUID конкретной выгрузки СЭМД; меняется при правке и перевыгрузке | `localUid` | `dwh_id` (PK) |
 | Логический документ | Цепочка версий одного документа в МИС | `jid` + `semd_code` + `doc_number` | `document_group_id` |
 
-`doc_number` — номер протокола/ИБ (`PROTOCOLID` / тег `documentNumber`), подтягивается из `transactions` в `documents` на шаге группировки. Экземпляры без `documentNumber` остаются одиночными группами (`singleton`).
+`doc_number` — номер протокола/ИБ (`PROTOCOLID` / тег `documentNumber`), подтягивается из `stg_egisz.exchange_messages` в `documents` на шаге группировки. Экземпляры без `documentNumber` остаются одиночными группами (`singleton`).
 
 Логика `recompute_document_versions` (`db/03_transform.sql`):
 
@@ -456,7 +456,7 @@ stateDiagram-v2
 
 В реальной группе: `semd_version_number` — порядок по `first_sent_at`; `is_current_version = true` ровно у одного экземпляра (`success`, иначе последнее IPS-событие); связь версий — `supersedes_dwh_id` / `superseded_by_dwh_id`.
 
-Витрины: `rpt_documents` — только `is_current_version`; полный аудит — `rpt_document_versions`; контроль группировки — `rpt_health_versions` (размер групп, коллизии `localUid` по `transactions`).
+Витрины: `serving_egisz.documents_current` — только `is_current_version`; полный аудит — `serving_egisz.document_versions`; контроль группировки — `mart_egisz_admin.health_versions` (размер групп, коллизии `localUid` по `stg_egisz.exchange_messages`).
 
 ---
 
@@ -483,16 +483,16 @@ stateDiagram-v2
 
 | Объект | Строка | Назначение |
 | ------ | ------ | ---------- |
-| `transactions.error_details` | JSON-массив элементов разобранного сообщения: `item_no`, `error_kind`, `error_code`, `error_text`, `error_type`, `nsi_dictionary_oid` | Заполняется при разборе один раз. Ошибка связи — элемент `item_no = 0` |
-| `stg_egisz.document_error_current` | Ошибка текущего состояния документа | Элементы последнего асинхронного ответа документа и ошибки связи после него, с `error_text`. Отбор по документу и времени сообщения |
-| `stg_egisz.message_error` | Элемент ошибки сообщения по времени сообщения | Все элементы всех разобранных сообщений, в том числе без связи с документом, с `error_text` |
-| `mart_egisz_selfservice.document_error` | Ошибка текущего состояния документа с реквизитами документа | Вид, категория, тип, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость, статус документа; без `error_text` |
-| `mart_egisz_selfservice.network_error` | Ошибка связи по времени сообщения | Все ошибки связи, в том числе в сообщениях без связи с документом (`dwh_id` пуст); LOGID и MSGID сообщения, подпись СЭМД; без `error_text` |
-| `mart_egisz.agg_document_error_weekly` / `_monthly` | Период × клиника × вид × категория | Число документов с ошибкой; документ учитывается в каждой своей категории |
+| `stg_egisz.exchange_messages.error_details` | JSON-массив элементов разобранного сообщения: `item_no`, `error_kind`, `error_code`, `error_text`, `error_type`, `nsi_dictionary_oid` | Заполняется при разборе один раз. Ошибка связи — элемент `item_no = 0` |
+| `stg_egisz.document_errors_current` | Ошибка текущего состояния документа | Элементы последнего асинхронного ответа документа и ошибки связи после него, с `error_text`. Отбор по документу и времени сообщения |
+| `stg_egisz.message_errors` | Элемент ошибки сообщения по времени сообщения | Все элементы всех разобранных сообщений, в том числе без связи с документом, с `error_text` |
+| `serving_egisz.document_errors` | Ошибка текущего состояния документа с реквизитами документа | Вид, категория, тип, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость, статус документа; без `error_text` |
+| `serving_egisz.network_errors` | Ошибка связи по времени сообщения | Все ошибки связи, в том числе в сообщениях без связи с документом (`dwh_id` пуст); LOGID и MSGID сообщения, подпись СЭМД; без `error_text` |
+| `serving_egisz.document_errors_weekly` / `_monthly` | Период × клиника × вид × категория | Число документов с ошибкой; документ учитывается в каждой своей категории |
 
 В `documents` ошибок нет: статус документа определяет асинхронный ответ, а ошибки остаются элементами сообщений.
 
-Исходный текст `error_text` в опубликованный слой не выносится: корпоративный стандарт хранилища (§2) не допускает там свободные тексты, в которых бывают персональные данные. Он остаётся в слое разбора, и дашборды до решения о доступе читают его из `stg_egisz.document_error_current` (ключ `dwh_id` + `error_no` общий с `document_error`) и `stg_egisz.message_error` (сообщение `logid` + `message_at` общее с `network_error`: ошибка связи у сообщения одна) — по исключению из правил стандарта.
+Исходный текст `error_text` в опубликованный слой не выносится: корпоративный стандарт хранилища (§2) не допускает там свободные тексты, в которых бывают персональные данные. Он остаётся в слое разбора, и дашборды до решения о доступе читают его из `stg_egisz.document_errors_current` (ключ `dwh_id` + `error_no` общий с `serving_egisz.document_errors`) и `stg_egisz.message_errors` (сообщение `logid` + `message_at` общее с `serving_egisz.network_errors`: ошибка связи у сообщения одна) — по исключению из правил стандарта.
 
 ### Справочники
 
@@ -535,15 +535,15 @@ flowchart TD
 
 **Маскирование.** Если правило не найдено, тип — исходный текст, в котором значения документа заменены обозначениями. Шаги маскирования — строки справочника правил с порядком применения; шаг действует на свой вид или на оба. Сначала снимается служебная обёртка: у ИЭМК — коды `[CRE-…]: PAT-…;` и хвост `Patient(…)`, у ФРМСС `[code: …, description: …]` раскрывается в «Ошибки валидации в ФРМСС (код): описание». Затем значения в скобках и кавычках, даты, ФИО со СНИЛС, e-mail, OID, длинные номера и номер правила схематрона заменяются обозначениями (`[…]`, `<e-mail>`, `<oid>`, `<значение>`, `<правило>`), хвосты `Путь: /ClinicalDocument…` и реквизиты сертификата отрезаются. Наименование реквизита в «Указанное значение [Имя пациента] …» сохраняется. У ошибки связи маскируются адреса: `<endpoint>`, `<gost-endpoint>`, `<ip>`.
 
-Годится ли текст в тип, решают при пополнении правил, а не при разборе. Ошибка без правила видна сигналом `uncovered_error_types` («Отказы без правила классификации») в `rpt_health_signals`; по нему заводится новое правило.
+Годится ли текст в тип, решают при пополнении правил, а не при разборе. Ошибка без правила видна сигналом `uncovered_error_types` («Отказы без правила классификации») в `mart_egisz_admin.health_signals`; по нему заводится новое правило.
 
 **Справочник НСИ элемента.** Для ошибок справочников OID извлекается шаблоном правила (`nsi_dictionary_pattern`) из текста конкретного элемента. Наименование берётся из `dim_nsi_dictionary`; справочник вне НСИ 805 показывается своим OID.
 
 ### Смена правил
 
-Правила меняются правкой `db/02_functions.sql` и применением схемы. Элементы, уже сохранённые в `transactions.error_details`, приводит к новым правилам задача `reclassify_errors` в `egisz_maintenance_dag`. Функция `reclassify_error_details()` пересчитывает тип каждого уникального сочетания «вид — код — текст», заводит новые типы и удаляет типы без правила, на которые больше нет ссылок; затем задача обновляет витрины. Версий классификации нет: история всегда в текущих правилах.
+Правила меняются правкой `db/02_functions.sql` и применением схемы. Элементы, уже сохранённые в `stg_egisz.exchange_messages.error_details`, приводит к новым правилам задача `reclassify_errors` в `egisz_maintenance_dag`. Функция `reclassify_error_details()` пересчитывает тип каждого уникального сочетания «вид — код — текст», заводит новые типы и удаляет типы без правила, на которые больше нет ссылок; затем задача обновляет витрины. Версий классификации нет: история всегда в текущих правилах.
 
-Нарушения видны сигналами `rpt_health_signals`:
+Нарушения видны сигналами `mart_egisz_admin.health_signals`:
 
 | Сигнал | Что означает |
 | ------ | ------------ |
@@ -555,7 +555,7 @@ flowchart TD
 
 ### Подсистема ЕГИСЗ
 
-`transactions.egisz_subsystem` (`РЭМД`/`ИЭМК`/NULL) вычисляется функцией `egisz_subsystem()`.
+`stg_egisz.exchange_messages.egisz_subsystem` (`РЭМД`/`ИЭМК`/NULL) вычисляется функцией `egisz_subsystem()`.
 
 | Признак | Значение |
 | ------- | -------- |
@@ -565,56 +565,69 @@ flowchart TD
 | Другой непустой `wsa:Action` | РЭМД |
 | Порт сервиса клиники в `LOGTEXT`: `:9921` / `:9945` | ИЭМК / РЭМД |
 
-`URI` — первичный транспортный реквизит; он заполнен до разбора payload, включая ошибки связи без тела ответа. На уровне документа значение фиксируется в `document_attributes.egisz_subsystem` как последнее непустое по строкам документа.
+`URI` — первичный транспортный реквизит; он заполнен до разбора payload, включая ошибки связи без тела ответа. На уровне документа значение фиксируется в `mart_egisz.document_attributes.egisz_subsystem` как последнее непустое по строкам документа.
 
 ---
 
 
 ## DWH-модель
 
-БД `dwh_egisz`. Схема — идемпотентный прогон `db/dwh_init.sql` (модули `db/`). Объекты обработки ошибок разложены по слоям стандарта хранилища: данные разбора — `stg_egisz`, справочники и агрегаты — `mart_egisz`, витрины для самостоятельного анализа — `mart_egisz_selfservice`. Остальные объекты пока в `public`, план переноса — [раскладка схем](docs/dwh-schema-naming-migration.md).
+БД `dwh_egisz` — общая BI-база, в ней же работает контур Redmine BI. Схема — идемпотентный прогон `db/dwh_init.sql` (модули `db/`). Объекты ЕГИСЗ разложены по слоям, правила имён — в [раскладке схем](docs/dwh-schema-naming-migration.md). В `public` объектов ЕГИСЗ нет, все имена в SQL указываются со схемой.
 
-| Слой | Объект | Детализация / назначение |
-| ---- | ------ | ------------------ |
-| Состояние | `etl_state` | Позиции выгрузки и разбора: по журналу шлюза, по реестру подач, по raw |
-| Реестр подач | `dim_message_document` | одна строка `EGISZ_MESSAGES` по `EGMID`; `msgid` подачи, `document_uid` localUid РЭМД, `reply_to`; для ИЭМК `document_uid` пустой |
-| Raw | `exchangelog_raw` | Строка журнала как в источнике |
-| Разобранные сообщения | `transactions` | Строка журнала + `xml_*` (разбор один раз) + исход асинхронного ответа (`status`) + элементы ошибки (`error_details`) + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки |
-| Документы | `documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
-| Атрибуты | `document_attributes` | OID происхождения клиники, host, способ определения JID, маскированные ФИО и СНИЛС, `egisz_subsystem` (подсистема на уровне документа) |
-| Справочники | `dim_organizations`, `dim_nsi_organization`, `dim_licenses`, `dim_semd_types` | Клиники CASH/JPERSONS, справочник НСИ 1461, лицензии, типы СЭМД |
-| Руководства по реализации | `dim_nsi_semd_guide`, `dim_nsi_semd_guide_alias` | НСИ `1.2.643.5.1.13.13.99.2.638`: руководство (OID, редакция, наименование) и синонимы OID; наполняются `scripts/load_nsi_semd_guides.py` |
-| Требования руководств | `dim_nsi_semd_guide_dictionary` | НСИ `1.2.643.5.1.13.13.99.2.805`: справочники НСИ, предписанные руководством; детализация (руководство, справочник) |
-| Наименования справочников | `dim_nsi_dictionary` | Снимок НСИ `1.2.643.5.1.13.13.99.2.805` вер. 6.19 (465 записей): OID справочника → наименование дословно + краткая подпись `short_name`; даёт `nsi_dictionary_name` в `mart_egisz_selfservice.document_error`. Справочники вне 805 показываются без расшифровки |
-| Реестры разрешения ЮЛ | `dim_clinic_oid`, `dim_clinic_endpoint` | Представления над справочниками: OID → ЮЛ (основной путь) и адрес обмена → ЮЛ (резервный) |
-| Реестр OID руководств | `dim_semd_guide_oid` | Представление над справочниками: `published_oid` (`dim_nsi_semd_guide.oid` либо `dim_nsi_semd_guide_alias.alias_oid`) → `guide_oid` (`dim_nsi_semd_guide.oid`). Точка входа — `dim_semd_types.ig_oid` |
-| Состояния | `dim_document_status`, `dim_pending_segments`, `dim_sent_state` | Статусы документа, лестница сроков ожидания, состояния отправки |
-| Фазы контрольных карт | `dim_control_chart_phases` | Грейн (`week` / `month`), начало фазы, опорный период (`baseline_start`..`baseline_end`), наименование и условия работы. Состав задаёт только `db/01_schema.sql` — см. [управленческий дашборд](#управленческий-дашборд-05_executivejson) |
+| Схема | Содержимое |
+| ----- | ---------- |
+| `raw_egisz` | Копия Firebird: журнал обмена и реестр подач, имена источника |
+| `stg_egisz` | Разбор: сообщения обмена, реестр подач в каноническом виде, элементы ошибок |
+| `mart_egisz` | Документы и справочники |
+| `serving_egisz` | Представления и агрегаты для потребителей |
+| `mart_egisz_admin` | Эксплуатационные представления |
+| `etl_meta` | Общая схема служебного состояния конвейеров; объекты ЕГИСЗ называются `egisz_*` |
+
+| Назначение | Объект | Детализация / назначение |
+| ---------- | ------ | ------------------ |
+| Состояние | `etl_meta.egisz_etl_state` | Позиции выгрузки и разбора: по журналу шлюза, по реестру подач, по raw |
+| Маркер разбора | `etl_meta.egisz_exchangelog_parse_attempts` | LOGID, строка которого уже разбиралась |
+| Журнал | `raw_egisz.exchangelog` | Строка `EXCHANGELOG` как в источнике; `_loaded_at` — момент загрузки |
+| Реестр подач | `raw_egisz.egisz_messages` | Строка `EGISZ_MESSAGES` по `EGMID` как в источнике: `msgid`, `replyto`, `documentid`, `createdate` |
+| Реестр подач в разборе | `stg_egisz.message_registry` | Представление: ключ реестра `msgid` (`message_registry_key`), `document_uid` — localUid РЭМД (для ИЭМК пустой), `reply_to` |
+| Разобранные сообщения | `stg_egisz.exchange_messages` | Строка журнала + `xml_*` (разбор один раз) + исход асинхронного ответа (`status`) + элементы ошибки (`error_details`) + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки |
+| Текущие ошибки документа | `stg_egisz.document_errors_current` | Элементы последнего асинхронного ответа и ошибки связи после него, с исходным текстом; строка — одна ошибка документа |
+| Элементы ошибки сообщений | `stg_egisz.message_errors` | Элементы ошибки всех разобранных сообщений по времени сообщения, с исходным текстом |
+| Документы | `mart_egisz.documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
+| Атрибуты | `mart_egisz.document_attributes` | OID происхождения клиники, host, способ определения JID, маскированные ФИО и СНИЛС, `egisz_subsystem` (подсистема на уровне документа) |
+| Справочники | `mart_egisz.dim_organizations`, `dim_nsi_organization`, `dim_licenses`, `dim_semd_types` | Клиники CASH/JPERSONS, справочник НСИ 1461, лицензии, типы СЭМД |
+| Руководства по реализации | `mart_egisz.dim_nsi_semd_guide`, `dim_nsi_semd_guide_alias` | НСИ `1.2.643.5.1.13.13.99.2.638`: руководство (OID, редакция, наименование) и синонимы OID; наполняются `scripts/load_nsi_semd_guides.py` |
+| Требования руководств | `mart_egisz.dim_nsi_semd_guide_dictionary` | НСИ `1.2.643.5.1.13.13.99.2.805`: справочники НСИ, предписанные руководством; детализация (руководство, справочник) |
+| Наименования справочников | `mart_egisz.dim_nsi_dictionary` | Снимок НСИ `1.2.643.5.1.13.13.99.2.805` вер. 6.19 (465 записей): OID справочника → наименование дословно + краткая подпись `short_name`; даёт `nsi_dictionary_name` в `serving_egisz.document_errors`. Справочники вне 805 показываются без расшифровки |
+| Реестры разрешения ЮЛ | `mart_egisz.dim_clinic_oid`, `dim_clinic_endpoint` | Представления над справочниками: OID → ЮЛ (основной путь) и адрес обмена → ЮЛ (резервный) |
+| Реестр OID руководств | `mart_egisz.dim_semd_guide_oid` | Представление над справочниками: `published_oid` (`dim_nsi_semd_guide.oid` либо `dim_nsi_semd_guide_alias.alias_oid`) → `guide_oid` (`dim_nsi_semd_guide.oid`). Точка входа — `dim_semd_types.ig_oid` |
+| Состояния | `mart_egisz.dim_document_status`, `dim_pending_segments`, `dim_sent_state` | Статусы документа, лестница сроков ожидания, состояния отправки |
+| Фазы контрольных карт | `mart_egisz.dim_control_chart_phases` | Грейн (`week` / `month`), начало фазы, опорный период (`baseline_start`..`baseline_end`), наименование и условия работы. Состав задаёт только `db/01_schema.sql` — см. [управленческий дашборд](#управленческий-дашборд-05_executivejson) |
 | Коды ошибок | `mart_egisz.dim_nsi_error_code` | НСИ `1.2.643.5.1.13.13.99.2.305` вер. 3.18: мнемоника (PK) + описание дословно + контур; `mart_egisz.dim_nsi_error_code_alias` — написания, которыми РЭМД отвечает вместо справочных |
 | Правила ошибок | `mart_egisz.dim_error_rules` | Классификация: `match_tier` (приоритет 1–4) + `match_code` + `nsi_error_code` (FK) + `match_pattern` → `interpretation` и `error_category`. Маскирование: `apply_order` + `match_pattern` + `replacement` для вида `error_kind` |
 | Категории ошибок | `mart_egisz.dim_error_category` | Вид + категория → `responsibility` и `is_retryable` по умолчанию |
 | Типы ошибок | `mart_egisz.dim_error_type` | Тип (PK) → вид, категория, `nsi_error_code`, `rule_code` (пусто у типа без правила), `responsibility`, `is_retryable` |
-| Текущие ошибки документа | `stg_egisz.document_error_current` | Элементы последнего асинхронного ответа и ошибки связи после него, с исходным текстом; строка — одна ошибка документа |
-| Элементы ошибки сообщений | `stg_egisz.message_error` | Элементы ошибки всех разобранных сообщений по времени сообщения, с исходным текстом |
 
-Представления и витрины отчётного слоя:
+Выдача и эксплуатация:
 
 | Представление | Содержание |
 | ------------- | ---------- |
-| `rpt_documents` | `documents` + `document_attributes` + справочники; **текущие версии** (`is_current_version`) |
-| `rpt_document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
-| `rpt_documents_sent` | `status = sent`: срок ожидания и состояние отправки (`pending` / `no_response`) |
-| `mart_egisz_selfservice.network_error` | Ошибки связи по времени сообщения, в том числе в сообщениях без связи с документом |
-| `mart_egisz_selfservice.document_error` | Ошибки текущего состояния документа: `error_type`, вид, категория, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость; реквизиты документа из `rpt_documents` |
-| `rpt_document_lineage` | OID / host / endpoint по документу |
-| `rpt_document_file_request` | Запросы `getDocumentFile` с заполненным `emdrId` — обращения за файлом уже зарегистрированного ЭМД; не подача и не источник состояния `sent` |
-| `rpt_documents_weekly` / `rpt_documents_monthly` | Недельный и месячный слой динамики: грейн (период, клиника), счётчики исходов и состояний отправки на конец периода; `docs_network_error` — документы с ошибкой связи в текущем состоянии |
-| `mart_egisz.agg_document_error_weekly` / `_monthly` | Структура ошибок в том же грейне: число документов по виду и категории |
-| `rpt_clinic_nsi_mapping` | Сопоставление клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID, признак сопоставления и дата последней успешной регистрации ЭМД |
-| `rpt_clinic_semd_activity` | Типы СЭМД в обмене клиники: детализация (`clinic_jid`, `semd_code`) по документам, наименование из `dim_semd_types`, последняя отправка `MAX(first_sent_at)`, последняя регистрация `MAX(registered_at)` |
-| `rpt_semd_guides` | Виды медицинской документации и их руководства по реализации: детализация `semd_code`, признак сопоставления (`guide_match`) и число предписанных справочников. Виды формата PDF/A руководства не имеют по существу — это не то же самое, что вид, чьё руководство не заведено в реестре |
-| `rpt_semd_dictionaries` | Справочники НСИ, требуемые руководством для вида документации: детализация (`semd_code`, `dict_oid`), редакция справочника (`*` — любая) и имя поля-идентификатора, которым СЭМД ссылается на запись справочника |
-| `rpt_health_*` | Свежесть и состояние контура (в т.ч. `rpt_health_versions` — наблюдаемость слоя версий) |
+| `serving_egisz.documents_current` | `mart_egisz.documents` + `mart_egisz.document_attributes` + справочники; **текущие версии** (`is_current_version`) |
+| `serving_egisz.document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
+| `serving_egisz.documents_sent` | `status = sent`: срок ожидания и состояние отправки (`pending` / `no_response`) |
+| `serving_egisz.network_errors` | Ошибки связи по времени сообщения, в том числе в сообщениях без связи с документом |
+| `serving_egisz.document_errors` | Ошибки текущего состояния документа: `error_type`, вид, категория, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость; реквизиты документа из `documents_current` |
+| `serving_egisz.document_file_requests` | Запросы `getDocumentFile` с заполненным `emdrId` — обращения за файлом уже зарегистрированного ЭМД; не подача и не источник состояния `sent` |
+| `serving_egisz.documents_weekly` / `documents_monthly` | Недельный и месячный слой динамики: грейн (период, клиника), счётчики исходов и состояний отправки на конец периода; `docs_network_error` — документы с ошибкой связи в текущем состоянии |
+| `serving_egisz.document_errors_weekly` / `_monthly` | Структура ошибок в том же грейне: число документов по виду и категории |
+| `serving_egisz.clinic_nsi_mapping` | Сопоставление клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID, признак сопоставления и дата последней успешной регистрации ЭМД |
+| `serving_egisz.clinic_semd_activity` | Типы СЭМД в обмене клиники: детализация (`clinic_jid`, `semd_code`) по документам, наименование из `dim_semd_types`, последняя отправка `MAX(first_sent_at)`, последняя регистрация `MAX(registered_at)` |
+| `serving_egisz.semd_guides` | Виды медицинской документации и их руководства по реализации: детализация `semd_code`, признак сопоставления (`guide_match`) и число предписанных справочников. Виды формата PDF/A руководства не имеют по существу — это не то же самое, что вид, чьё руководство не заведено в реестре |
+| `serving_egisz.semd_dictionaries` | Справочники НСИ, требуемые руководством для вида документации: детализация (`semd_code`, `dict_oid`), редакция справочника (`*` — любая) и имя поля-идентификатора, которым СЭМД ссылается на запись справочника |
+| `mart_egisz_admin.document_lineage` | OID / host / endpoint по документу |
+| `mart_egisz_admin.health_*` | Свежесть и состояние контура (в т.ч. `health_versions` — наблюдаемость слоя версий) |
+
+Материализованные витрины обновляет `serving_egisz.refresh_report_marts()` — единственное определение их состава и порядка; её вызывают DAG-и и сценарий применения схемы.
 
 Имена колонок в Metabase Models:
 
@@ -637,11 +650,11 @@ flowchart TD
 | `first_sent_at` | Первое IPS-событие документа — запрос файла со стороны РЭМД; дата подачи медицинской системой находится вне `EXCHANGELOG` | Карточка «Динамика документов по дням» (вкладка «Архив СЭМД»); от него отсчитывается срок ожидания |
 | `first_callback_at` | Отметка первого асинхронного ответа по документу. Единственная граница выхода из очереди обработки: последующие ответы её не двигают | Все карточки очереди (дашборд 01) через `is_pending_at`; воронка «Скорость регистрации в РЭМД» — срок `first_callback_at − first_sent_at` |
 | `delivery_seconds` | Время отклика ЕГИСЗ до **последнего** асинхронного ответа: `last_callback_at − first_sent_at`. Считается по журналу; XML-дата создания CDA (`document_created_at`) заполнена только в малой части набора документов. Пусто до получения ответа. На повторных ответах величина растягивается до последнего из них — ни для членства в очереди, ни для скорости регистрации она непригодна, там работает `first_callback_at` | Карточки времени доставки (дашборд 08) |
-| `loaded_at` (`transactions`) | Момент загрузки строки журнала в ELT | Служебное поле слоя транзакций |
+| `loaded_at` (`stg_egisz.exchange_messages`), `_loaded_at` (`raw_egisz`) | Момент загрузки строки в ELT | Служебные поля |
 
 **Часовой пояс отчётности** объявлен один раз на компонент и нигде не повторяется литералом. В DWH это пин роли конвейера (`ALTER ROLE egisz SET timezone`, `db/01_schema.sql`), в Metabase — настройка `report-timezone`, которую выставляет провижининг из переменной `REPORT_TIMEZONE`.
 
-Отчётный слой читает пояс функцией `report_timezone()`. Она берёт значение из настройки роли, а не из пояса текущей сессии: `REFRESH` материализованного представления пересчитывает границы периодов, и обновление из сессии с другим поясом сдвинуло бы уже закрытые недели. Границы недель и месяцев считаются через неё; карточки, которым нужен день, берут его из полной даты инлайн (`ips_date::date`) — второй сдвиг там был бы двойным переносом.
+Отчётный слой читает пояс функцией `serving_egisz.report_timezone()`. Она берёт значение из настройки роли, а не из пояса текущей сессии: `REFRESH` материализованного представления пересчитывает границы периодов, и обновление из сессии с другим поясом сдвинуло бы уже закрытые недели. Границы недель и месяцев считаются через неё; карточки, которым нужен день, берут его из полной даты инлайн (`ips_date::date`) — второй сдвиг там был бы двойным переносом.
 
 ---
 
@@ -655,7 +668,7 @@ flowchart TD
 | Файл | Имя в Metabase | Аудитория | Содержание |
 | ---- | -------------- | --------- | ---------- |
 | `01_integration_egisz.json` | Интеграция с ЕГИСЗ | Поддержка, аналитики | Оперативный мониторинг, контроль сервиса, отправленные, ошибки, архив |
-| `05_executive.json` | Управленческий дашборд | Руководство | «Обзор» (три статуса — рост, сигнал XmR, MRR под риском; ценность и качество, здоровье сервиса, пульс за скользящие 7 дней, ориентировочные деньги, выручка под риском и её тренд по `rpt_documents`), «Динамика по неделям» и «Динамика по месяцам» (состав исходов, отказы РЭМД и ошибки связи раздельно, контрольная карта XmR с фазами по неделям, время до ответа РЭМД, новые подключения, структура ошибок по `rpt_documents_weekly` / `_monthly` и `mart_egisz.agg_document_error_weekly` / `_monthly`) |
+| `05_executive.json` | Управленческий дашборд | Руководство | «Обзор» (три статуса — рост, сигнал XmR, MRR под риском; ценность и качество, здоровье сервиса, пульс за скользящие 7 дней, ориентировочные деньги, выручка под риском и её тренд по `serving_egisz.documents_current`), «Динамика по неделям» и «Динамика по месяцам» (состав исходов, отказы РЭМД и ошибки связи раздельно, контрольная карта XmR с фазами по неделям, время до ответа РЭМД, новые подключения, структура ошибок по `serving_egisz.documents_weekly` / `_monthly` и `serving_egisz.document_errors_weekly` / `_monthly`) |
 | `07_client_service.json` | Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ | Клиника | Обзор, ошибки регистрации, журнал документов, доступные типы СЭМД |
 | `08_client_bianalytic.json` | Клиентский дашборд. BI-аналитика ЭМД | Клиника (BI) | Объёмы производства, доставка, пациенты/врачи |
 | `09_clinic_nsi_mapping.json` | Список клиник | Поддержка, аналитики | Две таблицы аудита сопоставления — клиники с OID НСИ и без него; реквизиты, дата последней успешной регистрации ЭМД, фильтры по JID/наименованию/ИНН/OID |
@@ -671,9 +684,9 @@ flowchart TD
 | Анализ ошибок | Кто сдвинул долю ошибок и структура отказов РЭМД | «Вклад клиник в изменение доли ошибок», «Топ по типу ошибки», «Ошибки: тип × клиника», кросс-таблицы «% ошибок …» |
 | Архив СЭМД | Архивный объём | «Динамика документов по дням» (`first_sent_at`), «Объём по клиникам», журнал «Архив СЭМД» |
 
-**Ряд состояния «Оперативного мониторинга».** Три плитки отвечают на вопрос «есть ли инцидент прямо сейчас» и не зависят от фильтра «Обработано IPS»: при периоде «текущий месяц» сегодняшний всплеск растворяется в карточках за период. «Ошибок связи за последние 24 часа» считает ошибки связи (`mart_egisz_selfservice.network_error`) по времени сообщения, в том числе у сообщений без связи с документом, за скользящие сутки от текущего момента, а не за календарный день: утром день почти пуст. Ряд плитки — 14 таких суток, сравнение — с предыдущими 24 часами. «Документов в очереди» и «Ожидают > 24 часов» — те же карточки, что на вкладке «Отправленные», с тем же правилом очереди. Стрелка изменения у всех трёх несёт оценку: рост ошибок и очереди — ухудшение, поэтому окрашен красным. Плиток за период на мониторинге по-прежнему нет: их место занял разбор по дням и статусам.
+**Ряд состояния «Оперативного мониторинга».** Три плитки отвечают на вопрос «есть ли инцидент прямо сейчас» и не зависят от фильтра «Обработано IPS»: при периоде «текущий месяц» сегодняшний всплеск растворяется в карточках за период. «Ошибок связи за последние 24 часа» считает ошибки связи (`serving_egisz.network_errors`) по времени сообщения, в том числе у сообщений без связи с документом, за скользящие сутки от текущего момента, а не за календарный день: утром день почти пуст. Ряд плитки — 14 таких суток, сравнение — с предыдущими 24 часами. «Документов в очереди» и «Ожидают > 24 часов» — те же карточки, что на вкладке «Отправленные», с тем же правилом очереди. Стрелка изменения у всех трёх несёт оценку: рост ошибок и очереди — ухудшение, поэтому окрашен красным. Плиток за период на мониторинге по-прежнему нет: их место занял разбор по дням и статусам.
 
-**Вклад клиник в изменение доли ошибок.** Первая карточка «Анализа ошибок» превращает сигнал контрольной карты в список клиник. Период из фильтра «Обработано IPS» сравнивается с опорным периодом фазы из `dim_control_chart_phases` — той же базой, от которой XmR-карта управленческого дашборда считает центр; фаза берётся по последней неделе периода. Доля ошибок считается на корпусе XmR: отказы асинхронного ответа РЭМД от документов с ответом РЭМД.
+**Вклад клиник в изменение доли ошибок.** Первая карточка «Анализа ошибок» превращает сигнал контрольной карты в список клиник. Период из фильтра «Обработано IPS» сравнивается с опорным периодом фазы из `mart_egisz.dim_control_chart_phases` — той же базой, от которой XmR-карта управленческого дашборда считает центр; фаза берётся по последней неделе периода. Доля ошибок считается на корпусе XmR: отказы асинхронного ответа РЭМД от документов с ответом РЭМД.
 
 | Столбец | Смысл |
 | ------- | ----- |
@@ -681,7 +694,7 @@ flowchart TD
 | Вклад, п.п. | Превышение клиники над опорной долей в периоде минус то же превышение в опорном периоде, в процентных пунктах общей доли. Сумма вкладов клиник равна изменению итога |
 | За счёт доли ошибок, п.п. | Вес клиники в периоде × изменение её собственной доли ошибок: клиника стала ошибаться чаще или реже |
 | За счёт объёма, п.п. | Остаток вклада: изменилась доля клиники в потоке при прежней доле ошибок. У новых клиник и у пропавших из потока весь вклад объёмный |
-| Основной тип ошибки за период | Самый частый тип отказа (`document_error.error_type`) по документам клиники с ошибкой за период |
+| Основной тип ошибки за период | Самый частый тип отказа (`document_errors.error_type`) по документам клиники с ошибкой за период |
 
 Клиники стоят по направлению общего изменения: первыми те, кто его дал. Положительный вклад подсвечен красным, отрицательный — зелёным. Вклады клиник гасят друг друга, поэтому накопленный процент не выводится: по неделе 14.09.2026 положительные вклады в сумме дали +9,9 п.п., отрицательные −6,7, итог +3,2. Фильтры «Клиника», «Тип СЭМД» и «Тип ошибки» действуют на оба периода; при выбранном типе ошибки считается доля документов с этим типом. Пока опорный период фазы не закрыт, сравнения нет, как и границ на XmR-карте. Сюда же ведёт клик по точке XmR-карты: период ставится на неделю точки, срез по клинике переносится.
 
@@ -732,7 +745,7 @@ flowchart TD
 
 Аудитория — руководство. Оперативный контроль и разбор причин остаются на дашборде «Интеграция с ЕГИСЗ»; управленческий отвечает на вопросы шире: растёт ли ценность, в норме ли качество, сколько выручки под риском. Два фильтра шапки действуют на все три вкладки; часть карточек «Обзора» намеренно не реагирует на «Период» (см. ниже). Текстовых подписей у рядов нет: знаменатель и окно названы в имени карточки («% от ответов», «за последние 7 дней», «(ориентир)»), подробности — в её описании; единственная текстовая оговорка — о плоской ставке рублёвых карточек. Все вкладки собирает генератор `scripts/apply_dashboard_plan.py` (`executive_overview_cards`, `executive_periodic_cards`); JSON дашборда вручную не правится.
 
-**Единый корпус долей качества.** Доля успеха и отказов РЭМД считаются от документов **с ответом РЭМД** (`status IN ('success','async_error')`). Это тот же корпус, что в дашбордах «Интеграция с ЕГИСЗ» и «Клиентский» и в витринах `rpt_documents_weekly` / `rpt_documents_monthly` (`docs_total = status <> 'sent'`), поэтому одна и та же метрика в разных отчётах сходится. Документы «в обработке» в знаменатель не входят: их исход ещё не известен, а включение обнуляет метрику при всплеске очереди. От всех документов периода считаются две доли: «Ответ не получен, %» — это состояние отправки, а не исход регистрации, и «Ошибок связи, %» — ошибка связи статус не меняет и бывает у документа с любым исходом, в том числе когда не доставлена сама подача.
+**Единый корпус долей качества.** Доля успеха и отказов РЭМД считаются от документов **с ответом РЭМД** (`status IN ('success','async_error')`). Это тот же корпус, что в дашбордах «Интеграция с ЕГИСЗ» и «Клиентский» и в витринах `serving_egisz.documents_weekly` / `serving_egisz.documents_monthly` (`docs_total = status <> 'sent'`), поэтому одна и та же метрика в разных отчётах сходится. Документы «в обработке» в знаменатель не входят: их исход ещё не известен, а включение обнуляет метрику при всплеске очереди. От всех документов периода считаются две доли: «Ответ не получен, %» — это состояние отправки, а не исход регистрации, и «Ошибок связи, %» — ошибка связи статус не меняет и бывает у документа с любым исходом, в том числе когда не доставлена сама подача.
 
 | Вкладка | Ряд | Что отвечает | Реакция на «Период» |
 | ------- | --- | ------------ | ------------------- |
@@ -754,9 +767,9 @@ flowchart TD
 
 **Отказы РЭМД и ошибки связи — раздельно.** Итоговая доля ошибок (отказы РЭМД от документов с ответом) остаётся показателем уровня сервиса за закрытый период. У двух причин разные ответственные: отказ РЭМД — содержание СЭМД, ошибка связи — транспорт (VPN ГОСТ). Ошибка связи статус не меняет, поэтому в стек исходов не входит: её доля — своей карточкой и столбцами сводки, от всех документов периода, включая документы без ответа.
 
-**Время до ответа РЭМД и новые подключения.** Перцентили времени (`delivery_seconds`: от первой подачи до последнего ответа РЭМД, только успех и отказ) и когорты JID считаются на грейне документа из `rpt_documents`: перцентили и первые документы JID из периодных счётчиков не собираются. Когорта — период первого документа JID; JID, приславшие первый документ в первые 30 дней истории DWH, в когорты не входят — начало истории у них не совпадает с подключением. Доля успеха за первые 30 дней заполняется, когда окно закрыто у всех JID когорты. Отчётный пояс в запросе времени вычисляется один раз (`WITH calendar AS MATERIALIZED`): вызов `report_timezone()` на каждой строке растягивал карточку с 3 до 30 секунд.
+**Время до ответа РЭМД и новые подключения.** Перцентили времени (`delivery_seconds`: от первой подачи до последнего ответа РЭМД, только успех и отказ) и когорты JID считаются на грейне документа из `serving_egisz.documents_current`: перцентили и первые документы JID из периодных счётчиков не собираются. Когорта — период первого документа JID; JID, приславшие первый документ в первые 30 дней истории DWH, в когорты не входят — начало истории у них не совпадает с подключением. Доля успеха за первые 30 дней заполняется, когда окно закрыто у всех JID когорты. Отчётный пояс в запросе времени вычисляется один раз (`WITH calendar AS MATERIALIZED`): вызов `report_timezone()` на каждой строке растягивал карточку с 3 до 30 секунд.
 
-**Контрольная карта XmR с фазами.** Точка — доля ошибок закрытой недели. Центр и средний скользящий размах считаются только по **опорному периоду фазы**, границы «центр ± 2,66 × mR̄» продлеваются вперёд до начала следующей фазы; нижняя граница не ниже нуля. Фазы хранятся в справочнике `dim_control_chart_phases`: фаза — отрезок с неизменными условиями работы, опорный период задан датами, поэтому границы закрытых недель не зависят от момента расчёта. Пока опорный период не закрыт или в нём нет пары соседних недель, у фазы нет центра и границ, а плитка статуса пишет «Нет опорного периода». Правила серий действуют внутри фазы: выход за границу; 8 недель подряд по одну сторону от центра; 2 из 3 недель дальше 2σ (σ = mR̄ / 1,128) по одну сторону. Сработавшая неделя отмечается рядом «Сигнал, %» на карте, текст правил — столбцом «Сигнал XmR» сводки, последняя закрытая неделя — плиткой верхнего ряда. Срез по клинике пересчитывает центр и границы по опорным неделям клиники. Месячная карта появится после 12 закрытых месяцев.
+**Контрольная карта XmR с фазами.** Точка — доля ошибок закрытой недели. Центр и средний скользящий размах считаются только по **опорному периоду фазы**, границы «центр ± 2,66 × mR̄» продлеваются вперёд до начала следующей фазы; нижняя граница не ниже нуля. Фазы хранятся в справочнике `mart_egisz.dim_control_chart_phases`: фаза — отрезок с неизменными условиями работы, опорный период задан датами, поэтому границы закрытых недель не зависят от момента расчёта. Пока опорный период не закрыт или в нём нет пары соседних недель, у фазы нет центра и границ, а плитка статуса пишет «Нет опорного периода». Правила серий действуют внутри фазы: выход за границу; 8 недель подряд по одну сторону от центра; 2 из 3 недель дальше 2σ (σ = mR̄ / 1,128) по одну сторону. Сработавшая неделя отмечается рядом «Сигнал, %» на карте, текст правил — столбцом «Сигнал XmR» сводки, последняя закрытая неделя — плиткой верхнего ряда. Срез по клинике пересчитывает центр и границы по опорным неделям клиники. Месячная карта появится после 12 закрытых месяцев.
 
 **Переход из XmR-карты к причинам.** Клик по точке карты открывает дашборд «Интеграция с ЕГИСЗ» на вкладке «Анализ ошибок» за неделю этой точки; срез по клинике переносится. Первая карточка вкладки — «Вклад клиник в изменение доли ошибок» против того же опорного периода фазы: она показывает, какие клиники дали отклонение (см. §«[«Интеграция с ЕГИСЗ»](#интеграция-с-егисз-01_integration_egiszjson)»). Дату из native-запроса Metabase передаёт в фильтр одним днём, поэтому неделя уходит в фильтр «Обработано IPS» текстовым диапазоном `ГГГГ-ММ-ДД~ГГГГ-ММ-ДД` из столбца «Период». На графике этот столбец не выводится.
 
@@ -781,7 +794,7 @@ flowchart TD
 | Ответ на три вопроса первым рядом | Верхний ряд «Обзора»: растём ли, в норме ли качество, сколько выручки под риском; остальные ряды объясняют эти три числа |
 | Значение вместе с изменением | Плитка «Растём ли» и раздел «Пульс» показывают не только текущее число, но и сдвиг к предыдущей точке ряда |
 | Скользящее окно против недельной сезонности | Семисуточное окно вместо календарной недели: будни и выходные не искажают сравнение; «Пульс» шагает по дням, плитка роста — по неделям по полным суткам |
-| Отделение шума от сигнала | Контрольная карта XmR по закрытым неделям с фазами: центр и границы «центр ± 2,66 × средний скользящий размах» — по опорному периоду фазы из `dim_control_chart_phases`, продлеваются вперёд; правила серий — выход за границу, 8 подряд по одну сторону, 2 из 3 за 2σ. Прежняя XmR считала центр и границы по всей истории и смешивала фазы: сдвиг доли ошибок с 19,6 % до 25,0 % с недели 10.08.2026 расширил коридор до 16,1–29,7 %, и карта не показала ни одного сигнала. p-карта не подходит: при 55–77 тыс. документов в неделю биномиальный коридор ±3σ — около ±0,5 п.п. против фактического разброса ±3–4 п.п.; она давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно поглощал сдвиг уровня. Месячная карта появится после 12 закрытых месяцев |
+| Отделение шума от сигнала | Контрольная карта XmR по закрытым неделям с фазами: центр и границы «центр ± 2,66 × средний скользящий размах» — по опорному периоду фазы из `mart_egisz.dim_control_chart_phases`, продлеваются вперёд; правила серий — выход за границу, 8 подряд по одну сторону, 2 из 3 за 2σ. Прежняя XmR считала центр и границы по всей истории и смешивала фазы: сдвиг доли ошибок с 19,6 % до 25,0 % с недели 10.08.2026 расширил коридор до 16,1–29,7 %, и карта не показала ни одного сигнала. p-карта не подходит: при 55–77 тыс. документов в неделю биномиальный коридор ±3σ — около ±0,5 п.п. против фактического разброса ±3–4 п.п.; она давала сигнал в 8 неделях из 10, а скользящий центр за 12 недель постепенно поглощал сдвиг уровня. Месячная карта появится после 12 закрытых месяцев |
 | Сегментация выручки по ценности | Разбивка JID по объёму потока с «₽ за успешный СЭМД»: под плоской ставкой спящие клиники дают самую маржинальную и самую рисковую выручку |
 | Метрика с адресом действия | Каждой величине риска соответствует список: «Клиник без успехов» → «Очередь оттока» с разбивкой по исходам и основным типом ошибки; «Замолчавших клиник» → «Очередь замолчавших клиник» с датой последнего документа |
 | Явная граница достоверности | Ориентировочный характер рублёвых карточек, смещение JID/ЮЛ и нехватка истории для retention-метрик заявлены в описаниях карточек и единственной текстовой оговорке о ставке, а не подразумеваются |
@@ -793,11 +806,11 @@ flowchart TD
 | Вкладка | Фокус | Учёт отправленных |
 | ------- | ----- | ----------------- |
 | Обзор | Объёмы и состояния регистрации, динамика, топ СЭМД | Исходы плюс «В обработке» |
-| Ошибки регистрации ЭМД | Категории, типы, динамика, топ СЭМД по ошибкам (`mart_egisz_selfservice.document_error`; у ошибки связи категории нет — её место занимает вид) | Только документы с ответом |
-| Документы | Журнал с финальным ответом РЭМД | Отдельная карточка «Отправленные — клиент» (`rpt_documents_sent`) |
-| Типы СЭМД в обмене | Типы СЭМД, которые клиника фактически отправляет (`rpt_clinic_semd_activity`, пара клиника + код СЭМД) | Весь обмен |
+| Ошибки регистрации ЭМД | Категории, типы, динамика, топ СЭМД по ошибкам (`serving_egisz.document_errors`; у ошибки связи категории нет — её место занимает вид) | Только документы с ответом |
+| Документы | Журнал с финальным ответом РЭМД | Отдельная карточка «Отправленные — клиент» (`serving_egisz.documents_sent`) |
+| Типы СЭМД в обмене | Типы СЭМД, которые клиника фактически отправляет (`serving_egisz.clinic_semd_activity`, пара клиника + код СЭМД) | Весь обмен |
 
-Дашборд `08_client_bianalytic.json`: карточка «Документов за период — BI» считает все строки `rpt_documents` (включая отправленные без ответа); доли «% успеха» — только по итоговым статусам (`success`, `async_error`).
+Дашборд `08_client_bianalytic.json`: карточка «Документов за период — BI» считает все строки `serving_egisz.documents_current` (включая отправленные без ответа); доли «% успеха» — только по итоговым статусам (`success`, `async_error`).
 
 ### Провижининг и публичная ссылка
 
@@ -812,15 +825,15 @@ Metabase Models → витрины DWH:
 
 | Модель | Витрина | Детализация |
 | ------ | ------- | ----- |
-| Документы (`01_documents`) | `rpt_documents` | 1 строка = 1 логический документ (текущая версия) |
-| Разбивка ошибок (`02_error_breakdown`) | `mart_egisz_selfservice.document_error` | 1 строка = 1 ошибка текущего состояния документа: вид, категория, тип, статус документа; без исходного текста |
-| Отправленные (`03_no_response`) | `rpt_documents_sent` | 1 строка = 1 документ без ответа |
-| История запроса документов (`05_document_file_request`) | `rpt_document_file_request` | 1 строка = 1 запрос `getDocumentFile` по зарегистрированному ЭМД |
-| Сбои транспорта (`04_network_errors`) | `mart_egisz_selfservice.network_error` | 1 строка = 1 ошибка связи по времени сообщения; без исходного текста |
+| Документы (`01_documents`) | `serving_egisz.documents_current` | 1 строка = 1 логический документ (текущая версия) |
+| Разбивка ошибок (`02_error_breakdown`) | `serving_egisz.document_errors` | 1 строка = 1 ошибка текущего состояния документа: вид, категория, тип, статус документа; без исходного текста |
+| Отправленные (`03_no_response`) | `serving_egisz.documents_sent` | 1 строка = 1 документ без ответа |
+| История запроса документов (`05_document_file_request`) | `serving_egisz.document_file_requests` | 1 строка = 1 запрос `getDocumentFile` по зарегистрированному ЭМД |
+| Сбои транспорта (`04_network_errors`) | `serving_egisz.network_errors` | 1 строка = 1 ошибка связи по времени сообщения; без исходного текста |
 
 Простые срезы и drill-through — через Models и Query Builder; pivot, stacked и сложный SQL — native-запросы к витринам (`rpt_*`, `mart_egisz*`). Привязка фильтров к полям (`metabase-field-filters`) хранится в JSON дашборда; JSON дашборда служит единым источником правил привязки.
 
-Объекты DWH адресуются ссылкой «схема.объект» — и в SQL карточек, и в `table_ref` привязок и моделей. Импорт проверяет наличие объектов, столбцов моделей и собирает метаданные Metabase по схемам `public`, `stg_egisz`, `mart_egisz`, `mart_egisz_selfservice` (`DWH_SCHEMAS_REGEX` в `setup-dashboards.sh`). Подключение Metabase к DWH должно синхронизировать все четыре схемы: без этого поля фильтров не найдутся и импорт остановится на ожидании метаданных.
+Объекты DWH адресуются ссылкой «схема.объект» — и в SQL карточек, и в `table_ref` привязок и моделей. Импорт проверяет наличие объектов, столбцов моделей и собирает метаданные Metabase по схемам `stg_egisz`, `mart_egisz_admin`, `mart_egisz`, `serving_egisz` (`DWH_SCHEMAS_REGEX` в `setup-dashboards.sh`). Подключение Metabase к DWH должно синхронизировать все эти схемы: без этого поля фильтров не найдутся и импорт остановится на ожидании метаданных.
 
 ---
 

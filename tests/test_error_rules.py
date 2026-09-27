@@ -428,16 +428,16 @@ def test_items_take_priority_over_registry_errors_and_fallback(con):
     ("sendRegisterDocumentResult", "processing", None, False, False, None, None),
 ])
 def test_async_outcome(con, action, raw_status, document_status, fault, error_ilike, registry_status, expected):
-    assert one(con, "SELECT public.classify_async_status(%s, %s, %s, %s, %s, %s)",
+    assert one(con, "SELECT stg_egisz.classify_async_status(%s, %s, %s, %s, %s, %s)",
                action, raw_status, document_status, fault, error_ilike, registry_status) == expected
 
 
 def test_parse_exchangelog_row_extracts_faultcode_last(con):
-    row = one(con, "SELECT (public.parse_exchangelog_row(%s, NULL, NULL)).error_code",
+    row = one(con, "SELECT (stg_egisz.parse_exchangelog_row(%s, NULL, NULL)).error_code",
               "<soap:Fault><faultcode>soap:Server</faultcode><faultstring>x</faultstring></soap:Fault>")
     assert row == "SERVER"
     # <code>/<errorCode> имеют приоритет над faultcode
-    row = one(con, "SELECT (public.parse_exchangelog_row(%s, NULL, NULL)).error_code",
+    row = one(con, "SELECT (stg_egisz.parse_exchangelog_row(%s, NULL, NULL)).error_code",
               "<r><code>VALIDATION_ERROR</code><faultcode>soap:Server</faultcode></r>")
     assert row == "VALIDATION_ERROR"
 
@@ -682,7 +682,7 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
 def test_current_errors_follow_last_async_response(con):
     """Ошибки текущего состояния — элементы последнего асинхронного ответа и ошибки связи
     после него; сбой доставки до ответа к текущему состоянию не относится."""
-    if one(con, "SELECT to_regclass('stg_egisz.document_error_current')") is None:
+    if one(con, "SELECT to_regclass('stg_egisz.document_errors_current')") is None:
         pytest.skip("витрина текущих ошибок не построена; проверять нечего")
     doc = str(uuid.uuid4())
 
@@ -700,10 +700,10 @@ def test_current_errors_follow_last_async_response(con):
         try:
             for logid, age, status, details in rows:
                 cur.execute(
-                    "INSERT INTO transactions (logid, log_date, dwh_id, status, error_details) "
+                    "INSERT INTO stg_egisz.exchange_messages (logid, log_date, dwh_id, status, error_details) "
                     "VALUES (%s, now() - %s::interval, %s, %s, %s::jsonb)",
                     (logid, age, doc, status, json.dumps(details)))
-            cur.execute("SELECT pg_get_viewdef('stg_egisz.document_error_current'::regclass, true)")
+            cur.execute("SELECT pg_get_viewdef('stg_egisz.document_errors_current'::regclass, true)")
             view_sql = cur.fetchone()[0].rstrip().rstrip(";")
             cur.execute("SELECT error_text FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no", (doc,))
             assert [r[0] for r in cur.fetchall()] == ["отказ", "после ответа"]
@@ -715,20 +715,20 @@ def test_current_errors_follow_last_async_response(con):
 # --- Реестр наименований справочников ФНСИ ---------------------------------------------
 
 def test_nsi_dictionary_matches_published_805_revision(con):
-    assert one(con, "SELECT count(*) FROM dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
     assert one(con, """
-        SELECT count(*) FROM dim_nsi_dictionary
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary
         WHERE source_oid <> %s OR source_version <> %s
            OR name IS NULL OR btrim(name) = ''
     """, *NSI_DICTIONARY_SOURCE) == 0
 
 
 def test_nsi_dictionary_agrees_with_805_snapshot(con):
-    if one(con, "SELECT count(*) FROM dim_nsi_semd_guide_dictionary") == 0:
+    if one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_dictionary") == 0:
         pytest.skip("снимок НСИ 805 не загружен; сверять нечего")
     assert one(con, """
-        SELECT count(*) FROM dim_nsi_dictionary d
-        JOIN (SELECT DISTINCT dict_oid, dict_name FROM dim_nsi_semd_guide_dictionary) g
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary d
+        JOIN (SELECT DISTINCT dict_oid, dict_name FROM mart_egisz.dim_nsi_semd_guide_dictionary) g
           ON g.dict_oid = d.oid
         WHERE g.dict_name <> d.name
     """) == 0
@@ -736,35 +736,35 @@ def test_nsi_dictionary_agrees_with_805_snapshot(con):
 
 def test_nsi_dictionary_short_name_only_shortens(con):
     assert one(con, """
-        SELECT count(*) FROM dim_nsi_dictionary
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary
         WHERE short_name IS NOT NULL
           AND (btrim(short_name) = '' OR length(short_name) >= length(name))
     """) == 0
-    assert one(con, "SELECT short_name FROM dim_nsi_dictionary WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
+    assert one(con, "SELECT short_name FROM mart_egisz.dim_nsi_dictionary WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
 
 
 def test_document_error_names_every_registered_dictionary(con):
     """Наименование справочника пусто только у OID вне 805."""
-    if one(con, "SELECT to_regclass('mart_egisz_selfservice.document_error')") is None:
+    if one(con, "SELECT to_regclass('serving_egisz.document_errors')") is None:
         pytest.skip("витрина ошибок документа не построена; проверять нечего")
     assert one(con, """
-        SELECT count(*) FROM mart_egisz_selfservice.document_error e
+        SELECT count(*) FROM serving_egisz.document_errors e
         WHERE e.nsi_dictionary_oid IS NOT NULL
           AND e.nsi_dictionary_name IS NULL
-          AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = e.nsi_dictionary_oid)
+          AND EXISTS (SELECT 1 FROM mart_egisz.dim_nsi_dictionary d WHERE d.oid = e.nsi_dictionary_oid)
     """) == 0
 
 
 def test_nsi_dictionary_schema_contract() -> None:
     """Комментарий к таблице — единственное место, где записано назначение реестра и его
     потребитель."""
-    assert "CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (" in SCHEMA_SQL
-    assert "COMMENT ON TABLE dim_nsi_dictionary IS" in SCHEMA_SQL
-    assert "COMMENT ON COLUMN dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionary (" in SCHEMA_SQL
+    assert "COMMENT ON TABLE mart_egisz.dim_nsi_dictionary IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN mart_egisz.dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
     assert "rpt_error_messages" not in SCHEMA_SQL
     assert "rpt_error_breakdown" not in SCHEMA_SQL
-    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS dim_nsi_dictionary ("):]
+    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionary ("):]
     assert "short_name text," in dictionary_ddl[:dictionary_ddl.index(");")]
     # редакция объявляется сидом, а не умолчанием колонки
     assert "SELECT v.oid, v.name, '%s'" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
-    assert "DELETE FROM dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
+    assert "DELETE FROM mart_egisz.dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL

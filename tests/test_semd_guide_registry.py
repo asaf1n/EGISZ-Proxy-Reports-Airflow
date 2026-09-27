@@ -139,27 +139,27 @@ def test_validate_references_rejects_alias_colliding_with_active_oid(loader) -> 
 
 
 def test_semd_guide_schema_contract() -> None:
-    assert "CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide (" in SCHEMA_SQL
-    assert "CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_alias (" in SCHEMA_SQL
-    assert "CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_dictionary (" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guide (" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guide_alias (" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guide_dictionary (" in SCHEMA_SQL
     assert "PRIMARY KEY (guide_oid, dict_oid)" in SCHEMA_SQL
-    assert SCHEMA_SQL.count("REFERENCES dim_nsi_semd_guide (oid) ON DELETE CASCADE") == 2
+    assert SCHEMA_SQL.count("REFERENCES mart_egisz.dim_nsi_semd_guide (oid) ON DELETE CASCADE") == 2
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_nsi_semd_guide_dictionary_source_id" in SCHEMA_SQL
     assert "CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_dictionary_dict_oid" in SCHEMA_SQL
     assert "CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_alias_guide" in SCHEMA_SQL
 
     for table in ("dim_nsi_semd_guide", "dim_nsi_semd_guide_alias", "dim_nsi_semd_guide_dictionary"):
-        assert f"COMMENT ON TABLE {table} IS" in SCHEMA_SQL
+        assert f"COMMENT ON TABLE mart_egisz.{table} IS" in SCHEMA_SQL
 
 
 def test_guide_oid_column_is_named_by_content() -> None:
     """Колонка названа по содержанию: выгрузка ФНСИ кладёт OID руководства в GIT_LINK."""
-    semd_types_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS dim_semd_types ("):]
+    semd_types_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_semd_types ("):]
     semd_types_ddl = semd_types_ddl[:semd_types_ddl.index(");")]
     assert "ig_oid text," in semd_types_ddl
     assert "git_link" not in semd_types_ddl
     assert (
-        "INSERT INTO dim_semd_types (code, type_code, name, level, format_code, "
+        "INSERT INTO mart_egisz.dim_semd_types (code, type_code, name, level, format_code, "
         "start_date, end_date, implementation_guide, ig_oid)" in SCHEMA_SQL
     )
 
@@ -167,30 +167,30 @@ def test_guide_oid_column_is_named_by_content() -> None:
 def test_field_swap_and_branch_number_are_documented() -> None:
     """Эти два комментария — вся память о том, как устроена связь: без них колонку ig_oid
     «чинят» обратно в git_link, а semd_id принимают за код вида документации."""
-    assert "COMMENT ON COLUMN dim_semd_types.ig_oid IS" in SCHEMA_SQL
-    assert "COMMENT ON COLUMN dim_semd_types.implementation_guide IS" in SCHEMA_SQL
-    assert "COMMENT ON COLUMN dim_nsi_semd_guide.semd_id IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN mart_egisz.dim_semd_types.ig_oid IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN mart_egisz.dim_semd_types.implementation_guide IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guide.semd_id IS" in SCHEMA_SQL
 
-    swap_comment = SCHEMA_SQL[SCHEMA_SQL.index("COMMENT ON COLUMN dim_semd_types.ig_oid IS"):]
+    swap_comment = SCHEMA_SQL[SCHEMA_SQL.index("COMMENT ON COLUMN mart_egisz.dim_semd_types.ig_oid IS"):]
     assert "GIT_LINK" in swap_comment[:400]
 
 
 def test_semd_dictionaries_view_contract() -> None:
-    assert "CREATE OR REPLACE VIEW public.dim_semd_guide_oid AS" in FUNCTIONS_SQL
+    assert "CREATE OR REPLACE VIEW mart_egisz.dim_semd_guide_oid AS" in FUNCTIONS_SQL
 
-    assert "DROP VIEW IF EXISTS public.rpt_semd_dictionaries CASCADE;" in sql_section(
+    assert "DROP VIEW IF EXISTS serving_egisz.semd_dictionaries CASCADE;" in sql_section(
         VIEWS_SQL, "drop_dependents"
     )
-    assert "DROP VIEW IF EXISTS public.rpt_semd_guides CASCADE;" in sql_section(
+    assert "DROP VIEW IF EXISTS serving_egisz.semd_guides CASCADE;" in sql_section(
         VIEWS_SQL, "drop_dependents"
     )
 
     section = sql_section(VIEWS_SQL, "semd_guides")
-    assert "CREATE OR REPLACE VIEW public.rpt_semd_guides AS" in section
-    assert "CREATE OR REPLACE VIEW public.rpt_semd_dictionaries AS" in section
-    assert "LEFT JOIN public.dim_semd_guide_oid r ON r.published_oid" in section
-    assert "FROM public.rpt_semd_guides s" in section
-    assert "COMMENT ON VIEW public.rpt_semd_dictionaries IS" in section
+    assert "CREATE OR REPLACE VIEW serving_egisz.semd_guides AS" in section
+    assert "CREATE OR REPLACE VIEW serving_egisz.semd_dictionaries AS" in section
+    assert "LEFT JOIN mart_egisz.dim_semd_guide_oid r ON r.published_oid" in section
+    assert "FROM serving_egisz.semd_guides s" in section
+    assert "COMMENT ON VIEW serving_egisz.semd_dictionaries IS" in section
 
 
 def test_loader_contains_no_ddl() -> None:

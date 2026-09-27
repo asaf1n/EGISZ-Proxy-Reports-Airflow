@@ -33,17 +33,6 @@ DWH_POOL = "dwh_postgres"
 
 RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logtext", "msgtext", "uri")
 
-# Порядок обязателен: опубликованные ошибки, недельный и месячный слои читают текущие
-# ошибки документа.
-REPORT_MARTS = (
-    "stg_egisz.document_error_current",
-    "mart_egisz_selfservice.document_error",
-    "public.rpt_documents_weekly",
-    "mart_egisz.agg_document_error_weekly",
-    "public.rpt_documents_monthly",
-    "mart_egisz.agg_document_error_monthly",
-)
-
 # Дефолты настроек DAG; переопределяются переменной окружения EGISZ_<KEY> (env, не Airflow Variables).
 DEFAULTS: dict[str, str | int] = {
     "maintenance_schedule": "@daily",
@@ -67,13 +56,13 @@ def get_int(key: str) -> int:
     return int(_setting(key))
 
 
-PG_SESSION_OPTIONS = "-c search_path=public"
+PG_SESSION_OPTIONS = "-c search_path=pg_catalog"
 
 
 def connect_pg(conn_params: Any) -> psycopg2.extensions.connection:
     try:
-        # Схема задаётся явно: настройка search_path на уровне базы (чужие схемы в той же
-        # БД) иначе подменяет неквалифицированные имена таблиц и функций конвейера.
+        # Объекты конвейера адресуются схемой слоя; search_path без пользовательских схем
+        # не даёт настройке уровня базы (чужие схемы в той же БД) подменить имя без схемы.
         if isinstance(conn_params, str):
             return psycopg2.connect(conn_params, options=PG_SESSION_OPTIONS)
         return psycopg2.connect(
@@ -149,7 +138,7 @@ def get_cursors(con: psycopg2.extensions.connection, pipeline: str) -> dict[str,
     with con.cursor() as cur:
         cur.execute(
             "SELECT extract_logid_cursor, transform_logid_cursor, extract_egmid_cursor "
-            "FROM etl_state WHERE pipeline = %s",
+            "FROM etl_meta.egisz_etl_state WHERE pipeline = %s",
             (pipeline,),
         )
         row = cur.fetchone()
@@ -176,7 +165,7 @@ def _strip_nul(value: Any) -> Any:
 
 
 def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]] | list[tuple[Any, ...]]) -> None:
-    """Load EXCHANGELOG rows into exchangelog_raw without transforming them in Python."""
+    """Load EXCHANGELOG rows into raw_egisz.exchangelog without transforming them in Python."""
     values: list[tuple[Any, ...]] = []
     for row in rows:
         if isinstance(row, dict):
@@ -197,7 +186,7 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
         execute_values(
             cur,
             """
-            INSERT INTO exchangelog_raw (logid, logdate, createdate, msgid, logstate, logtext, msgtext, uri)
+            INSERT INTO raw_egisz.exchangelog (logid, logdate, createdate, msgid, logstate, logtext, msgtext, uri)
             VALUES %s
             ON CONFLICT (logid, createdate) DO UPDATE SET
                 logdate = EXCLUDED.logdate,
@@ -207,7 +196,7 @@ def load_raw_logs(con: psycopg2.extensions.connection, rows: list[dict[str, Any]
                 logtext = EXCLUDED.logtext,
                 msgtext = EXCLUDED.msgtext,
                 uri = EXCLUDED.uri,
-                loaded_at = now()
+                _loaded_at = now()
             """,
             values,
         )
@@ -227,7 +216,7 @@ def transform_raw_to_facts(
     """
     with con.cursor() as cur:
         cur.execute(
-            "SELECT public.transform_raw_to_facts(%s, %s)",
+            "SELECT mart_egisz.transform_raw_to_facts(%s, %s)",
             (from_logid, to_logid),
         )
         result = cur.fetchone()[0] or {}
@@ -236,7 +225,7 @@ def transform_raw_to_facts(
 
 
 def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
-    """Run ANALYZE outside a transaction (PostgreSQL forbids ANALYZE inside one).
+    """Run ANALYZE statements in autocommit: each one commits its statistics at once.
 
     Read-only SELECTs leave psycopg2 in an open transaction; commit first so
     set_session(autocommit=True) is legal.
@@ -254,30 +243,15 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
         con.set_session(autocommit=previous_autocommit)
 
 
-def _refresh_matview(con: psycopg2.extensions.connection, qualified_name: str) -> None:
-    """Refresh a materialized view after facts change.
+def refresh_report_marts(con: psycopg2.extensions.connection) -> None:
+    """Refresh materialized marts after facts change.
 
-    CONCURRENTLY (needs the unique index + a populated matview) keeps dashboard reads
-    unblocked during the ~seconds-long rebuild; falls back to a plain refresh if the
-    matview was never populated. Runs in autocommit — REFRESH CONCURRENTLY cannot run
-    inside a transaction block.
+    Состав и порядок витрин определяет serving_egisz.refresh_report_marts(): обновление
+    CONCURRENTLY не блокирует чтение дашбордов, статистика собирается там же.
     """
+    with con.cursor() as cur:
+        cur.execute("SELECT serving_egisz.refresh_report_marts()")
     con.commit()
-    previous_autocommit = con.autocommit
-    con.set_session(autocommit=True)
-    try:
-        with con.cursor() as cur:
-            try:
-                cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {qualified_name}")
-            except psycopg2.Error as exc:
-                log.warning(
-                    "CONCURRENTLY refresh of %s failed (%s); falling back to plain refresh",
-                    qualified_name,
-                    exc,
-                )
-                cur.execute(f"REFRESH MATERIALIZED VIEW {qualified_name}")
-    finally:
-        con.set_session(autocommit=previous_autocommit)
 
 
 def _dwh_connection():
@@ -317,10 +291,10 @@ def count_source_logids(con: Any, *, low: int, high: int) -> int:
 
 
 def count_raw_logids(con: psycopg2.extensions.connection, *, low: int, high: int) -> int:
-    """Число строк exchangelog_raw в том же диапазоне."""
+    """Число строк raw_egisz.exchangelog в том же диапазоне."""
     with con.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM public.exchangelog_raw WHERE logid >= %s AND logid <= %s",
+            "SELECT COUNT(*) FROM raw_egisz.exchangelog WHERE logid >= %s AND logid <= %s",
             (int(low), int(high)),
         )
         row = cur.fetchone()
@@ -346,10 +320,10 @@ def fetch_raw_logids_range(
     low: int,
     high: int,
 ) -> set[int]:
-    """LOGID, уже присутствующие в exchangelog_raw, в том же диапазоне."""
+    """LOGID, уже присутствующие в raw_egisz.exchangelog, в том же диапазоне."""
     with con.cursor() as cur:
         cur.execute(
-            "SELECT logid FROM public.exchangelog_raw WHERE logid >= %s AND logid <= %s",
+            "SELECT logid FROM raw_egisz.exchangelog WHERE logid >= %s AND logid <= %s",
             (int(low), int(high)),
         )
         return {int(row[0]) for row in cur.fetchall()}
@@ -427,7 +401,7 @@ def check_journal_window(
     lookback_days: int,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Сверка числа строк источника и exchangelog_raw в окне проверки.
+    """Сверка числа строк источника и raw_egisz.exchangelog в окне проверки.
 
     Сравниваются счётчики, а не множества: при исправной выгрузке они совпадают, и задача
     завершается пропуском. Разность множеств — только по расхождению, чтобы найти
@@ -467,7 +441,7 @@ def check_journal_window(
         "Догрузка %s строк(и) журнала в LOGID [%s, %s].", len(missing), low, high
     )
     load_raw_logs(pg_conn, fetch_exchangelog_by_logids(fb_conn, missing))
-    run_analyze(pg_conn, "ANALYZE public.exchangelog_raw")
+    run_analyze(pg_conn, "ANALYZE raw_egisz.exchangelog")
     batch = transform_missing_windows(pg_conn, missing)
     return {"missing": len(missing), **batch}
 
@@ -520,7 +494,7 @@ def egisz_maintenance_pipeline() -> None:
         pg_conn = _dwh_connection()
         try:
             with pg_conn.cursor() as cur:
-                cur.execute("SELECT public.ensure_time_partitions(12, 24)")
+                cur.execute("SELECT etl_meta.egisz_ensure_time_partitions(12, 24)")
                 created = int(cur.fetchone()[0] or 0)
             pg_conn.commit()
             log.info("Partition maintenance created %s partition(s).", created)
@@ -539,13 +513,11 @@ def egisz_maintenance_pipeline() -> None:
         pg_conn = _dwh_connection()
         try:
             with pg_conn.cursor() as cur:
-                cur.execute("SELECT public.reclassify_error_details()")
+                cur.execute("SELECT stg_egisz.reclassify_error_details()")
                 updated = int(cur.fetchone()[0] or 0)
             pg_conn.commit()
-            run_analyze(pg_conn, "ANALYZE public.transactions")
-            for matview in REPORT_MARTS:
-                _refresh_matview(pg_conn, matview)
-            run_analyze(pg_conn, *(f"ANALYZE {matview}" for matview in REPORT_MARTS))
+            run_analyze(pg_conn, "ANALYZE stg_egisz.exchange_messages")
+            refresh_report_marts(pg_conn)
             log.info("Error reclassification updated %s message(s).", updated)
             return updated
         finally:

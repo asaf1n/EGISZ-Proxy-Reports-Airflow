@@ -94,7 +94,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
 
     # Обрыв связи с источником не должен снимать разбор того, что уже лежит в raw:
     # задачи источника ретраятся, дальше цепочка идёт по all_done, а границы разбора
-    # читаются из etl_state, а не приходят XCom-ом от выгрузки.
+    # читаются из egisz_etl_state, а не приходят XCom-ом от выгрузки.
     assert 'trigger_rule="all_done"' in src
     assert "def transform(dictionary_changes" in src
 
@@ -112,7 +112,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     # Смена справочников должна пересчитать сохранённый JID документов: первичный
     # путь резолва идёт через dim_organizations.fir_oid, а витрины читают documents.jid.
     assert "def recompute_document_jids" in src
-    assert "public.recompute_document_jids(NULL::text[])" in src
+    assert "mart_egisz.recompute_document_jids(NULL::text[])" in src
     assert "dictionary_changes" in src
     assert "recompute_document_versions" not in src
     assert "affects_resolution" not in src
@@ -129,7 +129,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     # Витрины обновляются там же, где меняется их основание; пропущенный пересчёт
     # не должен снимать обновление.
     assert "def refresh_marts" in src
-    assert "REPORT_MARTS" in src
+    assert "refresh_report_marts(pg_conn)" in src
 
     # Каденция задаётся расписанием DAG-а, а не отметками в базе и не активами.
     assert "should_run_now" not in src
@@ -163,7 +163,7 @@ def test_maintenance_dag_checks_journal_without_moving_cursors() -> None:
     assert "update_cursors(" not in src
 
     assert '_setting("maintenance_schedule")' in src
-    assert "ensure_time_partitions" in src
+    assert "etl_meta.egisz_ensure_time_partitions" in src
     # error_text принадлежит последнему ответу и пишется в transform: сверка по архиву
     # возвращала текст отказа на документы, прошедшие со второй попытки.
     assert "repair_document_error_text" not in src
@@ -186,17 +186,24 @@ def test_dag_files_are_self_contained_units() -> None:
 
 
 def test_report_marts_refresh_matches_sql_layer() -> None:
-    """Список обновляемых витрин в DAG совпадает с материализованными представлениями
-    модуля и порядком их обновления в refresh_report_marts()."""
+    """Состав и порядок обновляемых витрин определяет одна функция
+    serving_egisz.refresh_report_marts(); DAG-и вызывают её и своего списка не держат."""
     views_sql = (PARTS_DIR / "04_views.sql").read_text(encoding="utf-8")
-    declared = set(re.findall(r"CREATE MATERIALIZED VIEW ([a-z_]+\.\w+)", views_sql))
+    declared = re.findall(r"CREATE MATERIALIZED VIEW ([a-z_]+\.\w+)", views_sql)
 
-    marts = load_dag_module("egisz_etl_dag").REPORT_MARTS
-    assert set(marts) == declared
-    # Порядок обязателен: опубликованные ошибки и периодический слой читают текущие
-    # ошибки документа — тот же порядок, что в refresh_report_marts().
-    refresh = views_sql.split("CREATE OR REPLACE FUNCTION public.refresh_report_marts()")[1].split("$$;")[0]
-    assert re.findall(r"REFRESH MATERIALIZED VIEW ([a-z_]+\.\w+);", refresh) == list(marts)
+    refresh = views_sql.split("CREATE OR REPLACE FUNCTION serving_egisz.refresh_report_marts(", 1)[1].split("$$;", 1)[0]
+    marts = re.findall(r"'([a-z_]+\.\w+)'", refresh.split("ARRAY[", 1)[1].split("]::regclass[]", 1)[0])
+    assert set(marts) == set(declared)
+    # Порядок обязателен: ошибки документа и периодический слой читают текущие ошибки документа.
+    assert marts[0] == "stg_egisz.document_errors_current"
+    assert marts.index("serving_egisz.document_errors") < marts.index("serving_egisz.documents_weekly")
+    assert "REFRESH MATERIALIZED VIEW CONCURRENTLY %s" in refresh
+    assert "ANALYZE %s" in refresh
+
+    for dag_file in sorted(DAGS_DIR.glob("egisz_*.py")):
+        source = dag_file.read_text(encoding="utf-8")
+        assert "REPORT_MARTS" not in source, dag_file.name
+        assert 'cur.execute("SELECT serving_egisz.refresh_report_marts()")' in source, dag_file.name
 
     # Идемпотентность каркаса: DROP, CREATE и первичное наполнение — в одном модуле схемы.
     drops = views_sql
@@ -206,13 +213,12 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
     assert "\\i db/04_views.sql" in init
     for matview in declared:
         assert f"DROP MATERIALIZED VIEW IF EXISTS {matview} CASCADE" in drops, matview
-        assert f"REFRESH MATERIALIZED VIEW {matview}" in finalize, matview
         assert f"ANALYZE {matview}" in finalize, matview
 
     # Пересчёты и обновление витрин выполняются накатом только при пустом отчётном слое:
     # полные проходы в теле наката пересекались по блокировкам с приёмом фактов.
-    assert "IF EXISTS (SELECT 1 FROM public.documents)" in finalize
-    assert "AND NOT EXISTS (SELECT 1 FROM public.document_attributes)" in finalize
+    assert "IF EXISTS (SELECT 1 FROM mart_egisz.documents)" in finalize
+    assert "AND NOT EXISTS (SELECT 1 FROM mart_egisz.document_attributes)" in finalize
 
     # REFRESH CONCURRENTLY в DAG-ах требует уникального индекса на каждой витрине.
     for matview in declared:

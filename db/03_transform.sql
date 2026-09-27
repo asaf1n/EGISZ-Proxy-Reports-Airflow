@@ -1,5 +1,5 @@
 -- ============================================================================
--- 03_transform.sql — raw journal -> transactions -> documents
+-- 03_transform.sql — raw journal -> exchange_messages -> documents
 -- Loaded by db/dwh_init.sql. Идемпотентен: повторный прогон не меняет состояние.
 -- ============================================================================
 
@@ -22,19 +22,19 @@
 -- (jid, semd_code, doc_number) = версии одного документа. Провенанс в
 -- document_group_confidence: 'doc_number' (сгруппировано) | 'singleton'. Защитный c_cap:
 -- группы крупнее порога не считаем версиями (страховка от клиник, переиспользующих счётчик
--- протокола) — остаются singleton и видны в rpt_health_versions.
-CREATE OR REPLACE FUNCTION public.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
+-- протокола) — остаются singleton и видны в health_versions.
+CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     affected integer := 0;
     c_cap constant integer := 50;  -- макс. версий в группе
 BEGIN
-    -- Шаг 0: documents.doc_number наполняется из transactions (PROTOCOLID не хранится в
+    -- Шаг 0: documents.doc_number наполняется из exchange_messages (PROTOCOLID не хранится в
     -- documents при INSERT). Только затронутые dwh_id (или весь архив при p_dwh_ids=NULL).
-    UPDATE public.documents d
+    UPDATE mart_egisz.documents d
     SET doc_number = src.docnum
     FROM (
         SELECT
@@ -43,7 +43,7 @@ BEGIN
                 max(NULLIF(btrim(t.doc_number), '')),
                 max(NULLIF(btrim(t.xml_doc_number), ''))
             ) AS docnum
-        FROM public.transactions t
+        FROM stg_egisz.exchange_messages t
         WHERE t.dwh_id IS NOT NULL
           AND (p_dwh_ids IS NULL OR t.dwh_id = ANY (p_dwh_ids))
         GROUP BY t.dwh_id
@@ -59,7 +59,7 @@ BEGIN
             lower(btrim(d.semd_code)) AS semd_norm,
             lower(btrim(d.doc_number)) AS docnum_norm,
             d.document_group_id
-        FROM public.documents d
+        FROM mart_egisz.documents d
         WHERE p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids)
     ),
     -- Пересчёт затрагивает не только переданные экземпляры, но и их соседей по группе:
@@ -73,7 +73,7 @@ BEGIN
 
         SELECT d.dwh_id
         FROM seed s
-        JOIN public.documents d
+        JOIN mart_egisz.documents d
           ON d.jid = s.jid
          AND lower(btrim(d.semd_code)) = s.semd_norm
          AND lower(btrim(d.doc_number)) = s.docnum_norm
@@ -86,7 +86,7 @@ BEGIN
 
         SELECT d.dwh_id
         FROM seed s
-        JOIN public.documents d ON d.document_group_id = s.document_group_id
+        JOIN mart_egisz.documents d ON d.document_group_id = s.document_group_id
         WHERE p_dwh_ids IS NOT NULL
           AND s.document_group_id IS NOT NULL
     ),
@@ -107,7 +107,7 @@ BEGIN
                 ELSE 'singleton'
             END AS conf,
             d.status, d.registered_at, d.last_callback_at, d.first_sent_at, d.request_logid
-        FROM public.documents d
+        FROM mart_egisz.documents d
         JOIN member_ids m ON m.dwh_id = d.dwh_id
     ),
     ranked AS (
@@ -139,7 +139,7 @@ BEGIN
             LEAD(r.dwh_id) OVER (PARTITION BY r.grp_key ORDER BY r.vnum) AS next_dwh
         FROM ranked r
     )
-    UPDATE public.documents d SET
+    UPDATE mart_egisz.documents d SET
         document_group_id         = CASE WHEN f.is_real_group THEN f.grp_key ELSE d.dwh_id END,
         document_group_confidence = CASE WHEN f.is_real_group THEN f.conf ELSE 'singleton' END,
         semd_version_number       = CASE WHEN f.is_real_group THEN f.vnum ELSE 1 END,
@@ -165,19 +165,19 @@ $$;
 --
 -- Правила связки ответа с документом:
 --   getDocumentFile — документ РЭМД по localUid из payload;
---   ответ РЭМД — relatesToMessage -> dim_message_document.document_uid;
+--   ответ РЭМД — relatesToMessage -> stg_egisz.message_registry.document_uid;
 --   ответ ИЭМК — relatesToMessage без document_uid;
 --   повторный ответ РЭМД — dwh_id по emdrId.
 --
 -- Окно строго ограничено (from_logid, to_logid]: связывание не зависит от префикса
 -- журнала, поэтому отсечение партиций по createdate работает на каждом батче.
-CREATE OR REPLACE FUNCTION public.transform_raw_to_facts(
+CREATE OR REPLACE FUNCTION mart_egisz.transform_raw_to_facts(
     from_logid bigint,
     to_logid bigint
 )
 RETURNS jsonb
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     affected integer := 0;
@@ -188,37 +188,37 @@ DECLARE
     raw_cd_min timestamptz;
     raw_cd_max timestamptz;
 BEGIN
-    -- exchangelog_raw партиционирована по createdate; transform фильтрует по logid.
+    -- raw_egisz.exchangelog партиционирована по createdate; transform фильтрует по logid.
     -- Узкий диапазон createdate по батчу включает partition pruning.
     SELECT
         MIN(r.createdate) - interval '1 day',
         MAX(r.createdate) + interval '1 day'
     INTO raw_cd_min, raw_cd_max
-    FROM exchangelog_raw r
+    FROM raw_egisz.exchangelog r
     WHERE r.logid > from_logid
       AND r.logid <= to_logid;
 
     raw_cd_min := COALESCE(raw_cd_min, '-infinity'::timestamptz);
     raw_cd_max := COALESCE(raw_cd_max, 'infinity'::timestamptz);
 
-    -- Разложение payload: каждый LOGID парсится один раз, результат — в transactions (xml_*).
-    -- Анти-джойн идёт по exchangelog_parse_attempts, а не по transactions.xml_parsed_at:
+    -- Разложение payload: каждый LOGID парсится один раз, результат — в exchange_messages (xml_*).
+    -- Анти-джойн идёт по egisz_exchangelog_parse_attempts, а не по exchange_messages.xml_parsed_at:
     -- строки без реквизитов не проходят фильтр вставки, и маркер только на вставленных
     -- строках заставлял перепарсивать их при каждом повторном проходе окна.
     WITH parse_targets AS (
-        SELECT r.logid, r.createdate, r.loaded_at, r.msgid, r.msgtext, r.logtext, r.uri
-        FROM exchangelog_raw r
+        SELECT r.logid, r.createdate, r._loaded_at, r.msgid, r.msgtext, r.logtext, r.uri
+        FROM raw_egisz.exchangelog r
         WHERE r.logid > from_logid
           AND r.logid <= to_logid
           AND r.createdate >= raw_cd_min
           AND r.createdate < raw_cd_max
           AND NOT EXISTS (
               SELECT 1
-              FROM public.exchangelog_parse_attempts pa
+              FROM etl_meta.egisz_exchangelog_parse_attempts pa
               WHERE pa.logid = r.logid
           )
     )
-    INSERT INTO public.transactions (
+    INSERT INTO stg_egisz.exchange_messages (
         logid, log_date,
         msgid, relates_to_msgid,
         xml_dwh_id, xml_local_uid, xml_emdr_id,
@@ -231,14 +231,14 @@ BEGIN
     )
     SELECT
         t.logid,
-        COALESCE(t.createdate, t.loaded_at, now()) AS log_date,
+        COALESCE(t.createdate, t._loaded_at, now()) AS log_date,
         p.msgid,
         p.relates_to_msgid,
         p.dwh_id,
         p.local_uid,
         p.emdr_id,
         p.action,
-        public.egisz_subsystem(t.uri, p.action, t.logtext),
+        stg_egisz.egisz_subsystem(t.uri, p.action, t.logtext),
         rj.jid,
         p.kind_xml,
         p.doc_number,
@@ -256,12 +256,12 @@ BEGIN
         now(),
         now()
     FROM parse_targets t
-    CROSS JOIN LATERAL public.parse_exchangelog_row(t.msgtext, t.msgid, t.logtext) p
+    CROSS JOIN LATERAL stg_egisz.parse_exchangelog_row(t.msgtext, t.msgid, t.logtext) p
     -- jid запроса getDocumentFile фиксируется при парсинге: один resolve на строку за всю
     -- её жизнь вместо повторного разбора payload регулярным выражением на чтении.
     LEFT JOIN LATERAL (
         SELECT res.jid
-        FROM public.resolve_document_jid(
+        FROM mart_egisz.resolve_document_jid(
             p.org_oid,
             COALESCE(t.logtext, '') || ' ' || COALESCE(t.msgtext, '')
         ) res
@@ -275,43 +275,43 @@ BEGIN
           OR COALESCE(p.action, '') = 'getDocumentFile'
       )
     ON CONFLICT (logid, log_date) DO UPDATE SET
-        msgid = COALESCE(EXCLUDED.msgid, public.transactions.msgid),
-        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, public.transactions.relates_to_msgid),
-        xml_dwh_id = COALESCE(EXCLUDED.xml_dwh_id, public.transactions.xml_dwh_id),
-        xml_local_uid = COALESCE(EXCLUDED.xml_local_uid, public.transactions.xml_local_uid),
-        xml_emdr_id = COALESCE(EXCLUDED.xml_emdr_id, public.transactions.xml_emdr_id),
-        source_action = COALESCE(EXCLUDED.source_action, public.transactions.source_action),
-        egisz_subsystem = COALESCE(EXCLUDED.egisz_subsystem, public.transactions.egisz_subsystem),
-        jid = COALESCE(public.transactions.jid, EXCLUDED.jid),
-        xml_semd_code = COALESCE(EXCLUDED.xml_semd_code, public.transactions.xml_semd_code),
-        xml_doc_number = COALESCE(EXCLUDED.xml_doc_number, public.transactions.xml_doc_number),
-        xml_org_oid = COALESCE(EXCLUDED.xml_org_oid, public.transactions.xml_org_oid),
-        xml_error_code = COALESCE(EXCLUDED.xml_error_code, public.transactions.xml_error_code),
-        xml_message = COALESCE(EXCLUDED.xml_message, public.transactions.xml_message),
-        xml_raw_status = COALESCE(EXCLUDED.xml_raw_status, public.transactions.xml_raw_status),
-        xml_document_status = COALESCE(EXCLUDED.xml_document_status, public.transactions.xml_document_status),
-        xml_creation_date = COALESCE(EXCLUDED.xml_creation_date, public.transactions.xml_creation_date),
-        xml_patient_name = COALESCE(EXCLUDED.xml_patient_name, public.transactions.xml_patient_name),
-        xml_snils = COALESCE(EXCLUDED.xml_snils, public.transactions.xml_snils),
-        xml_doctor_name = COALESCE(EXCLUDED.xml_doctor_name, public.transactions.xml_doctor_name),
-        xml_has_fault_marker = COALESCE(EXCLUDED.xml_has_fault_marker, public.transactions.xml_has_fault_marker),
-        xml_has_error_ilike = COALESCE(EXCLUDED.xml_has_error_ilike, public.transactions.xml_has_error_ilike),
-        xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, public.transactions.xml_parsed_at),
+        msgid = COALESCE(EXCLUDED.msgid, stg_egisz.exchange_messages.msgid),
+        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, stg_egisz.exchange_messages.relates_to_msgid),
+        xml_dwh_id = COALESCE(EXCLUDED.xml_dwh_id, stg_egisz.exchange_messages.xml_dwh_id),
+        xml_local_uid = COALESCE(EXCLUDED.xml_local_uid, stg_egisz.exchange_messages.xml_local_uid),
+        xml_emdr_id = COALESCE(EXCLUDED.xml_emdr_id, stg_egisz.exchange_messages.xml_emdr_id),
+        source_action = COALESCE(EXCLUDED.source_action, stg_egisz.exchange_messages.source_action),
+        egisz_subsystem = COALESCE(EXCLUDED.egisz_subsystem, stg_egisz.exchange_messages.egisz_subsystem),
+        jid = COALESCE(stg_egisz.exchange_messages.jid, EXCLUDED.jid),
+        xml_semd_code = COALESCE(EXCLUDED.xml_semd_code, stg_egisz.exchange_messages.xml_semd_code),
+        xml_doc_number = COALESCE(EXCLUDED.xml_doc_number, stg_egisz.exchange_messages.xml_doc_number),
+        xml_org_oid = COALESCE(EXCLUDED.xml_org_oid, stg_egisz.exchange_messages.xml_org_oid),
+        xml_error_code = COALESCE(EXCLUDED.xml_error_code, stg_egisz.exchange_messages.xml_error_code),
+        xml_message = COALESCE(EXCLUDED.xml_message, stg_egisz.exchange_messages.xml_message),
+        xml_raw_status = COALESCE(EXCLUDED.xml_raw_status, stg_egisz.exchange_messages.xml_raw_status),
+        xml_document_status = COALESCE(EXCLUDED.xml_document_status, stg_egisz.exchange_messages.xml_document_status),
+        xml_creation_date = COALESCE(EXCLUDED.xml_creation_date, stg_egisz.exchange_messages.xml_creation_date),
+        xml_patient_name = COALESCE(EXCLUDED.xml_patient_name, stg_egisz.exchange_messages.xml_patient_name),
+        xml_snils = COALESCE(EXCLUDED.xml_snils, stg_egisz.exchange_messages.xml_snils),
+        xml_doctor_name = COALESCE(EXCLUDED.xml_doctor_name, stg_egisz.exchange_messages.xml_doctor_name),
+        xml_has_fault_marker = COALESCE(EXCLUDED.xml_has_fault_marker, stg_egisz.exchange_messages.xml_has_fault_marker),
+        xml_has_error_ilike = COALESCE(EXCLUDED.xml_has_error_ilike, stg_egisz.exchange_messages.xml_has_error_ilike),
+        xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, stg_egisz.exchange_messages.xml_parsed_at),
         loaded_at = now();
 
     -- Фиксация попытки парсинга по всему просканированному диапазону, независимо от того,
     -- прошла ли строка фильтр вставки. Строго после INSERT выше: его анти-джойн должен
     -- видеть состояние маркера до этого батча.
-    INSERT INTO public.exchangelog_parse_attempts (logid)
+    INSERT INTO etl_meta.egisz_exchangelog_parse_attempts (logid)
     SELECT r.logid
-    FROM exchangelog_raw r
+    FROM raw_egisz.exchangelog r
     WHERE r.logid > from_logid
       AND r.logid <= to_logid
       AND r.createdate >= raw_cd_min
       AND r.createdate < raw_cd_max
       AND NOT EXISTS (
           SELECT 1
-          FROM public.exchangelog_parse_attempts pa
+          FROM etl_meta.egisz_exchangelog_parse_attempts pa
           WHERE pa.logid = r.logid
       )
     ON CONFLICT (logid) DO NOTHING;
@@ -322,7 +322,7 @@ BEGIN
     -- ------------------------------------------------------------------
     WITH batch_document_ids AS (
         SELECT DISTINCT tx.xml_dwh_id
-        FROM public.transactions tx
+        FROM stg_egisz.exchange_messages tx
         WHERE tx.source_action = 'getDocumentFile'
           AND tx.logid > from_logid
           AND tx.logid <= to_logid
@@ -331,7 +331,7 @@ BEGIN
           AND tx.xml_dwh_id IS NOT NULL
           AND EXISTS (
               SELECT 1
-              FROM public.dim_message_document m
+              FROM stg_egisz.message_registry m
               WHERE m.document_uid = tx.xml_dwh_id
           )
     ),
@@ -341,8 +341,8 @@ BEGIN
             tx.xml_dwh_id AS dwh_id,
             (array_agg(tx.xml_local_uid ORDER BY gr.logid)
                 FILTER (WHERE NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL))[1] AS local_uid,
-            (array_agg(public.normalize_semd_code(tx.xml_semd_code) ORDER BY gr.logid)
-                FILTER (WHERE public.normalize_semd_code(tx.xml_semd_code) IS NOT NULL))[1] AS semd_code,
+            (array_agg(stg_egisz.normalize_semd_code(tx.xml_semd_code) ORDER BY gr.logid)
+                FILTER (WHERE stg_egisz.normalize_semd_code(tx.xml_semd_code) IS NOT NULL))[1] AS semd_code,
             (array_agg(tx.xml_org_oid ORDER BY gr.logid)
                 FILTER (WHERE NULLIF(btrim(tx.xml_org_oid), '') IS NOT NULL))[1] AS org_oid,
             (array_agg(
@@ -357,9 +357,9 @@ BEGIN
             (array_agg(gr.logid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid))[1] AS request_logid,
             (array_agg(tx.msgid ORDER BY COALESCE(gr.createdate, gr.logdate), gr.logid)
                 FILTER (WHERE tx.msgid IS NOT NULL))[1] AS sent_msgid
-        FROM public.transactions tx
+        FROM stg_egisz.exchange_messages tx
         JOIN batch_document_ids bd ON bd.xml_dwh_id = tx.xml_dwh_id
-        JOIN public.exchangelog_raw gr ON gr.logid = tx.logid
+        JOIN raw_egisz.exchangelog gr ON gr.logid = tx.logid
             AND gr.createdate >= raw_cd_min
             AND gr.createdate < raw_cd_max
         WHERE COALESCE(tx.source_action, '') = 'getDocumentFile'
@@ -378,19 +378,19 @@ BEGIN
         -- reply_to реестра подач содержит endpoint клиники.
         JOIN LATERAL (
             SELECT m.reply_to
-            FROM public.dim_message_document m
+            FROM stg_egisz.message_registry m
             WHERE m.document_uid = a.dwh_id
-            ORDER BY m.source_egmid DESC
+            ORDER BY m.egmid DESC
             LIMIT 1
         ) reg ON TRUE
-        LEFT JOIN LATERAL public.resolve_document_jid(
+        LEFT JOIN LATERAL mart_egisz.resolve_document_jid(
             a.org_oid,
             COALESCE(a.endpoint_text, '') || ' ' || COALESCE(reg.reply_to, '')
         ) r ON TRUE
     )
     -- Запрос файла — шаг регистрации, а не её исход: документ получает нефинальный статус.
     -- Сбой доставки запроса статус не меняет; его элемент хранится в разобранном сообщении.
-    INSERT INTO public.documents (
+    INSERT INTO mart_egisz.documents (
         dwh_id, local_uid, semd_code,
         status, first_sent_at, request_logid, msgid,
         jid, org_oid, jid_resolve_method,
@@ -400,7 +400,7 @@ BEGIN
         a.dwh_id,
         a.local_uid,
         a.semd_code,
-        public.document_status_nonfinal(),
+        mart_egisz.document_status_nonfinal(),
         a.sent_at,
         a.request_logid,
         a.sent_msgid,
@@ -415,50 +415,50 @@ BEGIN
       -- Клиника обязательна — без неё экземпляр не отображается ни в одном срезе.
       AND a.resolved_jid IS NOT NULL
     ON CONFLICT (dwh_id) DO UPDATE SET
-        local_uid = COALESCE(EXCLUDED.local_uid, public.documents.local_uid),
-        semd_code = COALESCE(EXCLUDED.semd_code, public.documents.semd_code),
+        local_uid = COALESCE(EXCLUDED.local_uid, mart_egisz.documents.local_uid),
+        semd_code = COALESCE(EXCLUDED.semd_code, mart_egisz.documents.semd_code),
         first_sent_at = LEAST(
-            COALESCE(public.documents.first_sent_at, EXCLUDED.first_sent_at),
-            COALESCE(EXCLUDED.first_sent_at, public.documents.first_sent_at)
+            COALESCE(mart_egisz.documents.first_sent_at, EXCLUDED.first_sent_at),
+            COALESCE(EXCLUDED.first_sent_at, mart_egisz.documents.first_sent_at)
         ),
         status = CASE
-            WHEN public.documents.status IN (SELECT public.document_status_final())
-            THEN public.documents.status
+            WHEN mart_egisz.documents.status IN (SELECT mart_egisz.document_status_final())
+            THEN mart_egisz.documents.status
             ELSE EXCLUDED.status
         END,
-        jid = COALESCE(EXCLUDED.jid, public.documents.jid),
-        org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
+        jid = COALESCE(EXCLUDED.jid, mart_egisz.documents.jid),
+        org_oid = COALESCE(EXCLUDED.org_oid, mart_egisz.documents.org_oid),
         jid_resolve_method = CASE
-            WHEN public.documents.jid_resolve_method = 'mo_uid'
-            THEN public.documents.jid_resolve_method
-            ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
+            WHEN mart_egisz.documents.jid_resolve_method = 'mo_uid'
+            THEN mart_egisz.documents.jid_resolve_method
+            ELSE COALESCE(EXCLUDED.jid_resolve_method, mart_egisz.documents.jid_resolve_method)
         END,
         msgid = CASE
-            WHEN public.documents.status IN (SELECT public.document_status_final())
-            THEN public.documents.msgid
-            ELSE COALESCE(EXCLUDED.msgid, public.documents.msgid)
+            WHEN mart_egisz.documents.status IN (SELECT mart_egisz.document_status_final())
+            THEN mart_egisz.documents.msgid
+            ELSE COALESCE(EXCLUDED.msgid, mart_egisz.documents.msgid)
         END,
         request_logid = CASE
-            WHEN public.documents.first_sent_at IS NULL THEN EXCLUDED.request_logid
-            WHEN EXCLUDED.first_sent_at IS NULL THEN public.documents.request_logid
-            WHEN EXCLUDED.first_sent_at < public.documents.first_sent_at THEN EXCLUDED.request_logid
-            WHEN EXCLUDED.first_sent_at = public.documents.first_sent_at THEN LEAST(
-                COALESCE(public.documents.request_logid, EXCLUDED.request_logid),
-                COALESCE(EXCLUDED.request_logid, public.documents.request_logid)
+            WHEN mart_egisz.documents.first_sent_at IS NULL THEN EXCLUDED.request_logid
+            WHEN EXCLUDED.first_sent_at IS NULL THEN mart_egisz.documents.request_logid
+            WHEN EXCLUDED.first_sent_at < mart_egisz.documents.first_sent_at THEN EXCLUDED.request_logid
+            WHEN EXCLUDED.first_sent_at = mart_egisz.documents.first_sent_at THEN LEAST(
+                COALESCE(mart_egisz.documents.request_logid, EXCLUDED.request_logid),
+                COALESCE(EXCLUDED.request_logid, mart_egisz.documents.request_logid)
             )
-            ELSE public.documents.request_logid
+            ELSE mart_egisz.documents.request_logid
         END,
         updated_at = now();
 
     -- Отправки, по которым клиника не разрешилась ни payload'ом, ни реестром: в documents
     -- они не попадают (нечем атрибутировать), но их число возвращается вызывающему.
     SELECT count(*) INTO skipped_no_clinic
-    FROM public.transactions tx
+    FROM stg_egisz.exchange_messages tx
     WHERE tx.source_action = 'getDocumentFile'
       AND tx.logid > from_logid
       AND tx.logid <= to_logid
       AND tx.xml_dwh_id IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM public.documents d WHERE d.dwh_id = tx.xml_dwh_id);
+      AND NOT EXISTS (SELECT 1 FROM mart_egisz.documents d WHERE d.dwh_id = tx.xml_dwh_id);
 
     -- ------------------------------------------------------------------
     -- Ветка ответа: исход асинхронного ответа, элементы ошибки и привязка к документу.
@@ -470,7 +470,7 @@ BEGIN
     CREATE TEMP TABLE batch_responses AS
     WITH candidate_log_ids AS (
         SELECT r.logid
-        FROM exchangelog_raw r
+        FROM raw_egisz.exchangelog r
         WHERE r.logid > from_logid
           AND r.logid <= to_logid
           AND r.createdate >= raw_cd_min
@@ -505,9 +505,9 @@ BEGIN
             tx.xml_has_error_ilike AS has_error_ilike,
             -- Статус асинхронного ответа ИЭМК передаётся атрибутом RegistryResponse.
             substring(r.msgtext from 'ResponseStatusType:([A-Za-z]+)') AS registry_response_status
-        FROM exchangelog_raw r
+        FROM raw_egisz.exchangelog r
         JOIN candidate_log_ids c ON c.logid = r.logid
-        JOIN public.transactions tx ON tx.logid = r.logid
+        JOIN stg_egisz.exchange_messages tx ON tx.logid = r.logid
         WHERE r.createdate >= raw_cd_min
           AND r.createdate < raw_cd_max
           AND tx.xml_parsed_at IS NOT NULL
@@ -519,7 +519,7 @@ BEGIN
           )
           AND (
               r.logstate = 3
-              OR public.normalize_message_id(r.msgid) IS NOT NULL
+              OR stg_egisz.normalize_message_id(r.msgid) IS NOT NULL
               OR tx.msgid IS NOT NULL
               OR tx.relates_to_msgid IS NOT NULL
               OR NULLIF(btrim(tx.xml_local_uid), '') IS NOT NULL
@@ -559,7 +559,7 @@ BEGIN
             r.emdr_id,
             r.doc_number,
             r.org_oid,
-            public.normalize_semd_code(r.kind_xml) AS semd_code,
+            stg_egisz.normalize_semd_code(r.kind_xml) AS semd_code,
             r.error_code,
             r.xml_message,
             r.raw_status,
@@ -576,26 +576,26 @@ BEGIN
         -- Ответ РЭМД: relatesToMessage -> document_uid реестра подач.
         LEFT JOIN LATERAL (
             SELECT
-                public.dwh_id(m.document_uid) AS dwh_id,
+                stg_egisz.dwh_id(m.document_uid) AS dwh_id,
                 m.document_uid AS local_uid,
                 m.reply_to,
                 true AS has_registry
-            FROM public.dim_message_document m
+            FROM stg_egisz.message_registry m
             WHERE r.relates_to_msgid IS NOT NULL
-              AND m.msgid = public.message_registry_key(r.relates_to_msgid)
-            ORDER BY (m.document_uid IS NOT NULL) DESC, m.source_egmid DESC NULLS LAST
+              AND m.msgid = stg_egisz.message_registry_key(r.relates_to_msgid)
+            ORDER BY (m.document_uid IS NOT NULL) DESC, m.egmid DESC NULLS LAST
             LIMIT 1
         ) msg_ref ON TRUE
         -- Повторный ответ РЭМД: dwh_id по emdrId.
         LEFT JOIN LATERAL (
             SELECT fd.dwh_id
-            FROM public.documents fd
+            FROM mart_egisz.documents fd
             WHERE r.emdr_id IS NOT NULL
               AND lower(NULLIF(btrim(fd.emdr_id), '')) = lower(NULLIF(btrim(r.emdr_id), ''))
             ORDER BY fd.last_callback_at DESC NULLS LAST, fd.request_logid DESC NULLS LAST
             LIMIT 1
         ) emdr_ref ON TRUE
-        LEFT JOIN public.documents src_doc
+        LEFT JOIN mart_egisz.documents src_doc
           ON src_doc.dwh_id = COALESCE(r.dwh_id_xml, msg_ref.dwh_id, emdr_ref.dwh_id)
     ),
     enriched AS (
@@ -607,7 +607,7 @@ BEGIN
                 p.semd_code,
                 p.source_document_semd_code
             ) AS resolved_semd_code,
-            public.classify_async_status(
+            stg_egisz.classify_async_status(
                 p.source_action,
                 p.raw_status,
                 p.document_status,
@@ -617,7 +617,7 @@ BEGIN
             ) AS outcome,
             CASE WHEN p.logstate = 3 THEN p.logtext ELSE p.xml_message END AS message_text
         FROM parsed p
-        LEFT JOIN LATERAL public.resolve_document_jid(
+        LEFT JOIN LATERAL mart_egisz.resolve_document_jid(
             p.org_oid,
             COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '') || ' ' || COALESCE(p.registry_reply_to, '')
         ) res ON TRUE
@@ -661,9 +661,9 @@ BEGIN
     SELECT
         e.*,
         d.error_details,
-        regexp_split_to_array(public.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
+        regexp_split_to_array(stg_egisz.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
         regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
-        public.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
+        stg_egisz.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
     FROM enriched e
     LEFT JOIN details d ON d.logid = e.logid;
 
@@ -687,7 +687,7 @@ BEGIN
     ORDER BY x.error_type
     ON CONFLICT (error_type) DO NOTHING;
 
-    INSERT INTO transactions (
+    INSERT INTO stg_egisz.exchange_messages (
         logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
         creation_date, loaded_at, link_method, error_details,
@@ -750,7 +750,7 @@ BEGIN
 
     -- Сообщение без связи с документом тоже хранит исход и элементы ошибки: сбой доставки
     -- и отказ видны в разрезе периода независимо от того, найден ли документ.
-    UPDATE public.transactions tx
+    UPDATE stg_egisz.exchange_messages tx
     SET status = e.outcome,
         message = e.message_text,
         error_details = e.error_details,
@@ -773,14 +773,14 @@ BEGIN
             tx.logid,
             tx.log_date,
             reg.reply_to
-        FROM public.transactions tx
+        FROM stg_egisz.exchange_messages tx
         JOIN LATERAL (
             SELECT
                 m.document_uid,
                 m.reply_to
-            FROM public.dim_message_document m
-            WHERE m.msgid = public.message_registry_key(tx.relates_to_msgid)
-            ORDER BY (m.document_uid IS NOT NULL) DESC, m.source_egmid DESC NULLS LAST
+            FROM stg_egisz.message_registry m
+            WHERE m.msgid = stg_egisz.message_registry_key(tx.relates_to_msgid)
+            ORDER BY (m.document_uid IS NOT NULL) DESC, m.egmid DESC NULLS LAST
             LIMIT 1
         ) reg ON TRUE
         WHERE tx.logid > from_logid
@@ -800,9 +800,9 @@ BEGIN
             r.jid,
             r.resolve_method
         FROM registry_match rm
-        LEFT JOIN LATERAL public.resolve_document_jid(NULL::text, COALESCE(rm.reply_to, '')) r ON TRUE
+        LEFT JOIN LATERAL mart_egisz.resolve_document_jid(NULL::text, COALESCE(rm.reply_to, '')) r ON TRUE
     )
-    UPDATE public.transactions tx
+    UPDATE stg_egisz.exchange_messages tx
     SET
         link_method = 'message_registry_no_document',
         jid = reg.jid,
@@ -815,7 +815,7 @@ BEGIN
     affected := affected + registry_no_document_rows;
 
     -- Ответы без связи по payload, EGISZ_MESSAGES и emdrId.
-    UPDATE public.transactions tx
+    UPDATE stg_egisz.exchange_messages tx
     SET link_method = 'unlinked'
     WHERE tx.logid > from_logid
       AND tx.logid <= to_logid
@@ -825,8 +825,8 @@ BEGIN
       AND tx.relates_to_msgid IS NOT NULL
       AND NOT EXISTS (
           SELECT 1
-          FROM public.dim_message_document m
-          WHERE m.msgid = public.message_registry_key(tx.relates_to_msgid)
+          FROM stg_egisz.message_registry m
+          WHERE m.msgid = stg_egisz.message_registry_key(tx.relates_to_msgid)
       )
       AND tx.link_method IS DISTINCT FROM 'unlinked';
     GET DIAGNOSTICS unlinked_rows = ROW_COUNT;
@@ -835,7 +835,7 @@ BEGIN
     -- Перенос исхода на грейн документа: статус выставляет только асинхронный ответ.
     -- Сбой доставки статус не меняет — его элемент хранится в разобранном сообщении.
     -- ------------------------------------------------------------------
-    INSERT INTO public.documents (
+    INSERT INTO mart_egisz.documents (
         dwh_id, local_uid, emdr_id, semd_code,
         status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
@@ -844,12 +844,12 @@ BEGIN
     )
     SELECT DISTINCT ON (f.dwh_id)
         f.dwh_id,
-        public.clean_text_value(f.local_uid_semd),
-        public.clean_text_value(f.emdr_id),
-        public.normalize_semd_code(f.semd_code),
+        stg_egisz.clean_text_value(f.local_uid_semd),
+        stg_egisz.clean_text_value(f.emdr_id),
+        stg_egisz.normalize_semd_code(f.semd_code),
         CASE f.status WHEN 'success' THEN 'success' ELSE 'async_error' END,
-        public.clean_text_value(f.msgid),
-        public.clean_text_value(f.relates_to_msgid),
+        stg_egisz.clean_text_value(f.msgid),
+        stg_egisz.clean_text_value(f.relates_to_msgid),
         f.logid,
         f.creation_date,
         CASE WHEN f.status = 'success' THEN f.log_date ELSE NULL::timestamptz END,
@@ -864,66 +864,66 @@ BEGIN
         f.patient_hash,
         f.doctor_hash,
         now()
-    FROM public.transactions f
+    FROM stg_egisz.exchange_messages f
     WHERE f.logid > from_logid
       AND f.logid <= to_logid
       AND f.dwh_id IS NOT NULL
       AND f.status IN ('success', 'error')
     ORDER BY f.dwh_id, f.log_date DESC NULLS LAST, f.logid DESC
     ON CONFLICT (dwh_id) DO UPDATE SET
-        local_uid = COALESCE(EXCLUDED.local_uid, public.documents.local_uid),
-        emdr_id = COALESCE(EXCLUDED.emdr_id, public.documents.emdr_id),
-        semd_code = COALESCE(EXCLUDED.semd_code, public.documents.semd_code),
+        local_uid = COALESCE(EXCLUDED.local_uid, mart_egisz.documents.local_uid),
+        emdr_id = COALESCE(EXCLUDED.emdr_id, mart_egisz.documents.emdr_id),
+        semd_code = COALESCE(EXCLUDED.semd_code, mart_egisz.documents.semd_code),
         status = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
+               >= COALESCE(mart_egisz.documents.last_callback_at, '-infinity'::timestamptz)
             THEN EXCLUDED.status
-            ELSE public.documents.status
+            ELSE mart_egisz.documents.status
         END,
-        msgid = COALESCE(EXCLUDED.msgid, public.documents.msgid),
-        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, public.documents.relates_to_msgid),
+        msgid = COALESCE(EXCLUDED.msgid, mart_egisz.documents.msgid),
+        relates_to_msgid = COALESCE(EXCLUDED.relates_to_msgid, mart_egisz.documents.relates_to_msgid),
         result_logid = CASE
             WHEN COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)
-               >= COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz)
+               >= COALESCE(mart_egisz.documents.last_callback_at, '-infinity'::timestamptz)
             THEN EXCLUDED.result_logid
-            ELSE public.documents.result_logid
+            ELSE mart_egisz.documents.result_logid
         END,
-        document_created_at = COALESCE(EXCLUDED.document_created_at, public.documents.document_created_at),
-        registered_at = COALESCE(EXCLUDED.registered_at, public.documents.registered_at),
+        document_created_at = COALESCE(EXCLUDED.document_created_at, mart_egisz.documents.document_created_at),
+        registered_at = COALESCE(EXCLUDED.registered_at, mart_egisz.documents.registered_at),
         first_callback_at = LEAST(
-            COALESCE(public.documents.first_callback_at, EXCLUDED.first_callback_at),
-            COALESCE(EXCLUDED.first_callback_at, public.documents.first_callback_at)
+            COALESCE(mart_egisz.documents.first_callback_at, EXCLUDED.first_callback_at),
+            COALESCE(EXCLUDED.first_callback_at, mart_egisz.documents.first_callback_at)
         ),
-        last_callback_at = GREATEST(COALESCE(public.documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
-        last_status = COALESCE(EXCLUDED.last_status, public.documents.last_status),
-        jid = COALESCE(public.documents.jid, EXCLUDED.jid),
-        org_oid = COALESCE(EXCLUDED.org_oid, public.documents.org_oid),
+        last_callback_at = GREATEST(COALESCE(mart_egisz.documents.last_callback_at, '-infinity'::timestamptz), COALESCE(EXCLUDED.last_callback_at, '-infinity'::timestamptz)),
+        last_status = COALESCE(EXCLUDED.last_status, mart_egisz.documents.last_status),
+        jid = COALESCE(mart_egisz.documents.jid, EXCLUDED.jid),
+        org_oid = COALESCE(EXCLUDED.org_oid, mart_egisz.documents.org_oid),
         jid_resolve_method = CASE
-            WHEN public.documents.jid_resolve_method = 'mo_uid'
-            THEN public.documents.jid_resolve_method
-            ELSE COALESCE(EXCLUDED.jid_resolve_method, public.documents.jid_resolve_method)
+            WHEN mart_egisz.documents.jid_resolve_method = 'mo_uid'
+            THEN mart_egisz.documents.jid_resolve_method
+            ELSE COALESCE(EXCLUDED.jid_resolve_method, mart_egisz.documents.jid_resolve_method)
         END,
-        patient_hash = COALESCE(EXCLUDED.patient_hash, public.documents.patient_hash),
-        doctor_hash = COALESCE(EXCLUDED.doctor_hash, public.documents.doctor_hash),
+        patient_hash = COALESCE(EXCLUDED.patient_hash, mart_egisz.documents.patient_hash),
+        doctor_hash = COALESCE(EXCLUDED.doctor_hash, mart_egisz.documents.doctor_hash),
         updated_at = now();
 
     -- Ответ может прийти без KIND, а тип СЭМД уже известен из отправки.
     -- Только документы, затронутые в этой транзакции: O(батч), не O(архив).
     WITH batch_docs AS (
         SELECT d.dwh_id
-        FROM public.documents d
+        FROM mart_egisz.documents d
         WHERE d.updated_at = transaction_timestamp()
           AND NULLIF(btrim(d.semd_code), '') IS NULL
     )
-    UPDATE public.documents d
+    UPDATE mart_egisz.documents d
     SET
         semd_code = src.semd_code,
         updated_at = now()
     FROM (
         SELECT DISTINCT ON (t.dwh_id)
             t.dwh_id,
-            public.normalize_semd_code(t.semd_code) AS semd_code
-        FROM public.transactions t
+            stg_egisz.normalize_semd_code(t.semd_code) AS semd_code
+        FROM stg_egisz.exchange_messages t
         INNER JOIN batch_docs b ON b.dwh_id = t.dwh_id
         WHERE NULLIF(btrim(t.semd_code), '') IS NOT NULL
         ORDER BY t.dwh_id, t.log_date DESC NULLS LAST, t.logid DESC
@@ -932,14 +932,14 @@ BEGIN
 
     -- Число подач документа в ЕГИСЗ по реестру: повторная подача не меняет localUid,
     -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
-    UPDATE public.documents d
+    UPDATE mart_egisz.documents d
     SET attempt_count = src.attempts,
         updated_at = now()
     FROM (
         SELECT m.document_uid AS dwh_id, count(*)::integer AS attempts
-        FROM public.dim_message_document m
+        FROM stg_egisz.message_registry m
         WHERE EXISTS (
-            SELECT 1 FROM public.documents b
+            SELECT 1 FROM mart_egisz.documents b
             WHERE b.dwh_id = m.document_uid
               AND b.updated_at = transaction_timestamp()
         )
@@ -949,19 +949,19 @@ BEGIN
       AND d.attempt_count IS DISTINCT FROM src.attempts;
 
     -- Инкрементальное сопровождение document_attributes по dwh_id из батча.
-    PERFORM public.recompute_document_attributes(
+    PERFORM mart_egisz.recompute_document_attributes(
         ARRAY(
             SELECT d.dwh_id::text
-            FROM public.documents d
+            FROM mart_egisz.documents d
             WHERE d.updated_at = transaction_timestamp()
         )
     );
 
     -- Пересбор слоя версий для групп, затронутых батчем.
-    PERFORM public.recompute_document_versions(
+    PERFORM mart_egisz.recompute_document_versions(
         ARRAY(
             SELECT d.dwh_id::text
-            FROM public.documents d
+            FROM mart_egisz.documents d
             WHERE d.updated_at = transaction_timestamp()
         )
     );
@@ -979,10 +979,10 @@ $$;
 -- (вид, код, исходный текст). Тип без правила заводится в справочнике, тип без правила,
 -- на который больше не ссылается ни один элемент, снимается. Запускается вручную задачей
 -- DAG обслуживания; приём на это время ставится на паузу.
-CREATE OR REPLACE FUNCTION public.reclassify_error_details()
+CREATE OR REPLACE FUNCTION stg_egisz.reclassify_error_details()
 RETURNS integer
 LANGUAGE plpgsql
-SET search_path = public, pg_temp
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     updated integer := 0;
@@ -992,7 +992,7 @@ BEGIN
     SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
     FROM (
         SELECT DISTINCT e.error_kind, e.error_code, e.error_text
-        FROM public.transactions t
+        FROM stg_egisz.exchange_messages t
         CROSS JOIN LATERAL jsonb_to_recordset(t.error_details)
             AS e(error_kind text, error_code text, error_text text)
         WHERE t.error_details IS NOT NULL
@@ -1018,7 +1018,7 @@ BEGIN
     -- сообщения. Сравнение массивов считает NULL равными и соединяется хешем.
     WITH elements AS MATERIALIZED (
         SELECT t2.logid, t2.log_date, e.item_no, e.error_kind, e.error_code, e.error_text
-        FROM public.transactions t2
+        FROM stg_egisz.exchange_messages t2
         CROSS JOIN LATERAL jsonb_to_recordset(t2.error_details)
             AS e(item_no integer, error_kind text, error_code text, error_text text)
         WHERE t2.error_details IS NOT NULL
@@ -1040,7 +1040,7 @@ BEGIN
           ON ARRAY[r.error_kind, r.error_code, r.error_text] = ARRAY[el.error_kind, el.error_code, el.error_text]
         GROUP BY el.logid, el.log_date
     )
-    UPDATE public.transactions t
+    UPDATE stg_egisz.exchange_messages t
     SET error_details = n.error_details
     FROM rebuilt n
     WHERE t.logid = n.logid

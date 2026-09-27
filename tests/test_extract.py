@@ -12,7 +12,6 @@ extract_dag = load_dag_module("egisz_etl_dag")
 extract_exchangelog_batch = extract_dag.extract_exchangelog_batch
 extract_message_registry_batch = extract_dag.extract_message_registry_batch
 fetch_depth_floor = extract_dag.fetch_depth_floor
-normalize_registry_key = extract_dag.normalize_registry_key
 transform_exchangelog_batch = extract_dag.transform_exchangelog_batch
 run_analyze = extract_dag.run_analyze
 
@@ -52,7 +51,7 @@ def test_extract_cursor_counts_the_proxy_not_raw(
         patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=rows) as fetch,
         patch("egisz_etl_dag.load_raw_logs") as load_raw,
         patch("egisz_etl_dag.update_cursors") as update,
-        patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze_raw,
+        patch("egisz_etl_dag._analyze_exchangelog") as analyze_raw,
     ):
         result = extract_exchangelog_batch(
             pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0
@@ -123,7 +122,7 @@ def test_transform_exchangelog_runs_multiple_iterations(pg_conn: MagicMock) -> N
 
 def test_transform_is_bounded_by_the_extract_cursor(pg_conn: MagicMock) -> None:
     """Разбор не заходит выше отметки выгрузки: только до неё прокси вычитана без
-    пропусков. Обе отметки берутся из etl_state, поэтому сорванная выгрузка разбор
+    пропусков. Обе отметки берутся из egisz_etl_state, поэтому сорванная выгрузка разбор
     не снимает."""
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=102, transform=102)),
@@ -151,39 +150,27 @@ def test_bounded_transform_to_logid_stops_at_the_extract_cursor() -> None:
     con.cursor.assert_not_called()
 
 
-def test_normalize_registry_key_matches_sql_canonical_form() -> None:
-    """Ключ реестра приводится к одному виду на обеих сторонах: без дефисов,
-    без префикса urn:uuid: и угловых скобок, в верхнем регистре."""
-    expected = "A07167955FA149D1BF532EFAD47EFA46"
-    assert normalize_registry_key("a0716795-5fa1-49d1-bf53-2efad47efa46") == expected
-    assert normalize_registry_key("urn:uuid:A0716795-5FA1-49D1-BF53-2EFAD47EFA46") == expected
-    assert normalize_registry_key("<A07167955FA149D1BF532EFAD47EFA46>") == expected
-    assert normalize_registry_key(None) is None
-    assert normalize_registry_key("  ") is None
-
-
-def test_load_message_registry_keeps_source_rows_by_egmid(pg_conn: MagicMock) -> None:
-    """EGISZ_MESSAGES хранится как реестр по EGMID, без раннего отбора по DOCUMENTID."""
-    assert extract_dag.is_iemk_reply_to("http://gost-2.lan:9921")
-    assert not extract_dag.is_iemk_reply_to("http://gost-1.lan:9945")
-
+def test_load_message_registry_keeps_source_values(pg_conn: MagicMock) -> None:
+    """EGISZ_MESSAGES ложится в сырой слой как в источнике: ключ реестра и правило ИЭМК
+    применяет stg_egisz.message_registry, а не загрузчик."""
     rows = [
         (1, "a0716795-5fa1-49d1-bf53-2efad47efa46", "http://gost-1.lan:9945", "UID-OLD", None),
         (2, "urn:uuid:A0716795-5FA1-49D1-BF53-2EFAD47EFA46", "http://gost-2.lan:9921", "IEMK-UID", None),
-        (3, None, "http://gost-3.lan:9945", "UID-ONLY", None),
-        (4, None, None, None, None),
+        (3, None, "http://gost-3.lan:9945", "UID\x00-ONLY", None),
+        (None, "MSG-WITHOUT-EGMID", None, None, None),
     ]
 
     with patch("egisz_etl_dag.execute_values") as execute_values:
         loaded = extract_dag.load_message_registry(pg_conn, rows)
 
+    sql = execute_values.call_args.args[1]
     values = execute_values.call_args.args[2]
-    assert loaded == 4
+    assert "INSERT INTO raw_egisz.egisz_messages (egmid, msgid, replyto, documentid, createdate)" in sql
+    assert loaded == 3
     assert values == [
-        (1, "A07167955FA149D1BF532EFAD47EFA46", "uid-old", "http://gost-1.lan:9945", None),
-        (2, "A07167955FA149D1BF532EFAD47EFA46", None, "http://gost-2.lan:9921", None),
-        (3, None, "uid-only", "http://gost-3.lan:9945", None),
-        (4, None, None, None, None),
+        (1, "a0716795-5fa1-49d1-bf53-2efad47efa46", "http://gost-1.lan:9945", "UID-OLD", None),
+        (2, "urn:uuid:A0716795-5FA1-49D1-BF53-2EFAD47EFA46", "http://gost-2.lan:9921", "IEMK-UID", None),
+        (3, None, "http://gost-3.lan:9945", "UID-ONLY", None),
     ]
 
 
@@ -317,7 +304,7 @@ def test_run_analyze_commits_before_switching_autocommit(pg_conn: MagicMock) -> 
     cursor = MagicMock()
     pg_conn.cursor.return_value.__enter__.return_value = cursor
 
-    run_analyze(pg_conn, "ANALYZE public.documents", "ANALYZE public.transactions")
+    run_analyze(pg_conn, "ANALYZE mart_egisz.documents", "ANALYZE stg_egisz.exchange_messages")
 
     pg_conn.commit.assert_called_once()
     pg_conn.set_session.assert_any_call(autocommit=True)

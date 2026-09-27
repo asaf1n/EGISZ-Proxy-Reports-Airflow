@@ -26,7 +26,7 @@ CLIENT_DASHBOARD_NAMES = frozenset(
     }
 )
 SAMPLE_CLIENT_JID_SQL = (
-    "SELECT clinic_jid::text FROM public.rpt_documents "
+    "SELECT clinic_jid::text FROM serving_egisz.documents_current "
     "WHERE clinic_jid IS NOT NULL LIMIT 1"
 )
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"

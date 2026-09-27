@@ -32,30 +32,30 @@ VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
 SYNONYM_SEPARATOR = ";"
 
 REQUIRED_TABLES = (
-    "public.dim_nsi_semd_guide",
-    "public.dim_nsi_semd_guide_alias",
-    "public.dim_nsi_semd_guide_dictionary",
+    "mart_egisz.dim_nsi_semd_guide",
+    "mart_egisz.dim_nsi_semd_guide_alias",
+    "mart_egisz.dim_nsi_semd_guide_dictionary",
 )
 
 TRUNCATE_SQL = """
-TRUNCATE public.dim_nsi_semd_guide_dictionary,
-         public.dim_nsi_semd_guide_alias,
-         public.dim_nsi_semd_guide
+TRUNCATE mart_egisz.dim_nsi_semd_guide_dictionary,
+         mart_egisz.dim_nsi_semd_guide_alias,
+         mart_egisz.dim_nsi_semd_guide
 """
 
 GUIDE_COPY_SQL = """
-COPY public.dim_nsi_semd_guide (
+COPY mart_egisz.dim_nsi_semd_guide (
     oid, semd_id, full_name, release_number, format, git_pub_date, git_link,
     source_oid, source_version, raw_json
 ) FROM STDIN WITH (FORMAT csv)
 """
 
 ALIAS_COPY_SQL = """
-COPY public.dim_nsi_semd_guide_alias (alias_oid, guide_oid) FROM STDIN WITH (FORMAT csv)
+COPY mart_egisz.dim_nsi_semd_guide_alias (alias_oid, guide_oid) FROM STDIN WITH (FORMAT csv)
 """
 
 DICTIONARY_COPY_SQL = """
-COPY public.dim_nsi_semd_guide_dictionary (
+COPY mart_egisz.dim_nsi_semd_guide_dictionary (
     guide_oid, dict_oid, source_id, dict_name, dict_version, dict_ids_systemname,
     source_oid, source_version, raw_json
 ) FROM STDIN WITH (FORMAT csv)
@@ -313,7 +313,7 @@ def main() -> None:
                         cur.copy_expert(statement, fh)
                 for table in REQUIRED_TABLES:
                     cur.execute(f"ANALYZE {table}")
-                cur.execute("SELECT count(*) FROM public.dim_nsi_semd_guide_alias")
+                cur.execute("SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_alias")
                 loaded_aliases = cur.fetchone()[0]
     finally:
         for path, _ in copy_plan:

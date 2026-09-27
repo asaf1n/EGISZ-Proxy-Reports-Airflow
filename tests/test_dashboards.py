@@ -87,18 +87,18 @@ def test_service_network_top_groups_by_typed_label() -> None:
     card = next(c for c in dashboard["cards"] if c.get("name") == "Типы ошибок связи (за период)")
     query = card["dataset_query"]["native"]["query"]
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    view = sql[sql.index("CREATE VIEW mart_egisz_selfservice.network_error AS"):]
+    view = sql[sql.index("CREATE VIEW serving_egisz.network_errors AS"):]
 
     # Тип ошибки связи — текст шлюза с замаскированными значениями; счёт по времени
     # сообщения, в том числе у сообщений без связи с документом.
-    assert "FROM mart_egisz_selfservice.network_error" in query
+    assert "FROM serving_egisz.network_errors" in query
     assert "error_type AS lbl" in query
     assert "m.error_type" in view[:view.index(";")]
     assert "per_kind AS" in query
     assert "[[AND {{ips_date}}]]" in query
     assert "Остальные (" in query
     assert card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "mart_egisz_selfservice.network_error",
+        "table_ref": "serving_egisz.network_errors",
         "field_name": "message_at",
     }
 
@@ -129,7 +129,7 @@ def test_operational_error_types_include_network_slice() -> None:
     query = card["dataset_query"]["native"]["query"]
 
     assert card["display"] == "row"
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "FROM serving_egisz.document_errors" in query
     # Разбор берёт отказы и ошибки связи; у ошибки связи категории нет — её место
     # в разрезе по категории занимает вид.
     assert _plan.ERROR_ANALYSIS_SCOPE in query
@@ -142,7 +142,7 @@ def test_operational_error_types_include_network_slice() -> None:
 
 def _view_column_names(view_name: str) -> set[str]:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    marker = f"CREATE OR REPLACE VIEW public.{view_name} AS"
+    marker = f"CREATE OR REPLACE VIEW serving_egisz.{view_name} AS"
     start = sql.index(marker)
     select_start = sql.index("SELECT", start)
     from_start = sql.index("FROM", select_start)
@@ -186,7 +186,7 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
     "Тип ошибки",
     "СЭМД",
     # Типы и исходный текст ошибок документа в разборе последних операций: столбцы
-    # собираются из ошибок документа, а не из rpt_documents.
+    # собираются из ошибок документа, а не из documents_current.
     "Типы ошибки",
     "ns2_error",
 }
@@ -195,9 +195,9 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
 def test_operational_latest_operations_table_matches_documents_view() -> None:
     dashboard = _tab_dashboard("operational")
     card = next(card for card in dashboard["cards"] if card["name"] == "Последние операции")
-    # rpt_documents = SELECT * FROM rpt_document_versions WHERE is_current_version —
-    # колоночный проекшн (с алиасами) живёт в базовой rpt_document_versions.
-    view_columns = _view_column_names("rpt_document_versions")
+    # documents_current = SELECT * FROM document_versions WHERE is_current_version —
+    # колоночный проекшн (с алиасами) живёт в базовой document_versions.
+    view_columns = _view_column_names("document_versions")
     allowed_columns = _model_display_names("01_documents.json") | DOCUMENTS_TABLE_LEGACY_LABELS | view_columns
     configured_columns = {
         column["name"]
@@ -216,15 +216,15 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
     assert "Host Клиники (ГОСТ VPN)" in configured_columns or "Host" in configured_columns
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
-    assert "public.rpt_documents" in query
+    assert "serving_egisz.documents_current" in query
     assert "semd_label" in query
     assert "semd_code" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
     # Типы — из опубликованных ошибок документа, исходный текст — из слоя разбора.
-    assert "FROM mart_egisz_selfservice.document_error" in query
-    assert "FROM stg_egisz.document_error_current" in query
+    assert "FROM serving_egisz.document_errors" in query
+    assert "FROM stg_egisz.document_errors_current" in query
     assert "error_types" not in query
     assert card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "public.rpt_documents",
+        "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
     }
 
@@ -290,7 +290,7 @@ def test_service_healthcheck_table_scope() -> None:
     pie_query = refusal_pie["dataset_query"]["native"]["query"]
     # Сектор — вид ошибки: ошибка связи статус не меняет, документ с ошибками обоих видов
     # учитывается в обоих секторах.
-    assert 'document_error.error_kind AS "Вид ошибки"' in pie_query
+    assert 'document_errors.error_kind AS "Вид ошибки"' in pie_query
     assert _plan.ERROR_ANALYSIS_SCOPE in pie_query
     assert refusal_pie["visualization_settings"]["pie.dimension"] == ["Вид ошибки"]
     assert refusal_pie["visualization_settings"]["pie.metric"] == "Документов"
@@ -311,7 +311,7 @@ def test_service_transport_block_layout() -> None:
     assert "Сбоев связи за период" not in by_name
     assert "Пик сбоев связи за день" not in by_name
     assert trend["sizeX"] == 24
-    assert "FROM mart_egisz_selfservice.network_error" in trend["dataset_query"]["native"]["query"]
+    assert "FROM serving_egisz.network_errors" in trend["dataset_query"]["native"]["query"]
 
 
 def test_operational_status_breakdown_uses_canonical_states() -> None:
@@ -326,7 +326,7 @@ def test_operational_status_breakdown_uses_canonical_states() -> None:
     assert latest_card["dataset_query"]["type"] == "native"
     assert card["dataset_query"]["type"] == "native"
     assert latest_card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "public.rpt_documents",
+        "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
     }
     # Отображаемый корпус — всё, кроме «Без ответа»: ответа по ним уже не ожидается.
@@ -345,15 +345,15 @@ def test_operational_status_breakdown_uses_canonical_states() -> None:
     assert "Неизвестная ошибка" not in row_keys
     assert "Нераспознан" not in row_keys
     # Тренд по дням: текущее состояние документа и день из ips_date.
-    assert "public.rpt_documents" in trend_query
+    assert "serving_egisz.documents_current" in trend_query
     assert "ips_date::date" in trend_query
     assert "status_detail_label" in trend_query
-    assert "public.transactions" not in trend_query
+    assert "stg_egisz.exchange_messages" not in trend_query
     assert "WHERE \"Статус\" IN ('success', 'error')" not in trend_query
-    assert "CREATE OR REPLACE VIEW public.rpt_documents" in Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "FROM public.rpt_documents" in Path("db/04_views.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW serving_egisz.documents_current" in Path("db/04_views.sql").read_text(encoding="utf-8")
+    assert "FROM serving_egisz.documents_current" in Path("db/04_views.sql").read_text(encoding="utf-8")
     assert trend_card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "public.rpt_documents",
+        "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
     }
 
@@ -379,22 +379,21 @@ def test_documents_view_exposes_canonical_status_label_and_code() -> None:
 
 def test_documents_view_unifies_logid_msgid_naming() -> None:
     """Транспорт СЭМД: LOGID отправки/ответа и две MSGID-сущности."""
-    rpt = Path("db/04_views.sql").read_text(encoding="utf-8")
-    core = Path("db/04_views.sql").read_text(encoding="utf-8")
+    views = Path("db/04_views.sql").read_text(encoding="utf-8")
     transform = Path("db/03_transform.sql").read_text(encoding="utf-8")
 
     # LOGID состояния: исход если есть, иначе отправка — больше не NULL для «Отправлено».
-    assert "COALESCE(d.result_logid, d.request_logid)::text AS logid" in rpt
-    assert "d.request_logid::text AS request_logid" in rpt
-    assert "d.result_logid::text AS result_logid" in rpt
+    assert "COALESCE(d.result_logid, d.request_logid)::text AS logid" in views
+    assert "d.request_logid::text AS request_logid" in views
+    assert "d.result_logid::text AS result_logid" in views
     # MSGID: собственный идентификатор сообщения + relatesTo из XML.
-    assert "public.clean_text_value(d.msgid) AS msgid" in rpt
-    assert "AS relates_to_msgid" in rpt
+    assert "stg_egisz.clean_text_value(d.msgid) AS msgid" in views
+    assert "AS relates_to_msgid" in views
     # Корпус результатов выводится из status напрямую — отдельного флага is_resolved нет.
-    assert "is_resolved" not in rpt
+    assert "is_resolved" not in views
     # document_attributes не публикует отдельный request_msgid.
-    assert "request_msgid text" not in core
-    assert "AS request_msgid" not in core
+    assert "request_msgid text" not in views
+    assert "AS request_msgid" not in views
     # Stored-схема использует канонические имена.
     assert "result_msgid" not in transform
     assert "request_msgid" not in transform
@@ -429,7 +428,7 @@ def test_metabase_json_does_not_depend_on_processed_raw_layer() -> None:
     for root in (Path("metabase_dashboards"), Path("metabase_models")):
         for path in sorted(root.glob("*.json")):
             text = path.read_text(encoding="utf-8")
-            for token in ("public.exchangelog_raw", "public.exchangelog_parse_attempts"):
+            for token in ("raw_egisz.exchangelog", "etl_meta.egisz_exchangelog_parse_attempts"):
                 if token in text:
                     offenders.append(f"{path}:{token}")
     assert not offenders, "Metabase JSON references processed raw layer: " + ", ".join(offenders)
@@ -538,7 +537,7 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     assert card["display"] == "table"
     assert card["sizeX"] == 12
     assert card["col"] == 0
-    assert "rpt_documents" in query
+    assert "documents_current" in query
     # Срез по парам клиника × тип СЭМД с долей ошибок по документному универсуму.
     assert "GROUP BY 1, 3" in query
     assert "FILTER (WHERE status = 'async_error'" in query
@@ -550,7 +549,7 @@ def test_quality_error_rate_clinic_by_semd_card() -> None:
     assert "ORDER BY 4 DESC" in query
     assert "semd_code" in query
     assert card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "public.rpt_documents",
+        "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
     }
 
@@ -566,18 +565,18 @@ def test_quality_error_rate_error_kind_by_semd_card() -> None:
     # Пара срезов «% ошибок» стоит в одном ряду: клиника слева, тип ошибки справа.
     pair = next(c for c in dashboard["cards"] if c.get("name") == "% ошибок: клиника × тип СЭМД")
     assert card["row"] == pair["row"]
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "FROM serving_egisz.document_errors" in query
     assert _plan.ERROR_ANALYSIS_SCOPE in query
     assert "WITH pairs AS" in query
     # Знаменатель «% ошибок» — документы (COUNT DISTINCT) по типу СЭМД.
     assert "semd_totals AS" in query
     assert "SUM(docs) OVER (PARTITION BY semd)" not in query
     assert "semd_code" in query
-    assert "COUNT(DISTINCT document_error.dwh_id)" in query
+    assert "COUNT(DISTINCT document_errors.dwh_id)" in query
     assert "ORDER BY 3 DESC" in query
     assert "LIMIT" not in query
     assert card["metabase-field-filters"]["ips_date"] == {
-        "table_ref": "mart_egisz_selfservice.document_error",
+        "table_ref": "serving_egisz.document_errors",
         "field_name": "ips_date",
     }
 
@@ -605,14 +604,14 @@ def test_semd_volume_uses_same_document_universe_as_total() -> None:
     top_query = top["dataset_query"]["native"]["query"]
 
     assert "semd_label" in top_query
-    assert "rpt_documents" in top_query
+    assert "documents_current" in top_query
     assert "COUNT(DISTINCT dwh_id)" in top_query
 
 
 def test_transform_backfills_semd_code_from_transactions() -> None:
     sql = Path("db/03_transform.sql").read_text(encoding="utf-8")
-    assert "UPDATE public.documents d" in sql
-    assert "FROM public.transactions t" in sql
+    assert "UPDATE mart_egisz.documents d" in sql
+    assert "FROM stg_egisz.exchange_messages t" in sql
     assert "NULLIF(btrim(d.semd_code), '') IS NULL" in sql
     assert "batch_docs AS" in sql
     # Отдельная O(архив)-функция backfill_semd_codes() удалена — backfill делает inline batch-блок.
@@ -622,11 +621,11 @@ def test_transform_backfills_semd_code_from_transactions() -> None:
 def test_document_metric_cards_count_distinct_dwh_id() -> None:
     # Грейн ошибки связи — сообщение: её карточки считают ошибки, а не документы.
     document_views = (
-        "rpt_documents",
-        "mart_egisz_selfservice.document_error",
+        "documents_current",
+        "serving_egisz.document_errors",
     )
     allowed_count_star = {
-        "01_integration_egisz.json": {"rpt_health_signals"},
+        "01_integration_egisz.json": {"health_signals"},
         "05_executive.json": {"active_jid"},
         "08_client_bianalytic.json": {"per_patient"},
     }
@@ -662,7 +661,7 @@ def test_archive_no_code_documents_are_qualified_by_status() -> None:
     assert "semd_name" in sql
     assert "error_type" in sql
     assert "semd_label" in query
-    assert "rpt_documents" in query
+    assert "documents_current" in query
     assert "NULLIF(TRIM(semd_code" not in query
 
 
@@ -670,8 +669,8 @@ def test_document_views_use_document_grain_without_redundant_dedup() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "ROW_NUMBER() OVER" not in sql
-    assert "FROM public.documents d" in sql
-    assert "FROM public.rpt_documents" in sql
+    assert "FROM mart_egisz.documents d" in sql
+    assert "FROM serving_egisz.documents_current" in sql
 
 
 def test_dashboards_do_not_expose_technical_dwh_id_fallbacks() -> None:
@@ -714,8 +713,8 @@ def test_error_analytics_use_raw_json_column_for_grouping() -> None:
     dashboard = _tab_dashboard("errors")
     queries = _native_queries(dashboard)
 
-    assert any("mart_egisz_selfservice.document_error" in query for query in queries)
-    assert all("transactions" not in query for query in queries)
+    assert any("serving_egisz.document_errors" in query for query in queries)
+    assert all("exchange_messages" not in query for query in queries)
     assert all("\"Ошибки JSON raw\"" not in query for query in queries)
 
 
@@ -728,7 +727,7 @@ def test_document_volume_by_day_uses_first_sent_not_sent_at() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert "first_sent_at" in Path("db/04_views.sql").read_text(encoding="utf-8")
     assert "first_sent_at" in query
-    assert "FROM public.rpt_documents" in query
+    assert "FROM serving_egisz.documents_current" in query
     assert "documents fd" not in query
     assert "COALESCE(fd.first_sent_at" not in query
     assert "processed_day AS" not in query
@@ -769,7 +768,7 @@ def test_quality_error_structure_section_is_category_colored_row_card() -> None:
 
     assert card["display"] == "row"
     assert card["sizeX"] >= 11
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "FROM serving_egisz.document_errors" in query
     assert "GROUP BY 1, 2" in query
     assert "LIMIT" not in query.upper()
     assert viz["graph.dimensions"] == ["Категория ошибки", "Тип ошибки"]
@@ -797,7 +796,7 @@ def test_quality_semd_error_stacked_bar_hides_negligible_tail() -> None:
     assert card["display"] == "row"
     assert "semd_code" in query
     assert "rn <= 15" in query
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "FROM serving_egisz.document_errors" in query
     assert card["visualization_settings"]["graph.dimensions"] == ["СЭМД", "Тип ошибки"]
     assert card["visualization_settings"]["graph.metrics"] == ["Документов"]
     assert card["visualization_settings"]["stackable.stack_type"] == "stacked"
@@ -841,7 +840,7 @@ def test_executive_dashboard_mixes_ops_and_finance_metrics() -> None:
         )
 
     # Источники только реальные.
-    assert any("rpt_documents" in q for q in queries)
+    assert any("documents_current" in q for q in queries)
     assert all("rpt_documents_waiting" not in q for q in queries)
 
     # Фикс-тариф 10 000 ₽/JID/мес зашит явно в SQL карточек.
@@ -908,9 +907,9 @@ def test_executive_overview_opens_with_three_statuses() -> None:
     assert "CURRENT_DATE - 50, CURRENT_DATE - 1, '7 day'::interval" in growth_query
 
     signal_query = signal["dataset_query"]["native"]["query"]
-    assert "public.dim_control_chart_phases" in signal_query
+    assert "mart_egisz.dim_control_chart_phases" in signal_query
     assert "ORDER BY period_start DESC LIMIT 1" in signal_query
-    assert signal["metabase-field-filters"]["jid"]["table_ref"] == "public.rpt_documents_weekly"
+    assert signal["metabase-field-filters"]["jid"]["table_ref"] == "serving_egisz.documents_weekly"
 
     # JID из обоих рабочих списков считается один раз.
     risk_query = risk["dataset_query"]["native"]["query"]
@@ -930,13 +929,14 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     assert any(p["name"] == "JID Клиники" for p in dashboard["parameters"])
     assert any(p["name"] == "Обработано IPS" and p.get("default") == "past7days~" for p in dashboard["parameters"])
     assert any(p["name"] == "Тип документа" for p in dashboard["parameters"])
-    # Обзор/Документы читают rpt_documents, вкладка ошибок — ошибки документа
-    # (mart_egisz_selfservice.document_error), вкладка типов СЭМД в обмене —
-    # rpt_clinic_semd_activity.
+    # Обзор/Документы читают documents_current и documents_sent, вкладка ошибок — ошибки
+    # документа (serving_egisz.document_errors), вкладка типов СЭМД в обмене —
+    # clinic_semd_activity.
     assert all(
-        "public.rpt_documents" in query
-        or "mart_egisz_selfservice.document_error" in query
-        or "public.rpt_clinic_semd_activity" in query
+        "serving_egisz.documents_current" in query
+        or "serving_egisz.documents_sent" in query
+        or "serving_egisz.document_errors" in query
+        or "serving_egisz.clinic_semd_activity" in query
         for query in queries
     )
     assert all(
@@ -950,7 +950,7 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
 
     assert dashboard["name"] == "Клиентский дашборд. BI-аналитика ЭМД"
     assert any(p["name"] == "JID Клиники" for p in dashboard["parameters"])
-    assert all("public.rpt_documents" in query for query in queries)
+    assert all("serving_egisz.documents_current" in query for query in queries)
     assert all("clinic_jid::text = {{client_jid}}" in query for query in queries)
     assert all("clinic_jid = {{client_jid}}" not in query for query in queries)
     # Уникальный счёт пациентов/врачей идёт через hash-колонки, не через masked-имена.
@@ -983,16 +983,16 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
                 continue
             # Фильтры среза биндятся к грейну источника карточки: витрина типов СЭМД
             # в обмене несёт собственный clinic_label; если карточка смешивает документы и
-            # их ошибки (period_docs + join document_error), клиника/период/тип идут
-            # на rpt_documents; чисто-ошибочные карточки — на document_error.
-            if "public.rpt_clinic_semd_activity" in query:
-                source_view = "public.rpt_clinic_semd_activity"
-            elif "public.rpt_documents_sent" in query:
-                source_view = "public.rpt_documents_sent"
-            elif "public.rpt_documents" in query:
-                source_view = "public.rpt_documents"
+            # их ошибки (period_docs + join document_errors), клиника/период/тип идут
+            # на documents_current; чисто-ошибочные карточки — на document_errors.
+            if "serving_egisz.clinic_semd_activity" in query:
+                source_view = "serving_egisz.clinic_semd_activity"
+            elif "serving_egisz.documents_sent" in query:
+                source_view = "serving_egisz.documents_sent"
+            elif "serving_egisz.documents_current" in query:
+                source_view = "serving_egisz.documents_current"
             else:
-                source_view = "mart_egisz_selfservice.document_error"
+                source_view = "serving_egisz.document_errors"
             if path_name == "07_client_service.json":
                 assert tags["client_jid"]["type"] == "text"
                 assert tags["client_jid"]["required"] is False
@@ -1006,11 +1006,11 @@ def test_client_dashboards_field_filters_are_bound_to_client_view() -> None:
                 assert tags["client_jid"]["type"] == "text"
                 assert tags["client_jid"]["required"] is True
             # Field-filters периода/типа биндятся к source-витрине карточки: карточки ошибок
-            # читают document_error, остальные — rpt_documents (обе несут ips_date/semd_label).
+            # читают document_errors, остальные — documents_current (обе несут ips_date/semd_label).
             # Срез ожидающих живёт на грейне отправки, и период у него — дата отправки.
             # Неиспользуемые в SQL фильтры карточки вычищены (prune), поэтому проверяем по наличию.
             period_field = (
-                "first_sent_at" if source_view == "public.rpt_documents_sent" else "ips_date"
+                "first_sent_at" if source_view == "serving_egisz.documents_sent" else "ips_date"
             )
             if "ips_date" in tags:
                 assert tags["ips_date"]["type"] == "dimension"
@@ -1051,14 +1051,14 @@ def test_client_service_dashboard_has_tabs_and_error_analytics() -> None:
         assert card.get("tab") in tab_ids, f"card {card.get('name', '(text)')!r} without valid tab"
 
     # Карточки на грейне ошибки живут на вкладке ошибок; журнал документов читает
-    # rpt_documents и берёт из ошибок документа только их типы.
+    # documents_current и берёт из ошибок документа только их типы.
     error_cards = [
         card for card in dashboard["cards"]
         if card.get("dataset_query", {}).get("type") == "native"
-        and "FROM mart_egisz_selfservice.document_error" in card["dataset_query"]["native"]["query"]
-        and "FROM public.rpt_documents" not in card["dataset_query"]["native"]["query"]
+        and "FROM serving_egisz.document_errors" in card["dataset_query"]["native"]["query"]
+        and "FROM serving_egisz.documents_current" not in card["dataset_query"]["native"]["query"]
     ]
-    assert error_cards, "вкладка ошибок должна читать mart_egisz_selfservice.document_error"
+    assert error_cards, "вкладка ошибок должна читать serving_egisz.document_errors"
     assert all(card.get("tab") == "errors" for card in error_cards)
 
 
@@ -1086,7 +1086,7 @@ def test_client_service_status_by_day_is_stacked_status_shares() -> None:
 
 def test_client_top_error_type_shows_processed_share() -> None:
     """07: «Топ типов ошибок — клиент» — «% обработанных» (доля от успех+ошибка) рядом
-    с «% ошибок»; знаменатель считается по period_docs из rpt_documents."""
+    с «% ошибок»; знаменатель считается по period_docs из documents_current."""
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
     card = next(c for c in dashboard["cards"] if c.get("name") == "Топ типов ошибок — клиент")
     query = card["dataset_query"]["native"]["query"]
@@ -1094,14 +1094,14 @@ def test_client_top_error_type_shows_processed_share() -> None:
     assert 'AS "% ошибок"' in query
     assert 'AS "% обработанных"' in query
     assert "period_docs" in query
-    assert "public.rpt_documents" in query
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "serving_egisz.documents_current" in query
+    assert "FROM serving_egisz.document_errors" in query
     ff = card["metabase-field-filters"]
-    assert ff["ips_date"]["table_ref"] == "public.rpt_documents"
-    assert ff["client_document_type"]["table_ref"] == "public.rpt_documents"
-    assert ff["clinic_label"]["table_ref"] == "public.rpt_documents"
+    assert ff["ips_date"]["table_ref"] == "serving_egisz.documents_current"
+    assert ff["client_document_type"]["table_ref"] == "serving_egisz.documents_current"
+    assert ff["clinic_label"]["table_ref"] == "serving_egisz.documents_current"
     # Категория ошибки живёт только на грейне ошибок документа.
-    assert ff["client_error_category"]["table_ref"] == "mart_egisz_selfservice.document_error"
+    assert ff["client_error_category"]["table_ref"] == "serving_egisz.document_errors"
 
 
 def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
@@ -1110,11 +1110,11 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
     Витрина строится по фактам документов; ссылки на лицензии отсутствуют.
     """
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_activity" in sql
+    assert "CREATE OR REPLACE VIEW serving_egisz.clinic_semd_activity" in sql
     assert "MAX(r.first_sent_at) AS last_sent_at" in sql
     assert "MAX(r.registered_at) AS last_registered_at" in sql
-    assert "FROM public.rpt_documents r" in sql
-    assert "LEFT JOIN public.dim_semd_types st ON st.code = f.semd_code" in sql
+    assert "FROM serving_egisz.documents_current r" in sql
+    assert "LEFT JOIN mart_egisz.dim_semd_types st ON st.code = f.semd_code" in sql
     assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" not in sql
 
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
@@ -1122,10 +1122,10 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
     assert card["tab"] == "semd_types"
     assert card["display"] == "table"
     query = card["dataset_query"]["native"]["query"]
-    assert "public.rpt_clinic_semd_activity" in query
+    assert "serving_egisz.clinic_semd_activity" in query
     assert "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]]" in query
     assert card["metabase-field-filters"]["clinic_label"] == {
-        "table_ref": "public.rpt_clinic_semd_activity",
+        "table_ref": "serving_egisz.clinic_semd_activity",
         "field_name": "clinic_label",
     }
     columns = {c["name"] for c in card["visualization_settings"]["table.columns"]}
@@ -1148,8 +1148,8 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
 def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
-    assert "CREATE OR REPLACE VIEW public.rpt_documents" in sql
-    assert "FROM public.rpt_documents" in sql
+    assert "CREATE OR REPLACE VIEW serving_egisz.documents_current" in sql
+    assert "FROM serving_egisz.documents_current" in sql
     assert "patient_name_masked" in sql
     assert "snils_masked" in sql
     assert "doctor_name" in sql
@@ -1340,12 +1340,12 @@ ERROR_PERIOD_CARD = "Ошибки: тип × клиника"
 
 
 def test_operational_error_period_card_uses_atomic_error_types() -> None:
-    """Карточка error period — ошибки документа (document_error), без «Сводки ошибки»."""
+    """Карточка error period — ошибки документа (document_errors), без «Сводки ошибки»."""
     dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "FROM serving_egisz.document_errors" in query
     assert "error_type" in query
     assert "clinic_label" in query
     cols = {c["name"] for c in card["visualization_settings"].get("table.columns", [])}
@@ -1380,15 +1380,15 @@ def test_error_period_card_groups_by_error_type_and_clinic() -> None:
 
 
 def test_error_period_card_uses_breakdown_model() -> None:
-    """Карточка читает ошибки документа через period_docs из rpt_documents."""
+    """Карточка читает ошибки документа через period_docs из documents_current."""
     dashboard = _tab_dashboard("errors")
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
-    assert "FROM mart_egisz_selfservice.document_error" in query
-    assert "rpt_documents" in query
+    assert "FROM serving_egisz.document_errors" in query
+    assert "documents_current" in query
     assert card.get("metabase-field-filters")["ips_date"] == {
-        "table_ref": "public.rpt_documents",
+        "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
     }
 
@@ -1399,10 +1399,10 @@ def test_error_period_card_uses_canonical_filter_tags() -> None:
     card = next(c for c in dashboard["cards"] if c.get("name") == ERROR_PERIOD_CARD)
     filters = card.get("metabase-field-filters") or {}
     assert filters["jid"]["field_name"] == "clinic_label"
-    assert filters["jid"]["table_ref"] == "public.rpt_documents"
+    assert filters["jid"]["table_ref"] == "serving_egisz.documents_current"
     assert filters["semd_type"]["field_name"] == "semd_label"
     assert filters["error_type"]["field_name"] == "error_type"
-    assert filters["error_type"]["table_ref"] == "mart_egisz_selfservice.document_error"
+    assert filters["error_type"]["table_ref"] == "serving_egisz.document_errors"
     query = card["dataset_query"]["native"]["query"]
     assert "[[AND {{error_type}}]]" in query
     param_slugs = {p["slug"] for p in dashboard["parameters"]}
@@ -1424,7 +1424,7 @@ def test_all_error_analysis_cards_filter_individual_error_types() -> None:
         assert "{{error_type}}" in native["query"], card["name"]
         assert native["template-tags"]["error_type"]["widget-type"] == "string/="
         assert card["metabase-field-filters"]["error_type"] == {
-            "table_ref": "mart_egisz_selfservice.document_error", "field_name": "error_type"
+            "table_ref": "serving_egisz.document_errors", "field_name": "error_type"
         }
         if "semd_totals AS (" in native["query"]:
             assert "{{error_type}}" not in native["query"].split("semd_totals AS (")[1]
@@ -1487,22 +1487,22 @@ def test_top_error_type_card_is_table_with_share() -> None:
     assert card["display"] == "table"
     assert "error_category" in query
     assert '"Тип ошибки"' in query
-    # «% ошибок» — доля среди документов с ошибками (грейн document_error);
-    # «% обработанных» — доля среди всех документов с ответом РЭМД (грейн rpt_documents).
+    # «% ошибок» — доля среди документов с ошибками (грейн document_errors);
+    # «% обработанных» — доля среди всех документов с ответом РЭМД (грейн documents_current).
     assert 'AS "% ошибок"' in query
     assert 'AS "% обработанных"' in query
     assert "NULLIF((SELECT total_err FROM totals), 0)" in query
     assert "NULLIF((SELECT total_final FROM totals), 0)" in query
-    # База — period_docs из rpt_documents (успех+ошибка), к ней джойнятся ошибки документа.
+    # База — period_docs из documents_current (успех+ошибка), к ней джойнятся ошибки документа.
     assert "period_docs" in query
-    assert "public.rpt_documents" in query
-    assert "FROM mart_egisz_selfservice.document_error" in query
+    assert "serving_egisz.documents_current" in query
+    assert "FROM serving_egisz.document_errors" in query
     assert _plan.ERROR_ANALYSIS_SCOPE in query
     # Фильтры среза привязаны к грейну документа, иначе знаменатель «обработанных» неверен.
     ff = card["metabase-field-filters"]
-    assert ff["ips_date"]["table_ref"] == "public.rpt_documents"
-    assert ff["jid"]["table_ref"] == "public.rpt_documents"
-    assert ff["semd_type"]["table_ref"] == "public.rpt_documents"
+    assert ff["ips_date"]["table_ref"] == "serving_egisz.documents_current"
+    assert ff["jid"]["table_ref"] == "serving_egisz.documents_current"
+    assert ff["semd_type"]["table_ref"] == "serving_egisz.documents_current"
     columns = [col["name"] for col in viz["table.columns"]]
     assert columns == [
         "Тип ошибки",
@@ -1513,7 +1513,7 @@ def test_top_error_type_card_is_table_with_share() -> None:
         "Зона ответственности",
         "Устраняется повтором",
     ]
-    # Зона ответственности и повторяемость — из mart_egisz.dim_error_type через document_error.
+    # Зона ответственности и повторяемость — из mart_egisz.dim_error_type через document_errors.
     assert '"Зона ответственности"' in query
     assert '"Устраняется повтором"' in query
     assert viz["table.column_widths"] == [350, 96, 96, 128]
@@ -1595,15 +1595,15 @@ def test_dashboard_numeric_formatting_uses_ru_default() -> None:
 
 def test_network_error_view_is_published_per_message() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    view = sql[sql.index("CREATE VIEW mart_egisz_selfservice.network_error AS"):]
+    view = sql[sql.index("CREATE VIEW serving_egisz.network_errors AS"):]
     view = view[:view.index(";")]
-    elements = sql[sql.index("CREATE VIEW stg_egisz.message_error AS"):]
+    elements = sql[sql.index("CREATE VIEW stg_egisz.message_errors AS"):]
     elements = elements[:elements.index(";")]
     # Строка — одна ошибка связи по времени сообщения, в том числе без связи с документом.
     assert "tx.log_date AS message_at" in elements
-    assert "FROM stg_egisz.message_error m" in view
+    assert "FROM stg_egisz.message_errors m" in view
     assert "m.error_kind = 'Ошибка связи'" in view
-    assert "JOIN public.documents" not in view
+    assert "JOIN mart_egisz.documents" not in view
 
 
 def test_sent_view_derives_states_from_dictionaries() -> None:
@@ -1613,8 +1613,8 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
     views = Path("db/04_views.sql").read_text(encoding="utf-8")
     dashboard = _tab_dashboard("sent")
 
-    assert "CREATE TABLE IF NOT EXISTS dim_pending_segments" in tables
-    assert "CREATE TABLE IF NOT EXISTS dim_sent_state" in tables
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_pending_segments" in tables
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_sent_state" in tables
     for label in ("до 5 минут", "до 1 часа", "до 6 часов", "до 12 часов",
                   "до 24 часов", "до 3 суток", "до 7 суток", "до 15 суток", "свыше 15 суток"):
         assert f"'{label}'" in tables, f"ступень «{label}» отсутствует в справочнике"
@@ -1624,9 +1624,9 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
     assert "'no_response'" in tables
 
     # Представление не должно содержать собственных порогов и подписей ступеней.
-    assert "public.dim_pending_segments" in views
-    assert "public.dim_sent_state" in views
-    assert "CREATE OR REPLACE VIEW public.rpt_documents_sent" in views
+    assert "mart_egisz.dim_pending_segments" in views
+    assert "mart_egisz.dim_sent_state" in views
+    assert "CREATE OR REPLACE VIEW serving_egisz.documents_sent" in views
     for stale in ("'>30 дней'", "'>7 дней'", "'>3 дней'", "'до 3 дней'"):
         assert stale not in views, f"порог {stale} захардкожен в представлении"
 
@@ -1721,10 +1721,10 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
         "\u0448\u043b\u044e\u0437-\u041c\u041e)"
     )
     expected_filters = {
-        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
-        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
-        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
-        "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
+        "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
+        "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
+        "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
+        "local_uid": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_local_uid"},
     }
 
     card = next(c for c in _tab_cards("sent") if c.get("name") == scalar_name)
@@ -1732,15 +1732,15 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
 
     assert card["display"] == "scalar"
     assert (card["row"], card["col"], card["sizeX"], card["sizeY"]) == (48, 0, 12, 3)
-    assert "public.rpt_documents r" not in query
-    assert "COUNT(DISTINCT public.rpt_documents.dwh_id)" in query
-    assert "public.rpt_documents.status IN ('success', 'async_error')" in query
-    assert "FROM stg_egisz.document_error_current c" in query
+    assert "serving_egisz.documents_current r" not in query
+    assert "COUNT(DISTINCT serving_egisz.documents_current.dwh_id)" in query
+    assert "serving_egisz.documents_current.status IN ('success', 'async_error')" in query
+    assert "FROM stg_egisz.document_errors_current c" in query
     assert "WHERE c.error_kind = 'Ошибка связи'" in query
-    assert "public.exchangelog_raw" not in query
-    assert "public.transactions" not in query
+    assert "raw_egisz.exchangelog" not in query
+    assert "stg_egisz.exchange_messages" not in query
     assert "WITH latest_errors AS" in query
-    assert "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id" in query
+    assert "JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id" in query
     assert set(card["dataset_query"]["native"]["template-tags"]) == {
         "ips_date",
         "semd_type",
@@ -1753,16 +1753,16 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
     detail_query = detail["dataset_query"]["native"]["query"]
     assert detail["display"] == "table"
     assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (51, 0, 24, 10)
-    assert "public.rpt_documents r" not in detail_query
-    assert "public.rpt_documents.status IN ('success', 'async_error')" in detail_query
-    assert "FROM stg_egisz.document_error_current c" in detail_query
+    assert "serving_egisz.documents_current r" not in detail_query
+    assert "serving_egisz.documents_current.status IN ('success', 'async_error')" in detail_query
+    assert "FROM stg_egisz.document_errors_current c" in detail_query
     assert "WHERE c.error_kind = 'Ошибка связи'" in detail_query
     assert 'latest_errors.error_type AS "Тип ошибки доставки"' in detail_query
-    assert "public.exchangelog_raw" not in detail_query
-    assert "public.transactions" not in detail_query
+    assert "raw_egisz.exchangelog" not in detail_query
+    assert "stg_egisz.exchange_messages" not in detail_query
     assert "WITH latest_errors AS" in detail_query
     assert "JOIN LATERAL" not in detail_query
-    assert "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id" in detail_query
+    assert "JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id" in detail_query
     assert "LIMIT 200" in detail_query
     assert set(detail["dataset_query"]["native"]["template-tags"]) == {
         "ips_date",
@@ -1922,15 +1922,15 @@ def test_transport_tile_counts_network_errors_over_rolling_24h() -> None:
     связи по времени сообщения, в том числе у сообщений без связи с документом."""
     tile = next(c for c in _tab_cards("operational") if c.get("name") == TRANSPORT_24H_NAME)
     query = tile["dataset_query"]["native"]["query"]
-    assert "FROM mart_egisz_selfservice.network_error" in query
+    assert "FROM serving_egisz.network_errors" in query
     assert "FLOOR(EXTRACT(EPOCH FROM (now() - message_at)) / 86400)::int AS days_back" in query
     assert "message_at > now() - INTERVAL '14 days' AND message_at <= now()" in query
     assert "generate_series(13, 0, -1) AS k" in query
     assert "COUNT(*)" in query and "COUNT(DISTINCT dwh_id)" not in query
     assert set(tile["dataset_query"]["native"]["template-tags"]) == {"semd_type", "jid"}
     assert tile["metabase-field-filters"] == {
-        "semd_type": {"table_ref": "mart_egisz_selfservice.network_error", "field_name": "semd_label"},
-        "jid": {"table_ref": "mart_egisz_selfservice.network_error", "field_name": "clinic_label"},
+        "semd_type": {"table_ref": "serving_egisz.network_errors", "field_name": "semd_label"},
+        "jid": {"table_ref": "serving_egisz.network_errors", "field_name": "clinic_label"},
     }
     assert "click_behavior" not in tile
 
@@ -1946,12 +1946,12 @@ def test_clinic_error_contribution_explains_shift_from_phase_baseline() -> None:
 
     # Опорный период — из справочника фаз, по фазе последней недели периода; незакрытый
     # опорный период не сравнивается, как и у XmR-карты.
-    assert "FROM public.dim_control_chart_phases WHERE period_grain = 'week'" in query
+    assert "FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week'" in query
     assert "date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date" in query
     assert "WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date" in query
     assert "(ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts" in query
-    assert "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz )" in query
-    assert query.count("public.report_timezone()") == 1
+    assert "WITH calendar AS MATERIALIZED ( SELECT serving_egisz.report_timezone() AS tz )" in query
+    assert query.count("serving_egisz.report_timezone()") == 1
     # Фильтр периода — только у периода и основного типа ошибки, у опорного периода его нет.
     baseline = query.split("baseline AS (", 1)[1].split("clinics AS (", 1)[0]
     assert "{{ips_date}}" not in baseline
@@ -1965,8 +1965,8 @@ def test_clinic_error_contribution_explains_shift_from_phase_baseline() -> None:
     assert query.count(membership) == 2
     # Основной тип ошибки — из отказов: тот же отбор, что у числителя доли.
     top_error = query.split("top_error AS (", 1)[1]
-    assert "document_error.status = 'async_error'" in top_error
-    assert "document_error.error_kind = 'Ошибка асинхронного ответа'" in top_error
+    assert "document_errors.status = 'async_error'" in top_error
+    assert "document_errors.error_kind = 'Ошибка асинхронного ответа'" in top_error
     assert "COUNT(*)" not in query
 
     # Разложение: вклад = превышение над опорной долей в периоде минус то же в опорном;
@@ -1998,7 +1998,7 @@ def test_metabase_models_catalog_exists() -> None:
         "05_document_file_request.json",
     ]
     documents = json.loads(Path("metabase_models/01_documents.json").read_text(encoding="utf-8"))
-    assert documents["table_ref"] == "public.rpt_documents"
+    assert documents["table_ref"] == "serving_egisz.documents_current"
     assert documents["name"] == "Документы"
     assert "status_label" in documents["fields"]
     assert "semd_name" in documents["fields"]
@@ -2006,25 +2006,25 @@ def test_metabase_models_catalog_exists() -> None:
     assert "status" in documents["hidden_fields"]
     no_response = json.loads(Path("metabase_models/03_no_response.json").read_text(encoding="utf-8"))
     assert no_response["name"] == "Отправленные"
-    assert no_response["table_ref"] == "public.rpt_documents_sent"
+    assert no_response["table_ref"] == "serving_egisz.documents_sent"
     assert "pending_segment_label" in no_response["fields"]
     assert "sent_state_label" in no_response["fields"]
     # Ошибки — модели на опубликованных ошибках: исходного текста в них нет, он
     # остаётся в слое разбора.
     breakdown = json.loads(Path("metabase_models/02_error_breakdown.json").read_text(encoding="utf-8"))
     assert breakdown["name"] == "Разбивка ошибок"
-    assert breakdown["table_ref"] == "mart_egisz_selfservice.document_error"
+    assert breakdown["table_ref"] == "serving_egisz.document_errors"
     assert {"error_kind", "error_category", "error_type", "status_label"} <= set(breakdown["fields"])
     network_errors = json.loads(Path("metabase_models/04_network_errors.json").read_text(encoding="utf-8"))
     assert network_errors["name"] == "Сбои транспорта"
-    assert network_errors["table_ref"] == "mart_egisz_selfservice.network_error"
+    assert network_errors["table_ref"] == "serving_egisz.network_errors"
     assert {"message_at", "logid", "msgid", "error_type"} <= set(network_errors["fields"])
     for model in (documents, breakdown, network_errors):
         names = set(model["fields"]) | set(model.get("hidden_fields") or [])
         assert "error_text" not in names and "error_types" not in names, model["name"]
     file_requests = json.loads(Path("metabase_models/05_document_file_request.json").read_text(encoding="utf-8"))
     assert file_requests["name"] == "История запроса документов"
-    assert file_requests["table_ref"] == "public.rpt_document_file_request"
+    assert file_requests["table_ref"] == "serving_egisz.document_file_requests"
     assert "request_at" in file_requests["fields"]
 
 
@@ -2043,7 +2043,8 @@ def test_importer_addresses_every_dashboard_schema() -> None:
                     refs.add(binding["table_ref"])
     for path in Path("metabase_models").glob("*.json"):
         refs.add(json.loads(path.read_text(encoding="utf-8"))["table_ref"])
-    assert {"stg_egisz", "mart_egisz", "mart_egisz_selfservice"} <= schemas
+    assert {"stg_egisz", "mart_egisz", "mart_egisz_admin", "serving_egisz"} <= schemas
+    assert not {"public", "mart_egisz_selfservice"} & schemas
     assert {ref.split(".", 1)[0] for ref in refs} <= schemas, sorted(refs)
     for script in (setup, sync):
         assert "#public." not in script
@@ -2057,7 +2058,7 @@ def test_operational_clinic_volume_uses_native_documents_slice() -> None:
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
     assert 'AS "%"' in query
-    assert "public.rpt_documents" in query
+    assert "serving_egisz.documents_current" in query
     assert "clinic_jid" in query
 
 
@@ -2135,7 +2136,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
 
     network_sql = by_name["Последние сбои транспорта"]["dataset_query"]["native"]["query"]
     # Исходный текст шлюза — в слое разбора, по сообщению (logid, message_at).
-    assert "FROM stg_egisz.message_error m" in network_sql
+    assert "FROM stg_egisz.message_errors m" in network_sql
     assert "LEFT(m.error_text, 140)" in network_sql
     assert "m.logid = latest.logid AND m.message_at = latest.message_at" in network_sql
     assert 'latest.logid::text AS "LOGID"' in network_sql
@@ -2143,14 +2144,14 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     assert '"Текст сетевой ошибки"' not in network_sql
 
     registry_health = by_name["РЭМД: EGISZ_MESSAGES без DOCUMENTID"]["dataset_query"]["native"]["query"]
-    assert "public.rpt_health_message_registry_no_document" in registry_health
+    assert "mart_egisz_admin.health_message_registry_no_document" in registry_health
     assert '"Подсистема ЕГИСЗ"' in registry_health
     assert "LIMIT 200" in registry_health
 
     detail_sql = by_name["Детализация контроля качества"]["dataset_query"]["native"]["query"]
     assert "clinic_jid_mismatch" not in detail_sql
-    assert "FROM public.rpt_documents r" not in detail_sql
-    assert "rpt_document_lineage" in detail_sql
+    assert "FROM serving_egisz.documents_current r" not in detail_sql
+    assert "document_lineage" in detail_sql
     assert '"OID из обмена"' in detail_sql
     assert '"ЮЛ по реестру OID"' in detail_sql
 
@@ -2164,7 +2165,7 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
         assert {"semd_type", "jid"} <= set(filters), card_name
-        assert filters["jid"]["table_ref"] == "public.rpt_documents", card_name
+        assert filters["jid"]["table_ref"] == "serving_egisz.documents_current", card_name
 
     for card_name in (
         "Ответ не получен (утилизирован)",
@@ -2173,14 +2174,14 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
         assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
-        assert filters.get("ips_date", {}).get("table_ref") == "public.rpt_documents_sent", card_name
+        assert filters.get("ips_date", {}).get("table_ref") == "serving_egisz.documents_sent", card_name
 
     # Воронка процесса живёт на полном корпусе, а не на срезе ожидающих: срок ожидания
     # и localUid к нему неприменимы, поэтому в неё не переносятся.
     funnel = by_name["Скорость регистрации в РЭМД"]
     filters = funnel.get("metabase-field-filters") or {}
     assert set(filters) == {"ips_date", "semd_type", "jid"}
-    assert filters["ips_date"]["table_ref"] == "public.rpt_documents"
+    assert filters["ips_date"]["table_ref"] == "serving_egisz.documents_current"
     assert set(funnel["dataset_query"]["native"]["template-tags"]) == {"ips_date", "semd_type", "jid"}
     # Корпус — только документы с полученным ответом: у ожидающих и у «Без ответа»
     # срока регистрации нет, и в знаменателе они притворялись бы медленными.
@@ -2202,7 +2203,7 @@ def test_document_file_request_pattern_has_own_view_and_dashboard() -> None:
     cleanup = Path("scripts/cleanup_document_file_request_sent.sql").read_text(encoding="utf-8")
     dashboard = json.loads(Path("metabase_dashboards/10_document_file_request_history.json").read_text(encoding="utf-8"))
 
-    assert "CREATE OR REPLACE VIEW public.rpt_document_file_request" in views
+    assert "CREATE OR REPLACE VIEW serving_egisz.document_file_requests" in views
     assert "tx.source_action = 'getDocumentFile'" in views
     assert "NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL" in views
     assert "Это не подача документа" in views
@@ -2211,10 +2212,10 @@ def test_document_file_request_pattern_has_own_view_and_dashboard() -> None:
         "-- ------------------------------------------------------------------\n    -- Ветка ответа", 1
     )[0]
     assert "NULLIF(btrim(tx.xml_emdr_id), '') IS NULL" in sent_branch
-    assert "dim_message_document" in sent_branch
+    assert "stg_egisz.message_registry" in sent_branch
 
-    assert "DELETE FROM public.transactions" not in cleanup
-    assert "DELETE FROM public.exchangelog_raw" not in cleanup
+    assert "DELETE FROM stg_egisz.exchange_messages" not in cleanup
+    assert "DELETE FROM raw_egisz.exchangelog" not in cleanup
     assert "tx.source_action = 'getDocumentFile'" in cleanup
     assert "NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL" in cleanup
 
@@ -2223,8 +2224,8 @@ def test_document_file_request_pattern_has_own_view_and_dashboard() -> None:
     assert {"Запросов документов", "Запросы по дням", "История запросов документов"} <= names
     for card in dashboard["cards"]:
         query = card["dataset_query"]["native"]["query"]
-        assert "public.rpt_document_file_request" in query
-        assert "rpt_documents_sent" not in query
+        assert "serving_egisz.document_file_requests" in query
+        assert "documents_sent" not in query
 
 
 def test_message_registry_no_document_is_health_only() -> None:
@@ -2232,7 +2233,7 @@ def test_message_registry_no_document_is_health_only() -> None:
     dashboard = _tab_dashboard("service")
     by_name = {c.get("name"): c for c in dashboard["cards"]}
 
-    assert "CREATE OR REPLACE VIEW public.rpt_health_message_registry_no_document" in views
+    assert "CREATE OR REPLACE VIEW mart_egisz_admin.health_message_registry_no_document" in views
     assert "'message_registry_no_document'" in views
     assert "tx.egisz_subsystem IS DISTINCT FROM 'ИЭМК'" in views
     assert "'РЭМД: EGISZ_MESSAGES без DOCUMENTID'" in views
@@ -2289,10 +2290,10 @@ def test_document_attributes_table_has_no_legacy_labels() -> None:
 
 
 def test_connectivity_view_no_stale_jid_coalesce() -> None:
-    rpt_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "JID из журнала" not in rpt_sql
-    assert "JID Клиники (ключ)" not in rpt_sql
-    assert "Ответы РЭМД: успех (документов)" not in rpt_sql
+    views_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
+    assert "JID из журнала" not in views_sql
+    assert "JID Клиники (ключ)" not in views_sql
+    assert "Ответы РЭМД: успех (документов)" not in views_sql
 
 
 def test_clinic_error_volume_chart_uses_clinic_name_not_jid_label() -> None:
@@ -2448,7 +2449,7 @@ def _card_filter_keys(card: dict) -> set[str]:
 
 def test_no_legacy_date_tokens_anywhere() -> None:
     """ips_date — единственное имя бизнес-даты: ни dwh_date/processed_at/processed_day/arrival_day,
-    ни двойного сдвига AT TIME ZONE в документных rpt-витринах, ни в дашбордах."""
+    ни двойного сдвига AT TIME ZONE в документных витринах, ни в дашбордах."""
     for path in _dashboard_paths():
         blob = path.read_text(encoding="utf-8")
         for tok in ("dwh_date", "processed_at", "processed_day", "arrival_day", "mgmt_period", "client_period"):
@@ -2458,7 +2459,7 @@ def test_no_legacy_date_tokens_anywhere() -> None:
     # Документный слой берёт день из полной даты (стек МСК-pinned). Единственное место,
     # где сдвиг пояса применяется сознательно, — периодические матвью: там date_trunc
     # вычисляется в момент REFRESH, роль которого timezone не пинит.
-    assert "AT TIME ZONE 'Europe/Moscow'" not in sql_section(views, "rpt_documents")
+    assert "AT TIME ZONE 'Europe/Moscow'" not in sql_section(views, "documents_current")
     assert "AS processed_at" not in views and "AS processed_day" not in views
     tables = Path("db/01_schema.sql").read_text(encoding="utf-8")
     assert "loaded_at timestamptz DEFAULT now()" in tables
@@ -2541,13 +2542,13 @@ def test_operational_monitoring_cards_have_no_drill_down() -> None:
 # из периодных счётчиков не собираются.
 _PERIODIC_TABS = {
     "weekly": (
-        {"public.rpt_documents_weekly", "mart_egisz.agg_document_error_weekly",
-         "public.rpt_documents"},
+        {"serving_egisz.documents_weekly", "serving_egisz.document_errors_weekly",
+         "serving_egisz.documents_current"},
         8,
     ),
     "monthly": (
-        {"public.rpt_documents_monthly", "mart_egisz.agg_document_error_monthly",
-         "public.rpt_documents"},
+        {"serving_egisz.documents_monthly", "serving_egisz.document_errors_monthly",
+         "serving_egisz.documents_current"},
         7,
     ),
 }
@@ -2701,8 +2702,8 @@ def test_status_dynamics_are_stacked_area() -> None:
     Ошибка связи статус не меняет и в стек исходов не входит."""
     by_name = {c.get("name"): c for c in _executive_dashboard()["cards"]}
     for name, table in (
-        ("Статусы по неделям", "public.rpt_documents_weekly"),
-        ("Статусы по месяцам", "public.rpt_documents_monthly"),
+        ("Статусы по неделям", "serving_egisz.documents_weekly"),
+        ("Статусы по месяцам", "serving_egisz.documents_monthly"),
     ):
         card = by_name[name]
         assert card["display"] == "area", name
@@ -2739,11 +2740,11 @@ def test_volume_dynamics_exclude_no_response() -> None:
 def test_weekly_sql_layer_contract() -> None:
     """Недельный слой: matview в 85, DROP в 60, REFRESH+ANALYZE в 90, include в init."""
     weekly = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "CREATE MATERIALIZED VIEW public.rpt_documents_weekly" in weekly
-    assert "CREATE MATERIALIZED VIEW mart_egisz.agg_document_error_weekly" in weekly
-    assert "uq_rpt_documents_weekly" in weekly
-    assert "ON public.rpt_documents_weekly (week_start, clinic_label)" in weekly
-    assert "uq_agg_document_error_weekly" in weekly
+    assert "CREATE MATERIALIZED VIEW serving_egisz.documents_weekly" in weekly
+    assert "CREATE MATERIALIZED VIEW serving_egisz.document_errors_weekly" in weekly
+    assert "uq_documents_weekly" in weekly
+    assert "ON serving_egisz.documents_weekly (week_start, clinic_label)" in weekly
+    assert "uq_document_errors_weekly" in weekly
     # Корпус SLI — документы с ответом; состояния отправки идут отдельными счётчиками
     # и считаются на конец своей недели (см. test_pending_anchor).
     assert "FILTER (WHERE d.status <> 'sent')" in weekly
@@ -2752,14 +2753,15 @@ def test_weekly_sql_layer_contract() -> None:
     assert "is_complete_week" in weekly
 
     drops = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "DROP MATERIALIZED VIEW IF EXISTS public.rpt_documents_weekly CASCADE;" in drops
-    assert "DROP MATERIALIZED VIEW IF EXISTS mart_egisz.agg_document_error_weekly CASCADE;" in drops
+    assert "DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_weekly CASCADE;" in drops
+    assert "DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_errors_weekly CASCADE;" in drops
 
     finalize = Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "REFRESH MATERIALIZED VIEW public.rpt_documents_weekly;" in finalize
-    assert "REFRESH MATERIALIZED VIEW mart_egisz.agg_document_error_weekly;" in finalize
-    assert "ANALYZE public.rpt_documents_weekly;" in finalize
-    assert "ANALYZE mart_egisz.agg_document_error_weekly;" in finalize
+    refresh = finalize.split("CREATE OR REPLACE FUNCTION serving_egisz.refresh_report_marts", 1)[1].split("$$;", 1)[0]
+    assert "'serving_egisz.documents_weekly'," in refresh
+    assert "'serving_egisz.document_errors_weekly'," in refresh
+    assert "ANALYZE serving_egisz.documents_weekly;" in finalize
+    assert "ANALYZE serving_egisz.document_errors_weekly;" in finalize
 
     init = Path("db/dwh_init.sql").read_text(encoding="utf-8")
     assert r"\i db/04_views.sql" in init
@@ -2803,10 +2805,10 @@ def test_weekly_control_chart_is_xmr() -> None:
 
     control = by_name["Контрольная карта (XmR): доля ошибок по неделям"]
     query = control["dataset_query"]["native"]["query"]
-    assert "public.rpt_documents_weekly" in query and "is_complete_week" in query
+    assert "serving_egisz.documents_weekly" in query and "is_complete_week" in query
     assert "SUM(docs_error)" in query and "SUM(docs_total)" in query
     # Фазы — из справочника, а не из SQL карточки; размах не переходит границу фазы.
-    assert "public.dim_control_chart_phases" in query
+    assert "mart_egisz.dim_control_chart_phases" in query
     assert "PARTITION BY ph.phase_start ORDER BY s.period_start" in query
     assert "WHERE period_start BETWEEN baseline_start AND baseline_end" in query
     # Незакрытый опорный период границ не даёт: иначе они менялись бы с моментом расчёта.
@@ -2896,9 +2898,9 @@ def test_control_chart_phases_are_state_declarative() -> None:
     """Фазы задаёт только файл схемы: создание идемпотентно, строки приводятся к списку
     файла. Опорный период — даты, а не «последние N периодов»."""
     schema = Path("db/01_schema.sql").read_text(encoding="utf-8")
-    assert "CREATE TABLE IF NOT EXISTS dim_control_chart_phases" in schema
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_control_chart_phases" in schema
     assert "ON CONFLICT (period_grain, phase_start) DO UPDATE SET" in schema
-    assert "DELETE FROM dim_control_chart_phases" in schema
+    assert "DELETE FROM mart_egisz.dim_control_chart_phases" in schema
     assert "CHECK (baseline_start >= phase_start AND baseline_end >= baseline_start)" in schema
     assert "('week', DATE '2026-07-13', DATE '2026-07-13', DATE '2026-08-03'" in schema
 

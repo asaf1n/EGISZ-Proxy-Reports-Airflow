@@ -14,8 +14,8 @@ SELECT
     tx.xml_emdr_id,
     tx.xml_local_uid,
     tx.xml_semd_code
-FROM public.documents d
-JOIN public.transactions tx ON tx.logid = d.request_logid
+FROM mart_egisz.documents d
+JOIN stg_egisz.exchange_messages tx ON tx.logid = d.request_logid
 WHERE d.status = 'sent'
   AND tx.source_action = 'getDocumentFile'
   AND NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL;
@@ -36,23 +36,23 @@ ORDER BY 1;
 \if :apply
 BEGIN;
 
-DELETE FROM public.document_attributes a
+DELETE FROM mart_egisz.document_attributes a
 USING false_document_file_request_sent c
 WHERE a.dwh_id = c.dwh_id;
 
-DELETE FROM public.documents d
+DELETE FROM mart_egisz.documents d
 USING false_document_file_request_sent c
 WHERE d.dwh_id = c.dwh_id;
 
-ANALYZE public.documents;
-ANALYZE public.document_attributes;
-ANALYZE public.transactions;
+ANALYZE mart_egisz.documents;
+ANALYZE mart_egisz.document_attributes;
+ANALYZE stg_egisz.exchange_messages;
 
 COMMIT;
 
 SELECT 'applied' AS cleanup_status, count(*) AS remaining_candidates
-FROM public.documents d
-JOIN public.transactions tx ON tx.logid = d.request_logid
+FROM mart_egisz.documents d
+JOIN stg_egisz.exchange_messages tx ON tx.logid = d.request_logid
 WHERE d.status = 'sent'
   AND tx.source_action = 'getDocumentFile'
   AND NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL;

@@ -24,7 +24,7 @@
 --
 -- STABLE, а не IMMUTABLE: значение постоянно внутри запроса, но задано конфигурацией.
 -- Годится для материализованных представлений; в выражение индекса не ставится.
-CREATE OR REPLACE FUNCTION public.report_timezone()
+CREATE OR REPLACE FUNCTION serving_egisz.report_timezone()
 RETURNS text
 LANGUAGE sql
 STABLE
@@ -49,10 +49,10 @@ AS $$
     );
 $$;
 
-COMMENT ON FUNCTION public.report_timezone() IS
+COMMENT ON FUNCTION serving_egisz.report_timezone() IS
 'Пояс отчётного календаря: настройка timezone роли конвейера, резервно — пояс сессии. Границы недель и месяцев считаются через него, литералом пояс в SQL не задаётся.';
 
-CREATE OR REPLACE FUNCTION public.xml_text(payload text, tag_name text)
+CREATE OR REPLACE FUNCTION stg_egisz.xml_text(payload text, tag_name text)
 RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
@@ -86,7 +86,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.normalize_message_id(value text)
+CREATE OR REPLACE FUNCTION stg_egisz.normalize_message_id(value text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -94,32 +94,19 @@ AS $$
     SELECT NULLIF(regexp_replace(trim(both '<>' from btrim(COALESCE(value, ''))), '^urn:uuid:', '', 'i'), '');
 $$;
 
--- Канонический ключ реестра подач. Применяется симметрично: при загрузке
--- EGISZ_MESSAGES.MSGID в dim_message_document и при поиске по relatesToMessage ответа.
+-- Канонический ключ реестра подач. Применяется симметрично: к MSGID подачи
+-- (stg_egisz.message_registry) и к relatesToMessage ответа при поиске подачи.
 -- Шлюз и ЕГИСЗ передают идентификатор в разных написаниях (с дефисами и без,
 -- с префиксом urn:uuid:, в разном регистре), поэтому ключ приводится к одному виду.
-CREATE OR REPLACE FUNCTION public.message_registry_key(p_value text)
+CREATE OR REPLACE FUNCTION stg_egisz.message_registry_key(p_value text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-    SELECT NULLIF(upper(replace(public.normalize_message_id(p_value), '-', '')), '');
+    SELECT NULLIF(upper(replace(stg_egisz.normalize_message_id(p_value), '-', '')), '');
 $$;
 
-CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
-RETURNS timestamptz
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-BEGIN
-    IF NULLIF(btrim(COALESCE(p_text, '')), '') IS NULL THEN
-        RETURN NULL;
-    END IF;
-    RETURN p_text::timestamptz;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.clean_host(p_text text)
+CREATE OR REPLACE FUNCTION stg_egisz.clean_host(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -138,7 +125,7 @@ $$;
 -- Извлекает адрес обмена (gost-<JID>.<домен>:<порт>) из LOGTEXT/MSGTEXT и REPLY_TO реестра.
 -- Имя хоста бывает и числовым (gost-56571), и составным (gost-67136-1), и именованным
 -- (gost-sova) — шаблон покрывает все три, иначе адрес обрезается по первому дефису.
-CREATE OR REPLACE FUNCTION public.extract_gost_endpoint(p_text text)
+CREATE OR REPLACE FUNCTION stg_egisz.extract_gost_endpoint(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -156,106 +143,92 @@ $$;
 -- Реестр OID медорганизаций. Первичный источник OID — справочник ЮЛ:
 -- dim_organizations.fir_oid наполняется из НСИ организаций. Лицензии остаются
 -- запасным источником для определения ЮЛ по хосту обмена, а не по OID документа.
-CREATE OR REPLACE VIEW public.dim_clinic_oid AS
+CREATE OR REPLACE VIEW mart_egisz.dim_clinic_oid AS
 SELECT DISTINCT ON (oid) oid, jid
 FROM (
     SELECT
         NULLIF(btrim(o.fir_oid), '') AS oid,
         o.jid
-    FROM public.dim_organizations o
+    FROM mart_egisz.dim_organizations o
     WHERE o.jid IS NOT NULL
       AND NULLIF(btrim(o.fir_oid), '') IS NOT NULL
 ) t
 ORDER BY oid, jid;
 
-COMMENT ON VIEW public.dim_clinic_oid IS
+COMMENT ON VIEW mart_egisz.dim_clinic_oid IS
 'Реестр OID медорганизаций: OID → ЮЛ из dim_organizations.fir_oid; host/лицензии используются только запасным резолвом.';
 
 -- Адрес обмена → ЮЛ. MO_DOMEN лицензии и REPLY_TO реестра подач — один и тот же адрес,
 -- поэтому представление нужно только именованным хостам: числовые разбираются из адреса.
-CREATE OR REPLACE VIEW public.dim_clinic_endpoint AS
+CREATE OR REPLACE VIEW mart_egisz.dim_clinic_endpoint AS
 SELECT DISTINCT ON (host) host, jid
 FROM (
     SELECT
-        public.clean_host(dl.mo_domen) AS host,
+        stg_egisz.clean_host(dl.mo_domen) AS host,
         dl.jid,
         ((regexp_match(COALESCE(dl.mo_domen, ''), 'gost-([0-9]+)'))[1] = dl.jid::text) AS own_host
-    FROM public.dim_licenses dl
+    FROM mart_egisz.dim_licenses dl
     WHERE dl.jid IS NOT NULL
-      AND public.clean_host(dl.mo_domen) IS NOT NULL
+      AND stg_egisz.clean_host(dl.mo_domen) IS NOT NULL
 ) t
 ORDER BY host, own_host DESC NULLS LAST, jid;
 
-COMMENT ON VIEW public.dim_clinic_endpoint IS
+COMMENT ON VIEW mart_egisz.dim_clinic_endpoint IS
 'Адрес обмена → ЮЛ (MO_DOMEN = REPLY_TO): добор именованных хостов, у которых нет номера в имени.';
 
 -- Разрешение OID руководства по реализации: основной OID и синонимы из НСИ 638 в одном реестре.
 -- При совпадении выигрывает основной OID: загрузчик такое пересечение сейчас отвергает,
 -- но порядок разрешения не должен зависеть от этой проверки.
-CREATE OR REPLACE VIEW public.dim_semd_guide_oid AS
+CREATE OR REPLACE VIEW mart_egisz.dim_semd_guide_oid AS
 SELECT DISTINCT ON (published_oid) published_oid, guide_oid, is_alias
 FROM (
     SELECT g.oid, g.oid, false
-    FROM public.dim_nsi_semd_guide g
+    FROM mart_egisz.dim_nsi_semd_guide g
     UNION ALL
     SELECT a.alias_oid, a.guide_oid, true
-    FROM public.dim_nsi_semd_guide_alias a
+    FROM mart_egisz.dim_nsi_semd_guide_alias a
 ) t (published_oid, guide_oid, is_alias)
 ORDER BY published_oid, is_alias;
 
-COMMENT ON VIEW public.dim_semd_guide_oid IS
+COMMENT ON VIEW mart_egisz.dim_semd_guide_oid IS
 'Реестр OID руководств по реализации: published_oid (dim_nsi_semd_guide.oid либо dim_nsi_semd_guide_alias.alias_oid) → guide_oid (dim_nsi_semd_guide.oid). Точка входа — dim_semd_types.ig_oid.';
 
+-- Единая цепочка резолва JID документа.
 -- Основной путь: ЮЛ по OID медорганизации из содержания обмена (<organization>).
-CREATE OR REPLACE FUNCTION public.jid_from_mo_uid(p_org_oid text)
-RETURNS bigint
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT r.jid
-    FROM public.dim_clinic_oid r
-    WHERE r.oid = NULLIF(btrim(p_org_oid), '');
-$$;
-
 -- Запасной путь: ЮЛ по адресу обмена. Номер в gost-<N> — JID владельца хоста; отправка
 -- дочерней клиники с хоста головного ЮЛ разрешается в головное ЮЛ, это допустимо —
 -- приоритет остаётся за OID из содержания документа. Номер принимается только как ЮЛ,
 -- известное справочнику: иначе адрес породил бы клинику, которой нет в JPERSONS.
-CREATE OR REPLACE FUNCTION public.jid_from_host(p_text text)
-RETURNS bigint
-LANGUAGE sql
-STABLE
-AS $$
-    WITH endpoint AS (
-        SELECT public.extract_gost_endpoint(p_text) AS value
-    )
-    SELECT COALESCE(
-        (
-            SELECT o.jid
-            FROM endpoint e
-            JOIN public.dim_organizations o
-              ON o.jid = (regexp_match(e.value, 'gost-([0-9]+)'))[1]::bigint
-        ),
-        (
-            SELECT r.jid
-            FROM public.dim_clinic_endpoint r
-            CROSS JOIN endpoint e
-            WHERE r.host = public.clean_host(e.value)
-        )
-    );
-$$;
-
--- Единая цепочка резолва JID документа: mo_uid (primary) → host/gost-endpoint (fallback).
-CREATE OR REPLACE FUNCTION public.resolve_document_jid(p_org_oid text, p_endpoint_text text)
+CREATE OR REPLACE FUNCTION mart_egisz.resolve_document_jid(p_org_oid text, p_endpoint_text text)
 RETURNS TABLE (jid bigint, resolve_method text)
 LANGUAGE sql
 STABLE
 AS $$
-    WITH mo AS (
-        SELECT public.jid_from_mo_uid(p_org_oid) AS jid
+    WITH endpoint AS (
+        SELECT stg_egisz.extract_gost_endpoint(p_endpoint_text) AS value
+    ),
+    mo AS (
+        SELECT (
+            SELECT r.jid
+            FROM mart_egisz.dim_clinic_oid r
+            WHERE r.oid = NULLIF(btrim(p_org_oid), '')
+        ) AS jid
     ),
     ho AS (
-        SELECT public.jid_from_host(p_endpoint_text) AS jid
+        SELECT COALESCE(
+            (
+                SELECT o.jid
+                FROM endpoint e
+                JOIN mart_egisz.dim_organizations o
+                  ON o.jid = (regexp_match(e.value, 'gost-([0-9]+)'))[1]::bigint
+            ),
+            (
+                SELECT r.jid
+                FROM mart_egisz.dim_clinic_endpoint r
+                CROSS JOIN endpoint e
+                WHERE r.host = stg_egisz.clean_host(e.value)
+            )
+        ) AS jid
     )
     SELECT
         COALESCE(mo.jid, ho.jid) AS jid,
@@ -268,7 +241,7 @@ AS $$
     WHERE COALESCE(mo.jid, ho.jid) IS NOT NULL;
 $$;
 
-CREATE OR REPLACE FUNCTION public.clean_text_value(p_text text)
+CREATE OR REPLACE FUNCTION stg_egisz.clean_text_value(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
@@ -286,13 +259,13 @@ AS $$
     );
 $$;
 
-CREATE OR REPLACE FUNCTION public.normalize_semd_code(p_text text)
+CREATE OR REPLACE FUNCTION stg_egisz.normalize_semd_code(p_text text)
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
     WITH normalized AS (
-        SELECT public.clean_text_value(p_text) AS value
+        SELECT stg_egisz.clean_text_value(p_text) AS value
     )
     SELECT CASE
         WHEN value IS NULL THEN NULL
@@ -316,35 +289,35 @@ $$;
 -- ключом: emdrId — атрибут регистрации, OID — классификатор, не идентификатор экземпляра.
 -- Колбэк без localUid не порождает новый ключ, а резолвится к существующей строке по
 -- relatesToMessage / emdrId (см. egisz_transform_raw_to_facts).
-CREATE OR REPLACE FUNCTION public.dwh_id(
+CREATE OR REPLACE FUNCTION stg_egisz.dwh_id(
     p_local_uid text
 ) RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-    SELECT lower(NULLIF(btrim(public.clean_text_value(p_local_uid)), ''));
+    SELECT lower(NULLIF(btrim(stg_egisz.clean_text_value(p_local_uid)), ''));
 $$;
 
 -- Коды статуса документа берутся из dim_document_status, а не повторяются литералами
 -- в ветвях transform: набор статусов задан справочником в одном месте.
-CREATE OR REPLACE FUNCTION public.document_status_nonfinal()
+CREATE OR REPLACE FUNCTION mart_egisz.document_status_nonfinal()
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
     SELECT code
-    FROM public.dim_document_status
+    FROM mart_egisz.dim_document_status
     WHERE NOT is_final
     ORDER BY sort_order
     LIMIT 1;
 $$;
 
-CREATE OR REPLACE FUNCTION public.document_status_final()
+CREATE OR REPLACE FUNCTION mart_egisz.document_status_final()
 RETURNS SETOF text
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT code FROM public.dim_document_status WHERE is_final;
+    SELECT code FROM mart_egisz.dim_document_status WHERE is_final;
 $$;
 
 -- Очередь обработки на момент времени. Обе функции —
@@ -355,7 +328,7 @@ $$;
 -- либо его нет вовсе, либо он наступил позже. Границей служит отметка ПЕРВОГО ответа:
 -- last_callback_at перезаписывается каждым повторным коллбэком, и документ, отвеченный
 -- за секунды, числился бы в очереди до последнего повтора.
-CREATE OR REPLACE FUNCTION public.is_pending_at(
+CREATE OR REPLACE FUNCTION serving_egisz.is_pending_at(
     p_first_sent_at timestamptz,
     p_first_callback_at timestamptz,
     p_anchor timestamptz
@@ -376,7 +349,7 @@ $$;
 -- (max_age_minutes IS NULL) замыкает лестницу и ловит в том числе отправки без
 -- first_sent_at: без известного момента запроса файла возраст не определён. Пороги
 -- остаются данными справочника — функция читает dim_pending_segments, поэтому STABLE.
-CREATE OR REPLACE FUNCTION public.pending_segment_code_at(
+CREATE OR REPLACE FUNCTION serving_egisz.pending_segment_code_at(
     p_first_sent_at timestamptz,
     p_anchor timestamptz
 ) RETURNS text
@@ -384,7 +357,7 @@ LANGUAGE sql
 STABLE
 AS $$
     SELECT s.code
-    FROM public.dim_pending_segments s
+    FROM mart_egisz.dim_pending_segments s
     WHERE s.max_age_minutes IS NULL
        OR (
            p_first_sent_at IS NOT NULL
@@ -401,7 +374,7 @@ $$;
 -- от разбора payload и заполнен во всех строках, включая сбои связи без тела ответа.
 -- Запасные признаки для строк без URI — wsa:Action (ИЭМК ходит по IHE XDS.b, urn:ihe:*)
 -- и порт сервиса клиники в LOGTEXT: 9921 — ИЭМК, 9945 — РЭМД.
-CREATE OR REPLACE FUNCTION public.egisz_subsystem(
+CREATE OR REPLACE FUNCTION stg_egisz.egisz_subsystem(
     p_uri text,
     p_action text,
     p_logtext text
@@ -421,9 +394,39 @@ AS $$
     END;
 $$;
 
+-- Реестр подач в разобранном виде: ключ реестра по MSGID подачи и localUid документа.
+-- ИЭМК localUid не использует — подачу на его порт (egisz_subsystem по REPLYTO) документ
+-- не определяет. Выражения индексов ниже повторяют выражения колонок: по ним transform
+-- ищет подачу, и без совпадения индекс не применяется.
+CREATE OR REPLACE VIEW stg_egisz.message_registry AS
+SELECT
+    m.egmid,
+    stg_egisz.message_registry_key(m.msgid) AS msgid,
+    CASE
+        WHEN stg_egisz.egisz_subsystem(NULL, NULL, m.replyto) = 'ИЭМК' THEN NULL
+        ELSE stg_egisz.dwh_id(m.documentid)
+    END AS document_uid,
+    m.replyto AS reply_to,
+    m.createdate AS created_at
+FROM raw_egisz.egisz_messages m;
+
+COMMENT ON VIEW stg_egisz.message_registry IS
+'Реестр подач: строка EGISZ_MESSAGES по EGMID с ключом реестра (msgid) и localUid документа (document_uid, пуст для ИЭМК).';
+
+CREATE INDEX IF NOT EXISTS idx_egisz_messages_registry_key
+    ON raw_egisz.egisz_messages (stg_egisz.message_registry_key(msgid), egmid DESC)
+    WHERE stg_egisz.message_registry_key(msgid) IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_egisz_messages_document_uid
+    ON raw_egisz.egisz_messages ((
+        CASE
+            WHEN stg_egisz.egisz_subsystem(NULL, NULL, replyto) = 'ИЭМК' THEN NULL
+            ELSE stg_egisz.dwh_id(documentid)
+        END
+    ));
+
 -- Разложение payload EXCHANGELOG: каждый XML-тег и regex-маркер статуса
--- вычисляется ровно один раз; transform и связка документов читают transactions (xml_*).
-CREATE OR REPLACE FUNCTION public.parse_exchangelog_row(
+-- вычисляется ровно один раз; transform и связка документов читают stg_egisz.exchange_messages (xml_*).
+CREATE OR REPLACE FUNCTION stg_egisz.parse_exchangelog_row(
     p_msgtext text,
     p_msgid text,
     p_logtext text
@@ -494,63 +497,63 @@ DECLARE
     v_author_name text;
     v_doctor text;
 BEGIN
-    v_action := public.xml_text(p_msgtext, 'action');
-    v_message_id_xml := public.xml_text(p_msgtext, 'messageId');
-    v_relates_to_message := public.xml_text(p_msgtext, 'relatesToMessage');
-    v_relates_to := public.xml_text(p_msgtext, 'relatesTo');
-    v_local_uid_xml := public.xml_text(p_msgtext, 'localUid');
-    v_kind_xml := public.xml_text(p_msgtext, 'KIND');
-    v_emdr_id_xml := public.xml_text(p_msgtext, 'emdrId');
-    v_doc_number_xml := public.xml_text(p_msgtext, 'documentNumber');
-    v_organization := public.xml_text(p_msgtext, 'organization');
-    v_organization_oid := public.xml_text(p_msgtext, 'organizationOid');
-    v_error_code_xml := public.xml_text(p_msgtext, 'errorCode');
-    v_code_xml := public.xml_text(p_msgtext, 'code');
+    v_action := stg_egisz.xml_text(p_msgtext, 'action');
+    v_message_id_xml := stg_egisz.xml_text(p_msgtext, 'messageId');
+    v_relates_to_message := stg_egisz.xml_text(p_msgtext, 'relatesToMessage');
+    v_relates_to := stg_egisz.xml_text(p_msgtext, 'relatesTo');
+    v_local_uid_xml := stg_egisz.xml_text(p_msgtext, 'localUid');
+    v_kind_xml := stg_egisz.xml_text(p_msgtext, 'KIND');
+    v_emdr_id_xml := stg_egisz.xml_text(p_msgtext, 'emdrId');
+    v_doc_number_xml := stg_egisz.xml_text(p_msgtext, 'documentNumber');
+    v_organization := stg_egisz.xml_text(p_msgtext, 'organization');
+    v_organization_oid := stg_egisz.xml_text(p_msgtext, 'organizationOid');
+    v_error_code_xml := stg_egisz.xml_text(p_msgtext, 'errorCode');
+    v_code_xml := stg_egisz.xml_text(p_msgtext, 'code');
     -- SOAP-fault без <code>/<errorCode> нёс код только в <faultcode>; значение приходит
     -- с namespace-префиксом ('soap:Server') — оставляем локальную часть в UPPERCASE.
-    v_faultcode := NULLIF(upper(regexp_replace(public.xml_text(p_msgtext, 'faultcode'), '^[^:]*:', '')), '');
-    v_error_message := public.xml_text(p_msgtext, 'errorMessage');
-    v_message_xml := public.xml_text(p_msgtext, 'message');
-    v_faultstring := public.xml_text(p_msgtext, 'faultstring');
-    v_status_xml := public.xml_text(p_msgtext, 'status');
-    v_document_status := public.xml_text(p_msgtext, 'documentStatus');
-    v_creation_datetime := public.xml_text(p_msgtext, 'creationDateTime');
-    v_creation_date := public.xml_text(p_msgtext, 'creationDate');
-    v_patient_name := public.xml_text(p_msgtext, 'patientName');
-    v_patient_fio := public.xml_text(p_msgtext, 'patientFio');
-    v_fio := public.xml_text(p_msgtext, 'fio');
-    v_patient := public.xml_text(p_msgtext, 'patient');
-    v_patient_name_cap := public.xml_text(p_msgtext, 'PatientName');
-    v_family_name := public.xml_text(p_msgtext, 'familyName');
-    v_given_name := public.xml_text(p_msgtext, 'givenName');
-    v_patronymic := public.xml_text(p_msgtext, 'patronymic');
-    v_snils := public.xml_text(p_msgtext, 'snils');
-    v_snils_cap := public.xml_text(p_msgtext, 'SNILS');
-    v_patient_snils := public.xml_text(p_msgtext, 'patientSnils');
-    v_doctor_name := public.xml_text(p_msgtext, 'doctorName');
-    v_doctor_fio := public.xml_text(p_msgtext, 'doctorFio');
-    v_physician_name := public.xml_text(p_msgtext, 'physicianName');
-    v_medical_worker_name := public.xml_text(p_msgtext, 'medicalWorkerName');
-    v_author_name := public.xml_text(p_msgtext, 'authorName');
-    v_doctor := public.xml_text(p_msgtext, 'doctor');
+    v_faultcode := NULLIF(upper(regexp_replace(stg_egisz.xml_text(p_msgtext, 'faultcode'), '^[^:]*:', '')), '');
+    v_error_message := stg_egisz.xml_text(p_msgtext, 'errorMessage');
+    v_message_xml := stg_egisz.xml_text(p_msgtext, 'message');
+    v_faultstring := stg_egisz.xml_text(p_msgtext, 'faultstring');
+    v_status_xml := stg_egisz.xml_text(p_msgtext, 'status');
+    v_document_status := stg_egisz.xml_text(p_msgtext, 'documentStatus');
+    v_creation_datetime := stg_egisz.xml_text(p_msgtext, 'creationDateTime');
+    v_creation_date := stg_egisz.xml_text(p_msgtext, 'creationDate');
+    v_patient_name := stg_egisz.xml_text(p_msgtext, 'patientName');
+    v_patient_fio := stg_egisz.xml_text(p_msgtext, 'patientFio');
+    v_fio := stg_egisz.xml_text(p_msgtext, 'fio');
+    v_patient := stg_egisz.xml_text(p_msgtext, 'patient');
+    v_patient_name_cap := stg_egisz.xml_text(p_msgtext, 'PatientName');
+    v_family_name := stg_egisz.xml_text(p_msgtext, 'familyName');
+    v_given_name := stg_egisz.xml_text(p_msgtext, 'givenName');
+    v_patronymic := stg_egisz.xml_text(p_msgtext, 'patronymic');
+    v_snils := stg_egisz.xml_text(p_msgtext, 'snils');
+    v_snils_cap := stg_egisz.xml_text(p_msgtext, 'SNILS');
+    v_patient_snils := stg_egisz.xml_text(p_msgtext, 'patientSnils');
+    v_doctor_name := stg_egisz.xml_text(p_msgtext, 'doctorName');
+    v_doctor_fio := stg_egisz.xml_text(p_msgtext, 'doctorFio');
+    v_physician_name := stg_egisz.xml_text(p_msgtext, 'physicianName');
+    v_medical_worker_name := stg_egisz.xml_text(p_msgtext, 'medicalWorkerName');
+    v_author_name := stg_egisz.xml_text(p_msgtext, 'authorName');
+    v_doctor := stg_egisz.xml_text(p_msgtext, 'doctor');
 
     RETURN QUERY
     SELECT
         v_action,
-        public.normalize_message_id(COALESCE(NULLIF(btrim(p_msgid), ''), v_message_id_xml)),
-        public.normalize_message_id(COALESCE(v_relates_to_message, v_relates_to)),
-        public.clean_text_value(v_local_uid_xml),
-        public.clean_text_value(v_emdr_id_xml),
-        public.dwh_id(v_local_uid_xml),
+        stg_egisz.normalize_message_id(COALESCE(NULLIF(btrim(p_msgid), ''), v_message_id_xml)),
+        stg_egisz.normalize_message_id(COALESCE(v_relates_to_message, v_relates_to)),
+        stg_egisz.clean_text_value(v_local_uid_xml),
+        stg_egisz.clean_text_value(v_emdr_id_xml),
+        stg_egisz.dwh_id(v_local_uid_xml),
         v_kind_xml,
-        public.clean_text_value(v_doc_number_xml),
-        public.clean_text_value(COALESCE(v_organization, v_organization_oid)),
+        stg_egisz.clean_text_value(v_doc_number_xml),
+        stg_egisz.clean_text_value(COALESCE(v_organization, v_organization_oid)),
         COALESCE(v_error_code_xml, v_code_xml, v_faultcode),
         COALESCE(v_error_message, v_message_xml, v_faultstring),
         lower(COALESCE(v_status_xml, '')),
         v_document_status,
         NULLIF((regexp_match(v_text_blob, 'gost-([0-9]+)', 'i'))[1], '')::bigint,
-        public.safe_cast_timestamptz(COALESCE(v_creation_datetime, v_creation_date)),
+        NULLIF(btrim(COALESCE(v_creation_datetime, v_creation_date)), '')::timestamptz,
         COALESCE(
             v_patient_name,
             v_patient_fio,
@@ -573,7 +576,7 @@ BEGIN
 END;
 $$;
 
-CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (public.clean_host(mo_domen));
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON mart_egisz.dim_licenses (stg_egisz.clean_host(mo_domen));
 
 -- Исход асинхронного ответа. По «Описанию выполняемых проверок в РЭМД» асинхронный ответ
 -- содержит подтверждение регистрации СЭМД с регистрационными сведениями либо сведения об
@@ -581,7 +584,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_domen_host ON dim_licenses (publi
 -- читается из тела ответа при любом LOGSTATE: сбой доставки ответа в МИС исход регистрации
 -- не меняет. У сообщения, которое не является асинхронным ответом, исхода нет (NULL);
 -- асинхронный ответ с нераспознанным исходом тоже получает NULL и виден в контроле качества.
-CREATE OR REPLACE FUNCTION public.classify_async_status(
+CREATE OR REPLACE FUNCTION stg_egisz.classify_async_status(
     p_source_action text,
     p_raw_status text,
     p_document_status text,
@@ -1253,8 +1256,8 @@ BEGIN
         FOR part IN
             SELECT s FROM regexp_split_to_table(p_msgtext, '<(?:[A-Za-z0-9_]+:)?item(?:\s[^>]*)?>', 'i') AS s
         LOOP
-            part_code := public.xml_text(part, 'code');
-            part_text := public.xml_text(part, 'message');
+            part_code := stg_egisz.xml_text(part, 'code');
+            part_text := stg_egisz.xml_text(part, 'message');
             IF NULLIF(btrim(COALESCE(part_code, '')), '') IS NOT NULL
                OR NULLIF(btrim(COALESCE(part_text, '')), '') IS NOT NULL THEN
                 n := n + 1;

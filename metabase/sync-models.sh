@@ -49,7 +49,7 @@ dwh_column_exists() {
     -v ON_ERROR_STOP=1 \
     -c "SELECT CASE WHEN EXISTS (
           -- pg_attribute (а не information_schema.columns) — чтобы видеть колонки
-          -- MATERIALIZED VIEW (document_error), которых нет в information_schema.
+          -- MATERIALIZED VIEW (document_errors), которых нет в information_schema.
           SELECT 1
           FROM pg_attribute a
           JOIN pg_class c ON c.oid = a.attrelid
