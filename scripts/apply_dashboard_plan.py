@@ -17,21 +17,20 @@ with suppress(Exception):  # pragma: no cover
 ROOT = Path(__file__).resolve().parents[1]
 DASH_01 = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
 
-# Единая палитра по категориям ошибок (~10 групп + «Прочие»). Каждый тип наследует
-# цвет своей категории → сунберст и стэк-бар «парных» карточек согласованы по цвету.
+# Единая палитра по категориям ошибок (mart_egisz.dim_error_category) и виду «Ошибка
+# связи»: категорий у него нет, в разрезах по категории вид занимает её место. Каждый тип
+# наследует цвет своей категории → сунберст и стэк-бар «парных» карточек согласованы.
 CATEGORY_COLORS: dict[str, str] = {
     "Данные пациента": "#4E79A7",
     "Данные медработника": "#59A14F",
     "Ошибки структуры и валидации": "#B07AA1",
     "Ошибки справочника НСИ": "#EDC948",
-    "Ошибки регистрации в РЭМД": "#E15759",
+    "Ошибки регистрации": "#E15759",
     "Ошибки организации / ИС": "#76B7B2",
     "Ошибки получения файла ЭМД": "#FF9DA7",
     "Ошибки ЭП и сертификатов": "#F28E2B",
-    "Технические ошибки РЭМД": "#9C755F",
-    "Ошибки связи": "#499894",
-    "Ошибки ИЭМК": "#8CD17D",
-    "Ошибки ФРЛЛО": "#D7B5A6",
+    "Технические ошибки ЕГИСЗ": "#9C755F",
+    "Ошибка связи": "#499894",
     "Прочие": "#BAB0AC",
 }
 
@@ -253,6 +252,11 @@ RENAME_01 = {
     f"Тип СЭМД × ступень{NO_PERIOD_SUFFIX}": QUEUE_PIVOT_SEMD_NAME,
     f"Доля хвоста по неделям{NO_PERIOD_SUFFIX}": QUEUE_TAIL_NAME,
     f"Доля в обработке по неделям{NO_PERIOD_SUFFIX}": QUEUE_TAIL_NAME,
+    # «Вид ошибки» теперь уровень фиксации ошибки (связь / асинхронный ответ), а карточка
+    # разбирает типы.
+    "Топ типов СЭМД по видам ошибки": "Топ типов СЭМД по типам ошибок",
+    # Сбой доставки сообщения шлюзом — вид «Ошибка связи»: строго сетевые из них не все.
+    "Типы сетевых ошибок (за период)": "Типы ошибок связи (за период)",
 }
 
 # Переименования по остальным дашбордам — так же только не применённые.
@@ -318,7 +322,6 @@ EXECUTIVE_NO_RESPONSE_NAME = "Ответ не получен, %"
 STATUS_DETAIL_COLORS: dict[str, dict[str, str]] = {
     "Успешно зарегистрирован": {"color": "#84BB4C"},
     "Ошибка асинхронного ответа РЭМД": {"color": "#A989C5"},
-    "Ошибка связи": {"color": "#F2994A"},
     "В обработке": {"color": "#A6C8E8"},
     "Без ответа": {"color": "#C8CDD5"},
 }
@@ -327,6 +330,31 @@ DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 SENT_MODEL_REF = "Отправленные"
 
+# Ошибки документа — строки mart_egisz_selfservice.document_error (ошибки текущего
+# состояния). Разбор ошибок берёт элементы отказа регистрации и ошибки связи — тот же
+# отбор, что у агрегатов mart_egisz.agg_document_error_*: элементы в подтверждении
+# регистрации отказом не являются. Таблицу не алиасить: фильтр по полю разворачивается в
+# полное имя "mart_egisz_selfservice"."document_error"."<поле>".
+DOCUMENT_ERROR = "mart_egisz_selfservice.document_error"
+ERROR_ANALYSIS_SCOPE = (
+    "(document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи')"
+)
+# У ошибки связи категории нет: в разрезах по категории вид занимает её место.
+ERROR_GROUP = "COALESCE(document_error.error_category, document_error.error_kind)"
+# Отбор документа по типу ошибки — наличие такой ошибки в текущем состоянии документа.
+ERROR_TYPE_EXISTS = (
+    f"EXISTS (SELECT 1 FROM {DOCUMENT_ERROR} "
+    "WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})"
+)
+ERROR_TYPE_FIELD_FILTER = {"table_ref": DOCUMENT_ERROR, "field_name": "error_type"}
+# Ошибка связи документа — текущая ошибка вида «Ошибка связи» (после последнего
+# асинхронного ответа либо, без ответа, любая).
+NETWORK_ERROR_EXISTS = (
+    f"EXISTS (SELECT 1 FROM {DOCUMENT_ERROR} "
+    "WHERE document_error.dwh_id = rpt_documents.dwh_id "
+    "AND document_error.error_kind = 'Ошибка связи')"
+)
+
 # Карточки без дрилла (агрегаты-рейтинги без естественного грейна для строки).
 NO_DRILL_NAMES = frozenset({"Топ по типу ошибки", "Топ категорий и типов ошибки"})
 
@@ -334,33 +362,37 @@ ModelDrillMapping = tuple[str, str] | tuple[str, str, str]
 
 # Дрилл из строки ведёт СРАЗУ в модель (не на вкладку «Архив»): строка передаёт свой грейн
 # точным равенством + активные фильтры дашборда через metabase-model-drill-params. Тип ошибки —
-# через CONTAINS по полному списку error_types (документ с несколькими ошибками не теряется).
+# точным равенством в модели «Разбивка ошибок» (строка модели — одна ошибка документа).
 MODEL_DRILL_BY_NAME: dict[str, list[ModelDrillMapping]] = {
     "Последние операции": [("clinic_label", "Клиника")],
     "Статусы за период": [("status_detail_label", "Статус")],
-    "РЭМД vs связь": [("status_detail_label", "Статус")],
+    # Сектор — вид ошибки: ошибка связи статус документа не меняет.
+    "РЭМД vs связь": [("error_kind", "Вид ошибки")],
     "Объём по клиникам": [("clinic_jid", "JID Клиники")],
     "Успешность по клиникам": [("clinic_jid", "JID Клиники")],
     "Объём ошибок по клиникам": [("clinic_jid", "JID Клиники")],
     "Топ типов СЭМД по документам": [("semd_label", "СЭМД")],
     "Успешность по типам СЭМД": [("semd_label", "СЭМД")],
     "Топ типов СЭМД по ошибкам": [("semd_label", "СЭМД")],
-    "Топ типов СЭМД по видам ошибки": [("semd_code", "СЭМД")],
+    "Топ типов СЭМД по типам ошибок": [("semd_code", "СЭМД")],
     # Строка матрицы — объект целиком (ступени разложены по колонкам), поэтому дрилл
     # уносит в модель объект строки; разрез по ступени задаётся фильтром вкладки.
     QUEUE_PIVOT_CLINIC_NAME: [("clinic_label", "Клиника")],
     QUEUE_PIVOT_SEMD_NAME: [("semd_code", "Код СЭМД")],
+    # Справочник уточняет тип: строки одного типа по разным справочникам раздельны.
     "Ошибки: тип × клиника": [
-        ("error_types", "Тип ошибки (канонический)", "contains"),
+        ("error_type", "Тип ошибки"),
+        ("nsi_dictionary_oid", "OID справочника"),
         ("clinic_jid", "JID Клиники"),
-        ("error_text", "OID справочника", "contains"),
     ],
 }
 
 # Целевая модель дрилла по карточке (по умолчанию — «Документы»).
 MODEL_DRILL_TARGET_BY_NAME: dict[str, str] = {
+    "РЭМД vs связь": ERROR_BREAKDOWN_MODEL_REF,
     "Топ типов СЭМД по ошибкам": ERROR_BREAKDOWN_MODEL_REF,
-    "Топ типов СЭМД по видам ошибки": ERROR_BREAKDOWN_MODEL_REF,
+    "Топ типов СЭМД по типам ошибок": ERROR_BREAKDOWN_MODEL_REF,
+    "Ошибки: тип × клиника": ERROR_BREAKDOWN_MODEL_REF,
     QUEUE_PIVOT_CLINIC_NAME: SENT_MODEL_REF,
     QUEUE_PIVOT_SEMD_NAME: SENT_MODEL_REF,
 }
@@ -376,12 +408,12 @@ MODEL_DRILL_DASHBOARD_PARAMS: dict[str, list[str]] = {
     "Топ типов СЭМД по документам": ["ips_date", "jid", "status"],
     "Успешность по типам СЭМД": ["ips_date", "jid", "status"],
     "Топ типов СЭМД по ошибкам": ["ips_date", "jid"],
-    "Топ типов СЭМД по видам ошибки": ["ips_date", "jid"],
+    "Топ типов СЭМД по типам ошибок": ["ips_date", "jid"],
     # pending_segment не переносится: ступень — измерение самой ячейки (см. MODEL_DRILL_BY_NAME).
     # Период тоже: очередь — состояние на якорь, а не выборка за период.
     QUEUE_PIVOT_CLINIC_NAME: ["semd_type"],
     QUEUE_PIVOT_SEMD_NAME: ["jid"],
-    "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid", "status"],
+    "Ошибки: тип × клиника": ["ips_date", "semd_type", "jid"],
 }
 
 # Поля модели для переноса дашборд-фильтра (на грейне модели): JID/СЭМД — по label.
@@ -444,17 +476,6 @@ LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
 ]
 
-LATEST_OPERATIONS_QUERY_FIELDS = [
-    ["field", "Документы:processed_at", None],
-    ["field", "Документы:status_detail_label", None],
-    ["field", "Документы:clinic_label", None],
-    ["field", "Документы:clinic_host", None],
-    ["field", "Документы:semd_label", None],
-    ["field", "Документы:semd_local_uid", None],
-    ["field", "Документы:semd_emdr_id", None],
-    ["field", "Документы:error_types", None],
-]
-
 LATEST_OPERATIONS_COLUMN_SETTINGS = {
     '["name","Дата обработки"]': {
         "column_title": "Обработано IPS",
@@ -512,32 +533,47 @@ CLIENT_STATUS_BY_DAY_QUERY = (
     "ORDER BY ips_date::date, status_detail_sort"
 )
 
-# Отказы по часам — доля от корпуса с ответом РЭМД за час (успех+ошибка). Это метрика
-# отношения, а не распределение: «В обработке» — ещё не исход и в знаменатель не входит,
+# Отказы по часам — метрика отношения, а не распределение. Отказ — исход: его доля
+# считается от документов с ответом РЭМД за час, «В обработке» в знаменатель не входит,
 # поэтому отсечка идёт по status, а не по status_detail (см. README §«Учёт отправленных»).
+# Ошибка связи статус не меняет и бывает у документа с любым исходом, в том числе без
+# ответа, когда не доставлена сама подача: её доля — от всех документов часа.
 SERVICE_REFUSALS_BY_HOUR_QUERY = (
     "SELECT date_trunc('hour', ips_date) AS \"Час\", "
-    "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') "
+    f"ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE {NETWORK_ERROR_EXISTS}) "
     "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка связи, %\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
-    "/ NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ошибка асинхронного ответа РЭМД, %\" "
-    "FROM public.rpt_documents WHERE status <> 'sent' "
+    "/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent'), 0), 1) "
+    "AS \"Ошибка асинхронного ответа РЭМД, %\" "
+    "FROM public.rpt_documents WHERE ips_date IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY 1 ORDER BY 1"
 )
 
-# «ns2_error» — исходный текст <message> ответа РЭМД (documents.error_text) рядом с
-# каноническими типами: типы отвечают «что это за отказ», текст — «что именно ответил
-# РЭМД по этому документу», и при разборе инцидента нужен именно он.
+# «ns2_error» — исходный текст ошибок документа рядом с их типами: тип отвечает «что это
+# за ошибка», текст — «что именно ответили по этому документу», и при разборе инцидента
+# нужен именно он. Текст есть только в слое разбора: дашборд читает его оттуда по
+# исключению из стандарта до решения о доступе. Ошибки собираются для уже отобранных
+# 50 документов.
 LATEST_OPERATIONS_QUERY = (
-    "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", "
-    "clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", "
-    "semd_label AS \"СЭМД\", semd_local_uid AS \"localUid СЭМД\", "
-    "semd_emdr_id AS \"Рег. Номер РЭМД\", error_types AS \"Типы ошибки\", "
-    "error_text AS \"ns2_error\" "
+    "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, "
+    "clinic_host, semd_label, semd_local_uid, semd_emdr_id "
     "FROM public.rpt_documents WHERE 1=1 "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] "
-    "ORDER BY ips_date DESC LIMIT 50"
+    "ORDER BY ips_date DESC LIMIT 50 ) "
+    "SELECT latest.ips_date AS \"Дата обработки\", "
+    "latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", "
+    "latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", "
+    "latest.semd_local_uid AS \"localUid СЭМД\", "
+    "latest.semd_emdr_id AS \"Рег. Номер РЭМД\", "
+    "( SELECT string_agg(DISTINCT document_error.error_type, ' · ' "
+    "ORDER BY document_error.error_type) "
+    f"FROM {DOCUMENT_ERROR} WHERE document_error.dwh_id = latest.dwh_id ) "
+    "AS \"Типы ошибки\", "
+    "( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) "
+    "FROM stg_egisz.document_error_current c WHERE c.dwh_id = latest.dwh_id ) "
+    "AS \"ns2_error\" "
+    "FROM latest ORDER BY latest.ips_date DESC"
 )
 
 STATUS_PERIOD_QUERY = (
@@ -619,14 +655,14 @@ CLINIC_ERROR_VOLUME_LABEL_CHARS = 35
 CLINIC_ERROR_VOLUME_QUERY = (
     "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status "
     "FROM public.rpt_documents "
-    "WHERE status IN ('success','async_error','network_error') "
+    "WHERE status IN ('success','async_error') "
     "AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     f"{DOCUMENT_FILTERS} ), "
     "per_clinic AS ( SELECT clinic_jid::text AS jid, "
     f"LEFT(COALESCE(NULLIF(BTRIM(clinic_name), ''), 'JID ' || clinic_jid::text), "
     f"{CLINIC_ERROR_VOLUME_LABEL_CHARS}) AS lbl, "
     "COUNT(DISTINCT dwh_id)::bigint AS total, "
-    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS errs "
     "FROM filtered GROUP BY clinic_jid, clinic_label, clinic_name ), "
     "ranked AS ( SELECT jid, lbl, errs, total, "
     "ROW_NUMBER() OVER (ORDER BY errs DESC, total DESC) AS rn "
@@ -648,43 +684,30 @@ CLINIC_ERROR_VOLUME_QUERY = (
 )
 
 # «Код отказа» — код, с которым пришёл отказ: по нему обращаются в СТП ЕГИСЗ и ищут проверку
-# в методической документации. Берётся из витрины (там он уже разложен по типу), поэтому
-# обращения к словарю правил не нужно. У типа, распознанного по формулировке отказа, своей
-# мнемоники в классификаторе нет — витрина отдаёт зонтичную (VALIDATION_ERROR /
-# RUNTIME_ERROR), под которой отказ пришёл.
+# в методической документации. У ошибки связи это код сокета Windows или HTTP.
 #
-# base_error_type и nsi_dictionary_oid в таблицу не выводятся, а несут дрилл: подпись типа
-# уже содержит справочник (см. rpt_error_breakdown), а documents.error_types хранит
-# канонический тип — отбор по подписи вернул бы пусто. OID уточняет отбор по тексту отказа,
-# иначе клик отдал бы документы по всем справочникам этого типа.
+# nsi_dictionary_oid в таблицу не выводится: справочник — отдельная колонка витрины, строки
+# одного типа по разным справочникам остаются раздельными.
 ERROR_TYPE_CLINIC_QUERY = (
     "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
     "FROM public.rpt_documents "
-    "WHERE status IN ('success', 'async_error', 'network_error') "
+    "WHERE status IN ('success', 'async_error') "
     "AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
-    # Таблицу с field-фильтром нельзя алиасить: Metabase разворачивает {{error_type}}
-    # в полное имя public.rpt_error_breakdown.error_type, и алиас ломает ссылку.
-    "base AS ( SELECT "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS error_type, "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.base_error_type), ''), 'Неизвестная ошибка') "
-    "AS base_error_type, "
-    "rpt_error_breakdown.nsi_dictionary_oid AS nsi_dictionary_oid, "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.nsi_error_code), ''), "
-    "NULLIF(TRIM(rpt_error_breakdown.error_code), ''), '—') AS error_code, "
-    "rpt_error_breakdown.clinic_label AS clinic_label, "
-    "rpt_error_breakdown.clinic_jid::text AS clinic_jid, rpt_error_breakdown.dwh_id "
-    "FROM public.rpt_error_breakdown "
-    "INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id "
-    "WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' "
+    "base AS ( SELECT document_error.error_type, document_error.nsi_dictionary_oid, "
+    "COALESCE(document_error.nsi_error_code, document_error.error_code, '—') AS error_code, "
+    "document_error.clinic_label, document_error.clinic_jid::text AS clinic_jid, "
+    "document_error.dwh_id "
+    f"FROM {DOCUMENT_ERROR} "
+    "INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id "
+    f"WHERE {ERROR_ANALYSIS_SCOPE} "
     "[[AND {{error_type}}]] ), "
-    "error_clinic AS ( SELECT error_type, base_error_type, nsi_dictionary_oid, error_code, "
+    "error_clinic AS ( SELECT error_type, nsi_dictionary_oid, error_code, "
     "clinic_label, clinic_jid, COUNT(DISTINCT dwh_id)::bigint AS doc_count "
-    "FROM base GROUP BY 1, 2, 3, 4, 5, 6 ), "
+    "FROM base GROUP BY 1, 2, 3, 4, 5 ), "
     "clinic_totals AS ( SELECT clinic_jid, COUNT(DISTINCT dwh_id)::numeric AS total_docs "
     "FROM period_docs GROUP BY clinic_jid ) "
     'SELECT ec.error_type AS "Тип ошибки", '
-    'ec.base_error_type AS "Тип ошибки (канонический)", '
     'ec.nsi_dictionary_oid AS "OID справочника", ec.clinic_label AS "Клиника", '
     'ec.error_code AS "Код отказа", '
     'ec.clinic_jid AS "JID Клиники", ec.doc_count AS "Документов", '
@@ -698,8 +721,8 @@ HEATMAP_QUERY = (
     "WITH d AS ( "
     "SELECT date_trunc('day', processed_at)::date AS day, "
     "COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, "
-    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')) AS cnt, "
-    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS err "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS cnt, "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS err "
     "FROM public.rpt_documents "
     "WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] "
@@ -737,24 +760,21 @@ HEATMAP_VIZ = {
 
 # «%» — доля документов с этим типом от всех документов с ошибками в срезе. Документ с
 # несколькими типами учитывается в каждой строке, поэтому сумма долей может быть >100%.
-# Два знаменателя на разных грейнах: «% ошибок» — доля среди ошибочных документов
-# (грейн rpt_error_breakdown), «% обработанных» — доля среди всех документов с ответом
-# РЭМД (успех+ошибка, грейн rpt_documents). Поэтому база — period_docs из rpt_documents,
-# к которой джойнится rpt_error_breakdown (без алиаса: field-фильтры разворачиваются в
-# полное имя таблицы, см. ERROR_TYPE_CLINIC_QUERY). Фильтры срез — на грейне документа.
+# Два знаменателя на разных грейнах: «% ошибок» — доля среди документов с ошибкой
+# (грейн document_error), «% обработанных» — доля среди всех документов с ответом РЭМД
+# (успех+ошибка, грейн rpt_documents). Поэтому база — period_docs из rpt_documents, к
+# которой джойнится document_error. Фильтры среза — на грейне документа.
 TOP_ERROR_TYPE_QUERY = (
     "WITH period_docs AS ( "
     "SELECT dwh_id FROM public.rpt_documents "
-    "WHERE status IN ('success', 'async_error', 'network_error') "
+    "WHERE status IN ('success', 'async_error') "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
-    "eb AS ( SELECT "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, "
-    "COALESCE(NULLIF(TRIM(rpt_error_breakdown.responsibility), ''), 'смешанная') AS resp, "
-    "rpt_error_breakdown.is_retryable AS retryable, rpt_error_breakdown.dwh_id AS dwh_id "
-    "FROM public.rpt_error_breakdown "
-    "INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id "
-    "WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' ), "
+    f"eb AS ( SELECT {ERROR_GROUP} AS cat, document_error.error_type AS typ, "
+    "document_error.responsibility AS resp, document_error.is_retryable AS retryable, "
+    "document_error.dwh_id AS dwh_id "
+    f"FROM {DOCUMENT_ERROR} "
+    "INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id "
+    f"WHERE {ERROR_ANALYSIS_SCOPE} ), "
     "totals AS ( SELECT "
     "(SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, "
     "(SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ), "
@@ -771,11 +791,11 @@ TOP_ERROR_TYPE_QUERY = (
 
 TOP_SEMD_BY_ERROR_KIND_QUERY = (
     "WITH base AS ( "
-    "SELECT COALESCE(NULLIF(TRIM(semd_code), ''), 'Неизвестно') AS t, "
-    "COALESCE(NULLIF(TRIM(error_type), ''), 'Неизвестная ошибка') AS k, "
-    "dwh_id AS doc FROM public.rpt_error_breakdown "
-    "WHERE COALESCE(NULLIF(TRIM(semd_code), ''), '') <> '' "
-    "AND COALESCE(NULLIF(TRIM(error_type), ''), '') <> '' "
+    "SELECT document_error.semd_code AS t, "
+    "document_error.error_type AS k, document_error.dwh_id AS doc "
+    f"FROM {DOCUMENT_ERROR} "
+    f"WHERE {ERROR_ANALYSIS_SCOPE} "
+    "AND NULLIF(TRIM(document_error.semd_code), '') IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
     "totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), "
     "ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), "
@@ -795,9 +815,9 @@ TOP_SEMD_BY_ERRORS_QUERY = (
     "WITH per_code AS ( "
     "SELECT semd_label AS label, "
     "COUNT(DISTINCT dwh_id)::bigint AS total, "
-    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error','network_error'))::bigint AS errs "
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS errs "
     "FROM public.rpt_documents "
-    "WHERE status IN ('success','async_error','network_error') "
+    "WHERE status IN ('success','async_error') "
     "AND NULLIF(TRIM(semd_label), '') IS NOT NULL "
     f"{DOCUMENT_FILTERS} GROUP BY 1 ), "
     "ranked AS ( SELECT label, total, errs, ROW_NUMBER() OVER (ORDER BY errs DESC) AS rn "
@@ -812,12 +832,11 @@ ERROR_TYPE_CLINIC_FIELD_FILTERS = {
     "dwh_date": {"table_ref": "public.rpt_documents", "field_name": "processed_at"},
     "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_jid"},
     "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_code"},
-    "error_type": {"table_ref": "public.rpt_error_breakdown", "field_name": "error_type"},
+    "error_type": ERROR_TYPE_FIELD_FILTER,
 }
 
 ERROR_TYPE_CLINIC_TABLE_COLUMNS = [
     {"enabled": True, "name": "Тип ошибки"},
-    {"enabled": False, "name": "Тип ошибки (канонический)"},
     {"enabled": False, "name": "OID справочника"},
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "Код отказа"},
@@ -1183,15 +1202,21 @@ QUEUE_OVER_24H_QUERY = (
 
 # Скользящие сутки, а не календарный день: утром календарный день почти пуст, и плитка
 # сравнивала бы неполные сутки с полными. Ряд шагает на сутки назад от текущего момента;
-# документ попадает ровно в одно окно — по своей дате обработки.
+# ошибка связи попадает ровно в одно окно — по времени своего сообщения, в том числе
+# сообщения без связи с документом.
 TRANSPORT_TREND_DAYS = 14
 TRANSPORT_24H_FIELD = "Ошибок связи"
+NETWORK_ERROR = "mart_egisz_selfservice.network_error"
+NETWORK_ERROR_FIELD_FILTERS = {
+    "ips_date": {"table_ref": NETWORK_ERROR, "field_name": "message_at"},
+    "semd_type": {"table_ref": NETWORK_ERROR, "field_name": "semd_label"},
+    "jid": {"table_ref": NETWORK_ERROR, "field_name": "clinic_label"},
+}
 TRANSPORT_24H_QUERY = (
     "WITH errors AS ( SELECT "
-    "FLOOR(EXTRACT(EPOCH FROM (now() - ips_date)) / 86400)::int AS days_back, "
-    "COUNT(DISTINCT dwh_id)::bigint AS docs FROM public.rpt_documents "
-    "WHERE status = 'network_error' "
-    f"AND ips_date > now() - INTERVAL '{TRANSPORT_TREND_DAYS} days' AND ips_date <= now() "
+    "FLOOR(EXTRACT(EPOCH FROM (now() - message_at)) / 86400)::int AS days_back, "
+    f"COUNT(*)::bigint AS docs FROM {NETWORK_ERROR} "
+    f"WHERE message_at > now() - INTERVAL '{TRANSPORT_TREND_DAYS} days' AND message_at <= now() "
     "[[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY 1 ) "
     "SELECT now() - k * INTERVAL '1 day' AS \"Сутки по\", "
     f'COALESCE(e.docs, 0)::bigint AS "{TRANSPORT_24H_FIELD}" '
@@ -1200,8 +1225,8 @@ TRANSPORT_24H_QUERY = (
 )
 
 TRANSPORT_24H_DESCRIPTION = (
-    "Сколько документов получили ошибку связи за последние 24 часа — скользящие сутки от "
-    "текущего момента. Реквизиты: количество документов и сравнение с предыдущими 24 часами; "
+    "Сколько ошибок связи зафиксировано за последние 24 часа — скользящие сутки от "
+    "текущего момента. Реквизиты: количество ошибок и сравнение с предыдущими 24 часами; "
     "рост окрашен красным. Ряд — 14 таких суток; обычный уровень и всплески по календарным "
     "дням — карточка «Тренд ошибок связи по дням», виды сбоев и последние события — вкладка "
     "«Сервис интеграции». Фильтр периода карточку не двигает: это состояние на текущий момент."
@@ -1611,25 +1636,23 @@ UNDELIVERED_TO_CLINIC_FIELD_FILTERS = {
     "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
     "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
 }
+# Недоставленный результат — текущая ошибка связи документа с итоговым статусом: она
+# зафиксирована на последнем асинхронном ответе (ответ не доставлен в МИС) или после
+# него. Текст ошибки — из слоя разбора, в опубликованный слой он не выносится.
 UNDELIVERED_TO_CLINIC_LATEST_ERRORS = (
     "WITH latest_errors AS ( "
-    "SELECT DISTINCT ON (tx.dwh_id) "
-    "tx.dwh_id, tx.logid, tx.log_date AS error_at, tx.message AS error_text "
-    "FROM public.transactions tx "
-    "JOIN public.documents d ON d.dwh_id = tx.dwh_id "
-    "WHERE tx.status = 'network_error' "
-    "AND d.result_logid IS NOT NULL "
-    "AND tx.logid > d.result_logid "
-    "ORDER BY tx.dwh_id, tx.logid DESC, tx.log_date DESC NULLS LAST ) "
+    "SELECT DISTINCT ON (c.dwh_id) "
+    "c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text "
+    "FROM stg_egisz.document_error_current c "
+    "WHERE c.error_kind = 'Ошибка связи' "
+    "ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) "
 )
 UNDELIVERED_TO_CLINIC_QUERY = (
     UNDELIVERED_TO_CLINIC_LATEST_ERRORS
     + 'SELECT COUNT(DISTINCT public.rpt_documents.dwh_id)::bigint AS "Документов" '
     "FROM latest_errors "
     "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
-    "JOIN public.documents d ON d.dwh_id = latest_errors.dwh_id "
     "WHERE public.rpt_documents.status IN ('success', 'async_error') "
-    "AND d.result_logid IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]"
 )
 UNDELIVERED_TO_CLINIC_DETAIL_QUERY = (
@@ -1642,17 +1665,15 @@ UNDELIVERED_TO_CLINIC_DETAIL_QUERY = (
     'public.rpt_documents.first_sent_at AS "Дата отправки", '
     'public.rpt_documents.ips_date AS "Дата ответа ЕГИСЗ", '
     'public.rpt_documents.status_detail_label AS "Результат ЕГИСЗ", '
-    'd.result_logid::text AS "LOGID ответа ЕГИСЗ", '
-    'latest_errors.logid::text AS "LOGID ошибки доставки", '
+    'public.rpt_documents.result_logid::text AS "LOGID ответа ЕГИСЗ", '
     'latest_errors.error_at AS "Дата ошибки доставки", '
+    'latest_errors.error_type AS "Тип ошибки доставки", '
     'LEFT(COALESCE(latest_errors.error_text, \'\'), 180) AS "Текст ошибки доставки" '
     "FROM latest_errors "
     "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
-    "JOIN public.documents d ON d.dwh_id = latest_errors.dwh_id "
     "WHERE public.rpt_documents.status IN ('success', 'async_error') "
-    "AND d.result_logid IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] "
-    "ORDER BY latest_errors.error_at DESC NULLS LAST, latest_errors.logid DESC "
+    "ORDER BY latest_errors.error_at DESC NULLS LAST "
     "LIMIT 200"
 )
 
@@ -1661,8 +1682,9 @@ def apply_undelivered_to_clinic(card: dict) -> None:
     detail = card.get("name") == SENT_UNDELIVERED_TO_CLINIC_DETAIL_NAME
     card["display"] = "table" if detail else "scalar"
     card["description"] = (
-        "Сбой доставки результата в клинику после финального ответа ЕГИСЗ. "
-        "Источник — разобранные transactions; raw-слой после обработки не требуется."
+        "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка "
+        "связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя "
+        "разбора (stg_egisz.document_error_current)."
     )
     card.pop("query_tier", None)
     card.pop("source_model", None)
@@ -1687,8 +1709,8 @@ def apply_undelivered_to_clinic(card: dict) -> None:
             {"enabled": True, "name": "Дата ответа ЕГИСЗ"},
             {"enabled": True, "name": "Результат ЕГИСЗ"},
             {"enabled": True, "name": "LOGID ответа ЕГИСЗ"},
-            {"enabled": True, "name": "LOGID ошибки доставки"},
             {"enabled": True, "name": "Дата ошибки доставки"},
+            {"enabled": True, "name": "Тип ошибки доставки"},
             {"enabled": True, "name": "Текст ошибки доставки"},
         ]
 
@@ -1705,7 +1727,7 @@ CLINIC_SUCCESS_QUERY = (
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status_detail='no_response')::bigint AS \"Без ответа\", "
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') "
     "/ NULLIF(COUNT(DISTINCT dwh_id) FILTER "
-    "(WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" "
+    "(WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" "
     "FROM public.rpt_documents "
     "WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' "
     "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] "
@@ -1737,10 +1759,8 @@ def fix_sql(query: str) -> str:
         'SELECT DATE(processed_at) AS "Дата", status_label AS "Статус",',
         q,
     )
-    q = q.replace('AS "Вид ошибки"', 'AS "Тип ошибки"')
     q = q.replace("AS error_category,", 'AS "Категория ошибки",')
     q = q.replace("AS error_type,", 'AS "Тип ошибки",')
-    q = q.replace("AS network_error_type,", 'AS "Тип сетевой ошибки",')
     q = q.replace("AS pending_segment,", f'AS "{WAIT_DIMENSION_LABEL}",')
     q = q.replace("AS processed_day,", 'AS "День",')
     q = q.replace("SELECT b.t AS semd_code,", 'SELECT b.t AS "Код СЭМД",')
@@ -1850,7 +1870,7 @@ def fix_detail_quality_sql() -> str:
         "  FROM public.rpt_documents\n"
         "  INNER JOIN public.rpt_document_lineage\n"
         "    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n"
-        "  WHERE rpt_documents.status IN ('success', 'async_error', 'network_error')\n"
+        "  WHERE rpt_documents.status IN ('success', 'async_error')\n"
         "    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n"
         ")\n"
         "SELECT *\n"
@@ -2024,7 +2044,9 @@ def apply_status_by_day(card: dict) -> None:
     viz["stackable.stack_type"] = "stacked"
     series = viz.setdefault("series_settings", {})
     # «Без ответа» из запроса не приходит — серия с этим ключом осталась бы мёртвой.
-    for stale in ("Отправлено", "Без ответа"):
+    # «Ошибка связи» — вид ошибки, а не статус документа.
+    stale_series = ("Отправлено", "Без ответа", "Ошибка связи")
+    for stale in stale_series:
         series.pop(stale, None)
     series.update(
         {k: deepcopy(v) for k, v in STATUS_DETAIL_COLORS.items() if k != "Без ответа"}
@@ -2033,7 +2055,7 @@ def apply_status_by_day(card: dict) -> None:
     if isinstance(viz.get("graph.series_order"), list):
         viz["graph.series_order"] = [
             s for s in viz["graph.series_order"]
-            if not (isinstance(s, dict) and s.get("key") in ("Отправлено", "Без ответа"))
+            if not (isinstance(s, dict) and s.get("key") in stale_series)
         ]
     cs = viz.setdefault("column_settings", {})
     cs['["name","Документов"]'] = {
@@ -2044,12 +2066,14 @@ def apply_status_by_day(card: dict) -> None:
 
 
 def apply_refusals_hourly(card: dict) -> None:
-    """«Отказы по часам» — error-rate: доли отказов связи и асинхронного ответа от
-    документов с ответом РЭМД за час; знаменатель одного грейна с сериями."""
+    """«Отказы по часам» — error-rate: доли документов с ошибкой связи и с ошибкой
+    асинхронного ответа за час; знаменатель на грейне документа у каждой серии свой."""
     card["display"] = "line"
     card["description"] = (
-        "Почасовые доли отказов связи и асинхронного ответа РЭМД от всех документов "
-        "с ответом РЭМД за час (%). Отправленные без ответа в знаменатель не входят. "
+        "Почасовые доли документов с ошибкой асинхронного ответа РЭМД и с ошибкой связи "
+        "(%). Ошибка асинхронного ответа — исход: её доля от документов с ответом РЭМД за "
+        "час, отправленные без ответа в знаменатель не входят. Ошибка связи статус не "
+        "меняет: её доля от всех документов часа, включая документы без ответа. "
         "Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS»."
     )
     card["dataset_query"]["native"]["query"] = SERVICE_REFUSALS_BY_HOUR_QUERY
@@ -2114,8 +2138,9 @@ def apply_clinic_volume(card: dict) -> None:
 
 def apply_clinic_error_volume(card: dict) -> None:
     card["description"] = (
-        f"Топ-{CLINIC_ERROR_VOLUME_TOP_N} клиник по объёму отказов (async_error + network_error) "
-        "и строка «Прочие» с взвешенным % ошибок. Детальная разбивка по видам — вкладка **Анализ ошибок**."
+        f"Топ-{CLINIC_ERROR_VOLUME_TOP_N} клиник по числу документов с ошибкой асинхронного "
+        "ответа РЭМД и строка «Прочие» с взвешенным % ошибок. Детальная разбивка по типам — "
+        "вкладка **Анализ ошибок**."
     )
     card["dataset_query"]["native"]["query"] = CLINIC_ERROR_VOLUME_QUERY
     card["display"] = "combo"
@@ -2207,17 +2232,18 @@ def apply_heatmap(card: dict) -> None:
 
 
 def apply_top_error_type_table(card: dict) -> None:
-    """«Топ по типу ошибки» — табличный рейтинг атомарных видов ошибки (error_type)
-    с категорией и долей документов от всех документов с ошибками в срезе."""
+    """«Топ по типу ошибки» — табличный рейтинг типов ошибки (error_type) с категорией
+    и долей документов от всех документов с ошибками в срезе."""
     card["display"] = "table"
     card["description"] = (
-        "Рейтинг атомарных видов ошибки (`error_type`) по числу документов в срезе. "
+        "Рейтинг типов ошибки (`error_type`) по числу документов в срезе: отказы РЭМД и "
+        "ошибки связи. У ошибки связи категории нет — в столбце категории стоит её вид. "
         "«% ошибок» — доля документов с этим типом от всех документов с ошибками; "
         "«% всего» — доля от всех документов с ответом РЭМД (успех + ошибка)."
     )
     card["dataset_query"]["native"]["query"] = TOP_ERROR_TYPE_QUERY
     # Знаменатель «обработанных» живёт на грейне документа → фильтры среза привязаны к
-    # rpt_documents (не к rpt_error_breakdown), иначе предикат в period_docs не развернётся.
+    # rpt_documents (не к document_error), иначе предикат в period_docs не развернётся.
     card["metabase-field-filters"] = {
         "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
         "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
@@ -2254,7 +2280,8 @@ def apply_top_category_type_bar(card: dict) -> None:
     card["display"] = "row"
     card["description"] = (
         "Категория ошибки (ось) × тип (стэк), документов COUNT(DISTINCT «ID»). "
-        "Каждый вид окрашен цветом своей категории."
+        "Каждый тип окрашен цветом своей категории; у ошибки связи категории нет — её "
+        "место занимает вид."
     )
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["Категория ошибки", "Тип ошибки"]
@@ -2281,9 +2308,9 @@ def apply_top_semd_by_error_kind(card: dict) -> None:
     card["display"] = "row"
     card["dataset_query"]["native"]["query"] = TOP_SEMD_BY_ERROR_KIND_QUERY
     card["metabase-field-filters"] = {
-        "ips_date": {"table_ref": "public.rpt_error_breakdown", "field_name": "ips_date"},
-        "jid": {"table_ref": "public.rpt_error_breakdown", "field_name": "clinic_label"},
-        "semd_type": {"table_ref": "public.rpt_error_breakdown", "field_name": "semd_code"},
+        "ips_date": {"table_ref": DOCUMENT_ERROR, "field_name": "ips_date"},
+        "jid": {"table_ref": DOCUMENT_ERROR, "field_name": "clinic_label"},
+        "semd_type": {"table_ref": DOCUMENT_ERROR, "field_name": "semd_label"},
     }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["СЭМД", "Тип ошибки"]
@@ -2296,7 +2323,7 @@ def apply_top_semd_by_error_kind(card: dict) -> None:
     cs = viz.setdefault("column_settings", {})
     cs.pop('["name","Код СЭМД"]', None)
     cs['["name","СЭМД"]'] = {"column_title": "СЭМД", "text_style": "wrap"}
-    cs['["name","Тип ошибки"]'] = {"column_title": "Вид ошибки"}
+    cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки"}
     strip_chart_keys(viz, "row")
 
 
@@ -2663,7 +2690,7 @@ def fix_viz(viz: dict, *, display: str = "table") -> None:
     new_cs = {}
     for k, v in cs.items():
         nk = k.replace("JID+Наименование", "Клиника").replace("DWH_ID", "dwh_id")
-        nk = nk.replace("Вид ошибки", "Тип ошибки").replace('"Ошибок"', '"Документов"')
+        nk = nk.replace('"Ошибок"', '"Документов"')
         if isinstance(v, dict) and v.get("column_title") == "%" and v.get("decimals") == 1:
             v = {**v, "suffix": " %"}
         if isinstance(v, dict) and v.get("column_title") == "Ошибок":
@@ -2701,9 +2728,7 @@ def _dim(d: str) -> str:
         "clinic_name": "Клиника",
         "semd_code": "Код СЭМД",
         "СЭМД": "СЭМД",
-        "Вид ошибки": "Тип ошибки",
         "error_category": "Категория ошибки",
-        "network_error_type": "Тип сетевой ошибки",
         "pending_segment": WAIT_DIMENSION_LABEL,
         "status_detail_label": "Статус",
         "processed_day": "День",
@@ -3079,52 +3104,44 @@ def apply_error_type_filters(dash: dict) -> None:
             continue
         query = native["query"]
         if "{{error_type}}" not in query:
-            if "public.rpt_error_breakdown" in query:
+            if f"FROM {DOCUMENT_ERROR}" in query:
                 # Первый источник — числитель; последующие CTE могут считать знаменатель.
-                start = query.index("FROM public.rpt_error_breakdown")
+                start = query.index(f"FROM {DOCUMENT_ERROR}")
                 pos = query.index("WHERE ", start) + len("WHERE ")
                 query = query[:pos] + "1=1 [[AND {{error_type}}]] AND " + query[pos:]
             else:
                 # Документ учитывается один раз, даже если выбранным типам отвечают
                 # несколько элементов. Знаменатель по всем документам сохраняется.
-                membership = (
-                    " [[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown "
-                    "WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id "
-                    "AND {{error_type}})]]"
-                )
+                membership = f" [[AND {ERROR_TYPE_EXISTS}]]"
                 query = re.sub(
-                    r"status IN \('async_error',\s*'network_error'\)",
+                    r"FILTER \(WHERE status = 'async_error'",
                     lambda match: match.group(0) + membership, query,
                 )
             if card.get("name") == "Топ по типу ошибки":
                 query = query.replace(
                     "(SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err",
-                    "(SELECT COUNT(DISTINCT dwh_id) FROM public.rpt_error_breakdown "
-                    "INNER JOIN period_docs USING (dwh_id))::numeric AS total_err",
+                    f"(SELECT COUNT(DISTINCT dwh_id) FROM {DOCUMENT_ERROR} "
+                    f"INNER JOIN period_docs USING (dwh_id) WHERE {ERROR_ANALYSIS_SCOPE})"
+                    "::numeric AS total_err",
                 )
             native["query"] = query
         native.setdefault("template-tags", {})["error_type"] = deepcopy(
             ERROR_TYPE_CLINIC_TEMPLATE_TAGS["error_type"]
         )
-        card.setdefault("metabase-field-filters", {})["error_type"] = {
-            "table_ref": "public.rpt_error_breakdown", "field_name": "error_type"
-        }
+        card.setdefault("metabase-field-filters", {})["error_type"] = deepcopy(ERROR_TYPE_FIELD_FILTER)
 
 
 OPERATIONAL_EXTRA_FILTERS = {
     "status": "[[AND {{status}}]]",
     "pending_segment": "[[AND {{pending_segment}}]]",
     # Документ отбирается один раз, сколько бы его ошибок ни подошло под выбранные типы.
-    "error_type": (
-        "[[AND EXISTS (SELECT 1 FROM public.rpt_error_breakdown "
-        "WHERE rpt_error_breakdown.dwh_id = rpt_documents.dwh_id AND {{error_type}})]]"
-    ),
+    "error_type": f"[[AND {ERROR_TYPE_EXISTS}]]",
 }
 
 OPERATIONAL_EXTRA_FIELD_FILTERS = {
     "status": DOCUMENTS_FILTER_FIELD_FILTERS["status"],
     "pending_segment": {"table_ref": "public.rpt_documents", "field_name": "pending_segment_label"},
-    "error_type": {"table_ref": "public.rpt_error_breakdown", "field_name": "error_type"},
+    "error_type": ERROR_TYPE_FIELD_FILTER,
 }
 
 
@@ -3192,7 +3209,7 @@ def apply_operational_status_row(dash: dict) -> None:
         },
     }
     card["metabase-field-filters"] = {
-        key: deepcopy(DOCUMENTS_FILTER_FIELD_FILTERS[key]) for key in ("semd_type", "jid")
+        key: deepcopy(NETWORK_ERROR_FIELD_FILTERS[key]) for key in ("semd_type", "jid")
     }
     card["visualization_settings"] = status_tile_viz(TRANSPORT_24H_FIELD)
 
@@ -3221,12 +3238,12 @@ CONTRIBUTION_COLUMN_WIDTHS = [330, 110, 110, 110, 110, 96, 110, 110, 420]
 CONTRIBUTION_UP_BG = "#FEE2E2"
 CONTRIBUTION_DOWN_BG = "#DCFCE7"
 
-# Знаменатель — документы с ответом РЭМД, числитель — отказы и ошибки связи: тот же корпус,
-# что у XmR-карты и витрины rpt_documents_weekly. Отбор по типу ошибки apply_error_type_filters
+# Знаменатель — документы с ответом РЭМД, числитель — отказы асинхронного ответа: тот же
+# корпус, что у XmR-карты и витрины rpt_documents_weekly. Отбор по типу ошибки apply_error_type_filters
 # добавляет к числителю обоих периодов, знаменатели не меняются.
 _CONTRIBUTION_COUNTS = (
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, "
-    "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', 'network_error')) AS errs"
+    "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS errs"
 )
 
 CONTRIBUTION_QUERY = (
@@ -3267,13 +3284,18 @@ CONTRIBUTION_QUERY = (
     "CASE WHEN c.docs0 > 0 AND c.docs1 > 0 THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) "
     "* (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0) ELSE 0 END AS rate_pp, "
     "SIGN(t.p1 - t.p0) AS direction FROM clinics c CROSS JOIN totals t ), "
-    # Самый частый элемент error_types по документам клиники за период; ничья — по алфавиту.
-    "top_error AS ( SELECT clinic_label, top_type FROM ( SELECT clinic_label, "
-    "atom AS top_type, ROW_NUMBER() OVER (PARTITION BY clinic_label "
-    "ORDER BY COUNT(DISTINCT dwh_id) DESC, atom) AS rn "
-    "FROM public.rpt_documents, LATERAL unnest(string_to_array(error_types, ' · ')) AS atom "
-    "WHERE error_types IS NOT NULL [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-    "GROUP BY clinic_label, atom ) ranked WHERE rn = 1 ) "
+    # Самый частый тип отказа по документам клиники с ошибкой за период — тот же отбор,
+    # что у числителя доли; ничья — по алфавиту.
+    "top_error AS ( SELECT clinic_label, top_type FROM ( "
+    "SELECT public.rpt_documents.clinic_label, document_error.error_type AS top_type, "
+    "ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_label "
+    "ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn "
+    f"FROM public.rpt_documents JOIN {DOCUMENT_ERROR} "
+    "ON document_error.dwh_id = public.rpt_documents.dwh_id "
+    "WHERE document_error.status = 'async_error' "
+    "AND document_error.error_kind = 'Ошибка асинхронного ответа' "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "GROUP BY 1, 2 ) ranked WHERE rn = 1 ) "
     f'SELECT "Клиника", "{CONTRIBUTION_DOCS_BASE}", "{CONTRIBUTION_DOCS_PERIOD}", '
     f'"{CONTRIBUTION_SHARE_BASE}", "{CONTRIBUTION_SHARE_PERIOD}", "{CONTRIBUTION_TOTAL}", '
     f'"{CONTRIBUTION_RATE}", "{CONTRIBUTION_VOLUME}", "{CONTRIBUTION_TOP_ERROR}" FROM ( '
@@ -3304,7 +3326,7 @@ CONTRIBUTION_DESCRIPTION = (
     "Какие клиники сдвинули долю ошибок: период из фильтра «Обработано IPS» против опорного "
     "периода фазы из справочника dim_control_chart_phases — той же базы, от которой "
     "XmR-карта управленческого дашборда считает центр; фаза берётся по последней неделе "
-    "периода. Доля ошибок — отказы РЭМД и ошибки связи от документов с ответом РЭМД. Первая "
+    "периода. Доля ошибок — отказы асинхронного ответа РЭМД от документов с ответом РЭМД. Первая "
     "строка — итог по всем клиникам с датами опорного периода; опорная доля в ней — "
     "отношение сумм, а центр XmR — среднее недельных долей, поэтому они расходятся на "
     "десятые доли процента. Вклад клиники — её превышение над опорной долей в периоде минус "
@@ -3313,7 +3335,7 @@ CONTRIBUTION_DESCRIPTION = (
     "клиника стала ошибаться чаще или реже; «за счёт объёма» — изменилась её доля в потоке "
     "при прежней доле ошибок. У новых клиник и у пропавших из потока весь вклад — объёмный. "
     "Клиники стоят по направлению общего изменения: первыми те, кто его дал. Основной тип "
-    "ошибки — самый частый тип по документам клиники за период. При выбранном типе ошибки "
+    "ошибки — самый частый тип отказа по документам клиники за период. При выбранном типе ошибки "
     "считается доля документов с этим типом. Если опорный период фазы ещё не закрыт, "
     "сравнения нет, как и границ на XmR-карте."
 )
@@ -3405,7 +3427,7 @@ def apply_01(dash: dict) -> None:
             if name != "Детализация контроля качества":
                 dq["native"]["query"] = fix_sql(dq["native"]["query"])
 
-        if name == "Топ типов СЭМД по видам ошибки":
+        if name == "Топ типов СЭМД по типам ошибок":
             apply_top_semd_by_error_kind(card)
 
         if name == "Архив СЭМД":
@@ -3495,7 +3517,7 @@ EXECUTIVE_TAB = "overview"
 # Корпус метрик качества — документы, по которым ЕГИСЗ уже ответил. Тот же предикат несут
 # дашборд 01, клиентский 07 и недельная витрина (docs_total = status <> 'sent'), поэтому
 # доли качества сопоставимы между отчётами.
-EXECUTIVE_FINAL_CORPUS = "status IN ('success', 'async_error', 'network_error')"
+EXECUTIVE_FINAL_CORPUS = "status IN ('success', 'async_error')"
 
 # «В обработке» — отправленные, по которым ответ ещё ждут. Терминальная граница ожидания
 # приходит из справочника (dim_pending_segments → sent_state), а не порогом в SQL.
@@ -3758,16 +3780,18 @@ _EXECUTIVE_OK = "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok"
 
 
 def _executive_churn_top_error() -> str:
-    """Самый частый тип ошибки по документам JID за период: атомы documents.error_types
-    (разделитель « · »), ничья решается алфавитом. Считается только по JID очереди."""
+    """Самый частый тип среди текущих ошибок документов JID за период — отказов и ошибок
+    связи; ничья решается алфавитом. Считается только по JID очереди."""
     return (
-        ", top_error AS (SELECT jid, error_type FROM (SELECT clinic_jid AS jid, "
-        "atom AS error_type, ROW_NUMBER() OVER (PARTITION BY clinic_jid "
-        "ORDER BY COUNT(DISTINCT dwh_id) DESC, atom) AS rn "
-        "FROM public.rpt_documents, LATERAL unnest(string_to_array(error_types, ' · ')) "
-        f"AS atom WHERE clinic_jid IN (SELECT jid FROM per_jid WHERE {_EXECUTIVE_CHURN_PREDICATE}) "
-        "AND error_types IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t "
-        "WHERE rn = 1) "
+        ", top_error AS (SELECT jid, error_type FROM ("
+        "SELECT public.rpt_documents.clinic_jid AS jid, document_error.error_type, "
+        "ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_jid "
+        "ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn "
+        f"FROM public.rpt_documents JOIN {DOCUMENT_ERROR} "
+        "ON document_error.dwh_id = public.rpt_documents.dwh_id "
+        f"WHERE {ERROR_ANALYSIS_SCOPE} AND public.rpt_documents.clinic_jid IN "
+        f"(SELECT jid FROM per_jid WHERE {_EXECUTIVE_CHURN_PREDICATE}) "
+        "[[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t WHERE rn = 1) "
     )
 
 
@@ -3793,7 +3817,7 @@ EXECUTIVE_PERIODS: dict[str, dict[str, str]] = {
     "week": {
         "tab": "weekly",
         "mart": "public.rpt_documents_weekly",
-        "breakdown": "public.rpt_error_breakdown_weekly",
+        "breakdown": "mart_egisz.agg_document_error_weekly",
         "column": "week_start",
         "complete": "is_complete_week",
         "label": "Неделя",
@@ -3808,7 +3832,7 @@ EXECUTIVE_PERIODS: dict[str, dict[str, str]] = {
     "month": {
         "tab": "monthly",
         "mart": "public.rpt_documents_monthly",
-        "breakdown": "public.rpt_error_breakdown_monthly",
+        "breakdown": "mart_egisz.agg_document_error_monthly",
         "column": "month_start",
         "complete": "is_complete_month",
         "label": "Месяц",
@@ -4007,9 +4031,9 @@ def executive_overview_cards() -> list[dict]:
         _executive_card(
             EXECUTIVE_SUCCESS_NAME,
             "Доля успешно зарегистрированных СЭМД от документов с ответом РЭМД (успех + "
-            "отказ РЭМД + ошибка связи; «в обработке» не входят — исход ещё не известен). "
-            "Тот же знаменатель, что у дашборда «Интеграция с ЕГИСЗ» и вкладок динамики. "
-            "Вместе с «Отказов РЭМД, %» и «Ошибок связи, %» даёт в сумме 100 %.",
+            "отказ РЭМД; «в обработке» не входят — исход ещё не известен). Тот же "
+            "знаменатель, что у дашборда «Интеграция с ЕГИСЗ» и вкладок динамики. Вместе "
+            "с «Отказов РЭМД, %» даёт в сумме 100 %.",
             _executive_share("status = 'success'", EXECUTIVE_SUCCESS_NAME),
             _executive_pct(EXECUTIVE_SUCCESS_NAME),
             "scalar",
@@ -4061,10 +4085,11 @@ def executive_overview_cards() -> list[dict]:
         ),
         _executive_card(
             "Ошибок связи, %",
-            "Доля документов с ошибкой связи от документов с ответом (тот же знаменатель, "
-            "что у «Доля успеха, %»). Сигнал состояния транспорта (VPN ГОСТ), а не "
+            "Доля документов с ошибкой связи в текущем состоянии от всех документов "
+            "периода: ошибка связи статус не меняет и бывает у документа с любым исходом, в "
+            "том числе без ответа РЭМД. Сигнал состояния транспорта (VPN ГОСТ), а не "
             "содержания документа. Цель — вниз.",
-            _executive_share("status = 'network_error'", "Ошибок связи, %"),
+            _executive_share(NETWORK_ERROR_EXISTS, "Ошибок связи, %", corpus="TRUE"),
             _executive_pct("Ошибок связи, %"),
             "scalar",
             (6, 12, 6, 3),
@@ -4301,16 +4326,15 @@ def executive_overview_cards() -> list[dict]:
             f"Клиники от {EXECUTIVE_CHURN_MIN_DOCS} документов за период без единого "
             "успешного СЭМД, по убыванию объёма попыток. Разбивка по исходам отвечает, к "
             "кому идти: «с ошибкой» — разбор содержания документов, «в обработке» и «ответ "
-            "не получен» — разбор доставки. «Основной тип ошибки» — самый частый тип из "
-            "documents.error_types по документам JID за период; пусто, если у документов "
-            "нет распознанного типа.",
+            "не получен» — разбор доставки. «Основной тип ошибки» — самый частый тип среди "
+            "текущих ошибок документов JID за период (отказов и ошибок связи); пусто, если "
+            "ошибок нет.",
             _executive_per_jid(
                 "COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic",
                 "MAX(clinic_inn) AS inn",
                 _EXECUTIVE_DOCS,
                 _EXECUTIVE_OK,
-                "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('async_error', "
-                "'network_error')) AS errs",
+                "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS errs",
                 f"COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_PENDING}) AS in_progress",
                 "COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') AS no_answer",
             )
@@ -4514,8 +4538,8 @@ def _executive_summary_query(grain: str, *, with_signal: bool) -> str:
         f"periods AS (SELECT {p['column']} AS period_start, "
         f"BOOL_AND({p['complete']}) AS is_complete, SUM(docs_total)::bigint AS docs_total, "
         "SUM(docs_success)::bigint AS docs_success, "
-        "SUM(docs_async_error)::bigint AS docs_async_error, "
         "SUM(docs_network_error)::bigint AS docs_network_error, "
+        "SUM(docs_sent)::bigint AS docs_sent, "
         f"SUM(docs_error)::bigint AS docs_error FROM {p['mart']} WHERE 1=1 [[AND {{{{jid}}}}]] "
         f"GROUP BY {p['column']}), shares AS (SELECT periods.*, "
         "ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) "
@@ -4526,10 +4550,10 @@ def _executive_summary_query(grain: str, *, with_signal: bool) -> str:
     )
     select = (
         f'SELECT shares.period_start AS "{p["label"]}", docs_total AS "Документов", '
-        'docs_success AS "Успешно", docs_async_error AS "Отказов РЭМД", '
+        'docs_success AS "Успешно", docs_error AS "Отказов РЭМД", '
         'docs_network_error AS "Ошибок связи", '
-        'ROUND(100.0 * docs_async_error / NULLIF(docs_total, 0), 1) AS "Отказов РЭМД, %", '
-        'ROUND(100.0 * docs_network_error / NULLIF(docs_total, 0), 1) AS "Ошибок связи, %", '
+        'ROUND(100.0 * docs_network_error / NULLIF(docs_total + docs_sent, 0), 1) '
+        'AS "Ошибок связи, %", '
         'error_pct AS "Доля ошибок, %", ROUND(error_pct - LAG(error_pct) OVER '
         f'(ORDER BY shares.period_start), 1) AS "Δ доли ошибок, {p["delta"]}", {signal_column}'
         f"CASE WHEN is_complete THEN '{p['closed']}' ELSE '{p['open']}' END "
@@ -4597,8 +4621,8 @@ def _executive_xmr_card() -> dict:
     card = _executive_period_card(
         "week",
         EXECUTIVE_XMR_NAME,
-        "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД и "
-        "ошибки связи от документов с ответом РЭМД). Центр и границы «центр ± 2,66 × "
+        "XmR-карта индивидуальных значений: доля ошибок закрытой недели (отказы РЭМД от "
+        "документов с ответом РЭМД). Центр и границы «центр ± 2,66 × "
         "средний скользящий размах» считаются по опорному периоду фазы (справочник "
         "dim_control_chart_phases) и продлеваются вперёд до следующей фазы; нижняя "
         "граница не опускается ниже нуля. Фаза — отрезок с неизменными условиями работы: "
@@ -4652,22 +4676,17 @@ def executive_periodic_cards(grain: str) -> list[dict]:
             grain,
             f"Статусы {of}",
             f"Состав исходов регистрации {of} в долях от документов с ответом РЭМД: успех + "
-            "отказ РЭМД + ошибка связи = 100 % (стек, площадь). «Отправлено» (ещё без "
-            f"результата) исключено. Только {words['closed']} — при малом их числе ряд "
-            "короткий.",
+            "отказ РЭМД = 100 % (стек, площадь). «Отправлено» (ещё без результата) "
+            "исключено. Ошибка связи статус не меняет — её доля на карточке «Ошибок связи "
+            f"{of}, %». Только {words['closed']} — при малом их числе ряд короткий.",
             f'SELECT {column} AS "{label}", '
             'ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS "Успешно", '
-            'ROUND(100.0 * SUM(docs_async_error) / NULLIF(SUM(docs_total), 0), 1) '
-            'AS "Отказ РЭМД", '
-            'ROUND(100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total), 0), 1) '
-            f'AS "Ошибка связи" FROM {mart} WHERE {p["complete"]} [[AND {{{{jid}}}}]] '
+            'ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) '
+            f'AS "Отказ РЭМД" FROM {mart} WHERE {p["complete"]} [[AND {{{{jid}}}}]] '
             f"GROUP BY {column} ORDER BY {column}",
             _executive_period_viz(
                 grain,
-                {
-                    k: {"color": EXECUTIVE_OUTCOME_COLORS[k]}
-                    for k in ("Успешно", "Отказ РЭМД", "Ошибка связи")
-                },
+                {k: {"color": EXECUTIVE_OUTCOME_COLORS[k]} for k in ("Успешно", "Отказ РЭМД")},
                 "Доля документов, %",
                 _EXECUTIVE_PCT_FORMAT,
                 **{"stackable.stack_type": "stacked"},
@@ -4679,19 +4698,21 @@ def executive_periodic_cards(grain: str) -> list[dict]:
         _executive_period_card(
             grain,
             f"Объём документов {of}",
-            f"Объём документов {of} в разрезе исхода (успех / отказ РЭМД / ошибка связи) — "
+            f"Объём документов {of} в разрезе исхода (успех / отказ РЭМД) — "
             "знаменатель для интерпретации долей. Ряд «В обработке» — очередь ожидания на "
             f"конец своего {words['gen']} (МСК), поэтому значения закрытых периодов не "
             "меняются. «Ответ не получен (утилизирован)» в объём не входит: ответа по этим "
             "документам уже не будет, они разбираются на вкладке «Отправленные».",
             f'SELECT {column} AS "{label}", SUM(docs_success)::bigint AS "Успешно", '
-            'SUM(docs_async_error)::bigint AS "Отказ РЭМД", '
-            'SUM(docs_network_error)::bigint AS "Ошибка связи", '
+            'SUM(docs_error)::bigint AS "Отказ РЭМД", '
             'SUM(docs_pending)::bigint AS "В обработке" '
             f"FROM {mart} WHERE 1=1 [[AND {{{{jid}}}}]] GROUP BY {column} ORDER BY {column}",
             _executive_period_viz(
                 grain,
-                {k: {"color": v} for k, v in EXECUTIVE_OUTCOME_COLORS.items()},
+                {
+                    k: {"color": EXECUTIVE_OUTCOME_COLORS[k]}
+                    for k in ("Успешно", "Отказ РЭМД", "В обработке")
+                },
                 "Документов",
                 _EXECUTIVE_COUNT_FORMAT,
                 **{"stackable.stack_type": "stacked"},
@@ -4703,14 +4724,15 @@ def executive_periodic_cards(grain: str) -> list[dict]:
         _executive_period_card(
             grain,
             f"Ошибок связи {of}, %",
-            "Доля документов с ошибкой связи от документов с ответом РЭМД, "
-            f"{words['closed']}. Своя шкала: доля в десятые доли процента в стеке "
-            "«Статусов» не видна. Ошибка связи — сбой транспорта (VPN ГОСТ), отказ РЭМД — "
+            "Доля документов с ошибкой связи в текущем состоянии от всех документов, "
+            f"{words['closed']}. Ошибка связи статус не меняет и бывает у документа с любым "
+            "исходом, в том числе без ответа РЭМД, поэтому знаменатель — все документы, а не "
+            "корпус с ответом. Ошибка связи — сбой транспорта (VPN ГОСТ), отказ РЭМД — "
             "содержание СЭМД: у причин разные ответственные, поэтому доли разнесены. Разбор "
             "транспорта — дашборд «Интеграция с ЕГИСЗ».",
             # Без округления в SQL: доля в десятые процента при округлении шла бы ступенями.
             f'SELECT {column} AS "{label}", 100.0 * SUM(docs_network_error) '
-            '/ NULLIF(SUM(docs_total), 0) AS "Ошибок связи, %" '
+            '/ NULLIF(SUM(docs_total + docs_sent), 0) AS "Ошибок связи, %" '
             f"FROM {mart} WHERE {p['complete']} [[AND {{{{jid}}}}]] "
             f"GROUP BY {column} ORDER BY {column}",
             _executive_period_viz(
@@ -4757,18 +4779,18 @@ def executive_periodic_cards(grain: str) -> list[dict]:
         _executive_period_card(
             grain,
             f"Категории ошибок {of}",
-            "Число документов с ошибкой по категориям правил за "
-            f"{words['acc']} (уровень сообщений). Документ с несколькими категориями "
-            "учитывается в каждой — сумма столбца может превышать число документов с "
-            f"ошибкой. Последний столбец может быть {words['partial']} (не итоговый провал "
-            "по всем категориям сразу). Документы с ошибкой без распознанных категорий (в "
-            "основном асинхронные без атомов) в разбивку не входят, поэтому сумма по "
-            "категориям не сводится один-в-один с числом ошибок в SLI. Панель отвечает «что "
-            "именно ломается», а не «сколько документов пострадало».",
-            f'SELECT {column} AS "{label}", error_category AS "Категория ошибки", '
-            'SUM(docs_with_category)::bigint AS "Документов с ошибкой" '
+            f"Число документов с ошибкой по категориям за {words['acc']}: отказы — по "
+            "категории правил, ошибки связи — одной группой по виду (категорий у них нет). "
+            "Документ с несколькими категориями учитывается в каждой — сумма столбца может "
+            f"превышать число документов с ошибкой. Последний столбец может быть "
+            f"{words['partial']} (не итоговый провал по всем категориям сразу). Ошибка связи "
+            "учитывается и у документов с успешной регистрацией (ответ не доставлен в МИС), "
+            "поэтому сумма по категориям не сводится один-в-один с числом ошибок в SLI. "
+            "Панель отвечает «что именно ломается», а не «сколько документов пострадало».",
+            f'SELECT {column} AS "{label}", COALESCE(error_category, error_kind) '
+            'AS "Категория ошибки", SUM(docs_with_category)::bigint AS "Документов с ошибкой" '
             f"FROM {p['breakdown']} WHERE 1=1 [[AND {{{{jid}}}}]] "
-            f"GROUP BY {column}, error_category ORDER BY {column}",
+            f"GROUP BY 1, 2 ORDER BY 1",
             {
                 "graph.dimensions": [label, "Категория ошибки"],
                 "graph.metrics": ["Документов с ошибкой"],
@@ -4813,14 +4835,16 @@ def executive_periodic_cards(grain: str) -> list[dict]:
         _executive_period_card(
             grain,
             f"Сводка {of}",
-            f"{label}, объём корпуса, успешные, отказы РЭМД и ошибки связи — в штуках и "
-            "долях, итоговая доля ошибок и её изменение к предыдущему периоду (п.п.)"
+            f"{label}, объём корпуса, успешные, отказы РЭМД и ошибки связи в штуках, доля "
+            "ошибок связи, итоговая доля ошибок и её изменение к предыдущему периоду (п.п.)"
             + (", сигнал контрольной карты (сработавшие правила)" if grain == "week" else "")
             + ". Отказ РЭМД — содержание СЭМД, ошибка связи — транспорт: у причин разные "
-            "ответственные; итоговая доля ошибок — показатель уровня сервиса за закрытый "
-            f"период. Единица — логический документ (текущая версия); период — "
-            f"{words['anchor']} МСК по дате обработки IPS; корпус — документы с ответом РЭМД "
-            f"(без «в обработке»). Незакрытый период помечен «{p['open']}»."
+            "ответственные; итоговая доля ошибок (отказы РЭМД от корпуса) — показатель "
+            f"уровня сервиса за закрытый период. Единица — логический документ (текущая "
+            f"версия); период — {words['anchor']} МСК по дате обработки IPS; корпус — "
+            "документы с ответом РЭМД (без «в обработке»). Ошибка связи статус не меняет: её "
+            "доля — от всех документов периода, включая документы без ответа. Незакрытый "
+            f"период помечен «{p['open']}»."
             + (
                 ""
                 if grain == "week"
@@ -4835,7 +4859,6 @@ def executive_periodic_cards(grain: str) -> list[dict]:
                     '["name","Успешно"]': dict(_EXECUTIVE_COUNT_FORMAT),
                     '["name","Отказов РЭМД"]': dict(_EXECUTIVE_COUNT_FORMAT),
                     '["name","Ошибок связи"]': dict(_EXECUTIVE_COUNT_FORMAT),
-                    '["name","Отказов РЭМД, %"]': dict(_EXECUTIVE_PCT_FORMAT),
                     '["name","Ошибок связи, %"]': dict(_EXECUTIVE_PCT_FORMAT),
                     '["name","Доля ошибок, %"]': dict(_EXECUTIVE_PCT_FORMAT),
                     f'["name","Δ доли ошибок, {p["delta"]}"]': {
@@ -4868,9 +4891,10 @@ EXECUTIVE_DESCRIPTION = (
     "раздельно (у причин разные ответственные), время до ответа РЭМД, новые подключения, "
     "структура ошибок и сводка; на недельной вкладке — контрольная карта XmR с фазами "
     "(центр и границы по опорному периоду фазы из dim_control_chart_phases, правила серий). "
-    "Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД + "
-    "ошибка связи) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и "
-    "у витрин rpt_documents_weekly / rpt_documents_monthly. Рублёвые карточки помечены "
+    "Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД) — "
+    "тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин "
+    "rpt_documents_weekly / rpt_documents_monthly; ошибка связи статус не меняет, её доля — "
+    "от всех документов периода. Рублёвые карточки помечены "
     "«ориентир»: расчёт по плоской ставке 10 000 ₽/JID/мес читается как порядок величины — "
     "договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка "
     "подключения. Карточки за последние 7 и 30 дней, рублёвые карточки, тренд риска, список "
@@ -5060,7 +5084,7 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
             }
         # Фильтр клиники — на грейне источника карточки: витрина типов СЭМД в обмене несёт
         # собственный clinic_label; если запрос смешивает обе документные таблицы
-        # (period_docs из rpt_documents + join rpt_error_breakdown), привязываем к
+        # (period_docs из rpt_documents + join document_error), привязываем к
         # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
         if "public.rpt_clinic_semd_activity" in native["query"]:
             source = "public.rpt_clinic_semd_activity"
@@ -5069,7 +5093,7 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
         elif "public.rpt_documents" in native["query"]:
             source = "public.rpt_documents"
         else:
-            source = "public.rpt_error_breakdown"
+            source = DOCUMENT_ERROR
         ff = dict(card.get("metabase-field-filters") or {})
         ff.pop("client_jid", None)
         ff["clinic_label"] = {"table_ref": source, "field_name": "clinic_label"}
@@ -5111,7 +5135,7 @@ def apply_client_status_by_day(card: dict) -> None:
     card["metabase-field-filters"] = ff
     card["description"] = (
         "Доли документов по состоянию за день: успешно, ошибка асинхронного "
-        "ответа РЭМД, ошибка связи и «В обработке» (сумма = 100%). «Без ответа» "
+        "ответа РЭМД и «В обработке» (сумма = 100%). «Без ответа» "
         "исключено — см. карточку «Отправленные — клиент»."
     )
     card["display"] = "bar"

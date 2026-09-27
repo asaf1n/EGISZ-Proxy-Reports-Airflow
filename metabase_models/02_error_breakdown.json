@@ -1,24 +1,34 @@
 {
   "name": "Разбивка ошибок",
-  "table_ref": "public.rpt_error_breakdown",
-  "description": "Grain: 1 строка = 1 атомарный вид ошибки на документ.",
+  "table_ref": "mart_egisz_selfservice.document_error",
+  "description": "Ошибки текущего состояния документа (текущие версии), grain: 1 строка = 1 ошибка документа. Вид — уровень, на котором ошибку зафиксировали (ошибка связи или ошибка асинхронного ответа); категория — группа типов с общей причиной, у ошибки связи пуста; тип — формулировка с замаскированными значениями документа. Статус документа — отдельное поле: элементы ошибки в подтверждении регистрации статус не меняют. Исходного текста ошибки в модели нет.",
   "fields": {
     "ips_date": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
     "dwh_id": { "semantic_type": "type/FK" },
+    "status_label": { "semantic_type": "type/Category", "display_name": "Статус" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
     "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
     "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
     "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+    "message_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Время сообщения" },
+    "egisz_subsystem": { "semantic_type": "type/Category", "display_name": "Подсистема ЕГИСЗ" },
+    "error_kind": { "semantic_type": "type/Category", "display_name": "Вид ошибки" },
+    "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" },
     "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
-    "error_category": { "semantic_type": "type/Category", "display_name": "Категория ошибки" }
+    "error_code": { "semantic_type": "type/Category", "display_name": "Код ошибки" },
+    "nsi_error_code": { "semantic_type": "type/Category", "display_name": "Код НСИ 305" },
+    "nsi_dictionary_oid": { "semantic_type": "type/Category", "display_name": "OID справочника НСИ" },
+    "nsi_dictionary_name": { "semantic_type": "type/Name", "display_name": "Справочник НСИ" },
+    "responsibility": { "semantic_type": "type/Category", "display_name": "Зона ответственности" },
+    "is_retryable": { "semantic_type": "type/Category", "display_name": "Устраняется повтором" }
   },
-  "hidden_fields": ["dwh_id", "clinic_name", "classification_type"],
+  "hidden_fields": ["dwh_id", "error_no", "status", "clinic_name", "source_action", "nsi_error_description"],
   "metrics": {
-    "Вхождений ошибки": {
+    "Ошибок": {
       "aggregation": ["count"]
     },
-    "Документов с видом": {
+    "Документов с ошибкой": {
       "aggregation": ["distinct", ["field", "dwh_id", null]]
     }
   }

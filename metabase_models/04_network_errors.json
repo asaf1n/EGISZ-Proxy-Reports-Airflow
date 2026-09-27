@@ -1,20 +1,29 @@
 {
   "name": "Сбои транспорта",
-  "table_ref": "public.rpt_network_errors",
-  "description": "Сетевые сбои (status=network_error), grain: документ.",
+  "table_ref": "mart_egisz_selfservice.network_error",
+  "description": "Ошибки связи: шлюз не доставил сообщение (LOGSTATE = 3). Grain: 1 строка = 1 ошибка связи по времени сообщения, в том числе у сообщения без связи с документом (ID документа пуст). Статус документа ошибка связи не меняет. Исходного текста ошибки в модели нет.",
   "fields": {
-    "dwh_id": { "semantic_type": "type/PK" },
-    "ips_date": { "semantic_type": "type/CreationTimestamp", "display_name": "Дата обработки" },
+    "message_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Время сообщения" },
+    "logid": { "semantic_type": "type/Category", "display_name": "LOGID" },
+    "msgid": { "semantic_type": "type/Category", "display_name": "MSGID" },
+    "dwh_id": { "semantic_type": "type/FK" },
     "clinic_jid": { "semantic_type": "type/Category", "display_name": "JID Клиники" },
     "clinic_label": { "semantic_type": "type/Title", "display_name": "Клиника" },
     "clinic_name": { "semantic_type": "type/Name", "display_name": "Наименование клиники" },
-    "network_error_type": { "semantic_type": "type/Category", "display_name": "Тип сетевой ошибки" },
-    "semd_local_uid": { "semantic_type": "type/Category", "display_name": "localUid СЭМД" },
-    "semd_emdr_id": { "semantic_type": "type/Category", "display_name": "Рег. Номер РЭМД" }
+    "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
+    "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+    "egisz_subsystem": { "semantic_type": "type/Category", "display_name": "Подсистема ЕГИСЗ" },
+    "error_type": { "semantic_type": "type/Category", "display_name": "Тип ошибки" },
+    "error_code": { "semantic_type": "type/Category", "display_name": "Код ошибки" },
+    "responsibility": { "semantic_type": "type/Category", "display_name": "Зона ответственности" },
+    "is_retryable": { "semantic_type": "type/Category", "display_name": "Устраняется повтором" }
   },
-  "hidden_fields": ["dwh_id", "clinic_name"],
+  "hidden_fields": ["dwh_id", "clinic_name", "source_action"],
   "metrics": {
-    "Сбоев связи": {
+    "Ошибок связи": {
+      "aggregation": ["count"]
+    },
+    "Документов с ошибкой связи": {
       "aggregation": ["distinct", ["field", "dwh_id", null]]
     }
   }

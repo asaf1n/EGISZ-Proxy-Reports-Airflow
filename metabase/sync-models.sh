@@ -6,36 +6,40 @@ set -euo pipefail
 MODELS_DIR="${METABASE_MODELS_DIR:-/app/metabase_models}"
 MODEL_REGISTRY_FILE="${METABASE_MODEL_REGISTRY_FILE:-/tmp/metabase-model-registry.json}"
 
+# table_ref — «схема.таблица»; ref_schema/ref_object объявлены в setup-dashboards.sh.
 table_id_for_ref() {
   local table_ref="$1"
-  local table_name="${table_ref#public.}"
-  jq -r --arg table "${table_name}" '
+  jq -r --arg schema "$(ref_schema "${table_ref}")" --arg table "$(ref_object "${table_ref}")" '
     [.tables[]?
-      | select((.schema // "public") == "public" and .name == $table)
+      | select((.schema // "public") == $schema and .name == $table)
       | .id][0] // empty
   ' "${DB_METADATA_FILE}"
 }
 
 field_id_for_ref() {
   local table_ref="$1" field_name="$2"
-  local table_name="${table_ref#public.}"
-  jq -r --arg table "${table_name}" --arg field "${field_name}" '
+  jq -r \
+    --arg schema "$(ref_schema "${table_ref}")" \
+    --arg table "$(ref_object "${table_ref}")" \
+    --arg field "${field_name}" '
     [.tables[]?
-      | select((.schema // "public") == "public" and .name == $table)
+      | select((.schema // "public") == $schema and .name == $table)
       | .fields[]?
       | select(.name == $field or .display_name == $field)
       | .id][0] // empty
   ' "${DB_METADATA_FILE}"
 }
 
+# Метаданные перечитываются теми же постраничными запросами по таблицам коллекции, что и
+# при импорте дашбордов: ответ /api/database/:id/metadata по всей базе на узком канале
+# не доходит целиком.
 refresh_db_metadata() {
   api_request POST "/api/database/${APP_DB_ID}/sync_schema" "{}" >/dev/null
-  DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
-  api_request GET "/api/database/${APP_DB_ID}/metadata" > "${DB_METADATA_FILE}"
+  fetch_db_metadata
 }
 
 dwh_column_exists() {
-  local view_name="$1" column_name="$2"
+  local schema_name="$1" view_name="$2" column_name="$3"
   PGPASSWORD="${APP_DB_PASSWORD}" psql \
     -h "${APP_DB_HOST}" \
     -p "${APP_DB_PORT}" \
@@ -45,12 +49,12 @@ dwh_column_exists() {
     -v ON_ERROR_STOP=1 \
     -c "SELECT CASE WHEN EXISTS (
           -- pg_attribute (а не information_schema.columns) — чтобы видеть колонки
-          -- MATERIALIZED VIEW (rpt_error_breakdown), которых нет в information_schema.
+          -- MATERIALIZED VIEW (document_error), которых нет в information_schema.
           SELECT 1
           FROM pg_attribute a
           JOIN pg_class c ON c.oid = a.attrelid
           JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE n.nspname = 'public'
+          WHERE n.nspname = '${schema_name}'
             AND c.relname = '${view_name}'
             AND a.attname = '${column_name}'
             AND a.attnum > 0
@@ -59,14 +63,13 @@ dwh_column_exists() {
 }
 
 validate_model_fields_in_dwh() {
-  local model_file table_ref field_name view_name status missing=()
+  local model_file table_ref field_name status missing=()
   for model_file in "${MODELS_DIR}"/*.json; do
     [ -f "${model_file}" ] || continue
     table_ref="$(jq -r '.table_ref' "${model_file}")"
-    view_name="${table_ref#public.}"
     while IFS= read -r field_name; do
       [ -n "${field_name}" ] || continue
-      status="$(dwh_column_exists "${view_name}" "${field_name}")"
+      status="$(dwh_column_exists "$(ref_schema "${table_ref}")" "$(ref_object "${table_ref}")" "${field_name}")"
       if [ "${status}" != "ok" ]; then
         missing+=("${table_ref}.${field_name}")
       fi
@@ -127,7 +130,6 @@ apply_field_metadata() {
 # «Исходный текст ошибки»), а по ним оператор и ищет.
 sync_model_result_metadata() {
   local model_id="$1" table_ref="$2"
-  local table_name="${table_ref#public.}"
   local current updated
 
   current="$(api_request GET "/api/card/${model_id}" | jq -c '.result_metadata // []')"
@@ -135,10 +137,11 @@ sync_model_result_metadata() {
 
   updated="$(jq -nc \
     --argjson meta "${current}" \
-    --arg table "${table_name}" \
+    --arg schema "$(ref_schema "${table_ref}")" \
+    --arg table "$(ref_object "${table_ref}")" \
     --slurpfile db "${DB_METADATA_FILE}" \
     '
-    ($db[0].tables[]? | select((.schema // "public") == "public" and .name == $table) | .fields) as $fields
+    ($db[0].tables[]? | select((.schema // "public") == $schema and .name == $table) | .fields) as $fields
     | [ $meta[]
         | . as $f
         | ([$fields[]? | select(.name == $f.name) | .display_name]
@@ -237,13 +240,13 @@ build_model_registry() {
       --slurpfile meta "${DB_METADATA_FILE}" \
       '
       def field_map($table_ref):
-        ($table_ref | sub("^public\\."; "")) as $table_name
+        ($table_ref | split(".")) as $ref
         | reduce ($mf[0].fields // {} | keys[]) as $fname ({};
             . + {
               $fname: (
                 [
                   $meta[0].tables[]?
-                  | select((.schema // "public") == "public" and .name == $table_name)
+                  | select((.schema // "public") == $ref[0] and .name == $ref[1])
                   | .fields[]?
                   | select(.name == $fname or .display_name == $fname)
                   | .id

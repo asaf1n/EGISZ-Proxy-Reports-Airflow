@@ -339,17 +339,27 @@ ensure_collection() {
   [ -n "${COL_ID}" ] && [ "${COL_ID}" != "null" ] || fail "cannot create or resolve collection '${COLLECTION_NAME}'"
 }
 
-required_public_objects() {
+# Схемы хранилища, к объектам которых обращаются дашборды и модели (раскладка по стандарту
+# хранилища: слой разбора, витрины, витрины самообслуживания). Объект адресуется ссылкой
+# «схема.объект» — и в SQL карточек, и в table_ref привязок фильтров и моделей.
+DWH_SCHEMAS_REGEX="public|stg_egisz|mart_egisz_selfservice|mart_egisz"
+
+ref_schema() { printf '%s\n' "${1%%.*}"; }
+ref_object() { printf '%s\n' "${1#*.}"; }
+is_table_ref() { [[ "$1" =~ ^[a-z_][a-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$ ]]; }
+
+required_dwh_objects() {
   {
-    jq -r '.. | strings | scan("public\\.[A-Za-z_][A-Za-z0-9_]*")' "${DASHBOARDS_DIR}"/*.json 2>/dev/null || true
+    jq -r --arg re "\\b(?:${DWH_SCHEMAS_REGEX})\\.[A-Za-z_][A-Za-z0-9_]*" \
+      '.. | strings | scan($re)' "${DASHBOARDS_DIR}"/*.json 2>/dev/null || true
     if [ -d "${MODELS_DIR}" ]; then
       jq -r '.table_ref // empty' "${MODELS_DIR}"/*.json 2>/dev/null || true
     fi
-  } | sort -u | sed 's/^public\.//'
+  } | sort -u
 }
 
 dwh_object_exists() {
-  local object="$1"
+  local schema="$1" object="$2"
   PGPASSWORD="${APP_DB_PASSWORD}" psql \
     -h "${APP_DB_HOST}" \
     -p "${APP_DB_PORT}" \
@@ -359,27 +369,27 @@ dwh_object_exists() {
     -v ON_ERROR_STOP=1 \
     -c "SELECT CASE WHEN EXISTS (
           SELECT 1 FROM information_schema.tables
-          WHERE table_schema = 'public' AND table_name = '${object}'
+          WHERE table_schema = '${schema}' AND table_name = '${object}'
         ) OR EXISTS (
           SELECT 1 FROM pg_matviews
-          WHERE schemaname = 'public' AND matviewname = '${object}'
+          WHERE schemaname = '${schema}' AND matviewname = '${object}'
         ) OR EXISTS (
           SELECT 1 FROM information_schema.routines
-          WHERE specific_schema = 'public' AND routine_name = '${object}'
+          WHERE specific_schema = '${schema}' AND routine_name = '${object}'
         ) THEN 'ok' ELSE 'missing' END;"
 }
 
 validate_dwh_contract() {
   log_info "Checking DWH contract in ${APP_DB_HOST}:${APP_DB_PORT}/${APP_DB_NAME}"
   local missing=()
-  local object status
-  while IFS= read -r object; do
-    [ -n "${object}" ] || continue
-    status=$(dwh_object_exists "${object}")
+  local ref status
+  while IFS= read -r ref; do
+    [ -n "${ref}" ] || continue
+    status=$(dwh_object_exists "$(ref_schema "${ref}")" "$(ref_object "${ref}")")
     if [ "${status}" != "ok" ]; then
-      missing+=("public.${object}")
+      missing+=("${ref}")
     fi
-  done < <(required_public_objects)
+  done < <(required_dwh_objects)
 
   if [ "${#missing[@]}" -gt 0 ]; then
     printf '%s\n' "${missing[@]}" >&2
@@ -415,12 +425,14 @@ required_field_filters() {
 }
 
 metadata_has_field() {
-  local table_ref="$1" field_name="$2" table_name
-  table_name="${table_ref#public.}"
-  jq -e --arg table "${table_name}" --arg field "${field_name}" '
+  local table_ref="$1" field_name="$2"
+  jq -e \
+    --arg schema "$(ref_schema "${table_ref}")" \
+    --arg table "$(ref_object "${table_ref}")" \
+    --arg field "${field_name}" '
     [
       .tables[]?
-      | select((.schema // "public") == "public" and .name == $table)
+      | select((.schema // "public") == $schema and .name == $table)
       | .fields[]?
       | select(.name == $field or .display_name == $field)
       | .id
@@ -430,7 +442,7 @@ metadata_has_field() {
 
 resolve_filter_table_ref() {
   local ref="$1"
-  if [[ "${ref}" == public.* ]]; then
+  if is_table_ref "${ref}"; then
     printf '%s\n' "${ref}"
     return
   fi
@@ -445,22 +457,22 @@ resolve_filter_table_ref() {
   printf '\n'
 }
 
-# Таблицы DWH, которые адресует наша коллекция: приёмники field filters дашбордов и
-# table_ref моделей. Всё остальное в базе (сотня с лишним таблиц) провижинингу не нужно.
-collection_table_names() {
+# Таблицы DWH («схема.таблица»), которые адресует наша коллекция: приёмники field filters
+# дашбордов и table_ref моделей. Всё остальное в базе (сотня с лишним таблиц) провижинингу
+# не нужно.
+collection_table_refs() {
   local ref resolved
   {
     required_field_filters | cut -f1
     jq -r '.table_ref // empty' "${MODELS_DIR}"/*.json 2>/dev/null || true
   } | while IFS= read -r ref; do
     [ -n "${ref}" ] || continue
-    case "${ref}" in
-      public.*) printf '%s\n' "${ref#public.}" ;;
-      *)
-        resolved="$(resolve_filter_table_ref "${ref}")"
-        [ -n "${resolved}" ] && printf '%s\n' "${resolved#public.}"
-        ;;
-    esac
+    if is_table_ref "${ref}"; then
+      printf '%s\n' "${ref}"
+    else
+      resolved="$(resolve_filter_table_ref "${ref}")"
+      [ -n "${resolved}" ] && printf '%s\n' "${resolved}"
+    fi
   done | sort -u
 }
 
@@ -473,26 +485,30 @@ collection_table_names() {
 # метаданные объектов чужих сервисов на общем инстансе.
 fetch_db_metadata() {
   DB_METADATA_FILE="${DB_METADATA_FILE:-/tmp/metabase-db-metadata.json}"
-  local parts schema_json table_name table_id count=0
+  local parts refs schema schema_json table_ref table_id count=0
   parts="${DB_METADATA_FILE}.parts"
   : > "${parts}"
-  # На свежем инстансе схема появляется только после первой синхронизации: до неё
-  # Metabase отвечает 404, и это не сбой, а «таблиц пока нет» — повторы делает
-  # wait_for_metabase_metadata.
-  schema_json="$(api_request_optional GET "/api/database/${APP_DB_ID}/schema/public")"
-  schema_json="${schema_json:-[]}"
-  while IFS= read -r table_name; do
-    [ -n "${table_name}" ] || continue
-    table_id="$(printf '%s' "${schema_json}" |
-      jq -r --arg n "${table_name}" 'first(.[]? | select(.name == $n) | .id) // empty')"
-    # Таблицы может ещё не быть в каталоге Metabase (витрина накатана, синхронизация
-    # не дошла) — это штатно разбирает wait_for_metabase_metadata своими повторами.
-    [ -n "${table_id}" ] || continue
-    api_request GET "/api/table/${table_id}/query_metadata" |
-      jq -c '{schema: (.schema // "public"), name: .name,
-              fields: [.fields[]? | {id, name, display_name}]}' >> "${parts}"
-    count=$((count + 1))
-  done < <(collection_table_names)
+  refs="$(collection_table_refs)"
+  while IFS= read -r schema; do
+    [ -n "${schema}" ] || continue
+    # На свежем инстансе схема появляется только после первой синхронизации: до неё
+    # Metabase отвечает 404, и это не сбой, а «таблиц пока нет» — повторы делает
+    # wait_for_metabase_metadata.
+    schema_json="$(api_request_optional GET "/api/database/${APP_DB_ID}/schema/${schema}")"
+    schema_json="${schema_json:-[]}"
+    while IFS= read -r table_ref; do
+      [ "$(ref_schema "${table_ref}")" = "${schema}" ] || continue
+      table_id="$(printf '%s' "${schema_json}" |
+        jq -r --arg n "$(ref_object "${table_ref}")" 'first(.[]? | select(.name == $n) | .id) // empty')"
+      # Таблицы может ещё не быть в каталоге Metabase (витрина накатана, синхронизация
+      # не дошла) — это штатно разбирает wait_for_metabase_metadata своими повторами.
+      [ -n "${table_id}" ] || continue
+      api_request GET "/api/table/${table_id}/query_metadata" |
+        jq -c '{id, schema: (.schema // "public"), name: .name,
+                fields: [.fields[]? | {id, name, display_name}]}' >> "${parts}"
+      count=$((count + 1))
+    done <<< "${refs}"
+  done < <(printf '%s\n' "${refs}" | sed -n 's/\..*$//p' | sort -u)
   jq -s '{tables: .}' "${parts}" > "${DB_METADATA_FILE}"
   rm -f "${parts}"
   log_info "DB metadata collected for ${count} table(s) of collection '${COLLECTION_NAME}'"
@@ -506,7 +522,7 @@ wait_for_metabase_metadata() {
     sample=""
     while IFS=$'\t' read -r table_ref field_name; do
       [ -n "${table_ref}" ] || continue
-      if [[ "${table_ref}" != public.* ]]; then
+      if ! is_table_ref "${table_ref}"; then
         table_ref="$(resolve_filter_table_ref "${table_ref}")"
       fi
       [ -n "${table_ref}" ] || continue
@@ -710,10 +726,10 @@ dashboard_payload() {
         end;
 
     def field_id($table_ref; $field_name):
-      ($table_ref | sub("^public\\."; "")) as $table_name
+      ($table_ref | split(".")) as $ref
       | [
           $meta_file[0].tables[]?
-          | select((.schema // "public") == "public" and .name == $table_name)
+          | select((.schema // "public") == $ref[0] and .name == $ref[1])
           | .fields[]?
           | select(.name == $field_name or .display_name == $field_name)
           | .id

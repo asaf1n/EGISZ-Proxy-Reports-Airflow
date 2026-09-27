@@ -1,7 +1,7 @@
 {
   "name": "Клиентский дашборд. Мониторинг сервиса интеграции с ЕГИСЗ",
   "width": "full",
-  "description": "Личный кабинет клиники: общие объёмы и статусы регистрации СЭМД в РЭМД (вкладка «Обзор»), разбор ошибок регистрации ЭМД по категориям и типам (вкладка «Ошибки регистрации ЭМД») и детализация по документам (вкладка «Документы»). JID резолвится через справочник лицензий. Фильтр **JID Клиники** обязателен — в будущем JID придёт из auth-токена и фильтр станет невидимым. Источник — `rpt_documents` и `rpt_error_breakdown` (PII маскируется на уровне DWH). Доступна публичная страница без авторизации.",
+  "description": "Личный кабинет клиники: общие объёмы и статусы регистрации СЭМД в РЭМД (вкладка «Обзор»), разбор ошибок регистрации ЭМД по категориям и типам (вкладка «Ошибки регистрации ЭМД») и детализация по документам (вкладка «Документы»). JID резолвится через справочник лицензий. Фильтр **JID Клиники** обязателен — в будущем JID придёт из auth-токена и фильтр станет невидимым. Источник — `rpt_documents` и `mart_egisz_selfservice.document_error` (PII маскируется на уровне DWH). Доступна публичная страница без авторизации.",
   "parameters": [
     {
       "id": "07c00000-0000-4000-8000-000000000001",
@@ -140,7 +140,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1), 0)::text, '%)') AS \"Успешно\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -205,7 +205,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1), 0)::text, '%)') AS \"Ошибка асинхронного ответа РЭМД\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -266,11 +266,11 @@
     },
     {
       "name": "Ошибка связи",
-      "description": "Документы с транспортной ошибкой связи.",
+      "description": "Документы с ошибкой связи в текущем состоянии и их доля от всех документов периода: ошибка связи статус не меняет и бывает у документа с любым исходом.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error')::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'network_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT CONCAT(COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND document_error.error_kind = 'Ошибка связи'))::text, ' (', COALESCE(ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND document_error.error_kind = 'Ошибка связи')) / NULLIF(COUNT(DISTINCT dwh_id), 0), 1), 0)::text, '%)') AS \"Ошибка связи\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -396,7 +396,7 @@
     },
     {
       "name": "Динамика статусов по дням",
-      "description": "Доли документов по состоянию за день: успешно, ошибка асинхронного ответа РЭМД, ошибка связи и «В обработке» (сумма = 100%). «Без ответа» исключено — см. карточку «Отправленные — клиент».",
+      "description": "Доли документов по состоянию за день: успешно, ошибка асинхронного ответа РЭМД и «В обработке» (сумма = 100%). «Без ответа» исключено — см. карточку «Отправленные — клиент».",
       "dataset_query": {
         "type": "native",
         "native": {
@@ -456,9 +456,6 @@
           "Ошибка асинхронного ответа РЭМД": {
             "color": "#A989C5"
           },
-          "Ошибка связи": {
-            "color": "#F2994A"
-          },
           "В обработке": {
             "color": "#A6C8E8"
           }
@@ -496,7 +493,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -576,11 +573,11 @@
     },
     {
       "name": "Объёмы ошибок по категориям — клиент",
-      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию) и какую долю от всех ошибочных документов клиники за период это составляет.",
+      "description": "Сколько документов содержит ошибки каждой категории (один документ — один раз на категорию; у ошибки связи категории нет — её место занимает вид) и какую долю от всех ошибочных документов клиники за период это составляет.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF(SUM(COUNT(DISTINCT dwh_id)) OVER (), 0), 1) AS \"% ошибок\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY error_category ORDER BY 2 DESC",
+          "query": "SELECT COALESCE(document_error.error_category, document_error.error_kind) AS \"Категория ошибки\", COUNT(DISTINCT document_error.dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT document_error.dwh_id) / NULLIF(SUM(COUNT(DISTINCT document_error.dwh_id)) OVER (), 0), 1) AS \"% ошибок\" FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -671,19 +668,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "semd_label"
         },
         "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "error_category"
         },
         "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "clinic_label"
         }
       }
@@ -694,7 +691,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status IN ('success', 'async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ), eb AS ( SELECT COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_category), ''), 'Прочие') AS cat, COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), 'Неизвестная ошибка') AS typ, rpt_error_breakdown.dwh_id AS dwh_id FROM public.rpt_error_breakdown INNER JOIN period_docs pd ON pd.dwh_id = rpt_error_breakdown.dwh_id WHERE COALESCE(NULLIF(TRIM(rpt_error_breakdown.error_type), ''), '') <> '' [[AND {{client_error_category}}]] ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM eb GROUP BY cat, typ ORDER BY 3 DESC LIMIT 20",
+          "query": "WITH period_docs AS ( SELECT dwh_id FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ), eb AS ( SELECT COALESCE(document_error.error_category, document_error.error_kind) AS cat, document_error.error_type AS typ, document_error.dwh_id AS dwh_id FROM mart_egisz_selfservice.document_error INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{client_error_category}}]] ), totals AS ( SELECT (SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, (SELECT COUNT(DISTINCT dwh_id) FROM period_docs)::numeric AS total_final ) SELECT cat AS \"Категория ошибки\", typ AS \"Тип ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_err FROM totals), 0), 1) AS \"% ошибок\", ROUND(100.0 * COUNT(DISTINCT dwh_id) / NULLIF((SELECT total_final FROM totals), 0), 1) AS \"% обработанных\" FROM eb GROUP BY cat, typ ORDER BY 3 DESC LIMIT 20",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -802,7 +799,7 @@
           "field_name": "semd_label"
         },
         "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "error_category"
         },
         "clinic_label": {
@@ -813,11 +810,11 @@
     },
     {
       "name": "Динамика ошибок по дням — клиент",
-      "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок.",
+      "description": "Stacked bar: документы с ошибками по дням, в разрезе категорий ошибок; у ошибки связи категории нет — её место занимает вид.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date::date AS \"Дата\", error_category AS \"Категория ошибки\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY ips_date::date, error_category ORDER BY ips_date::date",
+          "query": "SELECT document_error.ips_date::date AS \"Дата\", COALESCE(document_error.error_category, document_error.error_kind) AS \"Категория ошибки\", COUNT(DISTINCT document_error.dwh_id)::bigint AS \"Документов\" FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1, 2 ORDER BY 1",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -891,9 +888,6 @@
           "Ошибки справочника НСИ": {
             "color": "#EDC948"
           },
-          "Ошибки регистрации в РЭМД": {
-            "color": "#E15759"
-          },
           "Ошибки организации / ИС": {
             "color": "#76B7B2"
           },
@@ -903,20 +897,17 @@
           "Ошибки ЭП и сертификатов": {
             "color": "#F28E2B"
           },
-          "Технические ошибки РЭМД": {
-            "color": "#9C755F"
-          },
-          "Ошибки связи": {
-            "color": "#499894"
-          },
-          "Ошибки ИЭМК": {
-            "color": "#8CD17D"
-          },
-          "Ошибки ФРЛЛО": {
-            "color": "#D7B5A6"
-          },
           "Прочие": {
             "color": "#BAB0AC"
+          },
+          "Ошибки регистрации": {
+            "color": "#E15759"
+          },
+          "Технические ошибки ЕГИСЗ": {
+            "color": "#9C755F"
+          },
+          "Ошибка связи": {
+            "color": "#499894"
           }
         }
       },
@@ -927,19 +918,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "semd_label"
         },
         "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "error_category"
         },
         "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "clinic_label"
         }
       }
@@ -950,7 +941,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_error_breakdown WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM mart_egisz_selfservice.document_error WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] [[AND {{client_error_category}}]] GROUP BY 1 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1018,19 +1009,19 @@
       "tab": "errors",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "semd_label"
         },
         "client_error_category": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "error_category"
         },
         "clinic_label": {
-          "table_ref": "public.rpt_error_breakdown",
+          "table_ref": "mart_egisz_selfservice.document_error",
           "field_name": "clinic_label"
         }
       }
@@ -1046,11 +1037,11 @@
     },
     {
       "name": "Журнал документов — клиент",
-      "description": "Документы клиники с финальным ответом РЭМД: дата обработки, статус (успех/ошибка), тип СЭМД, идентификаторы и сводка ошибок регистрации. Отправленные без ответа — на отдельной карточке «Отправленные — клиент».",
+      "description": "Документы клиники с ответом РЭМД: дата обработки, статус (успех/ошибка), тип СЭМД, идентификаторы и типы ошибок регистрации. Отправленные без ответа — на отдельной карточке «Отправленные — клиент».",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата обработки\", status_label AS \"Статус\", COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", semd_local_uid AS \"localUid\", semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN status IN ('async_error', 'network_error') THEN error_types END AS \"Ошибки регистрации\" FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500",
+          "query": "WITH journal AS ( SELECT dwh_id, ips_date, status, status_label, semd_label, semd_local_uid, semd_emdr_id FROM public.rpt_documents WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500 ) SELECT journal.ips_date AS \"Дата обработки\", journal.status_label AS \"Статус\", COALESCE(NULLIF(journal.semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", journal.semd_local_uid AS \"localUid\", journal.semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN journal.status = 'async_error' THEN ( SELECT string_agg(DISTINCT document_error.error_type, ' · ' ORDER BY document_error.error_type) FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = journal.dwh_id AND document_error.error_kind = 'Ошибка асинхронного ответа' ) END AS \"Ошибки регистрации\" FROM journal ORDER BY journal.ips_date DESC",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",

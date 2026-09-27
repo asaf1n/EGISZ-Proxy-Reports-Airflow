@@ -100,7 +100,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -357,7 +357,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -492,11 +492,11 @@
     },
     {
       "name": "Журнал документов с ошибками регистрации",
-      "description": "Последние 50 СЭМД, отклонённых РЭМД, с маскированными PII и текстом ошибки ЕГИСЗ.",
+      "description": "Последние 50 СЭМД, отклонённых РЭМД, с маскированными PII и типами ошибки асинхронного ответа.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ips_date AS \"Дата\", patient_name_masked AS \"Пациент\", snils_masked AS \"СНИЛС\", doctor_name AS \"Врач\", semd_label AS \"Тип СЭМД\", error_types AS \"Типы ошибки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status IN ('async_error', 'network_error') [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50",
+          "query": "WITH rejected AS ( SELECT dwh_id, ips_date, patient_name_masked, snils_masked, doctor_name, semd_label FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status = 'async_error' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50 ) SELECT rejected.ips_date AS \"Дата\", rejected.patient_name_masked AS \"Пациент\", rejected.snils_masked AS \"СНИЛС\", rejected.doctor_name AS \"Врач\", rejected.semd_label AS \"Тип СЭМД\", ( SELECT string_agg(DISTINCT document_error.error_type, ' · ' ORDER BY document_error.error_type) FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rejected.dwh_id AND document_error.error_kind = 'Ошибка асинхронного ответа' ) AS \"Типы ошибки\" FROM rejected ORDER BY rejected.ips_date DESC NULLS LAST",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -527,18 +527,6 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"error_text\"]": {
-            "column_title": "Текст ошибки",
-            "text_style": "wrap"
-          },
-          "[\"name\",\"Исходный текст ошибки\"]": {
-            "decimals": 0,
-            "number_separators": ", "
-          },
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
-            "text_style": "wrap"
-          },
           "[\"name\",\"Типы ошибки\"]": {
             "column_title": "Типы ошибки",
             "text_style": "wrap"
@@ -804,7 +792,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error', 'network_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "type": "text",

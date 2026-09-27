@@ -29,10 +29,9 @@ SAMPLE_CLIENT_JID_SQL = (
     "SELECT clinic_jid::text FROM public.rpt_documents "
     "WHERE clinic_jid IS NOT NULL LIMIT 1"
 )
-DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 ERROR_TYPE_CLINIC_CARD = "Ошибки: тип × клиника"
-ERROR_TYPE_CLINIC_DRILL_COLUMNS = frozenset({"Тип ошибки (канонический)", "JID Клиники"})
+ERROR_TYPE_CLINIC_DRILL_COLUMNS = frozenset({"Тип ошибки", "JID Клиники"})
 ERROR_TYPE_CLINIC_DASHBOARD_PARAMS = frozenset(
     {"ips_date_filter", "semd_type_filter"}
 )
@@ -131,30 +130,45 @@ def model_drill_dashboard_param_slugs(click: dict, dash_params: dict[str, dict])
     return slugs
 
 
-ERROR_TYPE_DRILL_COLUMN = "Тип ошибки (канонический)"
+ERROR_TYPE_DRILL_COLUMN = "Тип ошибки"
 
 
-def model_drill_contains_error_types(click: dict) -> bool:
-    """Канонический тип must map to the Документы model's error_types list with operator
-    'contains' — a document with several errors is matched by element containment and
-    not missed.
+def drill_target_field_id(target: dict) -> int | None:
+    dimension = target.get("dimension") or []
+    if len(dimension) >= 2 and isinstance(dimension[1], list) and len(dimension[1]) >= 2:
+        return dimension[1][1]
+    return None
 
-    Источником служит «Тип ошибки (канонический)»: отображаемая подпись типа несёт ещё и
-    справочник НСИ, а documents.error_types хранит канонический тип, и подпись со
-    справочником не дала бы совпадения."""
+
+def model_drill_maps_error_type(click: dict, error_type_field_id: int | None) -> bool:
+    """«Тип ошибки» переходит в поле error_type модели «Разбивка ошибок»: строка модели —
+    одна ошибка документа, поэтому документ с несколькими ошибками находится по равенству
+    типа."""
     mapping = click.get("parameterMapping") or {}
     for spec in mapping.values():
         source = spec.get("source") or {}
         if source.get("type") != "column" or source.get("name") != ERROR_TYPE_DRILL_COLUMN:
             continue
-        target = spec.get("target") or {}
-        return target.get("operator") == "contains"
+        target_field_id = drill_target_field_id(spec.get("target") or {})
+        return error_type_field_id is not None and target_field_id == error_type_field_id
     return False
+
+
+def model_card_field_ids(base_url: str, headers: dict[str, str], model_id: int) -> tuple[str, dict[str, int]]:
+    model = api_json(f"{base_url}/api/card/{model_id}", headers=headers)
+    fields = {
+        meta["name"]: meta["id"]
+        for meta in model.get("result_metadata") or []
+        if meta.get("name") and isinstance(meta.get("id"), int)
+    }
+    return model.get("name") or "", fields
 
 
 def error_type_clinic_model_drill_issues(
     click: dict,
     dash_params: dict[str, dict] | None = None,
+    target_model_name: str | None = None,
+    error_type_field_id: int | None = None,
 ) -> list[str]:
     issues: list[str] = []
     if click.get("type") != "link":
@@ -166,18 +180,18 @@ def error_type_clinic_model_drill_issues(
             f"(linkType=question), got linkType={click.get('linkType')!r}"
         )
         return issues
-    if click.get("targetModel") not in (None, DOCUMENTS_MODEL_REF) and not click.get("targetId"):
+    if target_model_name != ERROR_BREAKDOWN_MODEL_REF:
         issues.append(
             "click must target model "
-            f"{DOCUMENTS_MODEL_REF!r}, got targetModel={click.get('targetModel')!r}"
+            f"{ERROR_BREAKDOWN_MODEL_REF!r}, got {target_model_name!r}"
         )
     if click.get("tab") == "archive" or click.get("tabId") is not None:
         issues.append("click must not drill to archive tab")
     missing = ERROR_TYPE_CLINIC_DRILL_COLUMNS - model_drill_source_columns(click)
     if missing:
         issues.append(f"click missing column mappings: {sorted(missing)}")
-    if not model_drill_contains_error_types(click):
-        issues.append(f"click must map «{ERROR_TYPE_DRILL_COLUMN}» with operator=contains on error_types (Документы model)")
+    if not model_drill_maps_error_type(click, error_type_field_id):
+        issues.append(f"click must map «{ERROR_TYPE_DRILL_COLUMN}» to error_type ({ERROR_BREAKDOWN_MODEL_REF} model)")
     if dash_params is not None:
         missing_params = ERROR_TYPE_CLINIC_DASHBOARD_PARAMS - model_drill_dashboard_param_slugs(
             click, dash_params
@@ -209,7 +223,7 @@ def top_error_type_table_issues(name: str, card: dict) -> list[str]:
             issues.append(f"{name}: table.columns must include «{required}»")
     query = native_sql(card)
     if "error_category" not in query or '"Тип ошибки"' not in query:
-        issues.append(f"{name}: SQL must expose category and atomic error type")
+        issues.append(f"{name}: SQL must expose error category and error type")
     for share_column in ('AS "% ошибок"', 'AS "% обработанных"'):
         if share_column not in query:
             issues.append(f"{name}: SQL must expose {share_column} share column")
@@ -388,7 +402,14 @@ def verify_cards(base_url: str = DEFAULT_URL, workers: int = DEFAULT_WORKERS) ->
 
             click = (dashcard.get("visualization_settings") or {}).get("click_behavior") or {}
             if name == ERROR_TYPE_CLINIC_CARD:
-                for issue in error_type_clinic_model_drill_issues(click, dash_params):
+                target_model_name, target_fields = None, {}
+                if click.get("targetId"):
+                    target_model_name, target_fields = model_card_field_ids(
+                        base_url, headers, int(click["targetId"])
+                    )
+                for issue in error_type_clinic_model_drill_issues(
+                    click, dash_params, target_model_name, target_fields.get("error_type")
+                ):
                     errors.append(f"{dash_name} / {name}: {issue}")
             if name == TOP_ERROR_TYPE_CARD:
                 for issue in top_error_type_table_issues(name, full):

@@ -514,6 +514,8 @@ COMMENT ON MATERIALIZED VIEW stg_egisz.document_error_current IS
 CREATE VIEW stg_egisz.message_error AS
 SELECT
     tx.log_date AS message_at,
+    tx.logid,
+    tx.msgid,
     tx.dwh_id,
     tx.jid AS clinic_jid,
     public.normalize_semd_code(tx.semd_code) AS semd_code,
@@ -592,6 +594,8 @@ COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error IS
 CREATE VIEW mart_egisz_selfservice.network_error AS
 SELECT
     m.message_at,
+    m.logid,
+    m.msgid,
     m.dwh_id,
     m.clinic_jid,
     o.name AS clinic_name,
@@ -599,6 +603,13 @@ SELECT
         || ' · ' ||
     COALESCE(NULLIF(btrim(o.name), ''), '—') AS clinic_label,
     m.semd_code,
+    -- Подпись СЭМД та же, что в rpt_documents: фильтр «Код СЭМД» дашборда передаёт её.
+    CASE
+        WHEN st.code IS NOT NULL AND st.name IS NOT NULL
+            THEN st.code || ' · ' || st.name
+        WHEN st.code IS NOT NULL
+            THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+    END AS semd_label,
     m.egisz_subsystem,
     m.source_action,
     m.error_type,
@@ -608,10 +619,17 @@ SELECT
 FROM stg_egisz.message_error m
 LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = m.error_type
 LEFT JOIN public.dim_organizations o ON o.jid = m.clinic_jid
+LEFT JOIN LATERAL (
+    SELECT dst.code, dst.name
+    FROM public.dim_semd_types dst
+    WHERE dst.oid = m.semd_code
+    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
+    LIMIT 1
+) st ON TRUE
 WHERE m.error_kind = 'Ошибка связи';
 
 COMMENT ON VIEW mart_egisz_selfservice.network_error IS
-'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Исходный текст — в stg_egisz.message_error.';
+'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Исходный текст — в stg_egisz.message_error по сообщению (logid, message_at): ошибка связи у сообщения одна.';
 
 CREATE OR REPLACE VIEW public.rpt_document_lineage AS
 SELECT
