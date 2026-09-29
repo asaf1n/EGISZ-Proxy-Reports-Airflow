@@ -496,7 +496,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH rejected AS ( SELECT dwh_id, ips_date, patient_name_masked, snils_masked, doctor_name, semd_label FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND status = 'async_error' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50 ) SELECT rejected.ips_date AS \"Дата\", rejected.patient_name_masked AS \"Пациент\", rejected.snils_masked AS \"СНИЛС\", rejected.doctor_name AS \"Врач\", rejected.semd_label AS \"Тип СЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = rejected.dwh_id AND document_errors.error_kind = 'Ошибка асинхронного ответа' ) AS \"Типы ошибки\" FROM rejected ORDER BY rejected.ips_date DESC NULLS LAST",
+          "query": "WITH rejected AS ( SELECT dwh_id, ips_date, patient_name_masked, snils_masked, doctor_name, semd_label FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND status = 'async_error' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50 ) SELECT rejected.ips_date AS \"Дата\", rejected.patient_name_masked AS \"Пациент\", rejected.snils_masked AS \"СНИЛС\", rejected.doctor_name AS \"Врач\", rejected.semd_label AS \"Тип СЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = rejected.dwh_id AND document_errors.error_kind = 'Ошибка асинхронного ответа' ) AS \"Тип ошибки\" FROM rejected ORDER BY rejected.ips_date DESC NULLS LAST",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -527,8 +527,8 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Типы ошибки\"]": {
-            "column_title": "Типы ошибки",
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
             "text_style": "wrap"
           }
         }

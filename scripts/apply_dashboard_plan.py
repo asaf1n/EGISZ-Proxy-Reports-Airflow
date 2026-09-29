@@ -451,7 +451,7 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "Наименование клиники"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
     {"enabled": True, "name": "localUid СЭМД"},
-    {"enabled": True, "name": "Типы ошибки"},
+    {"enabled": True, "name": "Тип ошибки"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Связанное сообщение"},
     {"enabled": True, "name": "LOGID"},
@@ -462,15 +462,15 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "День"},
 ]
 
-# Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Типы ошибки» подняты
+# Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Тип ошибки» подняты
 # к идентификаторам документа, «Host Клиники» уведён в конец.
 LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "Дата обработки"},
     {"enabled": True, "name": "Статус"},
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "СЭМД"},
-    {"enabled": True, "name": "Типы ошибки"},
-    {"enabled": True, "name": "ns2_error"},
+    {"enabled": True, "name": "Тип ошибки"},
+    {"enabled": True, "name": "Исходный текст ошибки"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
@@ -486,8 +486,8 @@ LATEST_OPERATIONS_COLUMN_SETTINGS = {
     '["name","СЭМД"]': {"column_title": "СЭМД", "text_style": "wrap"},
     '["name","Клиника"]': {"column_title": "Клиника"},
     '["name","localUid СЭМД"]': {"column_title": "localUid"},
-    '["name","Типы ошибки"]': {"column_title": "Типы ошибки", "text_style": "wrap"},
-    '["name","ns2_error"]': {"column_title": "ns2_error", "text_style": "wrap"},
+    '["name","Тип ошибки"]': {"column_title": "Тип ошибки", "text_style": "wrap"},
+    '["name","Исходный текст ошибки"]': {"column_title": "Исходный текст ошибки", "text_style": "wrap"},
     '["name","Host Клиники (ГОСТ VPN)"]': {"column_title": "Host"},
 }
 
@@ -550,7 +550,7 @@ SERVICE_REFUSALS_BY_HOUR_QUERY = (
     "GROUP BY 1 ORDER BY 1"
 )
 
-# «ns2_error» — исходный текст ошибок документа рядом с их типами: тип отвечает «что это
+# «Исходный текст ошибки» — текст ошибок документа без изменений (из ns2) рядом с их типами: тип отвечает «что это
 # за ошибка», текст — «что именно ответили по этому документу», и при разборе инцидента
 # нужен именно он. Текст есть только в слое разбора: дашборд читает его оттуда по
 # исключению из стандарта до решения о доступе. Ошибки собираются для уже отобранных
@@ -569,10 +569,10 @@ LATEST_OPERATIONS_QUERY = (
     "( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' "
     "ORDER BY document_errors.error_type) "
     f"FROM {DOCUMENT_ERROR} WHERE document_errors.dwh_id = latest.dwh_id ) "
-    "AS \"Типы ошибки\", "
+    "AS \"Тип ошибки\", "
     "( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) "
     "FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) "
-    "AS \"ns2_error\" "
+    "AS \"Исходный текст ошибки\" "
     "FROM latest ORDER BY latest.ips_date DESC"
 )
 
@@ -1667,8 +1667,8 @@ UNDELIVERED_TO_CLINIC_DETAIL_QUERY = (
     'serving_egisz.documents_current.status_detail_label AS "Результат ЕГИСЗ", '
     'serving_egisz.documents_current.result_logid::text AS "LOGID ответа ЕГИСЗ", '
     'latest_errors.error_at AS "Дата ошибки доставки", '
-    'latest_errors.error_type AS "Тип ошибки доставки", '
-    'LEFT(COALESCE(latest_errors.error_text, \'\'), 180) AS "Текст ошибки доставки" '
+    'latest_errors.error_type AS "Тип ошибки", '
+    'latest_errors.error_text AS "Исходный текст ошибки" '
     "FROM latest_errors "
     "JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id "
     "WHERE serving_egisz.documents_current.status IN ('success', 'async_error') "
@@ -1710,8 +1710,8 @@ def apply_undelivered_to_clinic(card: dict) -> None:
             {"enabled": True, "name": "Результат ЕГИСЗ"},
             {"enabled": True, "name": "LOGID ответа ЕГИСЗ"},
             {"enabled": True, "name": "Дата ошибки доставки"},
-            {"enabled": True, "name": "Тип ошибки доставки"},
-            {"enabled": True, "name": "Текст ошибки доставки"},
+            {"enabled": True, "name": "Тип ошибки"},
+            {"enabled": True, "name": "Исходный текст ошибки"},
         ]
 
 # «Всего» — весь срез клиники, включая отправленные без ответа; «% успеха» считается
@@ -2833,7 +2833,7 @@ def convert_archive_card(card: dict) -> None:
     viz["table.columns"] = deepcopy(ARCHIVE_TABLE_COLUMNS)
     cs = viz.setdefault("column_settings", {})
     cs.pop('["name","Сводка ошибки"]', None)
-    cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
+    cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
     cs['["name","dwh_id"]'] = {"column_title": "dwh_id"}
 
 

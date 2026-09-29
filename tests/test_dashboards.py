@@ -187,8 +187,7 @@ DOCUMENTS_TABLE_LEGACY_LABELS = {
     "СЭМД",
     # Типы и исходный текст ошибок документа в разборе последних операций: столбцы
     # собираются из ошибок документа, а не из documents_current.
-    "Типы ошибки",
-    "ns2_error",
+    "Исходный текст ошибки",
 }
 
 
@@ -212,7 +211,8 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
     assert "Код СЭМД" not in configured_columns
     assert "Наименование СЭМД" not in configured_columns
     assert "День" not in configured_columns
-    assert "Типы ошибки" in configured_columns
+    assert "Тип ошибки" in configured_columns
+    assert "Исходный текст ошибки" in configured_columns
     assert "Host Клиники (ГОСТ VPN)" in configured_columns or "Host" in configured_columns
     query = card["dataset_query"]["native"]["query"]
     assert card["dataset_query"]["type"] == "native"
@@ -1757,7 +1757,10 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
     assert "serving_egisz.documents_current.status IN ('success', 'async_error')" in detail_query
     assert "FROM stg_egisz.document_errors_current c" in detail_query
     assert "WHERE c.error_kind = 'Ошибка связи'" in detail_query
-    assert 'latest_errors.error_type AS "Тип ошибки доставки"' in detail_query
+    assert 'latest_errors.error_type AS "Тип ошибки"' in detail_query
+    assert 'latest_errors.error_text AS "Исходный текст ошибки"' in detail_query
+    assert "LEFT(" not in detail_query
+    assert 'latest_errors.error_at AS "Дата ошибки доставки"' in detail_query
     assert "raw_egisz.exchangelog" not in detail_query
     assert "stg_egisz.exchange_messages" not in detail_query
     assert "WITH latest_errors AS" in detail_query

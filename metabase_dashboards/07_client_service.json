@@ -1041,7 +1041,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH journal AS ( SELECT dwh_id, ips_date, status, status_label, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500 ) SELECT journal.ips_date AS \"Дата обработки\", journal.status_label AS \"Статус\", COALESCE(NULLIF(journal.semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", journal.semd_local_uid AS \"localUid\", journal.semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN journal.status = 'async_error' THEN ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = journal.dwh_id AND document_errors.error_kind = 'Ошибка асинхронного ответа' ) END AS \"Ошибки регистрации\" FROM journal ORDER BY journal.ips_date DESC",
+          "query": "WITH journal AS ( SELECT dwh_id, ips_date, status, status_label, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC LIMIT 500 ) SELECT journal.ips_date AS \"Дата обработки\", journal.status_label AS \"Статус\", COALESCE(NULLIF(journal.semd_label, ''), '(тип СЭМД не определен)') AS \"СЭМД\", journal.semd_local_uid AS \"localUid\", journal.semd_emdr_id AS \"Рег. Номер РЭМД\", CASE WHEN journal.status = 'async_error' THEN ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = journal.dwh_id AND document_errors.error_kind = 'Ошибка асинхронного ответа' ) END AS \"Тип ошибки\" FROM journal ORDER BY journal.ips_date DESC",
           "template-tags": {
             "clinic_label": {
               "widget-type": "string/=",
@@ -1109,7 +1109,7 @@
           },
           {
             "enabled": true,
-            "name": "Ошибки регистрации"
+            "name": "Тип ошибки"
           }
         ],
         "column_settings": {
@@ -1117,8 +1117,8 @@
             "date_style": "D MMMM, YYYY",
             "time_style": "HH:mm"
           },
-          "[\"name\",\"Ошибки регистрации\"]": {
-            "column_title": "Ошибки регистрации",
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
             "text_style": "wrap"
           },
           "[\"name\",\"СЭМД\"]": {

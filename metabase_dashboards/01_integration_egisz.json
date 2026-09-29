@@ -84,7 +84,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = latest.dwh_id ) AS \"Типы ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) AS \"ns2_error\" FROM latest ORDER BY latest.ips_date DESC",
+          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = latest.dwh_id ) AS \"Тип ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) AS \"Исходный текст ошибки\" FROM latest ORDER BY latest.ips_date DESC",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -164,11 +164,11 @@
           },
           {
             "enabled": true,
-            "name": "Типы ошибки"
+            "name": "Тип ошибки"
           },
           {
             "enabled": true,
-            "name": "ns2_error"
+            "name": "Исходный текст ошибки"
           },
           {
             "enabled": true,
@@ -200,12 +200,12 @@
           "[\"name\",\"localUid СЭМД\"]": {
             "column_title": "localUid"
           },
-          "[\"name\",\"Типы ошибки\"]": {
-            "column_title": "Типы ошибки",
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
             "text_style": "wrap"
           },
-          "[\"name\",\"ns2_error\"]": {
-            "column_title": "ns2_error",
+          "[\"name\",\"Исходный текст ошибки\"]": {
+            "column_title": "Исходный текст ошибки",
             "text_style": "wrap"
           },
           "[\"name\",\"Host Клиники (ГОСТ VPN)\"]": {
@@ -2821,7 +2821,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT serving_egisz.documents_current.semd_local_uid AS \"localUid СЭМД\", serving_egisz.documents_current.semd_code AS \"Код СЭМД\", serving_egisz.documents_current.semd_name AS \"Наименование СЭМД\", serving_egisz.documents_current.clinic_jid::text AS \"JID Клиники\", serving_egisz.documents_current.clinic_label AS \"Клиника\", serving_egisz.documents_current.first_sent_at AS \"Дата отправки\", serving_egisz.documents_current.ips_date AS \"Дата ответа ЕГИСЗ\", serving_egisz.documents_current.status_detail_label AS \"Результат ЕГИСЗ\", serving_egisz.documents_current.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки доставки\", LEFT(COALESCE(latest_errors.error_text, ''), 180) AS \"Текст ошибки доставки\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
+          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT serving_egisz.documents_current.semd_local_uid AS \"localUid СЭМД\", serving_egisz.documents_current.semd_code AS \"Код СЭМД\", serving_egisz.documents_current.semd_name AS \"Наименование СЭМД\", serving_egisz.documents_current.clinic_jid::text AS \"JID Клиники\", serving_egisz.documents_current.clinic_label AS \"Клиника\", serving_egisz.documents_current.first_sent_at AS \"Дата отправки\", serving_egisz.documents_current.ips_date AS \"Дата ответа ЕГИСЗ\", serving_egisz.documents_current.status_detail_label AS \"Результат ЕГИСЗ\", serving_egisz.documents_current.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки\", latest_errors.error_text AS \"Исходный текст ошибки\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2903,11 +2903,11 @@
           },
           {
             "enabled": true,
-            "name": "Тип ошибки доставки"
+            "name": "Тип ошибки"
           },
           {
             "enabled": true,
-            "name": "Текст ошибки доставки"
+            "name": "Исходный текст ошибки"
           }
         ],
         "column_settings": {
@@ -5278,7 +5278,7 @@
           },
           {
             "enabled": true,
-            "name": "Типы ошибки"
+            "name": "Тип ошибки"
           },
           {
             "enabled": true,
@@ -5353,6 +5353,10 @@
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "Связанное сообщение"
+          },
+          "[\"name\",\"Тип ошибки\"]": {
+            "column_title": "Тип ошибки",
+            "text_style": "wrap"
           }
         }
       },
