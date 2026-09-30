@@ -26,6 +26,13 @@ def fb_conn() -> MagicMock:
     return MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def cursor_outside_window():
+    """По умолчанию отметка стоит перед окном: первая строка окна открывает участок."""
+    with patch("egisz_etl_dag.is_cursor_in_window", return_value=False) as probe:
+        yield probe
+
+
 def _raw_row(logid: int, created: datetime | None = None) -> dict[str, object]:
     return {
         "logid": logid,
@@ -64,43 +71,101 @@ def test_extract_cursor_counts_the_proxy_not_raw(
     assert result == {"count": 1, "extract_logid_cursor": 101}
 
 
-def test_extract_advances_over_gaps_across_pages(
+def test_extract_holds_cursor_before_gap_inside_window(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Пропуски перед первой строкой и внутри страниц не удерживают курсор."""
+    """Разрыв LOGID в окне удерживает отметку, но страница загружается целиком."""
+    page = [_raw_row(101), _raw_row(102), _raw_row(105), _raw_row(106)]
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
+        patch("egisz_etl_dag.is_cursor_in_window", return_value=True),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=page) as fetch,
+        patch("egisz_etl_dag.load_raw_logs") as load,
+        patch("egisz_etl_dag.update_cursors") as update,
+        patch("egisz_etl_dag._analyze_exchangelog"),
+    ):
+        result = extract_exchangelog_batch(
+            pg_conn, fb_conn, raw_rows=4, raw_rounds=3, depth_days=30
+        )
+
+    fetch.assert_called_once_with(fb_conn, after_logid=100, limit=4)
+    load.assert_called_once_with(pg_conn, page)
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=102)
+    assert result == {"count": 4, "extract_logid_cursor": 102}
+
+
+def test_extract_holds_cursor_when_first_row_is_after_gap_inside_window(
+    pg_conn: MagicMock,
+    fb_conn: MagicMock,
+) -> None:
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
+        patch("egisz_etl_dag.is_cursor_in_window", return_value=True),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[_raw_row(105)]),
+        patch("egisz_etl_dag.load_raw_logs"),
+        patch("egisz_etl_dag.update_cursors") as update,
+        patch("egisz_etl_dag._analyze_exchangelog"),
+    ):
+        result = extract_exchangelog_batch(
+            pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30
+        )
+
+    update.assert_not_called()
+    assert result == {"count": 1, "extract_logid_cursor": 100}
+
+
+def test_extract_passes_gaps_among_rows_older_than_window(
+    pg_conn: MagicMock,
+    fb_conn: MagicMock,
+) -> None:
+    """Разрывы среди строк старше окна не удерживают отметку; окно открывает участок."""
+    now = datetime.now()
     pages = [
-        [_raw_row(32_041_000), _raw_row(32_041_010)],
-        [_raw_row(32_041_020), _raw_row(32_042_000)],
+        [_raw_row(500, now - timedelta(days=90)), _raw_row(900, now - timedelta(days=80))],
+        [_raw_row(2_000, now - timedelta(days=2)), _raw_row(2_001, now - timedelta(days=1))],
         [],
     ]
     with (
-        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=32_040_952)),
-        patch("egisz_etl_dag.fetch_depth_floor") as floor,
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
         patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=pages) as fetch,
         patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
-        patch("egisz_etl_dag._analyze_exchangelog") as analyze,
+        patch("egisz_etl_dag._analyze_exchangelog"),
     ):
         result = extract_exchangelog_batch(
             pg_conn, fb_conn, raw_rows=2, raw_rounds=3, depth_days=30
         )
 
-    assert fetch.call_args_list == [
-        call(fb_conn, after_logid=cursor, limit=2) for cursor in (32_040_952, 32_041_010, 32_042_000)
-    ]
-    assert load.call_args_list == [call(pg_conn, rows) for rows in pages[:2]]
-    floor.assert_not_called()
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=32_042_000)
-    analyze.assert_called_once_with(pg_conn)
-    assert result == {"count": 4, "extract_logid_cursor": 32_042_000}
+    assert [c.kwargs["after_logid"] for c in fetch.call_args_list] == [100, 900, 2_001]
+    load.assert_called_once_with(pg_conn, pages[1])
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=2_001)
+    assert result == {"count": 2, "extract_logid_cursor": 2_001}
+
+
+def test_contiguous_prefix_end_bridges_old_rows_and_stops_at_gap_in_window() -> None:
+    since = datetime(2026, 9, 1)
+    old, fresh = datetime(2026, 8, 1), datetime(2026, 9, 15)
+    rows = [_raw_row(10, old), _raw_row(50, old), _raw_row(60, fresh), _raw_row(61, fresh), _raw_row(70, fresh)]
+
+    end, in_window = extract_dag.contiguous_prefix_end(
+        rows, after=0, since=since, after_in_window=False
+    )
+
+    assert (end, in_window) == (61, True)
+
+
+def test_contiguous_prefix_end_without_window_treats_first_row_as_start() -> None:
+    rows = [_raw_row(7), _raw_row(8), _raw_row(10)]
+
+    assert extract_dag.contiguous_prefix_end(rows, after=0, since=None, after_in_window=False) == (8, True)
 
 
 def test_extract_window_is_applied_to_fetched_rows_and_cursor_passes_old_ones(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Строки старше окна в raw не попадают, но курсор доходит до конца страницы."""
+    """Строки старше окна в raw не попадают, но курсор проходит через них."""
     now = datetime.now()
     old = _raw_row(101, now - timedelta(days=90))
     fresh = _raw_row(102, now - timedelta(days=1))
