@@ -1235,22 +1235,30 @@ WHERE t.error_type = v.error_type
 -- Функции ошибок: извлечение элементов сообщения журнала и их классификация.
 -- ============================================================================
 
--- Элементы ошибки одного сообщения журнала.
---   Ошибка связи — шлюз не доставил сообщение (LOGSTATE = 3): элемент 0 с исходным
---   текстом шлюза и кодом из него (код сокета Windows либо код ответа HTTP).
---   Ошибка асинхронного ответа — элементы 1..n асинхронного ответа с распознанным исходом:
---   <item> РЭМД (code, message), иначе RegistryError ИЭМК (errorCode, codeContext), иначе
---   код и текст ответа об ошибке без элементов. Элементы успешного ответа сохраняются
---   так же: исход ответа хранится в сообщении и от них не зависит.
-CREATE OR REPLACE FUNCTION stg_egisz.error_items(
-    p_logstate integer,
-    p_logtext text,
-    p_msgtext text,
-    p_outcome text,
-    p_error_code text,
-    p_error_message text
-)
-RETURNS TABLE (item_no integer, error_kind text, error_code text, error_text text)
+-- Функция общего разбора элементов заменена разбором по источникам; снятие приводит к
+-- этому состоянию базу, где она осталась.
+DROP FUNCTION IF EXISTS stg_egisz.error_items(integer, text, text, text, text, text);
+
+-- Разбор ошибок сообщения журнала по источникам. У каждого источника своя схема ответа,
+-- поэтому функции не объединяют результаты: общую форму собирает mart_egisz.message_errors.
+--   Ошибка связи — шлюз не доставил сообщение (LOGSTATE = 3): исходный текст шлюза и код
+--   из него (код сокета Windows либо код ответа HTTP).
+--   Ответ РЭМД — элементы <item> (code, message) в разделах errors и registrationWarnings;
+--   предупреждения приходят в успешном ответе вместе с регистрационным номером.
+--   Ответ ИЭМК — атрибуты IHE RegistryError: errorCode, codeContext, severity, location.
+CREATE OR REPLACE FUNCTION stg_egisz.network_error_code(p_logtext text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+    SELECT (regexp_match(COALESCE(p_logtext, ''), '(?:Socket error |Error code: )([0-9]+)'))[1];
+$$;
+
+-- Раздел элемента — последний открытый перед ним тег errors или registrationWarnings;
+-- элемент вне раздела получает пустой раздел.
+CREATE OR REPLACE FUNCTION stg_egisz.remd_error_items(p_msgtext text)
+RETURNS TABLE (item_no integer, section text, code text, message text)
 LANGUAGE plpgsql
 IMMUTABLE
 SET search_path = pg_catalog, pg_temp
@@ -1259,62 +1267,82 @@ DECLARE
     part text;
     part_code text;
     part_text text;
+    opened text;
+    current_section text;
+    is_first boolean := true;
     n integer := 0;
 BEGIN
-    IF p_logstate = 3 THEN
-        item_no := 0;
-        error_kind := 'Ошибка связи';
-        error_code := (regexp_match(COALESCE(p_logtext, ''), '(?:Socket error |Error code: )([0-9]+)'))[1];
-        error_text := p_logtext;
-        RETURN NEXT;
-    END IF;
-
-    IF p_outcome IS NULL OR COALESCE(p_msgtext, '') = '' THEN
+    IF position('<' in COALESCE(p_msgtext, '')) = 0 THEN
         RETURN;
     END IF;
-
-    error_kind := 'Ошибка асинхронного ответа';
-    IF position('<' in p_msgtext) > 0 THEN
-        FOR part IN
-            SELECT s FROM regexp_split_to_table(p_msgtext, '<(?:[A-Za-z0-9_]+:)?item(?:\s[^>]*)?>', 'i') AS s
-        LOOP
+    FOR part IN
+        SELECT s FROM regexp_split_to_table(p_msgtext, '<(?:[A-Za-z0-9_]+:)?item(?:\s[^>]*)?>', 'i') AS s
+    LOOP
+        IF NOT is_first THEN
             part_code := stg_egisz.xml_text(part, 'code');
             part_text := stg_egisz.xml_text(part, 'message');
             IF NULLIF(btrim(COALESCE(part_code, '')), '') IS NOT NULL
                OR NULLIF(btrim(COALESCE(part_text, '')), '') IS NOT NULL THEN
                 n := n + 1;
-                item_no := n; error_code := part_code; error_text := part_text;
+                item_no := n; section := current_section; code := part_code; message := part_text;
                 RETURN NEXT;
             END IF;
-        END LOOP;
-    END IF;
+        END IF;
+        is_first := false;
+        opened := NULL;
+        SELECT t.m[1] INTO opened
+        FROM regexp_matches(part, '<(?:[A-Za-z0-9_]+:)?(errors|registrationWarnings)(?:\s[^>]*)?>', 'gi')
+            WITH ORDINALITY AS t(m, ord)
+        ORDER BY t.ord DESC
+        LIMIT 1;
+        IF opened IS NOT NULL THEN
+            current_section := CASE lower(opened) WHEN 'errors' THEN 'errors' ELSE 'registrationWarnings' END;
+        END IF;
+    END LOOP;
+END;
+$$;
 
-    -- Ответ ИЭМК несёт ошибки атрибутами тега RegistryError; значение в "" не может
-    -- содержать сырую кавычку, XML-сущности декодируются после захвата (&amp; последним).
-    IF n = 0 AND strpos(p_msgtext, 'RegistryError') > 0 THEN
-        FOR part IN
-            SELECT m[1] FROM regexp_matches(p_msgtext, '<(?:[A-Za-z0-9_.-]+:)?RegistryError\y([^>]*?)/?>', 'gi') AS m
-        LOOP
-            part_code := NULLIF(btrim((regexp_match(part, 'errorCode\s*=\s*"([^"]*)"', 'i'))[1]), '');
-            part_text := NULLIF(btrim(
-                replace(replace(replace(replace(replace(
-                    COALESCE((regexp_match(part, 'codeContext\s*=\s*"([^"]*)"', 'i'))[1], ''),
-                    '&quot;', '"'), '&apos;', ''''), '&lt;', '<'), '&gt;', '>'), '&amp;', '&')
-            ), '');
-            IF part_code IS NOT NULL OR part_text IS NOT NULL THEN
-                n := n + 1;
-                item_no := n; error_code := part_code; error_text := part_text;
-                RETURN NEXT;
-            END IF;
-        END LOOP;
-    END IF;
+-- Значение атрибута в "" не может содержать сырую кавычку, XML-сущности декодируются после
+-- захвата (&amp; последним).
+CREATE OR REPLACE FUNCTION stg_egisz.xml_attribute(p_tag text, p_name text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+    SELECT NULLIF(btrim(
+        replace(replace(replace(replace(replace(
+            COALESCE((regexp_match(p_tag, '\y' || p_name || '\s*=\s*"([^"]*)"', 'i'))[1], ''),
+            '&quot;', '"'), '&apos;', ''''), '&lt;', '<'), '&gt;', '>'), '&amp;', '&')
+    ), '');
+$$;
 
-    IF n = 0 AND p_outcome = 'error'
-       AND (NULLIF(btrim(COALESCE(p_error_code, '')), '') IS NOT NULL
-            OR NULLIF(btrim(COALESCE(p_error_message, '')), '') IS NOT NULL) THEN
-        item_no := 1; error_code := p_error_code; error_text := p_error_message;
-        RETURN NEXT;
+CREATE OR REPLACE FUNCTION stg_egisz.ihe_error_items(p_msgtext text)
+RETURNS TABLE (item_no integer, error_code text, code_context text, severity text, location text)
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    tag text;
+    n integer := 0;
+BEGIN
+    IF strpos(COALESCE(p_msgtext, ''), 'RegistryError') = 0 THEN
+        RETURN;
     END IF;
+    FOR tag IN
+        SELECT m[1] FROM regexp_matches(p_msgtext, '<(?:[A-Za-z0-9_.-]+:)?RegistryError\y([^>]*?)/?>', 'gi') AS m
+    LOOP
+        error_code := stg_egisz.xml_attribute(tag, 'errorCode');
+        code_context := stg_egisz.xml_attribute(tag, 'codeContext');
+        IF error_code IS NOT NULL OR code_context IS NOT NULL THEN
+            n := n + 1;
+            item_no := n;
+            severity := stg_egisz.xml_attribute(tag, 'severity');
+            location := stg_egisz.xml_attribute(tag, 'location');
+            RETURN NEXT;
+        END IF;
+    END LOOP;
 END;
 $$;
 

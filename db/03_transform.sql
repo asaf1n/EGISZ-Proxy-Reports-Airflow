@@ -621,83 +621,25 @@ BEGIN
             p.org_oid,
             COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '') || ' ' || COALESCE(p.registry_reply_to, '')
         ) res ON TRUE
-    ),
-    items AS (
-        SELECT e.logid, i.item_no, i.error_kind, i.error_code, i.error_text
-        FROM enriched e
-        CROSS JOIN LATERAL stg_egisz.error_items(
-            e.logstate, e.logtext, e.msgtext, e.outcome, e.error_code, e.xml_message
-        ) i
-    ),
-    -- Классификация дорогая: на элемент идёт регекс-скан правил. Одинаковые элементы
-    -- внутри пакета классифицируются один раз.
-    item_keys AS MATERIALIZED (
-        SELECT DISTINCT error_kind, error_code, error_text
-        FROM items
-    ),
-    classified AS (
-        SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
-        FROM item_keys k
-        CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c
-    ),
-    details AS (
-        SELECT
-            i.logid,
-            jsonb_agg(jsonb_build_object(
-                'item_no', i.item_no,
-                'error_kind', i.error_kind,
-                'error_code', i.error_code,
-                'error_text', i.error_text,
-                'error_type', c.error_type,
-                'nsi_dictionary_oid', c.nsi_dictionary_oid
-            ) ORDER BY i.item_no) AS error_details
-        FROM items i
-        -- Сравнение массивов считает NULL равными и соединяется хешем или слиянием;
-        -- IS NOT DISTINCT FROM свёл бы соединение к перебору пар внутри вида ошибки.
-        JOIN classified c
-          ON ARRAY[c.error_kind, c.error_code, c.error_text] = ARRAY[i.error_kind, i.error_code, i.error_text]
-        GROUP BY i.logid
     )
     SELECT
         e.*,
-        d.error_details,
         regexp_split_to_array(stg_egisz.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
         regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
         stg_egisz.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
-    FROM enriched e
-    LEFT JOIN details d ON d.logid = e.logid;
-
-    -- Тип без правила заводится в справочнике типов при первом появлении: категория
-    -- «Прочие» у асинхронного ответа, без категории у ошибки связи. Значения зоны
-    -- ответственности и повтора наследуются из справочника категорий.
-    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
-    SELECT DISTINCT ON (x.error_type)
-        x.error_type,
-        x.error_kind,
-        c.error_category,
-        c.responsibility,
-        c.is_retryable
-    FROM pg_temp.batch_responses b
-    CROSS JOIN LATERAL jsonb_to_recordset(b.error_details) AS x(error_kind text, error_type text)
-    JOIN mart_egisz.dim_error_category c
-      ON c.error_kind = x.error_kind
-     AND c.error_category IS NOT DISTINCT FROM
-         CASE WHEN x.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
-    WHERE x.error_type IS NOT NULL
-    ORDER BY x.error_type
-    ON CONFLICT (error_type) DO NOTHING;
+    FROM enriched e;
 
     INSERT INTO stg_egisz.exchange_messages (
         logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
-        creation_date, loaded_at, link_method, error_details,
+        creation_date, loaded_at, link_method,
         patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
     )
     SELECT
         e.logid, e.dwh_id, e.logdate, e.msgid, e.relates_to_msgid, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.outcome, e.message_text,
         e.resolved_jid, e.resolved_method, e.resolved_semd_code,
-        e.creation_date, now(), e.link_method, e.error_details,
+        e.creation_date, now(), e.link_method,
         CASE
             WHEN e.patient_parts IS NULL OR array_length(e.patient_parts, 1) IS NULL THEN '(нет данных)'
             ELSE substring(e.patient_parts[1] FROM 1 FOR 1) || '***'
@@ -720,7 +662,7 @@ BEGIN
             ELSE md5(lower(e.doctor_name_clean))
         END
     FROM pg_temp.batch_responses e
-    WHERE (e.outcome IS NOT NULL OR e.error_details IS NOT NULL)
+    WHERE (e.outcome IS NOT NULL OR e.logstate = 3)
       AND e.dwh_id IS NOT NULL
     ON CONFLICT (logid, log_date) DO UPDATE SET
         log_date = EXCLUDED.log_date,
@@ -739,7 +681,6 @@ BEGIN
         creation_date = EXCLUDED.creation_date,
         loaded_at = now(),
         link_method = EXCLUDED.link_method,
-        error_details = EXCLUDED.error_details,
         patient_name_masked = EXCLUDED.patient_name_masked,
         snils_masked = EXCLUDED.snils_masked,
         doctor_name = EXCLUDED.doctor_name,
@@ -748,24 +689,26 @@ BEGIN
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
-    -- Сообщение без связи с документом тоже хранит исход и элементы ошибки: сбой доставки
-    -- и отказ видны в разрезе периода независимо от того, найден ли документ.
+    -- Сообщение без связи с документом тоже хранит исход: сбой доставки и отказ видны в
+    -- разрезе периода независимо от того, найден ли документ.
     UPDATE stg_egisz.exchange_messages tx
     SET status = e.outcome,
         message = e.message_text,
-        error_details = e.error_details,
         loaded_at = now()
     FROM pg_temp.batch_responses e
     WHERE tx.logid = e.logid
       AND tx.log_date = e.logdate
       AND e.dwh_id IS NULL
-      AND (e.outcome IS NOT NULL OR e.error_details IS NOT NULL)
-      AND (tx.status, tx.message, tx.error_details)
-          IS DISTINCT FROM (e.outcome, e.message_text, e.error_details);
+      AND (e.outcome IS NOT NULL OR e.logstate = 3)
+      AND (tx.status, tx.message) IS DISTINCT FROM (e.outcome, e.message_text);
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
     DROP TABLE pg_temp.batch_responses;
+
+    -- Ошибки разбираются после записи исхода: элементы ответа ищутся только в ответе с
+    -- распознанным исходом.
+    PERFORM stg_egisz.parse_message_errors(from_logid, to_logid);
 
     -- РЭМД-ответ с MSGID в EGISZ_MESSAGES и пустым DOCUMENTID.
     WITH registry_match AS (
@@ -974,28 +917,195 @@ BEGIN
 END;
 $$;
 
--- Приведение элементов ошибки к текущим правилам: после изменения правил или шагов
--- маскирования типы в разобранных сообщениях пересчитываются по уникальным элементам
--- (вид, код, исходный текст). Тип без правила заводится в справочнике, тип без правила,
--- на который больше не ссылается ни один элемент, снимается. Запускается вручную задачей
--- DAG обслуживания; приём на это время ставится на паузу.
-CREATE OR REPLACE FUNCTION stg_egisz.reclassify_error_details()
+-- Разбор ошибок разобранных сообщений диапазона LOGID по источникам: ошибка связи, элементы
+-- ответа РЭМД, элементы ответа ИЭМК. Элементы ответа ищутся только в сообщении с
+-- распознанным исходом. Ответ об ошибке без элементов сохраняет код и текст ответа
+-- элементом источника своего контура. Одинаковые элементы классифицируются один раз; тип
+-- без правила заводится в справочнике типов при первом появлении: категория «Прочие» у
+-- асинхронного ответа, без категории у ошибки связи. Вызывается приёмом для пакета и
+-- повторным разбором журнала по участкам LOGID.
+CREATE OR REPLACE FUNCTION stg_egisz.parse_message_errors(p_from_logid bigint, p_to_logid bigint)
 RETURNS integer
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     updated integer := 0;
+    cd_min timestamptz;
+    cd_max timestamptz;
+BEGIN
+    SELECT MIN(r.createdate), MAX(r.createdate)
+    INTO cd_min, cd_max
+    FROM raw_egisz.exchangelog r
+    WHERE r.logid > p_from_logid
+      AND r.logid <= p_to_logid;
+    IF cd_min IS NULL THEN
+        RETURN 0;
+    END IF;
+
+    -- Сообщения диапазона, у которых ошибки есть или были: прежние значения снимаются,
+    -- если источник их больше не даёт. Payload в набор не копируется — он большой.
+    DROP TABLE IF EXISTS pg_temp.message_error_scope;
+    CREATE TEMP TABLE message_error_scope AS
+    SELECT tx.logid, tx.log_date
+    FROM stg_egisz.exchange_messages tx
+    JOIN raw_egisz.exchangelog r
+      ON r.logid = tx.logid
+     AND r.createdate = tx.log_date
+     AND r.createdate >= cd_min
+     AND r.createdate <= cd_max
+    WHERE tx.logid > p_from_logid
+      AND tx.logid <= p_to_logid
+      AND tx.log_date >= cd_min
+      AND tx.log_date <= cd_max
+      AND (r.logstate = 3
+           OR tx.status IS NOT NULL
+           OR tx.network_error_text IS NOT NULL
+           OR tx.remd_errors IS NOT NULL
+           OR tx.ihe_errors IS NOT NULL);
+    ANALYZE pg_temp.message_error_scope;
+
+    DROP TABLE IF EXISTS pg_temp.message_error_items;
+    CREATE TEMP TABLE message_error_items AS
+    SELECT s.logid, s.log_date, i.*
+    FROM pg_temp.message_error_scope s
+    JOIN stg_egisz.exchange_messages tx ON tx.logid = s.logid AND tx.log_date = s.log_date
+    JOIN raw_egisz.exchangelog r
+      ON r.logid = s.logid
+     AND r.createdate = s.log_date
+     AND r.createdate >= cd_min
+     AND r.createdate <= cd_max
+    CROSS JOIN LATERAL (
+        WITH remd AS (
+            SELECT * FROM stg_egisz.remd_error_items(r.msgtext) WHERE tx.status IS NOT NULL
+        ),
+        ihe AS (
+            SELECT * FROM stg_egisz.ihe_error_items(r.msgtext) WHERE tx.status IS NOT NULL
+        )
+        SELECT 'network'::text AS source, 0 AS item_no, 'Ошибка связи'::text AS error_kind,
+               stg_egisz.network_error_code(r.logtext) AS error_code, r.logtext AS error_text,
+               NULL::text AS section, NULL::text AS severity, NULL::text AS location
+        WHERE r.logstate = 3
+        UNION ALL
+        SELECT 'remd', m.item_no, 'Ошибка асинхронного ответа', m.code, m.message, m.section, NULL, NULL
+        FROM remd m
+        UNION ALL
+        SELECT 'ihe', h.item_no, 'Ошибка асинхронного ответа', h.error_code, h.code_context, NULL, h.severity, h.location
+        FROM ihe h
+        UNION ALL
+        SELECT CASE WHEN tx.egisz_subsystem = 'ИЭМК' THEN 'ihe' ELSE 'remd' END, 1,
+               'Ошибка асинхронного ответа', tx.xml_error_code, tx.xml_message, NULL, NULL, NULL
+        WHERE tx.status = 'error'
+          AND COALESCE(r.msgtext, '') <> ''
+          AND (NULLIF(btrim(COALESCE(tx.xml_error_code, '')), '') IS NOT NULL
+               OR NULLIF(btrim(COALESCE(tx.xml_message, '')), '') IS NOT NULL)
+          AND NOT EXISTS (SELECT 1 FROM remd)
+          AND NOT EXISTS (SELECT 1 FROM ihe)
+    ) i;
+    ANALYZE pg_temp.message_error_items;
+
+    DROP TABLE IF EXISTS pg_temp.message_error_types;
+    CREATE TEMP TABLE message_error_types AS
+    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
+    FROM (SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.message_error_items) k
+    CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
+    ANALYZE pg_temp.message_error_types;
+
+    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
+    SELECT DISTINCT ON (t.error_type)
+        t.error_type, t.error_kind, c.error_category, c.responsibility, c.is_retryable
+    FROM pg_temp.message_error_types t
+    JOIN mart_egisz.dim_error_category c
+      ON c.error_kind = t.error_kind
+     AND c.error_category IS NOT DISTINCT FROM
+         CASE WHEN t.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
+    WHERE t.error_type IS NOT NULL
+    ORDER BY t.error_type
+    ON CONFLICT (error_type) DO NOTHING;
+
+    -- Значения собираются во временную таблицу со статистикой: соединение наборов без
+    -- статистики планировщик сводил к перебору пар. Сравнение массивов считает NULL
+    -- равными и соединяется хешем.
+    DROP TABLE IF EXISTS pg_temp.message_error_parsed;
+    CREATE TEMP TABLE message_error_parsed AS
+    SELECT
+        s.logid,
+        s.log_date,
+        max(i.error_code) FILTER (WHERE i.source = 'network') AS network_error_code,
+        max(i.error_text) FILTER (WHERE i.source = 'network') AS network_error_text,
+        max(t.error_type) FILTER (WHERE i.source = 'network') AS network_error_type,
+        jsonb_agg(jsonb_build_object(
+            'item_no', i.item_no, 'section', i.section, 'code', i.error_code, 'message', i.error_text,
+            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid
+        ) ORDER BY i.item_no) FILTER (WHERE i.source = 'remd') AS remd_errors,
+        jsonb_agg(jsonb_build_object(
+            'item_no', i.item_no, 'error_code', i.error_code, 'code_context', i.error_text,
+            'severity', i.severity, 'location', i.location,
+            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid
+        ) ORDER BY i.item_no) FILTER (WHERE i.source = 'ihe') AS ihe_errors
+    FROM pg_temp.message_error_scope s
+    LEFT JOIN pg_temp.message_error_items i ON i.logid = s.logid AND i.log_date = s.log_date
+    LEFT JOIN pg_temp.message_error_types t
+      ON ARRAY[t.error_kind, t.error_code, t.error_text] = ARRAY[i.error_kind, i.error_code, i.error_text]
+    GROUP BY s.logid, s.log_date;
+    ANALYZE pg_temp.message_error_parsed;
+
+    UPDATE stg_egisz.exchange_messages tx
+    SET network_error_code = p.network_error_code,
+        network_error_text = p.network_error_text,
+        network_error_type = p.network_error_type,
+        remd_errors = p.remd_errors,
+        ihe_errors = p.ihe_errors
+    FROM pg_temp.message_error_parsed p
+    WHERE tx.logid = p.logid
+      AND tx.log_date = p.log_date
+      AND tx.log_date >= cd_min
+      AND tx.log_date <= cd_max
+      AND (tx.network_error_code, tx.network_error_text, tx.network_error_type, tx.remd_errors, tx.ihe_errors)
+          IS DISTINCT FROM (p.network_error_code, p.network_error_text, p.network_error_type, p.remd_errors, p.ihe_errors);
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    DROP TABLE pg_temp.message_error_parsed;
+    DROP TABLE pg_temp.message_error_types;
+    DROP TABLE pg_temp.message_error_items;
+    DROP TABLE pg_temp.message_error_scope;
+    RETURN updated;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS stg_egisz.reclassify_error_details();
+
+-- Приведение ошибок к текущим правилам: после изменения правил или шагов маскирования
+-- типы в разобранных сообщениях пересчитываются по уникальным элементам (вид, код,
+-- исходный текст) каждого источника. Тип без правила заводится в справочнике, тип без
+-- правила, на который больше не ссылается ни один элемент, снимается. Запускается вручную
+-- задачей DAG обслуживания; приём на это время ставится на паузу.
+CREATE OR REPLACE FUNCTION stg_egisz.reclassify_errors()
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    updated integer := 0;
+    step_rows integer := 0;
 BEGIN
     DROP TABLE IF EXISTS pg_temp.reclassified;
     CREATE TEMP TABLE reclassified AS
     SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
     FROM (
-        SELECT DISTINCT e.error_kind, e.error_code, e.error_text
+        SELECT 'Ошибка связи'::text AS error_kind, t.network_error_code AS error_code, t.network_error_text AS error_text
         FROM stg_egisz.exchange_messages t
-        CROSS JOIN LATERAL jsonb_to_recordset(t.error_details)
-            AS e(error_kind text, error_code text, error_text text)
-        WHERE t.error_details IS NOT NULL
+        WHERE t.network_error_text IS NOT NULL
+        UNION
+        SELECT 'Ошибка асинхронного ответа', e.code, e.message
+        FROM stg_egisz.exchange_messages t
+        CROSS JOIN LATERAL jsonb_to_recordset(t.remd_errors) AS e(code text, message text)
+        WHERE t.remd_errors IS NOT NULL
+        UNION
+        SELECT 'Ошибка асинхронного ответа', e.error_code, e.code_context
+        FROM stg_egisz.exchange_messages t
+        CROSS JOIN LATERAL jsonb_to_recordset(t.ihe_errors) AS e(error_code text, code_context text)
+        WHERE t.ihe_errors IS NOT NULL
     ) k
     CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
     -- Временные таблицы автоанализ не обрабатывает; без статистики план соединений слеп.
@@ -1013,40 +1123,68 @@ BEGIN
     ORDER BY r.error_type
     ON CONFLICT (error_type) DO NOTHING;
 
+    UPDATE stg_egisz.exchange_messages t
+    SET network_error_type = r.error_type
+    FROM pg_temp.reclassified r
+    WHERE t.network_error_text IS NOT NULL
+      AND r.error_kind = 'Ошибка связи'
+      AND ARRAY[r.error_code, r.error_text] = ARRAY[t.network_error_code, t.network_error_text]
+      AND t.network_error_type IS DISTINCT FROM r.error_type;
+    GET DIAGNOSTICS step_rows = ROW_COUNT;
+    updated := updated + step_rows;
+
     -- Элементы разворачиваются в отдельный набор до соединения со справочником: внутри
     -- LATERAL соединение уходило во вложенный цикл и перебирало справочник для каждого
     -- сообщения. Сравнение массивов считает NULL равными и соединяется хешем.
     WITH elements AS MATERIALIZED (
-        SELECT t2.logid, t2.log_date, e.item_no, e.error_kind, e.error_code, e.error_text
-        FROM stg_egisz.exchange_messages t2
-        CROSS JOIN LATERAL jsonb_to_recordset(t2.error_details)
-            AS e(item_no integer, error_kind text, error_code text, error_text text)
-        WHERE t2.error_details IS NOT NULL
+        SELECT t.logid, t.log_date, e.ord, e.item
+        FROM stg_egisz.exchange_messages t
+        CROSS JOIN LATERAL jsonb_array_elements(t.remd_errors) WITH ORDINALITY AS e(item, ord)
+        WHERE t.remd_errors IS NOT NULL
     ),
     rebuilt AS (
-        SELECT
-            el.logid,
-            el.log_date,
-            jsonb_agg(jsonb_build_object(
-                'item_no', el.item_no,
-                'error_kind', el.error_kind,
-                'error_code', el.error_code,
-                'error_text', el.error_text,
-                'error_type', r.error_type,
-                'nsi_dictionary_oid', r.nsi_dictionary_oid
-            ) ORDER BY el.item_no) AS error_details
+        SELECT el.logid, el.log_date,
+               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid)
+                         ORDER BY el.ord) AS items
         FROM elements el
         JOIN pg_temp.reclassified r
-          ON ARRAY[r.error_kind, r.error_code, r.error_text] = ARRAY[el.error_kind, el.error_code, el.error_text]
+          ON r.error_kind = 'Ошибка асинхронного ответа'
+         AND ARRAY[r.error_code, r.error_text] = ARRAY[el.item ->> 'code', el.item ->> 'message']
         GROUP BY el.logid, el.log_date
     )
     UPDATE stg_egisz.exchange_messages t
-    SET error_details = n.error_details
+    SET remd_errors = n.items
     FROM rebuilt n
     WHERE t.logid = n.logid
       AND t.log_date = n.log_date
-      AND t.error_details IS DISTINCT FROM n.error_details;
-    GET DIAGNOSTICS updated = ROW_COUNT;
+      AND t.remd_errors IS DISTINCT FROM n.items;
+    GET DIAGNOSTICS step_rows = ROW_COUNT;
+    updated := updated + step_rows;
+
+    WITH elements AS MATERIALIZED (
+        SELECT t.logid, t.log_date, e.ord, e.item
+        FROM stg_egisz.exchange_messages t
+        CROSS JOIN LATERAL jsonb_array_elements(t.ihe_errors) WITH ORDINALITY AS e(item, ord)
+        WHERE t.ihe_errors IS NOT NULL
+    ),
+    rebuilt AS (
+        SELECT el.logid, el.log_date,
+               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid)
+                         ORDER BY el.ord) AS items
+        FROM elements el
+        JOIN pg_temp.reclassified r
+          ON r.error_kind = 'Ошибка асинхронного ответа'
+         AND ARRAY[r.error_code, r.error_text] = ARRAY[el.item ->> 'error_code', el.item ->> 'code_context']
+        GROUP BY el.logid, el.log_date
+    )
+    UPDATE stg_egisz.exchange_messages t
+    SET ihe_errors = n.items
+    FROM rebuilt n
+    WHERE t.logid = n.logid
+      AND t.log_date = n.log_date
+      AND t.ihe_errors IS DISTINCT FROM n.items;
+    GET DIAGNOSTICS step_rows = ROW_COUNT;
+    updated := updated + step_rows;
 
     DELETE FROM mart_egisz.dim_error_type d
     WHERE d.rule_code IS NULL

@@ -316,6 +316,34 @@ WHERE (dim_sent_state.label, dim_sent_state.sort_order)
 
 DELETE FROM mart_egisz.dim_sent_state WHERE code NOT IN ('pending', 'no_response');
 
+-- Тариф сервиса для ориентировочных денежных показателей: плоская абонентская плата за JID в
+-- месяц и окна, которыми показатели определяют активную базу и риск оттока. Договорная
+-- сетка сложнее плоской ставки, поэтому показатели — порядок величины, а не биллинг.
+-- Строка действует с valid_from до следующей строки; смена ставки — новая строка.
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_tariff (
+    valid_from date PRIMARY KEY,
+    jid_monthly_fee numeric(12, 2) NOT NULL CHECK (jid_monthly_fee >= 0),
+    active_days integer NOT NULL CHECK (active_days > 0),
+    quiet_days integer NOT NULL CHECK (quiet_days > 0),
+    no_success_min_docs integer NOT NULL CHECK (no_success_min_docs > 0)
+);
+
+COMMENT ON TABLE mart_egisz.dim_tariff IS
+'Тариф для ориентировочных денежных показателей: jid_monthly_fee — абонентская плата за JID в месяц, ₽; active_days — окно активной базы (JID с документами за последние active_days суток); quiet_days — клиника замолчала, если в активной базе и без документов quiet_days суток; no_success_min_docs — клиника без успехов, если за окно активной базы от стольких документов и ни одного успешного. Строка действует с valid_from.';
+
+INSERT INTO mart_egisz.dim_tariff (valid_from, jid_monthly_fee, active_days, quiet_days, no_success_min_docs)
+VALUES ('-infinity', 10000, 30, 7, 10)
+ON CONFLICT (valid_from) DO UPDATE SET
+    jid_monthly_fee = EXCLUDED.jid_monthly_fee,
+    active_days = EXCLUDED.active_days,
+    quiet_days = EXCLUDED.quiet_days,
+    no_success_min_docs = EXCLUDED.no_success_min_docs
+WHERE (dim_tariff.jid_monthly_fee, dim_tariff.active_days, dim_tariff.quiet_days, dim_tariff.no_success_min_docs)
+      IS DISTINCT FROM
+      (EXCLUDED.jid_monthly_fee, EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs);
+
+DELETE FROM mart_egisz.dim_tariff WHERE valid_from <> '-infinity';
+
 -- Фазы контрольных карт: отрезки с неизменными условиями работы сервиса. Центр и границы
 -- фазы считаются по её опорному периоду и продлеваются вперёд до следующей фазы. Опорный
 -- период задан датами, а не «последними N периодами»: границы закрытых периодов не должны
@@ -1522,7 +1550,11 @@ CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     semd_code text,
     creation_date timestamptz,
     link_method text,
-    error_details jsonb,
+    network_error_code text,
+    network_error_text text,
+    network_error_type text,
+    remd_errors jsonb,
+    ihe_errors jsonb,
     patient_name_masked text,
     snils_masked text,
     doctor_name text,
@@ -1557,8 +1589,27 @@ COMMENT ON COLUMN stg_egisz.exchange_messages.status IS
 'Исход асинхронного ответа: success либо error. Пусто у сообщения, которое асинхронным ответом не является, и у ответа с нераспознанным исходом.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.message IS
 'Текст сообщения: при LOGSTATE = 3 — исходный текст шлюза, иначе текст из payload.';
-COMMENT ON COLUMN stg_egisz.exchange_messages.error_details IS
-'Элементы ошибки сообщения: item_no, error_kind (вид), error_code, error_text (исходный текст), error_type (тип из mart_egisz.dim_error_type), nsi_dictionary_oid. Пусто, если элементов нет.';
+-- Столбцы ошибок существующей таблицы приводятся к разбору по источникам: у каждого
+-- источника своя схема ответа, общая форма собирается выше stage (mart_egisz.message_errors).
+ALTER TABLE stg_egisz.exchange_messages
+    ADD COLUMN IF NOT EXISTS network_error_code text,
+    ADD COLUMN IF NOT EXISTS network_error_text text,
+    ADD COLUMN IF NOT EXISTS network_error_type text,
+    ADD COLUMN IF NOT EXISTS remd_errors jsonb,
+    ADD COLUMN IF NOT EXISTS ihe_errors jsonb;
+DROP INDEX IF EXISTS stg_egisz.idx_exchange_messages_error_log_date;
+ALTER TABLE stg_egisz.exchange_messages DROP COLUMN IF EXISTS error_details CASCADE;
+
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_code IS
+'Ошибка связи (LOGSTATE = 3): код из текста шлюза — код сокета Windows либо код ответа HTTP.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_text IS
+'Ошибка связи (LOGSTATE = 3): исходный текст шлюза (LOGTEXT). Пусто, если сообщение доставлено.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_type IS
+'Тип ошибки связи из mart_egisz.dim_error_type: текст с замаскированными значениями.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.remd_errors IS
+'Элементы ответа РЭМД (<item>): item_no, section (раздел ответа: errors либо registrationWarnings — предупреждения при успешной регистрации), code, message (исходный текст), error_type, nsi_dictionary_oid. Пусто, если элементов нет.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.ihe_errors IS
+'Элементы ответа ИЭМК (IHE RegistryError): item_no, error_code (errorCode), code_context (codeContext, исходный текст), severity, location, error_type, nsi_dictionary_oid. Пусто, если элементов нет.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.egisz_subsystem IS
 'Контур обмена (РЭМД или ИЭМК), см. egisz_subsystem().';
 COMMENT ON COLUMN stg_egisz.exchange_messages.link_method IS
@@ -1711,9 +1762,11 @@ CREATE INDEX IF NOT EXISTS idx_exchange_messages_dwh_id_recent
     ON stg_egisz.exchange_messages (dwh_id, log_date DESC, logid DESC);
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_status ON stg_egisz.exchange_messages (status);
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_jid ON stg_egisz.exchange_messages (jid);
--- Ошибки связи за период читаются по времени сообщения среди сообщений с элементами ошибки.
-CREATE INDEX IF NOT EXISTS idx_exchange_messages_error_log_date
-    ON stg_egisz.exchange_messages (log_date) WHERE error_details IS NOT NULL;
+-- Ошибки связи и элементы ответа за период читаются по времени сообщения.
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_network_error_log_date
+    ON stg_egisz.exchange_messages (log_date) WHERE network_error_text IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_response_error_log_date
+    ON stg_egisz.exchange_messages (log_date) WHERE remd_errors IS NOT NULL OR ihe_errors IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_patient_hash ON stg_egisz.exchange_messages (patient_hash);
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_doctor_hash ON stg_egisz.exchange_messages (doctor_hash);
 -- Scoped semd backfill: DISTINCT ON (dwh_id) по последней транзакции с semd_code.

@@ -205,7 +205,7 @@ def test_report_marts_refresh_matches_sql_layer() -> None:
     marts = re.findall(r"'([a-z_]+\.\w+)'", refresh.split("ARRAY[", 1)[1].split("]::regclass[]", 1)[0])
     assert set(marts) == set(declared)
     # Порядок обязателен: ошибки документа и периодический слой читают текущие ошибки документа.
-    assert marts[0] == "stg_egisz.document_errors_current"
+    assert marts[0] == "mart_egisz.document_errors"
     assert marts.index("serving_egisz.document_errors") < marts.index("serving_egisz.documents_weekly")
     assert "REFRESH MATERIALIZED VIEW CONCURRENTLY %s" in refresh
     assert "ANALYZE %s" in refresh

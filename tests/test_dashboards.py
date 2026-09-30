@@ -1595,12 +1595,12 @@ def test_network_error_view_is_published_per_message() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     view = sql[sql.index("CREATE VIEW serving_egisz.network_errors AS"):]
     view = view[:view.index(";")]
-    elements = sql[sql.index("CREATE VIEW stg_egisz.message_errors AS"):]
+    elements = sql[sql.index("CREATE VIEW stg_egisz.network_errors AS"):]
     elements = elements[:elements.index(";")]
     # Строка — одна ошибка связи по времени сообщения, в том числе без связи с документом.
     assert "tx.log_date AS message_at" in elements
-    assert "FROM stg_egisz.message_errors m" in view
-    assert "m.error_kind = 'Ошибка связи'" in view
+    assert "FROM mart_egisz.message_errors m" in view
+    assert "m.error_source = 'связь'" in view
     assert "JOIN mart_egisz.documents" not in view
 
 

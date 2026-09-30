@@ -193,8 +193,8 @@ flowchart LR
 | `extract_exchangelog` | `EXCHANGELOG` → `raw_egisz.exchangelog` по курсору журнала |
 | `extract_registry` | `EGISZ_MESSAGES` → `raw_egisz.egisz_messages` по курсору реестра |
 | `sync_dictionaries` | `JPERSONS` → `dim_organizations`, `EGISZ_LICENSES` → `dim_licenses`; при изменениях пересчитывает JID документов |
-| `transform` | Разбор сообщений журнала: исход асинхронного ответа, элементы ошибки, записи по документам |
-| `refresh_marts` | `REFRESH MATERIALIZED VIEW CONCURRENTLY` по шести витринам. Порядок обязателен: первой обновляется `stg_egisz.document_errors_current`, её читают витрина ошибок документа, недельный и месячный слои |
+| `transform` | Разбор сообщений журнала: исход асинхронного ответа, ошибки по источникам (`parse_message_errors`), записи по документам |
+| `refresh_marts` | `serving_egisz.refresh_report_marts()`: `REFRESH MATERIALIZED VIEW CONCURRENTLY` по витринам в порядке зависимостей. Первой обновляется `mart_egisz.document_errors`, её читают витрина ошибок документа, недельный, месячный и дневные слои |
 
 ### `egisz_maintenance_dag` — раз в сутки
 
@@ -202,7 +202,7 @@ flowchart LR
 | ------ | -------- |
 | `consistency_check` | Сверка полноты журнала за последние 7 суток; недостающие строки догружаются и разбираются |
 | `maintain_partitions` | Создание месячных партиций на предстоящий период |
-| `reclassify_errors` | Пересчёт ошибок по текущим правилам: `reclassify_error_details()` и обновление витрин. Запускается вручную параметром `reclassify_errors`, суточный прогон задачу пропускает. На время пересчёта `egisz_etl_dag` ставится на паузу |
+| `reclassify_errors` | Пересчёт ошибок по текущим правилам: `reclassify_errors()` и обновление витрин. Запускается вручную параметром `reclassify_errors`, суточный прогон задачу пропускает. На время пересчёта `egisz_etl_dag` ставится на паузу |
 
 Полных пересчётов документов в регламенте нет: атрибуты документа и группы версий поддерживаются инкрементально в конце каждого `transform`. Правила ошибок меняются правкой `db/02_functions.sql`; после применения схемы элементы ошибки приводит к новым правилам задача `reclassify_errors`.
 
@@ -245,7 +245,9 @@ flowchart LR
 | `resolve_document_jid` | JID: `org_oid` из XML → `dim_organizations.fir_oid`; резервно по host/gost-endpoint |
 | `normalize_semd_code` | Код СЭМД из payload |
 | `classify_async_status` | Исход асинхронного ответа: `success`, `error` или пусто |
-| `stg_egisz.error_items` | Элементы ошибки сообщения: ошибка связи при `LOGSTATE = 3` и элементы асинхронного ответа |
+| `stg_egisz.network_error_code` | Код ошибки связи из текста шлюза (`LOGTEXT` при `LOGSTATE = 3`) |
+| `stg_egisz.remd_error_items` | Элементы ответа РЭМД: `<item>` (`code`, `message`) и раздел ответа (`errors` / `registrationWarnings`) |
+| `stg_egisz.ihe_error_items` | Элементы ответа ИЭМК: атрибуты IHE `RegistryError` (`errorCode`, `codeContext`, `severity`, `location`) |
 | `stg_egisz.classify_error` | Тип элемента по справочнику правил: классификация или маскирование значений |
 
 Извлекаемые поля:
@@ -258,7 +260,9 @@ flowchart LR
 | ID в РЭМД | `<emdrId>` | |
 | OID организации | `<organization>` | → `dim_clinic_oid` → JID (см. ниже) |
 | Код / название СЭМД | `<kind>`, `<name>` | Название также из `dim_semd_types` (НСИ `1.2.643.5.1.13.13.11.1520`); там же `ig_oid` — OID руководства по реализации, который выгрузка ФНСИ кладёт в поле `GIT_LINK`, а ссылку на портал — в `IMPLEMENTATION_GUIDE` |
-| Элементы ошибки | `<item>` (`<code>`, `<message>`), `RegistryError` ИЭМК; при `LOGSTATE = 3` — `LOGTEXT` | → `stg_egisz.exchange_messages.error_details` (см. §«Классификация ошибок») |
+| Ошибка связи | `LOGTEXT` при `LOGSTATE = 3` | → `stg_egisz.exchange_messages.network_error_*` (см. §«Классификация ошибок») |
+| Элементы ответа РЭМД | `<item>` (`<code>`, `<message>`) в разделах `errors` и `registrationWarnings` | → `stg_egisz.exchange_messages.remd_errors` |
+| Элементы ответа ИЭМК | `RegistryError` (`errorCode`, `codeContext`, `severity`, `location`) | → `stg_egisz.exchange_messages.ihe_errors` |
 | Дата создания | `<creationDateTime>` | Пустое значение — NULL, иначе приведение к `timestamptz` |
 | Номер протокола | `<documentNumber>` / `PROTOCOLID` | → `doc_number`; ключ группировки версий (см. §«Версии и идентичность документа») |
 
@@ -484,17 +488,19 @@ stateDiagram-v2
 
 | Объект | Строка | Назначение |
 | ------ | ------ | ---------- |
-| `stg_egisz.exchange_messages.error_details` | JSON-массив элементов разобранного сообщения: `item_no`, `error_kind`, `error_code`, `error_text`, `error_type`, `nsi_dictionary_oid` | Заполняется при разборе один раз. Ошибка связи — элемент `item_no = 0` |
-| `stg_egisz.document_errors_current` | Ошибка текущего состояния документа | Элементы последнего асинхронного ответа документа и ошибки связи после него, с `error_text`. Отбор по документу и времени сообщения |
-| `stg_egisz.message_errors` | Элемент ошибки сообщения по времени сообщения | Все элементы всех разобранных сообщений, в том числе без связи с документом, с `error_text` |
-| `serving_egisz.document_errors` | Ошибка текущего состояния документа с реквизитами документа | Вид, категория, тип, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость, статус документа; без `error_text`. `is_error_corpus` — элемент входит в корпус ошибок: отказ асинхронного ответа (`status = async_error`) или ошибка связи; элементы в подтверждении регистрации в корпус не входят |
+| `stg_egisz.exchange_messages` | Ошибки сообщения по источникам: `network_error_code` / `network_error_text` / `network_error_type`; `remd_errors` — JSON-массив элементов РЭМД (`item_no`, `section`, `code`, `message`, `error_type`, `nsi_dictionary_oid`); `ihe_errors` — элементов ИЭМК (`item_no`, `error_code`, `code_context`, `severity`, `location`, `error_type`, `nsi_dictionary_oid`) | Заполняет `parse_message_errors()` при разборе пакета. Схемы источников не объединяются |
+| `stg_egisz.network_errors`, `stg_egisz.remd_errors`, `stg_egisz.ihe_errors` | Ошибка связи сообщения; элемент ответа РЭМД; элемент ответа ИЭМК | Представления источников с исходным текстом и атрибутами источника; ключ — сообщение (`logid`, `message_at`) и `item_no` |
+| `mart_egisz.message_errors` | Ошибка сообщения в общей форме | Объединение источников без исходного текста: `error_source` (`связь` / `РЭМД` / `ИЭМК`), `item_no`, вид, код, тип, `is_warning` — предупреждение (раздел `registrationWarnings` РЭМД либо `severity` Warning ИЭМК) |
+| `mart_egisz.document_errors` | Ошибка текущего состояния документа | Элементы последнего асинхронного ответа документа и ошибки связи после него в общей форме; ключ `dwh_id` + `error_no`, ключ источника — `logid`, `message_at`, `error_source`, `item_no` |
+| `serving_egisz.document_errors` | Ошибка текущего состояния документа с реквизитами документа | Ключ источника, признак предупреждения `is_warning`, вид, категория, тип, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость, статус документа; без `error_text`. `is_error_corpus` — элемент входит в корпус ошибок: отказ асинхронного ответа (`status = async_error`) или ошибка связи; элементы в подтверждении регистрации в корпус не входят |
 | `serving_egisz.document_error_types` | Документ с ошибками текущего состояния | Ключ `dwh_id`: число элементов, списки типов, категорий и видов ошибок, признаки `has_network_error`, `has_remd_error`, `is_error_corpus` |
 | `serving_egisz.network_errors` | Ошибка связи по времени сообщения | Все ошибки связи, в том числе в сообщениях без связи с документом (`dwh_id` пуст); LOGID и MSGID сообщения, подпись СЭМД; без `error_text` |
 | `serving_egisz.document_errors_weekly` / `_monthly` | Период × клиника × вид × категория | Число документов с ошибкой; документ учитывается в каждой своей категории. Знаменатели периода и клиники: `docs_total` — документы с ответом (доля отказов РЭМД), `docs_all` — все документы периода (доля ошибок связи); у всех строк группы (период, клиника) значения одинаковы, поэтому доля считается по уникальным парам «период — клиника» |
+| `serving_egisz.semd_error_categories_daily` | День × клиника × тип СЭМД × вид × категория | Число документов с ошибкой категории и знаменатель доли `docs_denominator` (документы с ответом для отказов, все документы для ошибок связи). Строка есть у каждой категории справочника, поэтому доля за любой набор дней — `SUM(docs_with_category) / SUM(docs_denominator)` по строкам категории |
 
 В `documents` ошибок нет: статус документа определяет асинхронный ответ, а ошибки остаются элементами сообщений.
 
-Исходный текст `error_text` в опубликованный слой не выносится: корпоративный стандарт хранилища (§2) не допускает там свободные тексты, в которых бывают персональные данные. Он остаётся в слое разбора, и дашборды до решения о доступе читают его из `stg_egisz.document_errors_current` (ключ `dwh_id` + `error_no` общий с `serving_egisz.document_errors`) и `stg_egisz.message_errors` (сообщение `logid` + `message_at` общее с `serving_egisz.network_errors`: ошибка связи у сообщения одна) — по исключению из правил стандарта.
+Исходный текст ошибки в опубликованный слой не выносится: корпоративный стандарт хранилища (§2) не допускает там свободные тексты, в которых бывают персональные данные. Он остаётся в слое разбора, в представлениях своего источника, и присоединяется по ключу источника: `serving_egisz.document_errors` несёт `logid`, `message_at`, `error_source`, `item_no`, `serving_egisz.network_errors` — сообщение (`logid`, `message_at`: ошибка связи у сообщения одна). Служебное представление `mart_egisz_admin.document_error_texts` собирает тексты текущих ошибок документа одной строкой. Дашборды читают исходный текст по исключению из правил стандарта до решения о доступе.
 
 ### Справочники
 
@@ -510,7 +516,7 @@ stateDiagram-v2
 
 ### Порядок сопоставления
 
-Разбор выполняют две функции. `stg_egisz.error_items` извлекает элементы сообщения: ошибку связи при `LOGSTATE = 3` и элементы асинхронного ответа. `stg_egisz.classify_error` определяет тип элемента по справочнику правил.
+Разбор выполняет `stg_egisz.parse_message_errors()`: ошибку связи при `LOGSTATE = 3`, элементы ответа РЭМД и ИЭМК — каждый своей функцией; элементы ответа ищутся только в ответе с распознанным исходом, ответ об ошибке без элементов сохраняет код и текст ответа элементом своего контура. Тип элемента определяет `stg_egisz.classify_error` по справочнику правил: одинаковые сочетания «вид — код — текст» классифицируются один раз.
 
 ```mermaid
 flowchart TD
@@ -543,7 +549,7 @@ flowchart TD
 
 ### Смена правил
 
-Правила меняются правкой `db/02_functions.sql` и применением схемы. Элементы, уже сохранённые в `stg_egisz.exchange_messages.error_details`, приводит к новым правилам задача `reclassify_errors` в `egisz_maintenance_dag`. Функция `reclassify_error_details()` пересчитывает тип каждого уникального сочетания «вид — код — текст», заводит новые типы и удаляет типы без правила, на которые больше нет ссылок; затем задача обновляет витрины. Версий классификации нет: история всегда в текущих правилах.
+Правила меняются правкой `db/02_functions.sql` и применением схемы. Ошибки, уже сохранённые в `stg_egisz.exchange_messages`, приводит к новым правилам задача `reclassify_errors` в `egisz_maintenance_dag`. Функция `reclassify_errors()` пересчитывает тип каждого уникального сочетания «вид — код — текст», заводит новые типы и удаляет типы без правила, на которые больше нет ссылок; затем задача обновляет витрины. Версий классификации нет: история всегда в текущих правилах. Смена разбора (функций источников) требует повторного разбора журнала: `stg_egisz.parse_message_errors(from_logid, to_logid)` по участкам LOGID из `raw_egisz.exchangelog` (участок в 100 тыс. LOGID — десятки секунд) и затем `serving_egisz.refresh_report_marts()`.
 
 Нарушения видны сигналами `mart_egisz_admin.health_signals`:
 
@@ -592,9 +598,11 @@ flowchart TD
 | Журнал | `raw_egisz.exchangelog` | Строка `EXCHANGELOG` как в источнике; `_loaded_at` — момент загрузки |
 | Реестр подач | `raw_egisz.egisz_messages` | Строка `EGISZ_MESSAGES` по `EGMID` как в источнике: `msgid`, `replyto`, `documentid`, `createdate` |
 | Реестр подач в разборе | `stg_egisz.message_registry` | Представление: ключ реестра `msgid` (`message_registry_key`), `document_uid` — localUid РЭМД (для ИЭМК пустой), `reply_to` |
-| Разобранные сообщения | `stg_egisz.exchange_messages` | Строка журнала + `xml_*` (разбор один раз) + исход асинхронного ответа (`status`) + элементы ошибки (`error_details`) + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки |
-| Текущие ошибки документа | `stg_egisz.document_errors_current` | Элементы последнего асинхронного ответа и ошибки связи после него, с исходным текстом; строка — одна ошибка документа |
-| Элементы ошибки сообщений | `stg_egisz.message_errors` | Элементы ошибки всех разобранных сообщений по времени сообщения, с исходным текстом |
+| Разобранные сообщения | `stg_egisz.exchange_messages` | Строка журнала + `xml_*` (разбор один раз) + исход асинхронного ответа (`status`) + ошибки по источникам (`network_error_*`, `remd_errors`, `ihe_errors`) + `egisz_subsystem` (РЭМД/ИЭМК) + `link_method` (правило привязки); `loaded_at` — момент ELT-загрузки |
+| Ошибки источников | `stg_egisz.network_errors`, `stg_egisz.remd_errors`, `stg_egisz.ihe_errors` | Ошибки связи, элементы ответов РЭМД и ИЭМК по времени сообщения, с исходным текстом и атрибутами источника |
+| Ошибки в общей форме | `mart_egisz.message_errors` | Все ошибки разобранных сообщений: источник, вид, код, тип, признак предупреждения; без исходного текста |
+| Текущие ошибки документа | `mart_egisz.document_errors` | Элементы последнего асинхронного ответа и ошибки связи после него в общей форме; строка — одна ошибка документа |
+| Тариф | `mart_egisz.dim_tariff` | Плоская абонентская плата за JID в месяц и окна активной базы и риска оттока для ориентировочных денежных показателей; строка действует с `valid_from` |
 | Документы | `mart_egisz.documents` | Один экземпляр/версия СЭМД — одна строка (`dwh_id`); логическая группа версий — `document_group_id`, см. §«Версии и идентичность документа» |
 | Атрибуты | `mart_egisz.document_attributes` | OID происхождения клиники, host, способ определения JID, маскированные ФИО и СНИЛС, `egisz_subsystem` (подсистема на уровне документа) |
 | Справочники | `mart_egisz.dim_organizations`, `dim_nsi_organization`, `dim_licenses`, `dim_semd_types` | Клиники CASH/JPERSONS, справочник НСИ 1461, лицензии, типы СЭМД |
@@ -622,12 +630,18 @@ flowchart TD
 | `serving_egisz.documents_weekly` / `documents_monthly` | Недельный и месячный слой динамики: грейн (период, клиника), счётчики исходов и состояний отправки на конец периода; `docs_network_error` — документы с ошибкой связи в текущем состоянии |
 | `serving_egisz.document_errors_weekly` / `_monthly` | Структура ошибок в том же грейне: число документов по виду и категории, знаменатели периода `docs_total` и `docs_all` |
 | `serving_egisz.document_error_types` | Ошибки на уровне документа: списки типов, категорий и видов, признаки корпуса ошибок |
-| `serving_egisz.pending_queue_daily` | История очереди обработки: грейн (день МСК, клиника, срок ожидания), число документов в очереди на конец дня |
+| `serving_egisz.pending_queue_daily` | История очереди обработки: грейн (день МСК, клиника, тип СЭМД, срок ожидания), число документов в очереди на конец дня |
+| `serving_egisz.semd_error_categories_daily` | Категории ошибок внутри типа СЭМД: грейн (день МСК, клиника, тип СЭМД, вид, категория), документы с ошибкой категории и знаменатель доли |
+| `serving_egisz.registration_speed_daily` | Скорость регистрации: грейн (день МСК, клиника, тип СЭМД, ступень лестницы), документы с первым ответом в пределах ступени |
+| `serving_egisz.clinic_revenue_daily` | Ориентировочные деньги по тарифу `dim_tariff`: грейн (день МСК, JID активной базы); MRR и ARR JID, признаки «замолчал» и «без успехов», MRR под риском. MRR дня — сумма `monthly_fee` по дню, риск по неделям — строки последнего дня недели |
+| `serving_egisz.clinic_semd_types`, `document_status_details`, `pending_segments` | Измерения для значений фильтров: пары клиника — тип СЭМД текущих документов, статусы с раскрытием состояния отправки, ступени ожидания |
 | `serving_egisz.clinic_nsi_mapping` | Сопоставление клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID, признак сопоставления и дата последней успешной регистрации ЭМД |
 | `serving_egisz.clinic_semd_activity` | Типы СЭМД в обмене клиники: детализация (`clinic_jid`, `semd_code`) по документам, наименование из `dim_semd_types`, последняя отправка `MAX(first_sent_at)`, последняя регистрация `MAX(registered_at)` |
 | `serving_egisz.semd_guides` | Виды медицинской документации и их руководства по реализации: детализация `semd_code`, признак сопоставления (`guide_match`) и число предписанных справочников. Виды формата PDF/A руководства не имеют по существу — это не то же самое, что вид, чьё руководство не заведено в реестре |
 | `serving_egisz.semd_dictionaries` | Справочники НСИ, требуемые руководством для вида документации: детализация (`semd_code`, `dict_oid`), редакция справочника (`*` — любая) и имя поля-идентификатора, которым СЭМД ссылается на запись справочника |
 | `mart_egisz_admin.document_lineage` | OID / host / endpoint по документу |
+| `mart_egisz_admin.document_quality` | Признаки проверки данных документа: нет JID, OID вне реестра, нет localUid, нет кода СЭМД, успех без даты обработки |
+| `mart_egisz_admin.document_error_texts` | Исходный текст текущих ошибок документа одной строкой; текст присоединяется из представлений источников stg |
 | `mart_egisz_admin.health_*` | Свежесть и состояние контура (в т.ч. `health_versions` — наблюдаемость слоя версий) |
 
 Материализованные витрины обновляет `serving_egisz.refresh_report_marts()` — единственное определение их состава и порядка; её вызывают DAG-и и сценарий применения схемы.

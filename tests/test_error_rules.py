@@ -93,14 +93,20 @@ def category(con, error_type: str | None) -> str | None:
         return row[0] if row else None
 
 
-def items(con, logstate: int | None, logtext: str | None, msgtext: str | None,
-          outcome: str | None, error_code: str | None = None, error_message: str | None = None):
+def network_code(con, logtext: str | None) -> str | None:
+    return one(con, "SELECT stg_egisz.network_error_code(%s)", logtext)
+
+
+def remd_items(con, msgtext: str | None):
     with con.cursor() as cur:
-        cur.execute(
-            "SELECT item_no, error_kind, error_code, error_text "
-            "FROM stg_egisz.error_items(%s, %s, %s, %s, %s, %s)",
-            (logstate, logtext, msgtext, outcome, error_code, error_message),
-        )
+        cur.execute("SELECT item_no, section, code, message FROM stg_egisz.remd_error_items(%s)", (msgtext,))
+        return cur.fetchall()
+
+
+def ihe_items(con, msgtext: str | None):
+    with con.cursor() as cur:
+        cur.execute("SELECT item_no, error_code, code_context, severity, location "
+                    "FROM stg_egisz.ihe_error_items(%s)", (msgtext,))
         return cur.fetchall()
 
 
@@ -358,59 +364,45 @@ def test_network_error_type_is_masked_gateway_text(con):
         "Error while receiving data from service: <endpoint> Error code: 500"
 
 
-# --- Элементы ошибки сообщения ------------------------------------------------------------
+# --- Ошибки сообщения по источникам ------------------------------------------------------
 
-def test_delivery_failure_is_a_network_error_item(con):
-    assert items(con, 3, "Synapse TCP/IP Socket error 11001: Host not found", None, None) == [
-        (0, NETWORK, "11001", "Synapse TCP/IP Socket error 11001: Host not found")]
-    assert items(con, 3, "Error while receiving data from service: https://x Error code: 503", None, None)[0][2] == "503"
+def test_network_error_code_comes_from_gateway_text(con):
+    assert network_code(con, "Synapse TCP/IP Socket error 11001: Host not found") == "11001"
+    assert network_code(con, "Error while receiving data from service: https://x Error code: 503") == "503"
 
 
-def test_undelivered_response_keeps_both_kinds(con):
-    """Сбой доставки ответа не отменяет отказа в этом же ответе."""
-    payload = "<registerDocumentResult><status>error</status><item><code>NO_SNILS</code><message>м</message></item></registerDocumentResult>"
-    assert items(con, 3, "Synapse TCP/IP Socket error 10060: Connection timed out", payload, "error") == [
-        (0, NETWORK, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out"),
-        (1, ASYNC, "NO_SNILS", "м"),
+def test_remd_items_keep_response_section(con):
+    """Предупреждения успешной регистрации отделены от ошибок разделом ответа."""
+    payload = ("<ns2:registerDocumentResult><ns2:status>success</ns2:status><ns2:registryItem>"
+               "<ns2:registrationWarnings><ns2:item><ns2:code>VALIDATION_ERROR</ns2:code>"
+               "<ns2:message>м1</ns2:message></ns2:item><ns2:item><ns2:code>VALIDATION_ERROR</ns2:code>"
+               "<ns2:message>м2</ns2:message></ns2:item></ns2:registrationWarnings></ns2:registryItem>"
+               "</ns2:registerDocumentResult>")
+    assert remd_items(con, payload) == [
+        (1, "registrationWarnings", "VALIDATION_ERROR", "м1"),
+        (2, "registrationWarnings", "VALIDATION_ERROR", "м2"),
     ]
 
 
-def test_success_response_items_are_kept(con):
-    payload = ("<registerDocumentResult><status>success</status><emdrId>1</emdrId>"
-               "<item><code>VALIDATION_ERROR</code><message>м</message></item></registerDocumentResult>")
-    assert items(con, 0, None, payload, "success") == [(1, ASYNC, "VALIDATION_ERROR", "м")]
-
-
-def test_request_message_has_no_response_items(con):
-    assert items(con, 0, None, "<item><code>X</code></item>", None) == []
-
-
-def test_error_items_support_namespaced_items_with_attributes(con):
+def test_remd_items_support_namespaced_items_with_attributes(con):
     payload = ('<ns2:errors><ns2:item attr="x"><ns2:code>NO_SNILS</ns2:code>'
                "<ns2:message>СНИЛС отсутствует</ns2:message></ns2:item></ns2:errors>")
-    assert items(con, 0, None, payload, "error") == [(1, ASYNC, "NO_SNILS", "СНИЛС отсутствует")]
+    assert remd_items(con, payload) == [(1, "errors", "NO_SNILS", "СНИЛС отсутствует")]
 
 
-def test_error_items_read_registry_errors_in_any_attribute_order(con):
+def test_ihe_items_keep_all_registry_error_attributes(con):
     payload = (
         "<rs:RegistryResponse><rs:RegistryErrorList>"
-        '<rs:RegistryError severity="urn:e" errorCode="XDSDictionaryValidationError"'
-        ' codeContext="Значение &quot;X&quot; не найдено" location=""/>'
+        '<rs:RegistryError severity="urn:oasis:names:tc:ebxml-regrep:ErrorSeverityType:Error"'
+        ' errorCode="XDSDictionaryValidationError" codeContext="Значение &quot;X&quot; не найдено" location="doc/1"/>'
         '<rs:RegistryError codeContext="Internal error in repository" errorCode="XDSRepositoryError"/>'
         "</rs:RegistryErrorList></rs:RegistryResponse>"
     )
-    assert items(con, 0, None, payload, "error") == [
-        (1, ASYNC, "XDSDictionaryValidationError", 'Значение "X" не найдено'),
-        (2, ASYNC, "XDSRepositoryError", "Internal error in repository"),
+    assert ihe_items(con, payload) == [
+        (1, "XDSDictionaryValidationError", 'Значение "X" не найдено',
+         "urn:oasis:names:tc:ebxml-regrep:ErrorSeverityType:Error", "doc/1"),
+        (2, "XDSRepositoryError", "Internal error in repository", None, None),
     ]
-
-
-def test_items_take_priority_over_registry_errors_and_fallback(con):
-    both = ("<x><item><code>NO_SNILS</code><message>m</message></item>"
-            '<rs:RegistryError errorCode="XDSRepositoryError" codeContext="c"/></x>')
-    assert items(con, 0, None, both, "error") == [(1, ASYNC, "NO_SNILS", "m")]
-    # Ответ об ошибке без элементов: код и текст ответа.
-    assert items(con, 0, None, "<soap:Fault/>", "error", "SERVER", "текст") == [(1, ASYNC, "SERVER", "текст")]
 
 
 # --- Исход асинхронного ответа ------------------------------------------------------------
@@ -682,31 +674,31 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
 def test_current_errors_follow_last_async_response(con):
     """Ошибки текущего состояния — элементы последнего асинхронного ответа и ошибки связи
     после него; сбой доставки до ответа к текущему состоянию не относится."""
-    if one(con, "SELECT to_regclass('stg_egisz.document_errors_current')") is None:
+    if one(con, "SELECT to_regclass('mart_egisz.document_errors')") is None:
         pytest.skip("витрина текущих ошибок не построена; проверять нечего")
     doc = str(uuid.uuid4())
-
-    def element(kind: str, code: str, text: str, item_no: int) -> dict[str, object]:
-        return {"item_no": item_no, "error_kind": kind, "error_code": code, "error_text": text,
-                "error_type": text, "nsi_dictionary_oid": None}
-
+    remd = [{"item_no": 1, "section": "errors", "code": "NO_SNILS", "message": "отказ",
+             "error_type": "отказ", "nsi_dictionary_oid": None}]
     rows = [
-        (-9_000_000_001, "3 hours", None, [element(NETWORK, "10060", "до ответа", 0)]),
-        (-9_000_000_002, "2 hours", "error", [element(ASYNC, "NO_SNILS", "отказ", 1)]),
-        (-9_000_000_003, "1 hour", None, [element(NETWORK, "11001", "после ответа", 0)]),
+        (-9_000_000_001, "3 hours", None, "до ответа", None),
+        (-9_000_000_002, "2 hours", "error", None, remd),
+        (-9_000_000_003, "1 hour", None, "после ответа", None),
     ]
     with con.cursor() as cur:
         cur.execute("SAVEPOINT current_errors")
         try:
-            for logid, age, status, details in rows:
+            for logid, age, status, network_text, remd_errors in rows:
                 cur.execute(
-                    "INSERT INTO stg_egisz.exchange_messages (logid, log_date, dwh_id, status, error_details) "
-                    "VALUES (%s, now() - %s::interval, %s, %s, %s::jsonb)",
-                    (logid, age, doc, status, json.dumps(details)))
-            cur.execute("SELECT pg_get_viewdef('stg_egisz.document_errors_current'::regclass, true)")
+                    "INSERT INTO stg_egisz.exchange_messages "
+                    "(logid, log_date, dwh_id, status, network_error_code, network_error_text, remd_errors) "
+                    "VALUES (%s, now() - %s::interval, %s, %s, %s, %s, %s::jsonb)",
+                    (logid, age, doc, status, network_text, network_text,
+                     json.dumps(remd_errors) if remd_errors else None))
+            cur.execute("SELECT pg_get_viewdef('mart_egisz.document_errors'::regclass, true)")
             view_sql = cur.fetchone()[0].rstrip().rstrip(";")
-            cur.execute("SELECT error_text FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no", (doc,))
-            assert [r[0] for r in cur.fetchall()] == ["отказ", "после ответа"]
+            cur.execute("SELECT error_source, error_code FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no",
+                        (doc,))
+            assert cur.fetchall() == [("РЭМД", "NO_SNILS"), ("связь", "после ответа")]
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT current_errors")
             cur.execute("RELEASE SAVEPOINT current_errors")

@@ -478,7 +478,7 @@ def egisz_maintenance_pipeline() -> None:
         pg_conn = _dwh_connection()
         try:
             with pg_conn.cursor() as cur:
-                cur.execute("SELECT stg_egisz.reclassify_error_details()")
+                cur.execute("SELECT stg_egisz.reclassify_errors()")
                 updated = int(cur.fetchone()[0] or 0)
             pg_conn.commit()
             run_analyze(pg_conn, "ANALYZE stg_egisz.exchange_messages")

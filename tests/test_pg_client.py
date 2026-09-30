@@ -208,9 +208,12 @@ def test_error_rules_dictionary_contract() -> None:
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_type" in rules
     assert "responsibility IN ('клиника', 'МИС', 'интегратор', 'РЭМД', 'смешанная')" in rules
     assert "is_active" not in rules
-    items = rules.split("CREATE OR REPLACE FUNCTION stg_egisz.error_items")[1].split("$$;")[0]
-    assert "RegistryError" in items
-    assert "codeContext" in items
+    remd = rules.split("CREATE OR REPLACE FUNCTION stg_egisz.remd_error_items")[1].split("$$;")[0]
+    assert "registrationWarnings" in remd
+    ihe = rules.split("CREATE OR REPLACE FUNCTION stg_egisz.ihe_error_items")[1].split("$$;")[0]
+    assert "RegistryError" in ihe
+    for attribute in ("errorCode", "codeContext", "severity", "location"):
+        assert f"'{attribute}'" in ihe
     # faultcode: локальная часть в UPPERCASE, последним в COALESCE error_code
     assert "faultcode" in rules
     assert "COALESCE(v_error_code_xml, v_code_xml, v_faultcode)" in rules
@@ -224,55 +227,68 @@ def test_document_error_exposes_responsibility() -> None:
     assert "t.is_retryable" in view
 
 
-def test_transform_extracts_and_classifies_elements_once_per_batch() -> None:
+def test_errors_are_parsed_per_source_and_classified_once_per_batch() -> None:
+    """Каждый источник разбирается своей функцией в свои столбцы stg; одинаковые элементы
+    классифицируются один раз; приём разбирает ошибки пакета той же функцией, что и
+    повторный разбор журнала."""
+    schema = (DWH_INIT_SQL_PATH.parent / "01_schema.sql").read_text(encoding="utf-8")
+    for column in ("network_error_code text", "network_error_text text", "network_error_type text",
+                   "remd_errors jsonb", "ihe_errors jsonb"):
+        assert column in schema
     transform = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
-    assert "CROSS JOIN LATERAL stg_egisz.error_items(" in transform
-    assert "item_keys AS MATERIALIZED" in transform
-    assert "CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c" in transform
-    assert "error_classify" not in transform
-    assert "build_errors_json" not in transform
+    parse = transform.split("CREATE OR REPLACE FUNCTION stg_egisz.parse_message_errors")[1].split("$$;")[0]
+    assert "stg_egisz.remd_error_items(r.msgtext)" in parse
+    assert "stg_egisz.ihe_error_items(r.msgtext)" in parse
+    assert "stg_egisz.network_error_code(r.logtext)" in parse
+    assert "SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.message_error_items" in parse
+    assert "CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c" in parse
+    assert "PERFORM stg_egisz.parse_message_errors(from_logid, to_logid);" in transform
 
 
-def test_document_error_is_materialized_over_current_state() -> None:
+def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    current = sql.split("CREATE MATERIALIZED VIEW stg_egisz.document_errors_current AS")[1].split(
-        "COMMENT ON MATERIALIZED VIEW stg_egisz.document_errors_current")[0]
+    common = sql.split("CREATE VIEW mart_egisz.message_errors AS")[1].split("COMMENT ON VIEW mart_egisz.message_errors")[0]
+    for source in ("FROM stg_egisz.network_errors n", "FROM stg_egisz.remd_errors r", "FROM stg_egisz.ihe_errors h"):
+        assert source in common
+    assert "r.section IS NOT DISTINCT FROM 'registrationWarnings'" in common
+    assert "h.severity ~* 'Warning$'" in common
+    current = sql.split("CREATE MATERIALIZED VIEW mart_egisz.document_errors AS")[1].split(
+        "COMMENT ON MATERIALIZED VIEW mart_egisz.document_errors")[0]
     assert "t.status IN ('success', 'error')" in current
-    assert "tx.log_date >= COALESCE(lr.responded_at, '-infinity'::timestamptz)" in current
-    assert "jsonb_to_recordset(tx.error_details)" in current
+    assert "m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)" in current
+    assert "FROM mart_egisz.message_errors m" in current
     view = sql.split("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS")[1].split(
         "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")[0]
-    assert "FROM stg_egisz.document_errors_current c" in view
+    assert "FROM mart_egisz.document_errors c" in view
     assert "LEFT JOIN mart_egisz.dim_error_type t" in view
-    # Справочник — атрибут ошибки, а не часть наименования типа.
-    assert "' · '" not in view
-    assert "(НСИ:" not in view
+    assert "c.is_warning" in view
     # Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
     assert "ON serving_egisz.document_errors (dwh_id, error_no)" in sql
-    assert "rpt_error_breakdown" not in sql
 
 
 def test_source_error_text_stays_in_parsing_layer() -> None:
-    """Исходный текст ошибки в опубликованный слой не выносится: дашборды до решения о
-    доступе читают его из слоя разбора по исключению из правил стандарта."""
+    """Исходный текст ошибки хранится только в слое разбора: общая форма и опубликованные
+    ошибки его не несут, служебное представление присоединяет его по ключу источника."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     def body(start: str, end: str) -> str:
         return sql.split(start)[1].split(end)[0]
 
-    current = body("CREATE MATERIALIZED VIEW stg_egisz.document_errors_current AS",
-                   "COMMENT ON MATERIALIZED VIEW stg_egisz.document_errors_current")
-    message = body("CREATE VIEW stg_egisz.message_errors AS", "COMMENT ON VIEW stg_egisz.message_errors")
+    network = body("CREATE VIEW stg_egisz.network_errors AS", "COMMENT ON VIEW stg_egisz.network_errors")
+    remd = body("CREATE VIEW stg_egisz.remd_errors AS", "COMMENT ON VIEW stg_egisz.remd_errors")
+    ihe = body("CREATE VIEW stg_egisz.ihe_errors AS", "COMMENT ON VIEW stg_egisz.ihe_errors")
+    common = body("CREATE VIEW mart_egisz.message_errors AS", "COMMENT ON VIEW mart_egisz.message_errors")
     document = body("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS",
                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")
-    network = body("CREATE VIEW serving_egisz.network_errors AS",
-                   "COMMENT ON VIEW serving_egisz.network_errors")
+    texts = body("CREATE VIEW mart_egisz_admin.document_error_texts AS",
+                 "COMMENT ON VIEW mart_egisz_admin.document_error_texts")
 
-    assert 'e.error_text COLLATE "und-x-icu" AS error_text' in current
-    assert 'e.error_text COLLATE "und-x-icu" AS error_text' in message
+    assert 'tx.network_error_text COLLATE "und-x-icu" AS error_text' in network
+    assert 'e.message COLLATE "und-x-icu" AS message' in remd
+    assert 'e.code_context COLLATE "und-x-icu" AS code_context' in ihe
+    assert "error_text" not in common
     assert "error_text" not in document
-    assert "error_text" not in network
-    assert "FROM stg_egisz.message_errors m" in network
+    assert "COALESCE(n.error_text, r.message, h.code_context)" in texts
 
 
 def test_document_versions_carry_no_error_columns() -> None:
@@ -603,7 +619,8 @@ def test_dwh_init_sql_interprets_patient_address_schematron_and_network_errors()
     assert "'Неизвестная ошибка'" not in sql
     assert "'(без текста)'" not in sql
     assert "Наименование СЭМД отсутствует в справочнике СЭМД" in sql
-    assert "CREATE OR REPLACE FUNCTION stg_egisz.error_items" in sql
+    assert "CREATE OR REPLACE FUNCTION stg_egisz.remd_error_items" in sql
+    assert "CREATE OR REPLACE FUNCTION stg_egisz.ihe_error_items" in sql
     assert "CREATE OR REPLACE FUNCTION stg_egisz.classify_error" in sql
     assert "CREATE MATERIALIZED VIEW serving_egisz.document_errors" in sql
     assert "CREATE VIEW serving_egisz.network_errors" in sql

@@ -41,10 +41,11 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 
 | Объект | Тип | Содержание |
 |---|---|---|
-| `exchange_messages` | Секционированная таблица | Разобранные строки журнала: реквизиты XML, исход асинхронного ответа, элементы ошибок, подсистема ЕГИСЗ и правило привязки к документу; месячные разделы `exchange_messages_yYYYYmMM` |
+| `exchange_messages` | Секционированная таблица | Разобранные строки журнала: реквизиты XML, исход асинхронного ответа, ошибки по источникам (связь, РЭМД, ИЭМК), подсистема ЕГИСЗ и правило привязки к документу; месячные разделы `exchange_messages_yYYYYmMM` |
 | `message_registry` | Представление | Нормализованный реестр подач: ключ сообщения, адрес клиники и localUid РЭМД; для ИЭМК `document_uid` не заполняется |
-| `message_errors` | Представление | Элементы ошибок всех разобранных сообщений, включая сообщения без связи с документом; содержит исходный текст ошибки |
-| `document_errors_current` | Материализованное представление | Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки связи после него; одна строка — одна ошибка документа, с исходным текстом |
+| `network_errors` | Представление | Ошибки связи сообщений, включая сообщения без связи с документом; исходный текст шлюза |
+| `remd_errors` | Представление | Элементы ответов РЭМД: раздел ответа (`errors` / `registrationWarnings`), код, исходный текст |
+| `ihe_errors` | Представление | Элементы ответов ИЭМК: `errorCode`, `codeContext` (исходный текст), `severity`, `location` |
 
 ## mart_egisz — документы и справочники
 
@@ -101,6 +102,6 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Схема | Назначение | Функции |
 |---|---|---|
 | `etl_meta` | Управление временными разделами | `egisz_ensure_time_partitions` |
-| `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `error_items`, `classify_error`, `reclassify_error_details` |
+| `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `classify_error`, `parse_message_errors`, `reclassify_errors` |
 | `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal` |
 | `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |
