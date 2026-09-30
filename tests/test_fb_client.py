@@ -78,7 +78,7 @@ def test_fetch_exchangelog_after_cursor_includes_createdate_for_message_analytic
         [(101, None, None, "msg-1", 1, "log", "<xml/>", "/emdr/callback")],
     )
 
-    rows = fetch_exchangelog_after_cursor(con, after_logid=100, limit=500, since=None)
+    rows = fetch_exchangelog_after_cursor(con, after_logid=100, limit=500)
 
     assert rows == [
         {
@@ -99,47 +99,23 @@ def test_fetch_exchangelog_after_cursor_reads_uri_for_subsystem() -> None:
     """URI вызова задаёт подсистему ЕГИСЗ без разбора payload."""
     con = FakeConnection([])
 
-    fetch_exchangelog_after_cursor(con, after_logid=0, limit=10, since=None)
+    fetch_exchangelog_after_cursor(con, after_logid=0, limit=10)
 
     assert "URI" in con.cursor_instance.executed_sql
 
 
-def test_fetch_exchangelog_after_cursor_filters_date_above_cursor_before_page_limit() -> None:
+def test_fetch_exchangelog_after_cursor_does_not_filter_by_date() -> None:
+    """CREATEDATE на источнике не проиндексирована: страница отбирается только по курсору."""
     con = FakeConnection([])
-    since = datetime(2026, 8, 31, 12)
 
-    fetch_exchangelog_after_cursor(con, after_logid=100, limit=500, since=since)
+    fetch_exchangelog_after_cursor(con, after_logid=100, limit=500)
 
     sql = " ".join(con.cursor_instance.executed_sql.split())
-    assert "WHERE LOGID > ? AND CREATEDATE >= ? ORDER BY LOGID ROWS ?" in sql
+    assert "WHERE LOGID > ? ORDER BY LOGID ROWS ?" in sql
+    assert "CREATEDATE >=" not in sql
     assert "MIN(" not in sql
-    assert con.cursor_instance.params == (100, since, 500)
+    assert con.cursor_instance.params == (100, 500)
     assert con.cursor_instance.closed
-
-
-def test_fetch_exchangelog_after_cursor_applies_window_with_nonmonotonic_dates() -> None:
-    """Старая строка внутри диапазона не попадает в страницу и не скрывает свежие строки."""
-    import sqlite3
-
-    con = FakeConnection([])
-    since = datetime(2026, 8, 31, 12)
-    fetch_exchangelog_after_cursor(con, after_logid=100, limit=2, since=since)
-    # SQLite исполняет условия и сортировку того же запроса; отличается только синтаксис лимита.
-    with sqlite3.connect(":memory:") as db:
-        db.execute("CREATE TABLE EXCHANGELOG (LOGID INTEGER PRIMARY KEY, LOGDATE TEXT, "
-                   "CREATEDATE TEXT, MSGID TEXT, LOGSTATE INTEGER, LOGTEXT TEXT, MSGTEXT TEXT, URI TEXT)")
-        db.executemany("INSERT INTO EXCHANGELOG (LOGID, CREATEDATE) VALUES (?, ?)", [
-            (90, "2026-09-29 12:00:00"),
-            (101, "2026-08-01 12:00:00"),
-            (110, "2026-08-31 12:00:00"),
-            (120, "2026-08-30 12:00:00"),
-            (150, "2026-09-29 12:00:00"),
-            (160, None),
-            (170, "2026-09-30 12:00:00"),
-        ])
-        sql = con.cursor_instance.executed_sql.replace("ROWS ?", "LIMIT ?")
-        rows = db.execute(sql, (100, since.isoformat(sep=" "), 2)).fetchall()
-    assert [row[0] for row in rows] == [110, 150]
 
 
 def test_fetch_message_registry_uses_keyset_pagination_by_egmid() -> None:
