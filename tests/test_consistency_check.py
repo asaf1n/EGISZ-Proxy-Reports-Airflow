@@ -25,24 +25,21 @@ def _cursors(extract_logid: int) -> dict[str, int]:
     }
 
 
-def test_check_skips_when_counts_match_without_reading_logid_sets() -> None:
-    """Совпали счётчики — множества не выгружаются, задача завершается пропуском."""
+def test_check_skips_when_every_source_row_is_in_raw() -> None:
     pg_conn = MagicMock()
     fb_conn = MagicMock()
 
     with (
         patch("egisz_maintenance_dag.get_cursors", return_value=_cursors(1000)),
-        patch("egisz_maintenance_dag.source_window_low", return_value=100) as low,
-        patch("egisz_maintenance_dag.count_source_logids", return_value=901),
-        patch("egisz_maintenance_dag.count_raw_logids", return_value=901),
-        patch("egisz_maintenance_dag.fetch_source_logids_range") as source,
+        patch("egisz_maintenance_dag.raw_window_low", return_value=100) as low,
+        patch("egisz_maintenance_dag.fetch_source_logids_range", return_value={100, 101}),
+        patch("egisz_maintenance_dag.fetch_raw_logids_range", return_value={100, 101}),
         patch("egisz_maintenance_dag.load_raw_logs") as load_raw,
         pytest.raises(AirflowSkipException),
     ):
         check_journal_window(pg_conn, fb_conn, lookback_days=7, now=NOW)
 
     assert low.call_args.kwargs["since"] == datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
-    source.assert_not_called()
     load_raw.assert_not_called()
 
 
@@ -53,9 +50,7 @@ def test_check_loads_and_transforms_only_missing_rows() -> None:
 
     with (
         patch("egisz_maintenance_dag.get_cursors", return_value=_cursors(10)),
-        patch("egisz_maintenance_dag.source_window_low", return_value=1),
-        patch("egisz_maintenance_dag.count_source_logids", return_value=3),
-        patch("egisz_maintenance_dag.count_raw_logids", return_value=2),
+        patch("egisz_maintenance_dag.raw_window_low", return_value=1),
         patch("egisz_maintenance_dag.fetch_source_logids_range", return_value={5, 6, 7}),
         patch("egisz_maintenance_dag.fetch_raw_logids_range", return_value={5, 6}),
         patch(
@@ -85,7 +80,7 @@ def test_check_loads_and_transforms_only_missing_rows() -> None:
 def test_check_skips_when_the_extract_cursor_has_not_moved() -> None:
     with (
         patch("egisz_maintenance_dag.get_cursors", return_value=_cursors(0)),
-        patch("egisz_maintenance_dag.source_window_low") as low,
+        patch("egisz_maintenance_dag.raw_window_low") as low,
         pytest.raises(AirflowSkipException),
     ):
         check_journal_window(MagicMock(), MagicMock(), lookback_days=7, now=NOW)
@@ -97,22 +92,20 @@ def test_check_skips_when_window_lies_above_the_extract_cursor() -> None:
     """Окно целиком выше отметки — сравнивать нечего, недостачи это не означает."""
     with (
         patch("egisz_maintenance_dag.get_cursors", return_value=_cursors(100)),
-        patch("egisz_maintenance_dag.source_window_low", return_value=500),
-        patch("egisz_maintenance_dag.count_source_logids") as count,
+        patch("egisz_maintenance_dag.raw_window_low", return_value=500),
+        patch("egisz_maintenance_dag.fetch_source_logids_range") as source,
         pytest.raises(AirflowSkipException),
     ):
         check_journal_window(MagicMock(), MagicMock(), lookback_days=7, now=NOW)
 
-    count.assert_not_called()
+    source.assert_not_called()
 
 
-def test_check_skips_when_the_difference_is_deleted_source_rows() -> None:
-    """Счётчики разошлись, а недостающих нет — строки удалены на стороне шлюза."""
+def test_check_skips_when_raw_has_rows_the_source_no_longer_has() -> None:
+    """В raw есть лишнее, а недостающих нет — строки удалены на стороне шлюза."""
     with (
         patch("egisz_maintenance_dag.get_cursors", return_value=_cursors(10)),
-        patch("egisz_maintenance_dag.source_window_low", return_value=1),
-        patch("egisz_maintenance_dag.count_source_logids", return_value=2),
-        patch("egisz_maintenance_dag.count_raw_logids", return_value=3),
+        patch("egisz_maintenance_dag.raw_window_low", return_value=1),
         patch("egisz_maintenance_dag.fetch_source_logids_range", return_value={5, 6}),
         patch("egisz_maintenance_dag.fetch_raw_logids_range", return_value={5, 6, 7}),
         patch("egisz_maintenance_dag.load_raw_logs") as load_raw,

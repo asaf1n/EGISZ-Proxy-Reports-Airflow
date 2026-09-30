@@ -11,7 +11,6 @@ extract_dag = load_dag_module("egisz_etl_dag")
 
 extract_exchangelog_batch = extract_dag.extract_exchangelog_batch
 extract_message_registry_batch = extract_dag.extract_message_registry_batch
-fetch_depth_floor = extract_dag.fetch_depth_floor
 normalize_registry_key = extract_dag.normalize_registry_key
 transform_exchangelog_batch = extract_dag.transform_exchangelog_batch
 run_analyze = extract_dag.run_analyze
@@ -352,101 +351,31 @@ def test_extract_message_registry_advances_its_own_cursor(
     update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_egmid=7)
 
 
-def test_depth_floor_skips_source_prefix_outside_window(fb_conn: MagicMock) -> None:
-    """Глубина отдаёт отметку ПЕРЕД первой строкой окна: keyset читает её включительно."""
-    cursor = fb_conn.cursor.return_value
-    # Проба: строка за отметкой вне окна → считаем границу.
-    cursor.fetchone.side_effect = [(datetime.now() - timedelta(days=400),), (10_500_000,)]
-
-    floor = fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=5)
-
-    assert floor == 10_499_999
-    probe_stmt, floor_stmt = [call.args[0] for call in cursor.execute.call_args_list]
-    assert probe_stmt == extract_dag.DEPTH_FLOOR_SQL["message_registry"]["probe"]
-    assert floor_stmt == extract_dag.DEPTH_FLOOR_SQL["message_registry"]["floor"]
-
-
-def test_depth_floor_skips_range_scan_when_cursor_is_inside_window(fb_conn: MagicMock) -> None:
-    """Отметка уже в окне — тяжёлый MIN(...) по диапазону дат не выполняется.
-
-    На прод-объёме этот скан стоит около трёх минут; в установившемся режиме он был бы
-    чистыми накладными расходами на каждом запуске пятиминутного DAG.
-    """
-    cursor = fb_conn.cursor.return_value
-    cursor.fetchone.return_value = (datetime.now() - timedelta(hours=1),)
-
-    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=42) == 0
-
-    statements = [call.args[0] for call in cursor.execute.call_args_list]
-    assert statements == [extract_dag.DEPTH_FLOOR_SQL["message_registry"]["probe"]]
-
-
-def test_depth_floor_is_disabled_by_zero_and_does_not_query_source(fb_conn: MagicMock) -> None:
-    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=0, after_id=0) == 0
-    fb_conn.cursor.assert_not_called()
-
-
-def test_depth_floor_keeps_cursor_when_source_tail_is_exhausted(fb_conn: MagicMock) -> None:
-    """За отметкой строк нет — отметку не трогаем, иначе приём укатился бы назад."""
-    fb_conn.cursor.return_value.fetchone.return_value = (None,)
-
-    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=7) == 0
-
-
-def test_depth_floor_keeps_cursor_when_window_is_empty(fb_conn: MagicMock) -> None:
-    """В окне нет строк (источник молчит месяц) — отметка остаётся на месте."""
-    cursor = fb_conn.cursor.return_value
-    cursor.fetchone.side_effect = [(datetime.now() - timedelta(days=400),), (None,)]
-
-    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=7) == 0
-
-
-def test_extract_message_registry_lifts_cursor_to_depth_floor(
+def test_extract_message_registry_applies_window_to_fetched_rows(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Отметка ниже окна поднимается к его границе."""
-    rows = [(10_500_100, "MSG-1", "http://gost-1.lan:9945", "UID-1", None)]
+    """Реестр читается только по курсору; окно отбирает загружаемые строки, курсор проходит все."""
+    now = datetime.now()
+    old = (10, "MSG-OLD", "http://gost-1.lan:9945", "UID-OLD", now - timedelta(days=90))
+    fresh = (11, "MSG-NEW", "http://gost-1.lan:9945", "UID-NEW", now - timedelta(days=1))
+    undated = (12, "MSG-ND", "http://gost-1.lan:9945", "UID-ND", None)
 
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(egmid=5)),
-        patch("egisz_etl_dag.fetch_depth_floor", return_value=10_499_999),
-        patch("egisz_etl_dag.fetch_message_registry_after_cursor", side_effect=[rows, []]) as fetch,
-        patch("egisz_etl_dag.load_message_registry", return_value=1),
-        patch("egisz_etl_dag.update_cursors"),
+        patch("egisz_etl_dag.fetch_message_registry_after_cursor", side_effect=[[old, fresh, undated], []]) as fetch,
+        patch("egisz_etl_dag.load_message_registry", return_value=2) as load,
+        patch("egisz_etl_dag.update_cursors") as update,
         patch("egisz_etl_dag.run_analyze"),
     ):
-        extract_message_registry_batch(
-            pg_conn,
-            fb_conn,
-            registry_rows=5000,
-            registry_rounds=3,
-            depth_days=30,
+        loaded = extract_message_registry_batch(
+            pg_conn, fb_conn, registry_rows=3, registry_rounds=3, depth_days=30
         )
 
-    fetch.assert_called_once_with(fb_conn, after_egmid=10_499_999, limit=5000)
-
-
-def test_extract_message_registry_keeps_cursor_ahead_of_depth_floor(
-    pg_conn: MagicMock,
-    fb_conn: MagicMock,
-) -> None:
-    """Отметка выше границы окна не откатывается: курсоры только растут."""
-    with (
-        patch("egisz_etl_dag.get_cursors", return_value=_cursors(egmid=10_600_000)),
-        patch("egisz_etl_dag.fetch_depth_floor", return_value=10_499_999),
-        patch("egisz_etl_dag.fetch_message_registry_after_cursor", return_value=[]) as fetch,
-        patch("egisz_etl_dag.run_analyze"),
-    ):
-        extract_message_registry_batch(
-            pg_conn,
-            fb_conn,
-            registry_rows=5000,
-            registry_rounds=3,
-            depth_days=30,
-        )
-
-    fetch.assert_called_once_with(fb_conn, after_egmid=10_600_000, limit=5000)
+    assert loaded == 2
+    fetch.assert_called_with(fb_conn, after_egmid=12, limit=3)
+    load.assert_called_once_with(pg_conn, [fresh, undated])
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_egmid=12)
 
 
 def test_run_analyze_commits_before_switching_autocommit(pg_conn: MagicMock) -> None:

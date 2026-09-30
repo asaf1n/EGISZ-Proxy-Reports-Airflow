@@ -146,9 +146,10 @@ def test_maintenance_dag_checks_journal_without_moving_cursors() -> None:
     assert "def maintain_partitions" in src
     assert "def reconcile_journal_tail" not in src
 
-    # Сначала счётчики, множества — только по расхождению; совпадение даёт пропуск.
-    assert "count_source_logids(" in src
-    assert "count_raw_logids(" in src
+    # Источник читается только выгрузкой строк по ключу: ни COUNT(*), ни поиска по дате.
+    assert "raw_window_low(" in src
+    assert "COUNT(*) FROM EXCHANGELOG" not in src
+    assert "COALESCE(LOGDATE, CREATEDATE) >=" not in src
     assert "AirflowSkipException" in src
     assert "from airflow.exceptions import AirflowSkipException" in src
     assert "source_logids_range" in src
@@ -168,6 +169,15 @@ def test_maintenance_dag_checks_journal_without_moving_cursors() -> None:
     # возвращала текст отказа на документы, прошедшие со второй попытки.
     assert "repair_document_error_text" not in src
     assert "retries=2" in src
+
+
+def test_dags_query_firebird_only_by_key_to_export_rows() -> None:
+    """Запросы к Firebird — выгрузка строк по ключу; агрегатов и отбора по дате нет."""
+    for name in ("egisz_etl_dag.py", "egisz_maintenance_dag.py"):
+        src = _read(name)
+        assert "MIN(EGMID)" not in src and "MIN(LOGID)" not in src, name
+        assert "CREATEDATE >= ?" not in src, name
+        assert "fetch_depth_floor" not in src, name
 
 
 def test_dag_files_are_self_contained_units() -> None:

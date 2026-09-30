@@ -214,6 +214,18 @@ def is_iemk_reply_to(reply_to: Any) -> bool:
     return end == len(text) or not text[end].isdigit()
 
 
+def registry_in_window(
+    rows: list[tuple[Any, ...]], *, since: datetime | None
+) -> list[tuple[Any, ...]]:
+    """Оставляет строки реестра подач (EGMID, MSGID, REPLYTO, DOCUMENTID, CREATEDATE) не старше ``since``.
+
+    Отбор выполняется над прочитанной страницей по тем же причинам, что и для журнала.
+    """
+    if since is None:
+        return rows
+    return [row for row in rows if row[4] is None or row[4] >= since]
+
+
 def rows_in_window(rows: list[dict[str, Any]], *, since: datetime | None) -> list[dict[str, Any]]:
     """Оставляет строки журнала, созданные не раньше ``since``; строка без даты сохраняется.
 
@@ -493,54 +505,6 @@ def _dwh_connection():
 
 def _proxy_connection():
     return connect_fb(Connection.get(PROXY_CONN_ID))
-
-
-# Нижняя граница окна приёма реестра подач. Отбор по дате живёт здесь, а
-# постраничная keyset-пагинация идёт по идентификатору.
-#
-# `probe` — дата строки сразу за отметкой (чтение по индексу первичного ключа), `floor` —
-# граница окна (скан по диапазону дат). Тяжёлый запрос выполняется только когда проба
-# показала, что отметка ещё не дошла до окна: на прод-объёме он стоит около трёх минут,
-# и в установившемся режиме платить за него каждый запуск незачем.
-DEPTH_FLOOR_SQL: dict[str, dict[str, str]] = {
-    "message_registry": {
-        "probe": "SELECT CREATEDATE FROM EGISZ_MESSAGES WHERE EGMID > ? ORDER BY EGMID ROWS 1",
-        "floor": "SELECT MIN(EGMID) FROM EGISZ_MESSAGES WHERE CREATEDATE >= ?",
-    },
-}
-
-
-def _fetch_scalar(con: Any, statement: str, param: Any) -> Any:
-    cur = con.cursor()
-    try:
-        cur.execute(statement, (param,))
-        row = cur.fetchone()
-    finally:
-        cur.close()
-    return row[0] if row else None
-
-
-def fetch_depth_floor(con: Any, *, source: str, depth_days: int, after_id: int) -> int:
-    """Наименьший идентификатор источника, попадающий в окно глубины.
-
-    Возвращает отметку, ДО которой строки не нужны: курсор поднимается до неё и дальше
-    работает обычная keyset-пагинация. ``0`` означает «поднимать не надо» — отметка уже
-    в окне, в источнике не осталось строк или ограничение снято (``depth_days <= 0``).
-
-    Время источника наивное и трактуется как МСК (весь стек в Europe/Moscow), поэтому
-    граница считается наивным ``datetime.now()`` — сравнение идёт в одной шкале.
-    """
-    if depth_days <= 0:
-        return 0
-
-    boundary = datetime.now() - timedelta(days=depth_days)
-    next_row_date = _fetch_scalar(con, DEPTH_FLOOR_SQL[source]["probe"], int(after_id or 0))
-    if next_row_date is None or next_row_date >= boundary:
-        return 0
-
-    floor_id = _fetch_scalar(con, DEPTH_FLOOR_SQL[source]["floor"], boundary)
-    # Пустое окно (в источнике нет свежих строк) не должно обнулять отметку.
-    return int(floor_id) - 1 if floor_id is not None else 0
 
 
 def fetch_exchangelog_after_cursor(
@@ -833,17 +797,7 @@ def extract_message_registry_batch(
     cursor_egmid = int(get_cursors(pg_conn, PIPELINE)["extract_egmid_cursor"])
     total_loaded = 0
 
-    depth_floor = fetch_depth_floor(
-        fb_conn, source="message_registry", depth_days=depth_days, after_id=cursor_egmid
-    )
-    if depth_floor > cursor_egmid:
-        log.info(
-            "Depth window %s day(s): starting EGISZ_MESSAGES fetch at EGMID=%s instead of %s.",
-            depth_days,
-            depth_floor,
-            cursor_egmid,
-        )
-        cursor_egmid = depth_floor
+    since = datetime.now() - timedelta(days=depth_days) if depth_days > 0 else None
 
     for round_index in range(registry_rounds):
         started_at = time.monotonic()
@@ -862,7 +816,7 @@ def extract_message_registry_batch(
         if not rows:
             break
 
-        total_loaded += load_message_registry(pg_conn, rows)
+        total_loaded += load_message_registry(pg_conn, registry_in_window(rows, since=since))
         cursor_egmid = max(int(row[0]) for row in rows)
         update_cursors(pg_conn, PIPELINE, extract_egmid=cursor_egmid)
 
