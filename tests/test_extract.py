@@ -87,35 +87,15 @@ def test_extract_holds_cursor_before_gap(
     assert result == {"count": 4, "extract_logid_cursor": 102}
 
 
-def test_extract_holds_cursor_when_first_row_is_after_gap(
+def test_extract_starts_segment_at_first_row_above_cursor(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
+    """Прокси хранит журнал неделю: разрыв между отметкой и пулом выгрузку не держит."""
+    page = [_raw_row(33_959_871), _raw_row(33_959_872)]
     with (
-        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[_raw_row(105)]),
-        patch("egisz_etl_dag.load_raw_logs"),
-        patch("egisz_etl_dag.update_cursors") as update,
-        patch("egisz_etl_dag._analyze_exchangelog_raw"),
-    ):
-        result = extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30
-        )
-
-    update.assert_not_called()
-    assert result == {"count": 1, "extract_logid_cursor": 100}
-
-
-def test_extract_gap_holds_cursor_regardless_of_window(
-    pg_conn: MagicMock,
-    fb_conn: MagicMock,
-) -> None:
-    """Окно отбирает строки для загрузки, но не влияет на непрерывность LOGID."""
-    old = datetime.now() - timedelta(days=90)
-    page = [_raw_row(101, old), _raw_row(105, old)]
-    with (
-        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=page),
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=32_040_952)),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=[page, []]),
         patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
         patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze,
@@ -124,18 +104,41 @@ def test_extract_gap_holds_cursor_regardless_of_window(
             pg_conn, fb_conn, raw_rows=2, raw_rounds=3, depth_days=30
         )
 
+    load.assert_called_once_with(pg_conn, page)
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=33_959_872)
+    assert result == {"count": 2, "extract_logid_cursor": 33_959_872}
+
+
+def test_extract_gap_holds_cursor_regardless_of_window(
+    pg_conn: MagicMock,
+    fb_conn: MagicMock,
+) -> None:
+    """Окно отбирает строки для загрузки, но не влияет на непрерывность LOGID."""
+    old = datetime.now() - timedelta(days=90)
+    page = [_raw_row(101, old), _raw_row(102, old), _raw_row(105, old)]
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=page),
+        patch("egisz_etl_dag.load_raw_logs") as load,
+        patch("egisz_etl_dag.update_cursors") as update,
+        patch("egisz_etl_dag._analyze_exchangelog_raw"),
+    ):
+        result = extract_exchangelog_batch(
+            pg_conn, fb_conn, raw_rows=3, raw_rounds=3, depth_days=30
+        )
+
     load.assert_not_called()
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=101)
-    assert result == {"count": 0, "extract_logid_cursor": 101}
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=102)
+    assert result == {"count": 0, "extract_logid_cursor": 102}
 
 
 def test_contiguous_prefix_end_stops_at_first_gap() -> None:
     assert extract_dag.contiguous_prefix_end([101, 102, 105, 106], after=100) == 102
-    assert extract_dag.contiguous_prefix_end([105], after=100) == 100
+    assert extract_dag.contiguous_prefix_end([105, 106, 108], after=100) == 106
     assert extract_dag.contiguous_prefix_end([], after=100) == 100
 
 
-def test_contiguous_prefix_end_takes_first_row_as_start_from_zero() -> None:
+def test_contiguous_prefix_end_takes_first_row_as_start() -> None:
     assert extract_dag.contiguous_prefix_end([7, 8, 10], after=0) == 8
 
 
