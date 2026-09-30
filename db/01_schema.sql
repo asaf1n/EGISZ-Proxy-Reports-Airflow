@@ -7,19 +7,19 @@
 -- ============================================================================
 -- 00_bootstrap.sql — заголовок, пояс роли, гранты.
 -- Подключается из db/dwh_init.sql через \i db/01_schema.sql.
--- Идемпотентно; выполняется под ролью egisz (владелец dwh_egisz).
+-- Идемпотентно; выполняется под ролью egisz (владелец dwh_bi).
 -- ============================================================================
 
 \encoding UTF8
--- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_egisz;
+-- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_bi;
 -- повторный прогон безопасен. Все части dwh_init выполняются под ролью egisz.
 --
 -- Предусловия на уровне администратора БД:
 --   CREATE ROLE egisz LOGIN PASSWORD '...';
---   CREATE DATABASE dwh_egisz OWNER egisz;
+--   CREATE DATABASE dwh_bi OWNER egisz;
 --
 -- Usage:
---   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+--   psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 -- Пояс отчётности задаётся здесь и только здесь. Наивное Firebird-время
 -- (EXCHANGELOG.CREATEDATE, лицензии) пишется как timestamptz; без фиксированного пояса
@@ -32,7 +32,7 @@
 -- report-timezone. Смена пояса выполняется в этих двух точках, правки SQL не требует.
 ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 
-GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
+GRANT CONNECT ON DATABASE dwh_bi TO egisz;
 
 -- Схемы слоёв (docs/dwh-schema-naming-migration.md): raw_egisz — копия источника,
 -- stg_egisz — разбор, mart_egisz — документы и справочники, serving_egisz — выдача
@@ -1724,8 +1724,10 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON mart_egisz.dim_licenses (jid)
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON mart_egisz.dim_licenses (mo_uid);
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_xml_dwh_id ON stg_egisz.exchange_messages (xml_dwh_id);
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_xml_parsed_at ON stg_egisz.exchange_messages (xml_parsed_at);
--- Сигнал здоровья читает последние размеченные ответы по LOGID.
-CREATE INDEX IF NOT EXISTS idx_exchange_messages_link_method_logid
-    ON stg_egisz.exchange_messages (link_method, logid DESC)
-    WHERE link_method IS NOT NULL;
+-- Сигнал здоровья читает последние размеченные ответы по LOGID: упорядоченный по LOGID
+-- индекс даёт остановку после 500 строк, составной с link_method впереди сортировал бы все.
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_logid_linked
+    ON stg_egisz.exchange_messages (logid DESC)
+    WHERE link_method IS NOT NULL AND relates_to_msgid IS NOT NULL;
+DROP INDEX IF EXISTS stg_egisz.idx_exchange_messages_link_method_logid;
 

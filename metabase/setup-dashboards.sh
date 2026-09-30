@@ -36,7 +36,7 @@ REPORT_TIMEZONE="${REPORT_TIMEZONE:-Europe/Moscow}"
 
 APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
-APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
+APP_DB_NAME="${APP_DB_NAME:-dwh_bi}"
 APP_DB_USER="${APP_DB_USER:-postgres}"
 APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
@@ -477,7 +477,7 @@ collection_table_refs() {
 }
 
 # Метаданные собираются постранично, по одной таблице, а не одним запросом
-# /api/database/:id/metadata: тот отдаёт поля ВСЕХ таблиц базы (в dwh_egisz их 114,
+# /api/database/:id/metadata: тот отдаёт поля ВСЕХ таблиц базы (в dwh_bi их 114,
 # ответ измеряется мегабайтами) и на узком канале не доходит целиком — обрыв в середине,
 # а следом падение jq на обрезанном JSON. Постраничные ответы небольшие и проходят.
 #

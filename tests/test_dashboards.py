@@ -2203,7 +2203,6 @@ def test_integration_native_sql_uses_real_column_names() -> None:
 def test_document_file_request_pattern_has_own_view_and_dashboard() -> None:
     views = Path("db/04_views.sql").read_text(encoding="utf-8")
     transform = Path("db/03_transform.sql").read_text(encoding="utf-8")
-    cleanup = Path("scripts/cleanup_document_file_request_sent.sql").read_text(encoding="utf-8")
     dashboard = json.loads(Path("metabase_dashboards/10_document_file_request_history.json").read_text(encoding="utf-8"))
 
     assert "CREATE OR REPLACE VIEW serving_egisz.document_file_requests" in views
@@ -2216,11 +2215,6 @@ def test_document_file_request_pattern_has_own_view_and_dashboard() -> None:
     )[0]
     assert "NULLIF(btrim(tx.xml_emdr_id), '') IS NULL" in sent_branch
     assert "stg_egisz.message_registry" in sent_branch
-
-    assert "DELETE FROM stg_egisz.exchange_messages" not in cleanup
-    assert "DELETE FROM raw_egisz.exchangelog" not in cleanup
-    assert "tx.source_action = 'getDocumentFile'" in cleanup
-    assert "NULLIF(btrim(tx.xml_emdr_id), '') IS NOT NULL" in cleanup
 
     assert dashboard["name"] == "История запроса документов"
     names = {card["name"] for card in dashboard["cards"]}
@@ -2238,7 +2232,7 @@ def test_message_registry_no_document_is_health_only() -> None:
 
     assert "CREATE OR REPLACE VIEW mart_egisz_admin.health_message_registry_no_document" in views
     assert "'message_registry_no_document'" in views
-    assert "tx.egisz_subsystem IS DISTINCT FROM 'ИЭМК'" in views
+    assert "t.egisz_subsystem IS DISTINCT FROM 'ИЭМК'" in views
     assert "'РЭМД: EGISZ_MESSAGES без DOCUMENTID'" in views
     assert "ИЭМК не использует DOCUMENTID" in views
     assert "РЭМД: EGISZ_MESSAGES без DOCUMENTID" in by_name

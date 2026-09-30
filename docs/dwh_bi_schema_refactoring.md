@@ -1,6 +1,6 @@
-# Слои и сущности базы dwh_egisz
+# Слои и сущности базы dwh_bi
 
-База `dwh_egisz` хранит журнал обмена с ЕГИСЗ, разобранные сообщения, документы и справочники, отчётные витрины и служебное состояние конвейера.
+База `dwh_bi` хранит журнал обмена с ЕГИСЗ, разобранные сообщения, документы и справочники, отчётные витрины и служебное состояние конвейера.
 
 ## Слои
 
@@ -75,8 +75,10 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | `document_versions` | Представление | Все экземпляры и версии документов |
 | `documents_sent` | Представление | Документы в статусе `sent`, сроки ожидания и состояния отправки |
 | `documents_weekly`, `documents_monthly` | Материализованные представления | Недельные и месячные показатели по клиникам: исходы документов и состояния отправки на конец периода |
-| `document_errors` | Материализованное представление | Ошибки текущего состояния документов с классификацией и справочными реквизитами |
-| `document_errors_weekly`, `document_errors_monthly` | Материализованные представления | Недельное и месячное число документов с ошибками по клиникам, видам и категориям ошибок |
+| `document_errors` | Материализованное представление | Ошибки текущего состояния документов с классификацией и справочными реквизитами; `is_error_corpus` отмечает элементы корпуса ошибок |
+| `document_error_types` | Материализованное представление | Ошибки на уровне документа: списки типов, категорий и видов, признаки корпуса ошибок |
+| `pending_queue_daily` | Материализованное представление | История очереди обработки по дням, клиникам и срокам ожидания |
+| `document_errors_weekly`, `document_errors_monthly` | Материализованные представления | Недельное и месячное число документов с ошибками по клиникам, видам и категориям ошибок и знаменатели периода (`docs_total`, `docs_all`) |
 | `network_errors` | Представление | Ошибки связи по времени сообщения, включая сообщения без связи с документом |
 | `document_file_requests` | Представление | Запросы `getDocumentFile` с заполненным `emdrId` — обращения за файлами уже зарегистрированных ЭМД |
 | `clinic_nsi_mapping` | Представление | Сопоставление клиник шлюза с организациями НСИ 1461 |
@@ -102,4 +104,4 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | `etl_meta` | Управление временными разделами | `egisz_ensure_time_partitions` |
 | `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `error_items`, `classify_error`, `reclassify_error_details` |
 | `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal` |
-| `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_code_at`, `refresh_report_marts` |
+| `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |

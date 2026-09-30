@@ -4,10 +4,10 @@
 --
 -- Mandatory one-time bootstrap (run against maintenance DB `postgres`):
 --   CREATE ROLE egisz LOGIN PASSWORD 'egisz';
---   CREATE DATABASE dwh_egisz OWNER egisz;
+--   CREATE DATABASE dwh_bi OWNER egisz;
 --
 -- Usage (run from the repository/bundle root — parts are included by relative \i):
---   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+--   psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 -- ============================================================================
 
 \set ON_ERROR_STOP on
@@ -21,8 +21,8 @@ SET search_path = pg_catalog;
 
 DO $$
 BEGIN
-    IF current_database() <> 'dwh_egisz' THEN
-        RAISE EXCEPTION 'dwh_init.sql must run against dwh_egisz, current DB: %', current_database();
+    IF current_database() <> 'dwh_bi' THEN
+        RAISE EXCEPTION 'dwh_init.sql must run against dwh_bi, current DB: %', current_database();
     END IF;
 END
 $$;
@@ -48,4 +48,4 @@ $$;
 \i db/03_transform.sql
 \i db/04_views.sql
 
-\echo 'DWH init complete: dwh_egisz schema is up to date'
+\echo 'DWH init complete: dwh_bi schema is up to date'

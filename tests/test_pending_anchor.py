@@ -3,7 +3,7 @@
 Статическая часть проверяет, что определение живёт в одном месте — функциях DWH
 `is_pending_at` / `pending_segment_code_at`, — а отчётный слой и карточки очереди только
 подставляют момент, и что набор документов очереди у всех карточек блока один. Живая часть
-требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_egisz)
+требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi)
 и проверяет свойства, которые статикой не ловятся: неизменность закрытых периодов между
 обновлениями витрин, совпадение размера очереди у всех карточек её распределения,
 сходимость баланса движения очереди и равенство текущей очереди числу отправленных
@@ -102,7 +102,12 @@ def test_membership_and_segment_have_one_definition() -> None:
     # Одна сигнатура: вторая версия сосуществовала бы с первой как перегрузка.
     assert FUNCTIONS_SQL.count("FUNCTION serving_egisz.is_pending_at(") == 1
 
-    segment = function_body("pending_segment_code_at")
+    segment = function_body("pending_segment_at")
+    # Табличная функция подставляется в запрос; скалярная обёртка не повторяет предикат.
+    assert "RETURNS SETOF mart_egisz.dim_pending_segments" in segment
+    scalar = function_body("pending_segment_code_at")
+    assert "serving_egisz.pending_segment_at(p_first_sent_at, p_anchor)" in scalar
+    assert "max_age_minutes" not in scalar
     # Пороги остаются данными справочника: ужесточение делается UPDATE'ом.
     assert "FROM mart_egisz.dim_pending_segments s" in segment
     assert "s.max_age_minutes IS NULL" in segment
@@ -111,8 +116,8 @@ def test_membership_and_segment_have_one_definition() -> None:
     assert not re.search(r"\b\d{3,}\b", segment), "порог ступени захардкожен в функции"
 
     # Представления только подставляют момент.
-    assert "serving_egisz.pending_segment_code_at(d.first_sent_at, now())" in VIEWS_SQL
-    assert "serving_egisz.pending_segment_code_at(r.first_sent_at, anchor.ts)" in VIEWS_SQL
+    assert "serving_egisz.pending_segment_at(d.first_sent_at, now())" in VIEWS_SQL
+    assert "serving_egisz.pending_segment_code_at(d.first_sent_at, anchor.ts)" in VIEWS_SQL
     assert "<= s.max_age_minutes" not in VIEWS_SQL
 
 

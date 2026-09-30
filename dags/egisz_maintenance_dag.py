@@ -27,7 +27,7 @@ from psycopg2.extras import execute_values
 log = logging.getLogger(__name__)
 
 PIPELINE = "egisz"
-DWH_CONN_ID = "dwh_egisz_pg"
+DWH_CONN_ID = "dwh_bi_pg"
 PROXY_CONN_ID = "proxy_egisz_fb"
 DWH_POOL = "dwh_postgres"
 

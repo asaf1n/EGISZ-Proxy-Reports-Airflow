@@ -1,4 +1,4 @@
 {
-  "dwh_egisz_pg": "postgres://egisz:egisz@host.docker.internal:5432/dwh_egisz?sslmode=disable",
+  "dwh_bi_pg": "postgres://egisz:egisz@host.docker.internal:5432/dwh_bi?sslmode=disable",
   "proxy_egisz_fb": "firebird://SYSDBA:masterkey@host.docker.internal:3050/proxy_egisz?charset=WIN1251"
 }
