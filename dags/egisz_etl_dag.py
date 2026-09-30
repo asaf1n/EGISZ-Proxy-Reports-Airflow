@@ -214,24 +214,6 @@ def is_iemk_reply_to(reply_to: Any) -> bool:
     return end == len(text) or not text[end].isdigit()
 
 
-def contiguous_prefix_end(logids: list[int], *, after: int) -> int:
-    """Последний LOGID непрерывного участка страницы источника, начинающегося за ``after``.
-
-    Отметка выгрузки не переступает разрыв LOGID. Пока идентификаторы идут подряд,
-    отметка равна последнему из них; на первом пропуске она останавливается.
-
-    ``after <= 0`` задаёт первую строку источника как начало участка.
-    """
-    if not logids:
-        return after
-    end = logids[0] - 1 if after <= 0 else after
-    for logid in logids:
-        if logid != end + 1:
-            break
-        end = logid
-    return end
-
-
 def bounded_transform_to_logid(
     con: psycopg2.extensions.connection,
     *,
@@ -479,7 +461,7 @@ def _proxy_connection():
     return connect_fb(Connection.get(PROXY_CONN_ID))
 
 
-# Нижняя граница окна приёма по каждому источнику. Отбор по дате живёт здесь, а
+# Нижняя граница окна приёма реестра подач. Отбор по дате живёт здесь, а
 # постраничная keyset-пагинация идёт по идентификатору.
 #
 # `probe` — дата строки сразу за отметкой (чтение по индексу первичного ключа), `floor` —
@@ -487,10 +469,6 @@ def _proxy_connection():
 # показала, что отметка ещё не дошла до окна: на прод-объёме он стоит около трёх минут,
 # и в установившемся режиме платить за него каждый запуск незачем.
 DEPTH_FLOOR_SQL: dict[str, dict[str, str]] = {
-    "exchangelog": {
-        "probe": "SELECT CREATEDATE FROM EXCHANGELOG WHERE LOGID > ? ORDER BY LOGID ROWS 1",
-        "floor": "SELECT MIN(LOGID) FROM EXCHANGELOG WHERE CREATEDATE >= ?",
-    },
     "message_registry": {
         "probe": "SELECT CREATEDATE FROM EGISZ_MESSAGES WHERE EGMID > ? ORDER BY EGMID ROWS 1",
         "floor": "SELECT MIN(EGMID) FROM EGISZ_MESSAGES WHERE CREATEDATE >= ?",
@@ -536,6 +514,7 @@ def fetch_exchangelog_after_cursor(
     *,
     after_logid: int,
     limit: int,
+    since: datetime | None,
 ) -> list[dict[str, Any]]:
     """Fetch EXCHANGELOG rows via keyset pagination by LOGID.
 
@@ -547,7 +526,12 @@ def fetch_exchangelog_after_cursor(
 
     cur = con.cursor()
     try:
-        query = """
+        date_filter = "AND CREATEDATE >= ?" if since is not None else ""
+        params: tuple[Any, ...] = (int(after_logid or 0),)
+        if since is not None:
+            params += (since,)
+        params += (int(limit),)
+        query = f"""
             SELECT
                 LOGID,
                 LOGDATE,
@@ -559,10 +543,11 @@ def fetch_exchangelog_after_cursor(
                 URI
             FROM EXCHANGELOG
             WHERE LOGID > ?
+                {date_filter}
             ORDER BY LOGID
             ROWS ?
             """
-        cur.execute(query, (int(after_logid or 0), int(limit)))
+        cur.execute(query, params)
         return [serialize_exchangelog_row(*row) for row in cur.fetchall()]
     finally:
         cur.close()
@@ -748,26 +733,13 @@ def extract_exchangelog_batch(
 ) -> ExtractResult:
     """EXCHANGELOG → exchangelog_raw.
 
-    Отметка выгрузки считает по журналу шлюза: докуда прокси вычитана в raw. Двигается по
-    концу непрерывного участка страницы — разрыв означает строку, которую источник ещё не
-    закоммитил, и её подберёт следующий запуск. Повтор безопасен: загрузка идемпотентна
-    (UPSERT по ``(logid, createdate)``), а строка журнала в источнике не меняется.
+    Правила окна приёма и продвижения курсора: README.md, раздел «ELT-конвейер».
     """
     started_cursor = int(get_cursors(pg_conn, PIPELINE)["extract_logid_cursor"])
     cursor_logid = started_cursor
     total_loaded = 0
 
-    depth_floor = fetch_depth_floor(
-        fb_conn, source="exchangelog", depth_days=depth_days, after_id=cursor_logid
-    )
-    if depth_floor > cursor_logid:
-        log.info(
-            "Depth window %s day(s): starting EXCHANGELOG fetch at LOGID=%s instead of %s.",
-            depth_days,
-            depth_floor,
-            cursor_logid,
-        )
-        cursor_logid = depth_floor
+    since = datetime.now() - timedelta(days=depth_days) if depth_days > 0 else None
 
     for round_index in range(raw_rounds):
         started_at = time.monotonic()
@@ -775,6 +747,7 @@ def extract_exchangelog_batch(
             fb_conn,
             after_logid=cursor_logid,
             limit=raw_rows,
+            since=since,
         )
         log.info(
             "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs (round %s).",
@@ -790,19 +763,7 @@ def extract_exchangelog_batch(
         load_raw_logs(pg_conn, log_rows)
         total_loaded += len(log_rows)
 
-        logids = [int(row["logid"]) for row in log_rows]
-        advanced = contiguous_prefix_end(logids, after=cursor_logid)
-        if advanced < logids[-1]:
-            log.warning(
-                "EXCHANGELOG gap above LOGID=%s: %s row(s) loaded, extract cursor holds until "
-                "the missing row arrives.",
-                advanced,
-                len(log_rows),
-            )
-            cursor_logid = advanced
-            break
-
-        cursor_logid = advanced
+        cursor_logid = int(log_rows[-1]["logid"])
         if len(log_rows) < raw_rows:
             break
 
@@ -884,7 +845,7 @@ def transform_exchangelog_batch(
     """exchangelog_raw → documents/transactions; двигает отметку разбора.
 
     Отметка разбора считает по exchangelog_raw: докуда raw разобрана. Верхняя
-    граница — отметка выгрузки: только до неё журнал заведомо вычитан без пропусков.
+    граница — отметка последней успешно загруженной строки журнала.
 
     Обе отметки читаются из etl_state, а не приходят от выгрузки: сорванная выгрузка
     (недоступный Firebird) не должна мешать разобрать то, что уже лежит в raw.

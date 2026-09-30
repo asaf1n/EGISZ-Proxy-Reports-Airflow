@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -58,30 +58,83 @@ def test_extract_cursor_counts_the_proxy_not_raw(
             pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=0
         )
 
-    fetch.assert_called_once_with(fb_conn, after_logid=100, limit=2000)
+    fetch.assert_called_once_with(fb_conn, after_logid=100, limit=2000, since=None)
     load_raw.assert_called_once_with(pg_conn, rows)
     analyze_raw.assert_called_once_with(pg_conn)
     update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=101)
     assert result == {"count": 1, "extract_logid_cursor": 101}
 
 
-def test_extract_lifts_cursor_to_depth_floor(
+def test_extract_advances_over_gaps_across_pages(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Отметка ниже окна поднимается к его границе: приём не ползёт по архиву."""
+    """Пропуски перед первой строкой и внутри страниц не удерживают курсор."""
+    now = datetime(2026, 9, 30, 12)
+    pages = [
+        [_raw_row(32_041_000), _raw_row(32_041_010)],
+        [_raw_row(32_041_020), _raw_row(32_042_000)],
+        [],
+    ]
     with (
-        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100, transform=100)),
-        patch("egisz_etl_dag.fetch_depth_floor", return_value=32_000_000),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[]) as fetch,
+        patch("egisz_etl_dag.datetime") as clock,
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=32_040_952)),
+        patch("egisz_etl_dag.fetch_depth_floor") as floor,
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=pages) as fetch,
+        patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
+        patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze,
     ):
-        extract_exchangelog_batch(
-            pg_conn, fb_conn, raw_rows=2000, raw_rounds=3, depth_days=30
+        clock.now.return_value = now
+        result = extract_exchangelog_batch(
+            pg_conn, fb_conn, raw_rows=2, raw_rounds=3, depth_days=30
         )
 
-    fetch.assert_called_once_with(fb_conn, after_logid=32_000_000, limit=2000)
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=32_000_000)
+    assert fetch.call_args_list == [
+        call(fb_conn, after_logid=cursor, limit=2, since=now - timedelta(days=30))
+        for cursor in (32_040_952, 32_041_010, 32_042_000)
+    ]
+    assert load.call_args_list == [call(pg_conn, rows) for rows in pages[:2]]
+    floor.assert_not_called()
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=32_042_000)
+    analyze.assert_called_once_with(pg_conn)
+    assert result == {"count": 4, "extract_logid_cursor": 32_042_000}
+
+
+def test_extract_empty_window_retries_same_cursor_on_next_run(
+    pg_conn: MagicMock, fb_conn: MagicMock,
+) -> None:
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=[[], [_raw_row(200)]]) as fetch,
+        patch("egisz_etl_dag.load_raw_logs") as load,
+        patch("egisz_etl_dag.update_cursors") as update,
+        patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze,
+    ):
+        first = extract_exchangelog_batch(pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30)
+        update.assert_not_called()
+        load.assert_not_called()
+        analyze.assert_not_called()
+        second = extract_exchangelog_batch(pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30)
+
+    assert first == {"count": 0, "extract_logid_cursor": 100}
+    assert second == {"count": 1, "extract_logid_cursor": 200}
+    assert [c.kwargs["after_logid"] for c in fetch.call_args_list] == [100, 100]
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=200)
+
+
+def test_extract_load_failure_does_not_advance_cursor(
+    pg_conn: MagicMock, fb_conn: MagicMock,
+) -> None:
+    with (
+        patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[_raw_row(200)]),
+        patch("egisz_etl_dag.load_raw_logs", side_effect=RuntimeError("load failed")),
+        patch("egisz_etl_dag.update_cursors") as update,
+        pytest.raises(RuntimeError, match="load failed"),
+    ):
+        extract_exchangelog_batch(pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30)
+    update.assert_not_called()
 
 
 def _cursors(*, extract: int = 0, transform: int = 0, egmid: int = 0) -> dict[str, int]:
@@ -122,9 +175,7 @@ def test_transform_exchangelog_runs_multiple_iterations(pg_conn: MagicMock) -> N
 
 
 def test_transform_is_bounded_by_the_extract_cursor(pg_conn: MagicMock) -> None:
-    """Разбор не заходит выше отметки выгрузки: только до неё прокси вычитана без
-    пропусков. Обе отметки берутся из etl_state, поэтому сорванная выгрузка разбор
-    не снимает."""
+    """Разбор ограничен отметкой последней успешно загруженной строки журнала."""
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=102, transform=102)),
         patch("egisz_etl_dag.transform_raw_to_facts") as transform,
@@ -238,14 +289,14 @@ def test_depth_floor_skips_range_scan_when_cursor_is_inside_window(fb_conn: Magi
     cursor = fb_conn.cursor.return_value
     cursor.fetchone.return_value = (datetime.now() - timedelta(hours=1),)
 
-    assert fetch_depth_floor(fb_conn, source="exchangelog", depth_days=30, after_id=42) == 0
+    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=42) == 0
 
     statements = [call.args[0] for call in cursor.execute.call_args_list]
-    assert statements == [extract_dag.DEPTH_FLOOR_SQL["exchangelog"]["probe"]]
+    assert statements == [extract_dag.DEPTH_FLOOR_SQL["message_registry"]["probe"]]
 
 
 def test_depth_floor_is_disabled_by_zero_and_does_not_query_source(fb_conn: MagicMock) -> None:
-    assert fetch_depth_floor(fb_conn, source="exchangelog", depth_days=0, after_id=0) == 0
+    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=0, after_id=0) == 0
     fb_conn.cursor.assert_not_called()
 
 
@@ -253,7 +304,7 @@ def test_depth_floor_keeps_cursor_when_source_tail_is_exhausted(fb_conn: MagicMo
     """За отметкой строк нет — отметку не трогаем, иначе приём укатился бы назад."""
     fb_conn.cursor.return_value.fetchone.return_value = (None,)
 
-    assert fetch_depth_floor(fb_conn, source="exchangelog", depth_days=30, after_id=7) == 0
+    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=7) == 0
 
 
 def test_depth_floor_keeps_cursor_when_window_is_empty(fb_conn: MagicMock) -> None:
@@ -261,7 +312,7 @@ def test_depth_floor_keeps_cursor_when_window_is_empty(fb_conn: MagicMock) -> No
     cursor = fb_conn.cursor.return_value
     cursor.fetchone.side_effect = [(datetime.now() - timedelta(days=400),), (None,)]
 
-    assert fetch_depth_floor(fb_conn, source="exchangelog", depth_days=30, after_id=7) == 0
+    assert fetch_depth_floor(fb_conn, source="message_registry", depth_days=30, after_id=7) == 0
 
 
 def test_extract_message_registry_lifts_cursor_to_depth_floor(
