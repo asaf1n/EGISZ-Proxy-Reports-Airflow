@@ -74,8 +74,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 
 | Сейчас | Цель | Примечание |
 |---|---|---|
-| `rpt_documents` | `documents_current` | текущие версии документов |
-| `rpt_document_versions` | `document_versions` | все версии |
+| `rpt_documents`, `rpt_document_versions` | `document_versions` | все версии; текущие — `is_current_version` |
 | `rpt_documents_sent` | `documents_sent` | |
 | `rpt_documents_weekly` | `documents_weekly` | материализованное |
 | `rpt_documents_monthly` | `documents_monthly` | материализованное |

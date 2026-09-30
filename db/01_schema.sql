@@ -1681,7 +1681,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON mart_egisz.documents (
 CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON mart_egisz.documents (document_created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON mart_egisz.documents (registered_at);
 CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON mart_egisz.documents (result_logid);
--- Слой версий: serving_egisz.documents_current отбирает по is_current_version; transform пересобирает
+-- Слой версий: потребители serving_egisz.document_versions отбирают по is_current_version; transform пересобирает
 -- группу по document_group_id для затронутых батчем экземпляров.
 CREATE INDEX IF NOT EXISTS idx_documents_doc_number ON mart_egisz.documents (doc_number);
 CREATE INDEX IF NOT EXISTS idx_documents_group_id ON mart_egisz.documents (document_group_id);

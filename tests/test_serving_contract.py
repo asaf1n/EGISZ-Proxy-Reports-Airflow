@@ -122,14 +122,14 @@ def test_health_signals_do_not_rebuild_the_registry_detail_or_sort_the_journal()
     assert "(logid DESC)" in SCHEMA_SQL.split("idx_exchange_messages_logid_linked", 1)[1].split(";", 1)[0]
 
 
-def test_documents_sent_reuses_the_segment_of_documents_current() -> None:
+def test_documents_sent_reuses_the_segment_of_document_versions() -> None:
     body = view_body("CREATE OR REPLACE VIEW serving_egisz.documents_sent AS",
                      "COMMENT ON VIEW serving_egisz.documents_sent IS")
     assert "pending_segment_code_at" not in body
     assert "pending_segment_at" not in body
     assert "r.pending_segment," in body
     assert "r.sent_state," in body
-    assert "WHERE r.sent_state IS NOT NULL" in body
+    assert "WHERE r.is_current_version\n  AND r.sent_state IS NOT NULL" in body
 
     versions = view_body("CREATE OR REPLACE VIEW serving_egisz.document_versions AS",
                          "COMMENT ON VIEW serving_egisz.document_versions IS")

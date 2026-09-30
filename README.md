@@ -77,12 +77,12 @@ sequenceDiagram
 
 | Срез | Содержание | Витрина / представление |
 | ---- | ---------- | ----------------------- |
-| Отправка и состояния | Объёмы, состояния, динамика по клиникам и типам СЭМД | `serving_egisz.documents_current` |
-| Обратная связь | Отправленные без ответа, корреляция подачи и ответа | `serving_egisz.documents_sent`, `serving_egisz.documents_current` |
-| Ошибки | Вид, категория и тип ошибки, вклад клиник в изменение доли ошибок против опорного периода фазы, ошибки связи за скользящие сутки | `serving_egisz.document_errors`, `serving_egisz.network_errors`, `serving_egisz.documents_current`, `mart_egisz.dim_control_chart_phases` |
-| Полнота | Атрибуты документа, `emdrId`, расхождения JID | `serving_egisz.documents_current`, `mart_egisz.document_attributes` |
-| Версии | Текущая версия, полный аудит попыток, контроль группировки | `serving_egisz.documents_current`, `serving_egisz.document_versions`, `mart_egisz_admin.health_versions` |
-| Недельная динамика | SLI по неделям, контрольная карта XmR с фазами, отказы РЭМД и ошибки связи раздельно, время до ответа РЭМД, новые подключения, структура ошибок по категориям | `serving_egisz.documents_weekly`, `serving_egisz.document_errors_weekly`, `serving_egisz.documents_current`, `mart_egisz.dim_control_chart_phases` |
+| Отправка и состояния | Объёмы, состояния, динамика по клиникам и типам СЭМД | `serving_egisz.document_versions` |
+| Обратная связь | Отправленные без ответа, корреляция подачи и ответа | `serving_egisz.documents_sent`, `serving_egisz.document_versions` |
+| Ошибки | Вид, категория и тип ошибки, вклад клиник в изменение доли ошибок против опорного периода фазы, ошибки связи за скользящие сутки | `serving_egisz.document_errors`, `serving_egisz.network_errors`, `serving_egisz.document_versions`, `mart_egisz.dim_control_chart_phases` |
+| Полнота | Атрибуты документа, `emdrId`, расхождения JID | `serving_egisz.document_versions`, `mart_egisz.document_attributes` |
+| Версии | Текущая версия, полный аудит попыток, контроль группировки | `serving_egisz.document_versions`, `mart_egisz_admin.health_versions` |
+| Недельная динамика | SLI по неделям, контрольная карта XmR с фазами, отказы РЭМД и ошибки связи раздельно, время до ответа РЭМД, новые подключения, структура ошибок по категориям | `serving_egisz.documents_weekly`, `serving_egisz.document_errors_weekly`, `serving_egisz.document_versions`, `mart_egisz.dim_control_chart_phases` |
 | Загрузка данных | Позиции выгрузки и разбора, необработанный raw, контрольные показатели | `mart_egisz_admin.health_*`, `etl_meta.egisz_etl_state` |
 
 ---
@@ -396,7 +396,7 @@ stateDiagram-v2
 
 | Потребитель | Момент |
 | ----------- | ------ |
-| `serving_egisz.documents_current`, `serving_egisz.documents_sent` | `now()` — очередь на момент чтения |
+| `serving_egisz.document_versions`, `serving_egisz.documents_sent` | `now()` — очередь на момент чтения |
 | `serving_egisz.documents_weekly` / `serving_egisz.documents_monthly` | конец своей недели или месяца, для открытого периода — `now()`; строки закрытого периода не меняются между обновлениями витрин |
 | `serving_egisz.pending_queue_daily` | конец каждого отчётного дня МСК (для текущего дня — `now()`); только ступени лестницы, документы за терминальным порогом не учитываются; строки закрытых дней меняются лишь при позднем поступлении ответов |
 | Карточки очереди на дашбордах | `now()`; фильтр периода к состоянию на момент неприменим и в наименованиях карточек оговорён как «(без фильтра периода)» |
@@ -457,7 +457,7 @@ stateDiagram-v2
 
 В реальной группе: `semd_version_number` — порядок по `first_sent_at`; `is_current_version = true` ровно у одного экземпляра (`success`, иначе последнее IPS-событие); связь версий — `supersedes_dwh_id` / `superseded_by_dwh_id`.
 
-Витрины: `serving_egisz.documents_current` — только `is_current_version`; полный аудит — `serving_egisz.document_versions`; контроль группировки — `mart_egisz_admin.health_versions` (размер групп, коллизии `localUid` по `stg_egisz.exchange_messages`).
+Витрина `serving_egisz.document_versions` содержит все экземпляры, текущая версия отбирается по `is_current_version`; контроль группировки — `mart_egisz_admin.health_versions` (размер групп, коллизии `localUid` по `stg_egisz.exchange_messages`).
 
 ---
 
@@ -614,11 +614,10 @@ flowchart TD
 
 | Представление | Содержание |
 | ------------- | ---------- |
-| `serving_egisz.documents_current` | `mart_egisz.documents` + `mart_egisz.document_attributes` + справочники; **текущие версии** (`is_current_version`) |
-| `serving_egisz.document_versions` | то же, но все экземпляры/версии (полный аудит, включая superseded) |
+| `serving_egisz.document_versions` | `mart_egisz.documents` + `mart_egisz.document_attributes` + справочники; все экземпляры/версии, включая superseded; грейн логического документа — `is_current_version` |
 | `serving_egisz.documents_sent` | `status = sent`: срок ожидания и состояние отправки (`pending` / `no_response`) |
 | `serving_egisz.network_errors` | Ошибки связи по времени сообщения, в том числе в сообщениях без связи с документом |
-| `serving_egisz.document_errors` | Ошибки текущего состояния документа: `error_type`, вид, категория, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость; реквизиты документа из `documents_current` |
+| `serving_egisz.document_errors` | Ошибки текущего состояния документа: `error_type`, вид, категория, код, наименование по НСИ 305, справочник НСИ, зона ответственности, повторяемость; реквизиты текущей версии документа из `document_versions` |
 | `serving_egisz.document_file_requests` | Запросы `getDocumentFile` с заполненным `emdrId` — обращения за файлом уже зарегистрированного ЭМД; не подача и не источник состояния `sent` |
 | `serving_egisz.documents_weekly` / `documents_monthly` | Недельный и месячный слой динамики: грейн (период, клиника), счётчики исходов и состояний отправки на конец периода; `docs_network_error` — документы с ошибкой связи в текущем состоянии |
 | `serving_egisz.document_errors_weekly` / `_monthly` | Структура ошибок в том же грейне: число документов по виду и категории, знаменатели периода `docs_total` и `docs_all` |

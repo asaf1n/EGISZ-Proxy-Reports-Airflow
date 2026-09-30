@@ -16,7 +16,7 @@ DROP VIEW IF EXISTS mart_egisz_admin.health_sync CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_versions CASCADE;
 DROP VIEW IF EXISTS serving_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.message_errors CASCADE;
--- Недельный и месячный слои читают documents_current и текущие ошибки документа —
+-- Недельный и месячный слои читают document_versions и текущие ошибки документа —
 -- удаляются до них.
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_weekly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_errors_weekly CASCADE;
@@ -26,7 +26,6 @@ DROP MATERIALIZED VIEW IF EXISTS serving_egisz.pending_queue_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_error_types CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_errors CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS stg_egisz.document_errors_current CASCADE;
-DROP VIEW IF EXISTS serving_egisz.documents_current CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_versions CASCADE;
 DROP VIEW IF EXISTS serving_egisz.documents_sent CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_file_requests CASCADE;
@@ -244,7 +243,7 @@ BEGIN
 END;
 $$;
 
--- ---------------------------------------------------------------- section: documents_current
+-- ---------------------------------------------------------------- section: document_versions
 -- ============================================================================
 -- serving_egisz — представления и агрегаты для потребителей
 -- Loaded by db/dwh_init.sql via \i db/04_views.sql.
@@ -370,18 +369,9 @@ LEFT JOIN LATERAL (
 WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
 
 COMMENT ON VIEW serving_egisz.document_versions IS
-'Все экземпляры/версии отправки СЭМД: одна строка на dwh_id (полный аудит, включая superseded).';
+'Документная витрина: одна строка на экземпляр (версию) отправки СЭМД, включая superseded. Грейн логического документа — отбор is_current_version.';
 
--- Основная витрина — ТЕКУЩИЕ версии (один логический документ = одна строка). Все попытки
--- (включая superseded) — document_versions.
-CREATE OR REPLACE VIEW serving_egisz.documents_current AS
-SELECT * FROM serving_egisz.document_versions
-WHERE is_current_version;
-
-COMMENT ON VIEW serving_egisz.documents_current IS
-'Документная витрина (текущие версии, is_current_version): одна строка на логический документ. Полный аудит версий — document_versions.';
-
--- Ступень и состояние отправки берутся из documents_current: обе колонки считаются от
+-- Ступень и состояние отправки берутся из document_versions: обе колонки считаются от
 -- now() одного оператора, поэтому возраст ниже и ступень не расходятся. Повторный подбор
 -- ступени здесь удваивал стоимость запроса.
 CREATE OR REPLACE VIEW serving_egisz.documents_sent AS
@@ -407,8 +397,9 @@ SELECT
     r.clinic_host,
     r.attempt_count,
     r.is_resubmitted
-FROM serving_egisz.documents_current r
-WHERE r.sent_state IS NOT NULL;
+FROM serving_egisz.document_versions r
+WHERE r.is_current_version
+  AND r.sent_state IS NOT NULL;
 
 COMMENT ON VIEW serving_egisz.documents_sent IS
 'Отправленные документы без ответа ЕГИСЗ: ступень возраста обработки (dim_pending_segments), возраст и состояние отправки («В обработке» / «Без ответа») на текущий момент. Срез на прошлый момент строится теми же функциями от своего якоря (is_pending_at, pending_segment_code_at).';
@@ -572,7 +563,7 @@ SELECT
     -- у недельных и месячных агрегатов ошибок.
     (r.status = 'async_error' OR c.error_kind = 'Ошибка связи') AS is_error_corpus
 FROM stg_egisz.document_errors_current c
-JOIN serving_egisz.documents_current r ON r.dwh_id = c.dwh_id
+JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
 LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
 LEFT JOIN mart_egisz.dim_nsi_error_code_alias a ON a.alias = upper(btrim(c.error_code))
 LEFT JOIN mart_egisz.dim_nsi_error_code n
@@ -598,7 +589,7 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors IS
 -- Ошибки на уровне документа: строка — один документ с ошибками текущего состояния, списки
 -- типов, категорий и видов — по всем его элементам. Нужна потребителям, которым удобнее
 -- отбирать документы по типу ошибки без соединения с элементами; с документом связывается
--- по dwh_id (serving_egisz.documents_current). Элемент ошибки в подтверждении регистрации
+-- по dwh_id (serving_egisz.document_versions). Элемент ошибки в подтверждении регистрации
 -- в списки входит, поэтому корпус ошибок обозначен отдельным признаком.
 CREATE MATERIALIZED VIEW serving_egisz.document_error_types AS
 SELECT
@@ -636,7 +627,7 @@ SELECT
         || ' · ' ||
     COALESCE(NULLIF(btrim(o.name), ''), '—') AS clinic_label,
     m.semd_code,
-    -- Подпись СЭМД та же, что в documents_current: фильтр «Код СЭМД» дашборда передаёт её.
+    -- Подпись СЭМД та же, что в document_versions: фильтр «Код СЭМД» дашборда передаёт её.
     CASE
         WHEN st.code IS NOT NULL AND st.name IS NOT NULL
             THEN st.code || ' · ' || st.name
@@ -697,8 +688,8 @@ FROM mart_egisz.dim_organizations o
 LEFT JOIN mart_egisz.dim_nsi_organization n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)
 LEFT JOIN LATERAL (
     SELECT MAX(r.registered_at) AS last_success_registered_at
-    FROM serving_egisz.documents_current r
-    WHERE r.clinic_jid = o.jid AND r.status = 'success'
+    FROM serving_egisz.document_versions r
+    WHERE r.is_current_version AND r.clinic_jid = o.jid AND r.status = 'success'
 ) doc ON true
 WHERE o.jid IS NOT NULL;
 
@@ -707,7 +698,7 @@ COMMENT ON VIEW serving_egisz.clinic_nsi_mapping IS
 
 -- Типы СЭМД, которые клиника фактически отправляет: грейн (clinic_jid, semd_code)
 -- по документам.
--- clinic_label собирается идентично documents_current, чтобы общий дашборд-фильтр «Клиника»
+-- clinic_label собирается идентично document_versions, чтобы общий дашборд-фильтр «Клиника»
 -- привязывался одним значением к обеим витринам.
 CREATE OR REPLACE VIEW serving_egisz.clinic_semd_activity AS
 SELECT
@@ -726,7 +717,7 @@ SELECT
     f.last_registered_at,
     f.documents_total
 FROM (
-    -- Счётчик на грейне логического документа (documents_current = текущие версии), иначе
+    -- Счётчик на грейне логического документа (текущие версии), иначе
     -- повторная подача того же документа считалась бы как ещё один документ клиники.
     SELECT
         r.clinic_jid,
@@ -734,8 +725,9 @@ FROM (
         MAX(r.first_sent_at) AS last_sent_at,
         MAX(r.registered_at) AS last_registered_at,
         count(*) AS documents_total
-    FROM serving_egisz.documents_current r
-    WHERE r.clinic_jid IS NOT NULL
+    FROM serving_egisz.document_versions r
+    WHERE r.is_current_version
+      AND r.clinic_jid IS NOT NULL
       AND r.semd_code IS NOT NULL
     GROUP BY 1, 2
 ) f
@@ -878,8 +870,9 @@ FROM (
             WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
         ) AS has_network_error,
         date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date AS week_start
-    FROM serving_egisz.documents_current r
-    WHERE r.ips_date IS NOT NULL
+    FROM serving_egisz.document_versions r
+    WHERE r.is_current_version
+      AND r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
     SELECT LEAST(
@@ -921,7 +914,7 @@ SELECT
     (date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
         < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_week
 FROM stg_egisz.document_errors_current c
-JOIN serving_egisz.documents_current r ON r.dwh_id = c.dwh_id
+JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
 LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_weekly p
   ON p.week_start = date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
@@ -991,8 +984,9 @@ FROM (
             WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
         ) AS has_network_error,
         date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date AS month_start
-    FROM serving_egisz.documents_current r
-    WHERE r.ips_date IS NOT NULL
+    FROM serving_egisz.document_versions r
+    WHERE r.is_current_version
+      AND r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
     SELECT LEAST(
@@ -1034,7 +1028,7 @@ SELECT
     (date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
         < date_trunc('month', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_month
 FROM stg_egisz.document_errors_current c
-JOIN serving_egisz.documents_current r ON r.dwh_id = c.dwh_id
+JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
 LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_monthly p
   ON p.month_start = date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
@@ -1090,10 +1084,11 @@ queue_documents AS (
             (COALESCE(r.first_callback_at, now()) AT TIME ZONE c.tz)::date,
             c.today
         ) AS last_day
-    FROM serving_egisz.documents_current r
+    FROM serving_egisz.document_versions r
     CROSS JOIN ladder l
     CROSS JOIN calendar c
-    WHERE r.first_sent_at IS NOT NULL
+    WHERE r.is_current_version
+      AND r.first_sent_at IS NOT NULL
 )
 SELECT
     g.snapshot_date,

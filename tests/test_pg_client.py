@@ -182,7 +182,7 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert "stg_egisz.clean_text_value(t.message_id),\n        t.logid::text" not in sql
     assert "stg_egisz.clean_text_value(t.msgid),\n        t.logid::text" not in sql
     assert "CREATE OR REPLACE FUNCTION stg_egisz.normalize_semd_code" in sql
-    assert "serving_egisz.documents_current" in sql
+    assert "serving_egisz.document_versions" in sql
     assert 'f.clinic_jid AS "JID Клиники"' in sql
 
 
@@ -312,8 +312,7 @@ def test_document_version_layer_groups_by_doc_number() -> None:
     assert "mart_egisz.recompute_document_versions(NULL::text[])" in views
 
     assert "CREATE OR REPLACE VIEW serving_egisz.document_versions" in views
-    assert "CREATE OR REPLACE VIEW serving_egisz.documents_current AS" in views
-    assert "WHERE is_current_version" in views
+    assert "r.is_current_version" in views
     assert "health_versions" in views
 
 
@@ -539,7 +538,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "WHERE dst.oid = stg_egisz.normalize_semd_code(d.semd_code)" in sql
     assert "FROM mart_egisz.documents" in sql
     assert "CREATE OR REPLACE VIEW public.fact_egisz_messages AS" not in sql
-    assert "FROM serving_egisz.documents_current" in sql
+    assert "FROM serving_egisz.document_versions" in sql
     assert "document_group_key" not in sql
     assert "CREATE MATERIALIZED VIEW public.v_documents_daily_ui" not in sql
     assert "p.error_code = 'NO_DOCUMENT_KIND_ON_DATE'" not in sql
@@ -558,7 +557,7 @@ def test_reporting_views_do_not_depend_on_raw_tables() -> None:
     # чтобы отчётному слою не приходилось этого делать.
     reporting_sql = "\n".join(
         line.split("--", 1)[0]
-        for line in sql_section(views_sql, "documents_current").splitlines()
+        for line in sql_section(views_sql, "document_versions").splitlines()
     )
 
     assert "raw_egisz." not in reporting_sql

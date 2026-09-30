@@ -350,8 +350,7 @@ def test_operational_status_breakdown_uses_canonical_states() -> None:
     assert "status_detail_label" in trend_query
     assert "stg_egisz.exchange_messages" not in trend_query
     assert "WHERE \"Статус\" IN ('success', 'error')" not in trend_query
-    assert "CREATE OR REPLACE VIEW serving_egisz.documents_current" in Path("db/04_views.sql").read_text(encoding="utf-8")
-    assert "FROM serving_egisz.documents_current" in Path("db/04_views.sql").read_text(encoding="utf-8")
+    assert "CREATE OR REPLACE VIEW serving_egisz.document_versions" in Path("db/04_views.sql").read_text(encoding="utf-8")
     assert trend_card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "serving_egisz.documents_current",
         "field_name": "ips_date",
@@ -670,7 +669,7 @@ def test_document_views_use_document_grain_without_redundant_dedup() -> None:
 
     assert "ROW_NUMBER() OVER" not in sql
     assert "FROM mart_egisz.documents d" in sql
-    assert "FROM serving_egisz.documents_current" in sql
+    assert "FROM serving_egisz.document_versions r" in sql
 
 
 def test_dashboards_do_not_expose_technical_dwh_id_fallbacks() -> None:
@@ -1113,7 +1112,7 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
     assert "CREATE OR REPLACE VIEW serving_egisz.clinic_semd_activity" in sql
     assert "MAX(r.first_sent_at) AS last_sent_at" in sql
     assert "MAX(r.registered_at) AS last_registered_at" in sql
-    assert "FROM serving_egisz.documents_current r" in sql
+    assert "FROM serving_egisz.document_versions r" in sql
     assert "LEFT JOIN mart_egisz.dim_semd_types st ON st.code = f.semd_code" in sql
     assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" not in sql
 
@@ -1148,8 +1147,7 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
 def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
-    assert "CREATE OR REPLACE VIEW serving_egisz.documents_current" in sql
-    assert "FROM serving_egisz.documents_current" in sql
+    assert "CREATE OR REPLACE VIEW serving_egisz.document_versions" in sql
     assert "patient_name_masked" in sql
     assert "snils_masked" in sql
     assert "doctor_name" in sql
@@ -2456,7 +2454,7 @@ def test_no_legacy_date_tokens_anywhere() -> None:
     # Документный слой берёт день из полной даты (стек МСК-pinned). Единственное место,
     # где сдвиг пояса применяется сознательно, — периодические матвью: там date_trunc
     # вычисляется в момент REFRESH, роль которого timezone не пинит.
-    assert "AT TIME ZONE 'Europe/Moscow'" not in sql_section(views, "documents_current")
+    assert "AT TIME ZONE 'Europe/Moscow'" not in sql_section(views, "document_versions")
     assert "AS processed_at" not in views and "AS processed_day" not in views
     tables = Path("db/01_schema.sql").read_text(encoding="utf-8")
     assert "loaded_at timestamptz DEFAULT now()" in tables
