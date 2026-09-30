@@ -214,6 +214,22 @@ def is_iemk_reply_to(reply_to: Any) -> bool:
     return end == len(text) or not text[end].isdigit()
 
 
+def rows_in_window(rows: list[dict[str, Any]], *, since: datetime | None) -> list[dict[str, Any]]:
+    """Оставляет строки журнала, созданные не раньше ``since``.
+
+    Отбор по дате выполняется над уже прочитанной страницей: на источнике CREATEDATE не
+    проиндексирована, а границу читаемого диапазона задаёт только отметка.
+    Строка без даты сохраняется — отнести её к окну нельзя.
+    """
+    if since is None:
+        return rows
+    return [
+        row
+        for row in rows
+        if row["createdate"] is None or datetime.fromisoformat(row["createdate"]) >= since
+    ]
+
+
 def bounded_transform_to_logid(
     con: psycopg2.extensions.connection,
     *,
@@ -514,7 +530,6 @@ def fetch_exchangelog_after_cursor(
     *,
     after_logid: int,
     limit: int,
-    since: datetime | None,
 ) -> list[dict[str, Any]]:
     """Fetch EXCHANGELOG rows via keyset pagination by LOGID.
 
@@ -526,12 +541,7 @@ def fetch_exchangelog_after_cursor(
 
     cur = con.cursor()
     try:
-        date_filter = "AND CREATEDATE >= ?" if since is not None else ""
-        params: tuple[Any, ...] = (int(after_logid or 0),)
-        if since is not None:
-            params += (since,)
-        params += (int(limit),)
-        query = f"""
+        query = """
             SELECT
                 LOGID,
                 LOGDATE,
@@ -543,11 +553,10 @@ def fetch_exchangelog_after_cursor(
                 URI
             FROM EXCHANGELOG
             WHERE LOGID > ?
-                {date_filter}
             ORDER BY LOGID
             ROWS ?
             """
-        cur.execute(query, params)
+        cur.execute(query, (int(after_logid or 0), int(limit)))
         return [serialize_exchangelog_row(*row) for row in cur.fetchall()]
     finally:
         cur.close()
@@ -747,7 +756,6 @@ def extract_exchangelog_batch(
             fb_conn,
             after_logid=cursor_logid,
             limit=raw_rows,
-            since=since,
         )
         log.info(
             "Fetched %s EXCHANGELOG row(s) after LOGID=%s in %.2fs (round %s).",
@@ -760,8 +768,10 @@ def extract_exchangelog_batch(
         if not log_rows:
             break
 
-        load_raw_logs(pg_conn, log_rows)
-        total_loaded += len(log_rows)
+        window_rows = rows_in_window(log_rows, since=since)
+        if window_rows:
+            load_raw_logs(pg_conn, window_rows)
+            total_loaded += len(window_rows)
 
         cursor_logid = int(log_rows[-1]["logid"])
         if len(log_rows) < raw_rows:
