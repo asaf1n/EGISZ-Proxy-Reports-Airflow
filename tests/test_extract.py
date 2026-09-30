@@ -27,13 +27,6 @@ def fb_conn() -> MagicMock:
     return MagicMock()
 
 
-@pytest.fixture(autouse=True)
-def cursor_outside_window():
-    """По умолчанию отметка стоит перед окном: первая строка окна открывает участок."""
-    with patch("egisz_etl_dag.is_cursor_in_window", return_value=False) as probe:
-        yield probe
-
-
 def _raw_row(logid: int, created: datetime | None = None) -> dict[str, object]:
     return {
         "logid": logid,
@@ -72,15 +65,14 @@ def test_extract_cursor_counts_the_proxy_not_raw(
     assert result == {"count": 1, "extract_logid_cursor": 101}
 
 
-def test_extract_holds_cursor_before_gap_inside_window(
+def test_extract_holds_cursor_before_gap(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Разрыв LOGID в окне удерживает отметку, но страница загружается целиком."""
+    """Разрыв LOGID удерживает отметку, но страница загружается целиком."""
     page = [_raw_row(101), _raw_row(102), _raw_row(105), _raw_row(106)]
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.is_cursor_in_window", return_value=True),
         patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=page) as fetch,
         patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
@@ -96,13 +88,12 @@ def test_extract_holds_cursor_before_gap_inside_window(
     assert result == {"count": 4, "extract_logid_cursor": 102}
 
 
-def test_extract_holds_cursor_when_first_row_is_after_gap_inside_window(
+def test_extract_holds_cursor_when_first_row_is_after_gap(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.is_cursor_in_window", return_value=True),
         patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=[_raw_row(105)]),
         patch("egisz_etl_dag.load_raw_logs"),
         patch("egisz_etl_dag.update_cursors") as update,
@@ -116,20 +107,16 @@ def test_extract_holds_cursor_when_first_row_is_after_gap_inside_window(
     assert result == {"count": 1, "extract_logid_cursor": 100}
 
 
-def test_extract_passes_gaps_among_rows_older_than_window(
+def test_extract_gap_holds_cursor_regardless_of_window(
     pg_conn: MagicMock,
     fb_conn: MagicMock,
 ) -> None:
-    """Разрывы среди строк старше окна не удерживают отметку; окно открывает участок."""
-    now = datetime.now()
-    pages = [
-        [_raw_row(500, now - timedelta(days=90)), _raw_row(900, now - timedelta(days=80))],
-        [_raw_row(2_000, now - timedelta(days=2)), _raw_row(2_001, now - timedelta(days=1))],
-        [],
-    ]
+    """Окно отбирает строки для загрузки, но не влияет на непрерывность LOGID."""
+    old = datetime.now() - timedelta(days=90)
+    page = [_raw_row(101, old), _raw_row(105, old)]
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=pages) as fetch,
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", return_value=page),
         patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
         patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze,
@@ -138,28 +125,19 @@ def test_extract_passes_gaps_among_rows_older_than_window(
             pg_conn, fb_conn, raw_rows=2, raw_rounds=3, depth_days=30
         )
 
-    assert [c.kwargs["after_logid"] for c in fetch.call_args_list] == [100, 900, 2_001]
-    load.assert_called_once_with(pg_conn, pages[1])
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=2_001)
-    assert result == {"count": 2, "extract_logid_cursor": 2_001}
+    load.assert_not_called()
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=101)
+    assert result == {"count": 0, "extract_logid_cursor": 101}
 
 
-def test_contiguous_prefix_end_bridges_old_rows_and_stops_at_gap_in_window() -> None:
-    since = datetime(2026, 9, 1)
-    old, fresh = datetime(2026, 8, 1), datetime(2026, 9, 15)
-    rows = [_raw_row(10, old), _raw_row(50, old), _raw_row(60, fresh), _raw_row(61, fresh), _raw_row(70, fresh)]
-
-    end, in_window = extract_dag.contiguous_prefix_end(
-        rows, after=0, since=since, after_in_window=False
-    )
-
-    assert (end, in_window) == (61, True)
+def test_contiguous_prefix_end_stops_at_first_gap() -> None:
+    assert extract_dag.contiguous_prefix_end([101, 102, 105, 106], after=100) == 102
+    assert extract_dag.contiguous_prefix_end([105], after=100) == 100
+    assert extract_dag.contiguous_prefix_end([], after=100) == 100
 
 
-def test_contiguous_prefix_end_without_window_treats_first_row_as_start() -> None:
-    rows = [_raw_row(7), _raw_row(8), _raw_row(10)]
-
-    assert extract_dag.contiguous_prefix_end(rows, after=0, since=None, after_in_window=False) == (8, True)
+def test_contiguous_prefix_end_takes_first_row_as_start_from_zero() -> None:
+    assert extract_dag.contiguous_prefix_end([7, 8, 10], after=0) == 8
 
 
 def test_extract_window_is_applied_to_fetched_rows_and_cursor_passes_old_ones(
@@ -214,7 +192,7 @@ def test_extract_empty_window_retries_same_cursor_on_next_run(
 ) -> None:
     with (
         patch("egisz_etl_dag.get_cursors", return_value=_cursors(extract=100)),
-        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=[[], [_raw_row(200)]]) as fetch,
+        patch("egisz_etl_dag.fetch_exchangelog_after_cursor", side_effect=[[], [_raw_row(101)]]) as fetch,
         patch("egisz_etl_dag.load_raw_logs") as load,
         patch("egisz_etl_dag.update_cursors") as update,
         patch("egisz_etl_dag._analyze_exchangelog_raw") as analyze,
@@ -226,9 +204,9 @@ def test_extract_empty_window_retries_same_cursor_on_next_run(
         second = extract_exchangelog_batch(pg_conn, fb_conn, raw_rows=10, raw_rounds=3, depth_days=30)
 
     assert first == {"count": 0, "extract_logid_cursor": 100}
-    assert second == {"count": 1, "extract_logid_cursor": 200}
+    assert second == {"count": 1, "extract_logid_cursor": 101}
     assert [c.kwargs["after_logid"] for c in fetch.call_args_list] == [100, 100]
-    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=200)
+    update.assert_called_once_with(pg_conn, extract_dag.PIPELINE, extract_logid=101)
 
 
 def test_extract_load_failure_does_not_advance_cursor(
