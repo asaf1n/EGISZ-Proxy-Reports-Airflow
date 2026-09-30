@@ -267,8 +267,8 @@ def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
 
 
 def test_source_error_text_stays_in_parsing_layer() -> None:
-    """Исходный текст ошибки хранится только в слое разбора: общая форма и опубликованные
-    ошибки его не несут, служебное представление присоединяет его по ключу источника."""
+    """Исходный текст ошибки хранится в слое разбора: общая форма и опубликованные ошибки его
+    не несут, служебная витрина собирает его по ключу источника."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     def body(start: str, end: str) -> str:
@@ -280,8 +280,8 @@ def test_source_error_text_stays_in_parsing_layer() -> None:
     common = body("CREATE VIEW mart_egisz.message_errors AS", "COMMENT ON VIEW mart_egisz.message_errors")
     document = body("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS",
                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")
-    texts = body("CREATE VIEW mart_egisz_admin.document_error_texts AS",
-                 "COMMENT ON VIEW mart_egisz_admin.document_error_texts")
+    texts = body("CREATE MATERIALIZED VIEW mart_egisz_admin.document_error_texts AS",
+                 "COMMENT ON MATERIALIZED VIEW mart_egisz_admin.document_error_texts")
 
     assert 'tx.network_error_text COLLATE "und-x-icu" AS error_text' in network
     assert 'e.message COLLATE "und-x-icu" AS message' in remd
