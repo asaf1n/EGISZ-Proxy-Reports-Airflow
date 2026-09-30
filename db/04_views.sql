@@ -1371,7 +1371,8 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.semd_error_categories_daily IS
 -- лестницы ожидания. Грейн (ips_day, клиника, тип СЭМД, ступень); ступень «Получен ответ»
 -- (порядок 0) — все документы с ответом, основание воронки. Ступень срока ответа подбирает
 -- pending_segment_at на момент первого ответа: документ укладывается в каждую ступень не
--- ниже своей.
+-- ниже своей. Пороги лестницы — целые минуты, поэтому срок округляется вверх до минуты без
+-- смены ступени, и функция вызывается один раз на различный срок, а не на документ.
 CREATE MATERIALIZED VIEW serving_egisz.registration_speed_daily AS
 WITH answered AS (
     SELECT
@@ -1380,14 +1381,20 @@ WITH answered AS (
         r.clinic_label,
         r.semd_code,
         r.semd_label,
-        seg.sort_order AS answer_segment_sort
+        ceil(EXTRACT(EPOCH FROM (r.first_callback_at - r.first_sent_at)) / 60.0)::integer AS answer_minutes
     FROM serving_egisz.document_versions r
-    CROSS JOIN LATERAL serving_egisz.pending_segment_at(r.first_sent_at, r.first_callback_at) seg
     WHERE r.is_current_version
       AND r.ips_date IS NOT NULL
       AND r.first_sent_at IS NOT NULL
       AND r.first_callback_at IS NOT NULL
       AND r.first_callback_at >= r.first_sent_at
+),
+answer_segments AS (
+    SELECT m.answer_minutes, seg.sort_order AS answer_segment_sort
+    FROM (SELECT DISTINCT answer_minutes FROM answered) m
+    CROSS JOIN LATERAL serving_egisz.pending_segment_at(
+        'epoch'::timestamptz, 'epoch'::timestamptz + make_interval(mins => m.answer_minutes)
+    ) seg
 ),
 stages AS (
     SELECT 'answered'::text AS stage_code, 'Получен ответ'::text AS stage_label, 0::smallint AS stage_sort
@@ -1405,8 +1412,9 @@ SELECT
     s.stage_code,
     s.stage_label,
     s.stage_sort,
-    COUNT(*) FILTER (WHERE s.stage_sort = 0 OR a.answer_segment_sort <= s.stage_sort)::bigint AS docs
+    COUNT(*) FILTER (WHERE s.stage_sort = 0 OR g.answer_segment_sort <= s.stage_sort)::bigint AS docs
 FROM answered a
+JOIN answer_segments g ON g.answer_minutes = a.answer_minutes
 CROSS JOIN stages s
 GROUP BY a.ips_day, a.clinic_jid, a.clinic_label, a.semd_code, s.stage_code, s.stage_label, s.stage_sort
 WITH DATA;
