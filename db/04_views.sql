@@ -14,7 +14,7 @@ DROP VIEW IF EXISTS mart_egisz_admin.health_signals CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_message_registry_no_document CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_sync CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_versions CASCADE;
-DROP VIEW IF EXISTS mart_egisz_admin.document_error_texts CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mart_egisz_admin.document_error_texts CASCADE;
 DROP VIEW IF EXISTS serving_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS mart_egisz.message_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.network_errors CASCADE;
@@ -44,7 +44,7 @@ DROP VIEW IF EXISTS serving_egisz.document_versions CASCADE;
 DROP VIEW IF EXISTS serving_egisz.documents_sent CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_file_requests CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.document_lineage CASCADE;
-DROP VIEW IF EXISTS mart_egisz_admin.document_quality CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS mart_egisz_admin.document_quality CASCADE;
 DROP VIEW IF EXISTS serving_egisz.clinic_nsi_mapping CASCADE;
 DROP VIEW IF EXISTS serving_egisz.clinic_semd_activity CASCADE;
 DROP VIEW IF EXISTS serving_egisz.semd_dictionaries CASCADE;
@@ -744,28 +744,28 @@ WHERE m.error_source = 'связь';
 COMMENT ON VIEW serving_egisz.network_errors IS
 'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Исходный текст — в stg_egisz.network_errors по сообщению (logid, message_at): ошибка связи у сообщения одна.';
 
--- Исходный текст ошибок документа одной строкой для разбора поддержкой. Представление
--- ведётся от первой ошибки документа, а текст собирается подзапросом по ключу источника:
--- при соединении с документами по dwh_id он считается только для выводимых строк.
-CREATE VIEW mart_egisz_admin.document_error_texts AS
+-- Исходный текст текущих ошибок документа одной строкой для разбора поддержкой. Текст
+-- хранится в stg_egisz; здесь — производная копия со служебным доступом: сборка текста из
+-- представлений источников на каждом запросе карточки занимала десятки секунд.
+CREATE MATERIALIZED VIEW mart_egisz_admin.document_error_texts AS
 SELECT
-    e.dwh_id,
-    (
-        SELECT string_agg(COALESCE(n.error_text, r.message, h.code_context), ' · ' ORDER BY c.error_no)
-        FROM mart_egisz.document_errors c
-        LEFT JOIN stg_egisz.network_errors n
-          ON c.error_source = 'связь' AND n.logid = c.logid AND n.message_at = c.message_at
-        LEFT JOIN stg_egisz.remd_errors r
-          ON c.error_source = 'РЭМД' AND r.logid = c.logid AND r.message_at = c.message_at AND r.item_no = c.item_no
-        LEFT JOIN stg_egisz.ihe_errors h
-          ON c.error_source = 'ИЭМК' AND h.logid = c.logid AND h.message_at = c.message_at AND h.item_no = c.item_no
-        WHERE c.dwh_id = e.dwh_id
-    ) AS error_text
-FROM mart_egisz.document_errors e
-WHERE e.error_no = 1;
+    c.dwh_id,
+    string_agg(COALESCE(n.error_text, r.message, h.code_context), ' · ' ORDER BY c.error_no) AS error_text
+FROM mart_egisz.document_errors c
+LEFT JOIN stg_egisz.network_errors n
+  ON c.error_source = 'связь' AND n.logid = c.logid AND n.message_at = c.message_at
+LEFT JOIN stg_egisz.remd_errors r
+  ON c.error_source = 'РЭМД' AND r.logid = c.logid AND r.message_at = c.message_at AND r.item_no = c.item_no
+LEFT JOIN stg_egisz.ihe_errors h
+  ON c.error_source = 'ИЭМК' AND h.logid = c.logid AND h.message_at = c.message_at AND h.item_no = c.item_no
+GROUP BY c.dwh_id
+WITH DATA;
 
-COMMENT ON VIEW mart_egisz_admin.document_error_texts IS
-'Исходный текст ошибок текущего состояния документа: строка — документ с ошибками (dwh_id), error_text — тексты источников через « · » в порядке error_no. Текст хранится в stg_egisz и сюда присоединяется по ключу источника.';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_error_texts
+    ON mart_egisz_admin.document_error_texts (dwh_id);
+
+COMMENT ON MATERIALIZED VIEW mart_egisz_admin.document_error_texts IS
+'Исходный текст текущих ошибок документа: строка — документ с ошибками (dwh_id), error_text — тексты источников через « · » в порядке error_no. Источник текста — stg_egisz.network_errors, remd_errors, ihe_errors по ключу источника; здесь производная копия для разбора поддержкой, доступ служебный. Обновляется refresh_report_marts().';
 
 CREATE OR REPLACE VIEW mart_egisz_admin.document_lineage AS
 SELECT
@@ -787,32 +787,50 @@ WHERE d.dwh_id IS NOT NULL;
 COMMENT ON VIEW mart_egisz_admin.document_lineage IS
 'Lineage документа: OID и адрес обмена из журнала рядом с ЮЛ, к которому их относит реестр OID.';
 
--- Признаки проверки данных документа: каждое правило записано здесь один раз, отчёты
--- отбирают документы по готовым столбцам. OID вне реестра — то же правило, что
--- clinic_oid_unknown в serving_egisz.document_versions.
-CREATE OR REPLACE VIEW mart_egisz_admin.document_quality AS
+-- Контроль качества данных: текущие документы с ответом РЭМД, их происхождение и признаки
+-- проверки. Каждое правило записано здесь один раз; OID вне реестра — clinic_oid_unknown
+-- document_versions. Материализовано: соединение документной витрины с происхождением на
+-- каждом запросе карточки занимало секунды.
+CREATE MATERIALIZED VIEW mart_egisz_admin.document_quality AS
 SELECT
-    d.dwh_id,
-    q.is_no_jid,
-    q.is_oid_unknown,
-    q.is_no_local_uid,
-    q.is_no_semd_code,
-    q.is_success_without_date,
+    q.*,
     (q.is_no_jid OR q.is_oid_unknown OR q.is_no_local_uid OR q.is_no_semd_code OR q.is_success_without_date) AS has_violation
-FROM mart_egisz.documents d
-LEFT JOIN mart_egisz.dim_clinic_oid oid_ref ON oid_ref.oid = btrim(stg_egisz.clean_text_value(d.org_oid))
-CROSS JOIN LATERAL (
+FROM (
     SELECT
-        (d.jid IS NULL) AS is_no_jid,
-        (NULLIF(btrim(d.org_oid), '') IS NOT NULL AND oid_ref.jid IS NULL) AS is_oid_unknown,
-        (NULLIF(btrim(stg_egisz.clean_text_value(d.local_uid)), '') IS NULL) AS is_no_local_uid,
-        (NULLIF(btrim(stg_egisz.normalize_semd_code(d.semd_code)), '') IS NULL) AS is_no_semd_code,
-        (d.status = 'success' AND COALESCE(d.last_callback_at, d.registered_at, d.first_sent_at) IS NULL) AS is_success_without_date
+        d.dwh_id,
+        d.ips_date,
+        d.status,
+        d.status_detail_label,
+        d.clinic_jid,
+        d.clinic_label,
+        d.semd_code,
+        d.semd_name,
+        d.semd_label,
+        d.semd_local_uid,
+        d.clinic_oid,
+        l.clinic_oid_xml,
+        l.clinic_jid_by_oid,
+        l.clinic_host,
+        l.clinic_jid_resolve_method,
+        (d.clinic_jid IS NULL) AS is_no_jid,
+        COALESCE(d.clinic_oid_unknown, false) AS is_oid_unknown,
+        (NULLIF(btrim(d.semd_local_uid), '') IS NULL) AS is_no_local_uid,
+        (NULLIF(btrim(d.semd_code), '') IS NULL) AS is_no_semd_code,
+        (d.status = 'success' AND d.ips_date IS NULL) AS is_success_without_date
+    FROM serving_egisz.document_versions d
+    JOIN mart_egisz_admin.document_lineage l ON l.dwh_id = d.dwh_id
+    WHERE d.is_current_version
+      AND d.status IN ('success', 'async_error')
 ) q
-WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
+WITH DATA;
 
-COMMENT ON VIEW mart_egisz_admin.document_quality IS
-'Признаки проверки данных документа (ключ dwh_id): нет JID, OID вне реестра медорганизаций, нет localUid, нет кода СЭМД, успех без даты обработки; has_violation — хотя бы одно нарушение.';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_quality
+    ON mart_egisz_admin.document_quality (dwh_id);
+CREATE INDEX IF NOT EXISTS idx_document_quality_ips_date
+    ON mart_egisz_admin.document_quality (ips_date);
+
+COMMENT ON MATERIALIZED VIEW mart_egisz_admin.document_quality IS
+'Контроль качества данных: строка — текущий документ с ответом РЭМД (dwh_id) с реквизитами, происхождением из document_lineage и признаками проверки: нет JID, OID вне реестра медорганизаций, нет localUid, нет кода СЭМД, успех без даты обработки; has_violation — хотя бы одно нарушение. Обновляется refresh_report_marts().';
 
 CREATE OR REPLACE VIEW serving_egisz.clinic_nsi_mapping AS
 SELECT
@@ -1592,6 +1610,8 @@ BEGIN
         'mart_egisz.document_errors',
         'serving_egisz.document_errors',
         'serving_egisz.document_error_types',
+        'mart_egisz_admin.document_error_texts',
+        'mart_egisz_admin.document_quality',
         'serving_egisz.documents_weekly',
         'serving_egisz.document_errors_weekly',
         'serving_egisz.documents_monthly',
@@ -2068,5 +2088,7 @@ ANALYZE serving_egisz.semd_error_categories_daily;
 ANALYZE serving_egisz.registration_speed_daily;
 ANALYZE serving_egisz.clinic_revenue_daily;
 ANALYZE serving_egisz.clinic_semd_types;
+ANALYZE mart_egisz_admin.document_error_texts;
+ANALYZE mart_egisz_admin.document_quality;
 
 \echo 'DWH init complete: egisz owns all objects of the EGISZ layer schemas in dwh_bi'
