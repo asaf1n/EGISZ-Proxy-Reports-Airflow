@@ -1725,6 +1725,10 @@ CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON mart_egisz.document
 CREATE INDEX IF NOT EXISTS idx_documents_first_callback_at ON mart_egisz.documents (first_callback_at);
 -- Инкрементальное сопровождение document_attributes читает документы по updated_at.
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON mart_egisz.documents (updated_at);
+-- Дата обработки IPS (ips_date в serving_egisz.document_versions) — то же выражение: журналы
+-- «последние N документов» читают индекс с конца вместо сортировки всего периода.
+CREATE INDEX IF NOT EXISTS idx_documents_ips_date
+    ON mart_egisz.documents ((COALESCE(last_callback_at, registered_at, first_sent_at)));
 CREATE INDEX IF NOT EXISTS idx_documents_status ON mart_egisz.documents (status);
 CREATE INDEX IF NOT EXISTS idx_documents_jid ON mart_egisz.documents (jid);
 CREATE INDEX IF NOT EXISTS idx_documents_org_oid ON mart_egisz.documents (org_oid) WHERE org_oid IS NOT NULL;
