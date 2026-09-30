@@ -473,7 +473,7 @@ RETURNS TABLE (
     raw_snils text,
     raw_doctor_name text,
     has_fault_marker boolean,
-    has_error_ilike boolean
+    mentions_error boolean
 )
 LANGUAGE plpgsql
 IMMUTABLE
@@ -611,7 +611,7 @@ CREATE OR REPLACE FUNCTION stg_egisz.classify_async_status(
     p_raw_status text,
     p_document_status text,
     p_has_fault_marker boolean,
-    p_has_error_ilike boolean,
+    p_mentions_error boolean,
     p_registry_response_status text
 ) RETURNS text
 LANGUAGE sql
@@ -623,7 +623,7 @@ AS $$
             WHEN COALESCE(p_has_fault_marker, false)                                  THEN 'error'
             WHEN COALESCE(p_document_status, '') ~* 'зарегистр'                       THEN 'success'
             WHEN COALESCE(p_raw_status, '') ~* '^\s*(ok|success)\s*$'                 THEN 'success'
-            WHEN COALESCE(p_has_error_ilike, false)                                   THEN 'error'
+            WHEN COALESCE(p_mentions_error, false)                                    THEN 'error'
         END
         WHEN p_source_action LIKE 'urn:ihe:%AsyncResponse' THEN CASE
             WHEN p_registry_response_status = 'Success'                            THEN 'success'
@@ -1240,7 +1240,7 @@ WHERE t.error_type = v.error_type
 DROP FUNCTION IF EXISTS stg_egisz.error_items(integer, text, text, text, text, text);
 
 -- Разбор ошибок сообщения журнала по источникам. У каждого источника своя схема ответа,
--- поэтому функции не объединяют результаты: общую форму собирает mart_egisz.message_errors.
+-- поэтому функции не объединяют результаты: общую форму собирает mart_egisz.exchangelog_errors.
 --   Ошибка связи — шлюз не доставил сообщение (LOGSTATE = 3): исходный текст шлюза и код
 --   из него (код сокета Windows либо код ответа HTTP).
 --   Ответ РЭМД — элементы <item> (code, message) в разделах errors и registrationWarnings;

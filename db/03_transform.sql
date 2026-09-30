@@ -226,7 +226,7 @@ BEGIN
         xml_error_code, xml_message, xml_raw_status, xml_document_status,
         xml_creation_date,
         xml_patient_name, xml_snils, xml_doctor_name,
-        xml_has_fault_marker, xml_has_error_ilike,
+        xml_has_fault_marker, xml_mentions_error,
         xml_parsed_at, loaded_at
     )
     SELECT
@@ -252,7 +252,7 @@ BEGIN
         p.raw_snils,
         p.raw_doctor_name,
         p.has_fault_marker,
-        p.has_error_ilike,
+        p.mentions_error,
         now(),
         now()
     FROM parse_targets t
@@ -295,7 +295,7 @@ BEGIN
         xml_snils = COALESCE(EXCLUDED.xml_snils, stg_egisz.exchange_messages.xml_snils),
         xml_doctor_name = COALESCE(EXCLUDED.xml_doctor_name, stg_egisz.exchange_messages.xml_doctor_name),
         xml_has_fault_marker = COALESCE(EXCLUDED.xml_has_fault_marker, stg_egisz.exchange_messages.xml_has_fault_marker),
-        xml_has_error_ilike = COALESCE(EXCLUDED.xml_has_error_ilike, stg_egisz.exchange_messages.xml_has_error_ilike),
+        xml_mentions_error = COALESCE(EXCLUDED.xml_mentions_error, stg_egisz.exchange_messages.xml_mentions_error),
         xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, stg_egisz.exchange_messages.xml_parsed_at),
         loaded_at = now();
 
@@ -502,7 +502,7 @@ BEGIN
             tx.xml_doctor_name AS raw_doctor_name,
             tx.xml_document_status AS document_status,
             tx.xml_has_fault_marker AS has_fault_marker,
-            tx.xml_has_error_ilike AS has_error_ilike,
+            tx.xml_mentions_error AS mentions_error,
             -- Статус асинхронного ответа ИЭМК передаётся атрибутом RegistryResponse.
             substring(r.msgtext from 'ResponseStatusType:([A-Za-z]+)') AS registry_response_status
         FROM raw_egisz.exchangelog r
@@ -569,7 +569,7 @@ BEGIN
             r.raw_doctor_name,
             r.document_status,
             r.has_fault_marker,
-            r.has_error_ilike,
+            r.mentions_error,
             r.registry_response_status,
             src_doc.semd_code AS source_document_semd_code
         FROM raw_parsed r
@@ -612,7 +612,7 @@ BEGIN
                 p.raw_status,
                 p.document_status,
                 p.has_fault_marker,
-                p.has_error_ilike,
+                p.mentions_error,
                 p.registry_response_status
             ) AS outcome,
             CASE WHEN p.logstate = 3 THEN p.logtext ELSE p.xml_message END AS message_text

@@ -247,7 +247,7 @@ def test_errors_are_parsed_per_source_and_classified_once_per_batch() -> None:
 
 def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    common = sql.split("CREATE VIEW mart_egisz.message_errors AS")[1].split("COMMENT ON VIEW mart_egisz.message_errors")[0]
+    common = sql.split("CREATE VIEW mart_egisz.exchangelog_errors AS")[1].split("COMMENT ON VIEW mart_egisz.exchangelog_errors")[0]
     for source in ("FROM stg_egisz.network_errors n", "FROM stg_egisz.remd_errors r", "FROM stg_egisz.ihe_errors h"):
         assert source in common
     assert "r.section IS NOT DISTINCT FROM 'registrationWarnings'" in common
@@ -256,7 +256,7 @@ def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
         "COMMENT ON MATERIALIZED VIEW mart_egisz.document_errors")[0]
     assert "t.status IN ('success', 'error')" in current
     assert "m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)" in current
-    assert "FROM mart_egisz.message_errors m" in current
+    assert "FROM mart_egisz.exchangelog_errors m" in current
     view = sql.split("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS")[1].split(
         "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")[0]
     assert "FROM mart_egisz.document_errors c" in view
@@ -277,7 +277,7 @@ def test_source_error_text_stays_in_parsing_layer() -> None:
     network = body("CREATE VIEW stg_egisz.network_errors AS", "COMMENT ON VIEW stg_egisz.network_errors")
     remd = body("CREATE VIEW stg_egisz.remd_errors AS", "COMMENT ON VIEW stg_egisz.remd_errors")
     ihe = body("CREATE VIEW stg_egisz.ihe_errors AS", "COMMENT ON VIEW stg_egisz.ihe_errors")
-    common = body("CREATE VIEW mart_egisz.message_errors AS", "COMMENT ON VIEW mart_egisz.message_errors")
+    common = body("CREATE VIEW mart_egisz.exchangelog_errors AS", "COMMENT ON VIEW mart_egisz.exchangelog_errors")
     document = body("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS",
                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")
     texts = body("CREATE MATERIALIZED VIEW mart_egisz_admin.document_error_texts AS",

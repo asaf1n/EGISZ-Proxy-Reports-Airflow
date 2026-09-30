@@ -16,7 +16,7 @@ DROP VIEW IF EXISTS mart_egisz_admin.health_sync CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_versions CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS mart_egisz_admin.document_error_texts CASCADE;
 DROP VIEW IF EXISTS serving_egisz.network_errors CASCADE;
-DROP VIEW IF EXISTS mart_egisz.message_errors CASCADE;
+DROP VIEW IF EXISTS mart_egisz.exchangelog_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.remd_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.ihe_errors CASCADE;
@@ -35,6 +35,7 @@ DROP MATERIALIZED VIEW IF EXISTS serving_egisz.semd_error_categories_daily CASCA
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.registration_speed_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.clinic_revenue_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.clinic_semd_types CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_search_keys CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_status_details CASCADE;
 DROP VIEW IF EXISTS serving_egisz.pending_segments CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_error_types CASCADE;
@@ -545,10 +546,10 @@ WHERE tx.ihe_errors IS NOT NULL;
 COMMENT ON VIEW stg_egisz.ihe_errors IS
 'Элементы ответа ИЭМК: строка — IHE RegistryError, ключ (logid, message_at, item_no). error_code — errorCode, code_context — codeContext (исходный текст), severity и location — атрибуты элемента.';
 
--- Общая форма ошибок сообщения без исходного текста: вид, код, тип и признак
+-- Общая форма ошибок журнала обмена без исходного текста: вид, код, тип и признак
 -- предупреждения из атрибута своего источника. Ключ элемента — (logid, message_at,
 -- error_source, item_no); по нему исходный текст присоединяется из представления источника.
-CREATE VIEW mart_egisz.message_errors AS
+CREATE VIEW mart_egisz.exchangelog_errors AS
 SELECT
     n.message_at, n.logid, n.msgid, n.dwh_id, n.clinic_jid, n.semd_code, n.egisz_subsystem, n.source_action,
     'связь'::text AS error_source,
@@ -572,8 +573,8 @@ SELECT
     COALESCE(h.severity ~* 'Warning$', false)
 FROM stg_egisz.ihe_errors h;
 
-COMMENT ON VIEW mart_egisz.message_errors IS
-'Ошибки разобранных сообщений в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. Исходный текст — в stg_egisz.network_errors, remd_errors, ihe_errors по ключу.';
+COMMENT ON VIEW mart_egisz.exchangelog_errors IS
+'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. Исходный текст — в stg_egisz.network_errors, remd_errors, ihe_errors по ключу.';
 
 -- Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки
 -- связи после него; у документа без асинхронного ответа — все его ошибки связи. Время
@@ -601,7 +602,7 @@ SELECT
     m.error_type,
     m.nsi_dictionary_oid,
     m.is_warning
-FROM mart_egisz.message_errors m
+FROM mart_egisz.exchangelog_errors m
 LEFT JOIN last_response lr ON lr.dwh_id = m.dwh_id
 WHERE m.dwh_id IS NOT NULL
   AND m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
@@ -729,7 +730,7 @@ SELECT
     m.error_code,
     t.responsibility,
     t.is_retryable
-FROM mart_egisz.message_errors m
+FROM mart_egisz.exchangelog_errors m
 LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = m.error_type
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = m.clinic_jid
 LEFT JOIN LATERAL (
@@ -1426,9 +1427,10 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.registration_speed_daily IS
 'Скорость регистрации в РЭМД: грейн (ips_day — отчётный день МСК по ips_date, клиника, тип СЭМД, ступень лестницы ожидания). docs — документы, первый ответ которых пришёл в пределах ступени от первой отправки; ступень answered («Получен ответ», порядок 0) — все документы с ответом. Ступени — mart_egisz.dim_pending_segments без терминальной. Обновляется refresh_report_marts().';
 
 -- ---------------------------------------------------------------- section: revenue
--- Ориентировочные денежные показатели по плоской ставке (mart_egisz.dim_tariff): состояние
+-- Ориентировочные денежные показатели по плоской ставке (mart_egisz.jid_fee_rates): состояние
 -- каждого JID активной базы на конец каждого отчётного дня (для текущего дня — на момент
--- обновления). Активная база дня D — JID с документами в окне [D − active_days + 1; D];
+-- обновления). Окна и пороги — mart_egisz.dim_jid_activity_rules. Активная база дня D —
+-- JID с документами в окне [D − active_days + 1; D];
 -- замолчавший — нет документов в последние quiet_days суток окна; без успехов — не
 -- замолчавший, от no_success_min_docs документов за окно и ни одного успешного. Документ
 -- относится к дню по ips_date, как во всех витринах.
@@ -1438,9 +1440,13 @@ WITH calendar AS (
         serving_egisz.report_timezone() AS tz,
         (now() AT TIME ZONE serving_egisz.report_timezone())::date AS today
 ),
-tariff AS (
-    SELECT t.*, lead(t.valid_from) OVER (ORDER BY t.valid_from) AS valid_to
-    FROM mart_egisz.dim_tariff t
+fee_rates AS (
+    SELECT f.*, lead(f.valid_from) OVER (ORDER BY f.valid_from) AS valid_to
+    FROM mart_egisz.jid_fee_rates f
+),
+rules AS (
+    SELECT r.*, lead(r.valid_from) OVER (ORDER BY r.valid_from) AS valid_to
+    FROM mart_egisz.dim_jid_activity_rules r
 ),
 activity AS (
     SELECT
@@ -1465,7 +1471,7 @@ spread AS (
     CROSS JOIN calendar c
     CROSS JOIN LATERAL generate_series(
         a.activity_day::timestamp,
-        LEAST(a.activity_day + (SELECT MAX(active_days) FROM mart_egisz.dim_tariff) - 1, c.today)::timestamp,
+        LEAST(a.activity_day + (SELECT MAX(active_days) FROM mart_egisz.dim_jid_activity_rules) - 1, c.today)::timestamp,
         interval '1 day'
     ) AS g(snapshot_date)
 ),
@@ -1473,20 +1479,23 @@ per_jid AS (
     SELECT
         s.snapshot_date,
         s.clinic_jid,
-        t.jid_monthly_fee,
-        t.active_days,
-        t.quiet_days,
-        t.no_success_min_docs,
+        f.jid_monthly_fee,
+        r.active_days,
+        r.quiet_days,
+        r.no_success_min_docs,
         SUM(s.docs)::bigint AS docs_window,
         SUM(s.docs_success)::bigint AS docs_success_window,
         SUM(s.docs_answered)::bigint AS docs_answered_window,
         MAX(s.activity_day) AS last_document_day
     FROM spread s
-    JOIN tariff t
-      ON s.snapshot_date >= t.valid_from
-     AND (t.valid_to IS NULL OR s.snapshot_date < t.valid_to)
-    WHERE s.activity_day > s.snapshot_date - t.active_days
-    GROUP BY s.snapshot_date, s.clinic_jid, t.jid_monthly_fee, t.active_days, t.quiet_days, t.no_success_min_docs
+    JOIN fee_rates f
+      ON s.snapshot_date >= f.valid_from
+     AND (f.valid_to IS NULL OR s.snapshot_date < f.valid_to)
+    JOIN rules r
+      ON s.snapshot_date >= r.valid_from
+     AND (r.valid_to IS NULL OR s.snapshot_date < r.valid_to)
+    WHERE s.activity_day > s.snapshot_date - r.active_days
+    GROUP BY s.snapshot_date, s.clinic_jid, f.jid_monthly_fee, r.active_days, r.quiet_days, r.no_success_min_docs
 ),
 flagged AS (
     SELECT
@@ -1528,7 +1537,323 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_revenue_daily
     ON serving_egisz.clinic_revenue_daily (snapshot_date, clinic_jid);
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_revenue_daily IS
-'Ориентировочные денежные показатели по плоской ставке mart_egisz.dim_tariff: грейн (snapshot_date — отчётный день МСК, JID активной базы этого дня). Активная база — JID с документами за active_days суток по день включительно (для текущего дня — на момент обновления); docs_window, docs_success_window, docs_answered_window — документы, успешные и с ответом РЭМД за окно; last_document_day — день последнего документа. is_silent — замолчал: нет документов quiet_days суток; is_no_success — не замолчал, от no_success_min_docs документов и ни одного успешного. monthly_fee — MRR JID, annual_fee — ARR; monthly_fee_at_risk — MRR под риском (замолчавшие и без успехов, JID один раз), monthly_fee_silent и monthly_fee_no_success — по спискам. MRR дня = SUM(monthly_fee) по дню. is_full_window — окно дня целиком лежит в истории. Ставка — порядок величины, а не биллинг. Обновляется refresh_report_marts().';
+'Ориентировочные денежные показатели по плоской ставке mart_egisz.jid_fee_rates и правилам активности mart_egisz.dim_jid_activity_rules: грейн (snapshot_date — отчётный день МСК, JID активной базы этого дня). Активная база — JID с документами за active_days суток по день включительно (для текущего дня — на момент обновления); docs_window, docs_success_window, docs_answered_window — документы, успешные и с ответом РЭМД за окно; last_document_day — день последнего документа. is_silent — замолчал: нет документов quiet_days суток; is_no_success — не замолчал, от no_success_min_docs документов и ни одного успешного. monthly_fee — MRR JID, annual_fee — ARR; monthly_fee_at_risk — MRR под риском (замолчавшие и без успехов, JID один раз), monthly_fee_silent и monthly_fee_no_success — по спискам. MRR дня = SUM(monthly_fee) по дню. is_full_window — окно дня целиком лежит в истории. Ставка — порядок величины, а не биллинг. Обновляется refresh_report_marts().';
+
+-- ---------------------------------------------------------------- section: period functions
+-- Показатели, зависящие от периода фильтра дашборда. Параметр NULL или пустой массив —
+-- без ограничения. Тело функции — один SELECT на STABLE-функциях: планировщик подставляет
+-- его в запрос потребителя, как тело представления.
+
+-- Вклад клиник в изменение доли ошибок: период [p_from; p_to) против опорного периода фазы
+-- контрольной карты (mart_egisz.dim_control_chart_phases). Фаза — последняя, начатая не позже
+-- недели последнего документа периода; её опорный период должен быть закрыт. Определения —
+-- README, раздел «Вклад клиник в изменение доли ошибок».
+CREATE OR REPLACE FUNCTION serving_egisz.clinic_error_rate_contribution(
+    p_from timestamptz,
+    p_to timestamptz,
+    p_clinic_labels text[] DEFAULT NULL,
+    p_semd_labels text[] DEFAULT NULL,
+    p_error_types text[] DEFAULT NULL
+)
+RETURNS TABLE (
+    clinic text,
+    docs_baseline bigint,
+    docs_period bigint,
+    rate_baseline numeric,
+    rate_period numeric,
+    contribution_pp numeric,
+    via_rate_pp numeric,
+    via_volume_pp numeric,
+    top_error_type text,
+    row_kind integer,
+    sort_key numeric
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH calendar AS MATERIALIZED (
+    SELECT serving_egisz.report_timezone() AS tz
+),
+slice AS (
+    SELECT d.dwh_id, d.clinic_label, d.status, d.ips_date
+    FROM serving_egisz.document_versions d
+    WHERE d.is_current_version
+      AND d.ips_date IS NOT NULL
+      AND (COALESCE(cardinality(p_clinic_labels), 0) = 0 OR d.clinic_label = ANY (p_clinic_labels))
+      AND (COALESCE(cardinality(p_semd_labels), 0) = 0 OR d.semd_label = ANY (p_semd_labels))
+),
+counted AS (
+    SELECT
+        s.*,
+        s.status = 'async_error'
+        AND (COALESCE(cardinality(p_error_types), 0) = 0 OR EXISTS (
+            SELECT 1
+            FROM serving_egisz.document_errors e
+            WHERE e.dwh_id = s.dwh_id
+              AND e.error_type = ANY (p_error_types)
+        )) AS is_error
+    FROM slice s
+),
+period AS (
+    SELECT
+        c.clinic_label,
+        COUNT(DISTINCT c.dwh_id) FILTER (WHERE c.status <> 'sent') AS docs,
+        COUNT(DISTINCT c.dwh_id) FILTER (WHERE c.is_error) AS errs,
+        MAX(c.ips_date) AS last_at
+    FROM counted c
+    WHERE (p_from IS NULL OR c.ips_date >= p_from)
+      AND (p_to IS NULL OR c.ips_date < p_to)
+    GROUP BY c.clinic_label
+),
+phase AS MATERIALIZED (
+    SELECT
+        ph.baseline_start,
+        ph.baseline_end,
+        ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts,
+        (ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts
+    FROM calendar c
+    CROSS JOIN LATERAL (
+        SELECT p.baseline_start, p.baseline_end
+        FROM mart_egisz.dim_control_chart_phases p
+        WHERE p.period_grain = 'week'
+          AND p.phase_start <= (SELECT date_trunc('week', MAX(period.last_at) AT TIME ZONE c.tz)::date FROM period)
+        ORDER BY p.phase_start DESC
+        LIMIT 1
+    ) ph
+    WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date
+),
+baseline AS (
+    SELECT
+        c.clinic_label,
+        COUNT(DISTINCT c.dwh_id) FILTER (WHERE c.status <> 'sent') AS docs,
+        COUNT(DISTINCT c.dwh_id) FILTER (WHERE c.is_error) AS errs
+    FROM counted c
+    CROSS JOIN phase ph
+    WHERE c.ips_date >= ph.from_ts
+      AND c.ips_date < ph.to_ts
+    GROUP BY c.clinic_label
+),
+clinics AS (
+    SELECT
+        COALESCE(p.clinic_label, b.clinic_label) AS clinic_label,
+        COALESCE(b.docs, 0) AS docs0,
+        COALESCE(b.errs, 0) AS errs0,
+        COALESCE(p.docs, 0) AS docs1,
+        COALESCE(p.errs, 0) AS errs1
+    FROM period p
+    FULL JOIN baseline b ON b.clinic_label = p.clinic_label
+    WHERE EXISTS (SELECT 1 FROM phase)
+),
+totals AS (
+    SELECT
+        SUM(docs0) AS n0,
+        SUM(docs1) AS n1,
+        SUM(errs0)::numeric / NULLIF(SUM(docs0), 0) AS p0,
+        SUM(errs1)::numeric / NULLIF(SUM(docs1), 0) AS p1
+    FROM clinics
+),
+contrib AS (
+    SELECT
+        c.*,
+        100.0 * ((c.errs1 - t.p0 * c.docs1) / NULLIF(t.n1, 0) - (c.errs0 - t.p0 * c.docs0) / NULLIF(t.n0, 0)) AS total_pp,
+        CASE
+            WHEN c.docs0 > 0 AND c.docs1 > 0
+                THEN 100.0 * c.docs1 / NULLIF(t.n1, 0) * (c.errs1::numeric / c.docs1 - c.errs0::numeric / c.docs0)
+            ELSE 0
+        END AS rate_pp,
+        SIGN(t.p1 - t.p0) AS direction
+    FROM clinics c
+    CROSS JOIN totals t
+),
+top_error AS (
+    SELECT DISTINCT ON (by_type.clinic_label) by_type.clinic_label, by_type.error_type
+    FROM (
+        SELECT s.clinic_label, e.error_type, COUNT(DISTINCT e.dwh_id) AS docs
+        FROM slice s
+        JOIN serving_egisz.document_errors e ON e.dwh_id = s.dwh_id
+        WHERE e.status = 'async_error'
+          AND e.error_kind = 'Ошибка асинхронного ответа'
+          AND (p_from IS NULL OR s.ips_date >= p_from)
+          AND (p_to IS NULL OR s.ips_date < p_to)
+        GROUP BY s.clinic_label, e.error_type
+    ) by_type
+    ORDER BY by_type.clinic_label, by_type.docs DESC, by_type.error_type
+)
+SELECT
+    CASE
+        WHEN NOT EXISTS (SELECT 1 FROM period) THEN 'Нет документов за период'
+        WHEN ph.baseline_start IS NULL THEN 'Нет закрытого опорного периода фазы'
+        ELSE 'Итого (опорный период ' || to_char(ph.baseline_start, 'DD.MM') || '–'
+             || to_char(ph.baseline_end + 6, 'DD.MM.YYYY') || ')'
+    END,
+    t.n0,
+    t.n1,
+    ROUND(100 * t.p0, 1),
+    ROUND(100 * t.p1, 1),
+    ROUND(100 * (t.p1 - t.p0), 1),
+    (SELECT ROUND(SUM(ct.rate_pp), 1) FROM contrib ct),
+    (SELECT ROUND(SUM(ct.total_pp - ct.rate_pp), 1) FROM contrib ct),
+    NULL::text,
+    0,
+    NULL::numeric
+FROM totals t
+LEFT JOIN phase ph ON TRUE
+UNION ALL
+SELECT
+    c.clinic_label,
+    c.docs0,
+    c.docs1,
+    ROUND(100.0 * c.errs0 / NULLIF(c.docs0, 0), 1),
+    ROUND(100.0 * c.errs1 / NULLIF(c.docs1, 0), 1),
+    ROUND(c.total_pp, 1),
+    ROUND(c.rate_pp, 1),
+    ROUND(c.total_pp - c.rate_pp, 1),
+    te.error_type,
+    1,
+    c.direction * c.total_pp
+FROM contrib c
+LEFT JOIN top_error te ON te.clinic_label = c.clinic_label
+$$;
+
+COMMENT ON FUNCTION serving_egisz.clinic_error_rate_contribution(timestamptz, timestamptz, text[], text[], text[]) IS
+'Вклад клиник в изменение доли ошибок: период [p_from; p_to) против опорного периода фазы контрольной карты, срез по клиникам (clinic_label), типам СЭМД (semd_label) и типам ошибки. Строка row_kind 0 — итог: документы с исходом и доля отказов РЭМД в опорном периоде и периоде, изменение доли (contribution_pp) и его части за счёт долей ошибок клиник (via_rate_pp) и за счёт объёма (via_volume_pp); без закрытого опорного периода или без документов — пояснение. Строки row_kind 1 — клиники; sort_key упорядочивает их по направлению общего изменения. top_error_type — самый частый тип отказа РЭМД клиники за период.';
+
+-- Показатели клиник (JID) за период [p_from; p_to): строка — JID с документами в периоде либо
+-- в окне active_days перед ним. Правила и ставка — действующие на последний день периода;
+-- конец периода в будущем ограничен текущим моментом. Определения — README, раздел
+-- «Показатели клиник за период».
+CREATE OR REPLACE FUNCTION serving_egisz.clinic_activity_period(
+    p_from timestamptz,
+    p_to timestamptz
+)
+RETURNS TABLE (
+    clinic_jid bigint,
+    clinic_name text,
+    clinic_label text,
+    clinic_inn text,
+    docs bigint,
+    docs_success bigint,
+    docs_answered bigint,
+    docs_refused bigint,
+    docs_pending bigint,
+    docs_no_response bigint,
+    docs_before bigint,
+    first_sent_at timestamptz,
+    last_document_at timestamptz,
+    is_active boolean,
+    is_new boolean,
+    is_churned boolean,
+    is_silent boolean,
+    is_no_success boolean,
+    volume_segment text,
+    volume_segment_label text,
+    volume_segment_sort smallint,
+    monthly_fee numeric
+)
+LANGUAGE sql
+STABLE
+AS $$
+WITH bounds AS MATERIALIZED (
+    SELECT
+        COALESCE(p_from, '-infinity'::timestamptz) AS from_ts,
+        LEAST(COALESCE(p_to, 'infinity'::timestamptz), now()) AS to_ts
+),
+rules AS MATERIALIZED (
+    SELECT r.*
+    FROM mart_egisz.dim_jid_activity_rules r
+    CROSS JOIN bounds b
+    WHERE r.valid_from <= (b.to_ts AT TIME ZONE serving_egisz.report_timezone())::date
+    ORDER BY r.valid_from DESC
+    LIMIT 1
+),
+fee AS MATERIALIZED (
+    SELECT f.jid_monthly_fee
+    FROM mart_egisz.jid_fee_rates f
+    CROSS JOIN bounds b
+    WHERE f.valid_from <= (b.to_ts AT TIME ZONE serving_egisz.report_timezone())::date
+    ORDER BY f.valid_from DESC
+    LIMIT 1
+),
+history AS MATERIALIZED (
+    SELECT MIN(d.first_sent_at) AS first_at
+    FROM mart_egisz.documents d
+    WHERE COALESCE(d.is_current_version, true)
+      AND NULLIF(btrim(d.dwh_id), '') IS NOT NULL
+),
+per_jid AS (
+    SELECT
+        v.clinic_jid,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts) AS docs,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.status = 'success') AS docs_success,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.status IN ('success', 'async_error')) AS docs_answered,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.status = 'async_error') AS docs_refused,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.sent_state = 'pending') AS docs_pending,
+        COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.sent_state = 'no_response') AS docs_no_response,
+        COUNT(*) FILTER (WHERE v.ips_date < b.from_ts) AS docs_before,
+        MAX(v.ips_date) FILTER (WHERE v.ips_date >= b.from_ts) AS last_document_at
+    FROM serving_egisz.document_versions v
+    CROSS JOIN bounds b
+    WHERE v.is_current_version
+      AND v.clinic_jid IS NOT NULL
+      -- Границы — скалярными подзапросами: так они служат условием индекса по ips_date.
+      AND v.ips_date >= (SELECT b2.from_ts - make_interval(days => r.active_days) FROM bounds b2 CROSS JOIN rules r)
+      AND v.ips_date < (SELECT b2.to_ts FROM bounds b2)
+    GROUP BY v.clinic_jid
+)
+SELECT
+    p.clinic_jid,
+    o.name,
+    COALESCE(NULLIF(btrim(p.clinic_jid::text), ''), '—') || ' · ' || COALESCE(NULLIF(btrim(o.name), ''), '—'),
+    o.inn,
+    p.docs,
+    p.docs_success,
+    p.docs_answered,
+    p.docs_refused,
+    p.docs_pending,
+    p.docs_no_response,
+    p.docs_before,
+    fs.first_sent_at,
+    p.last_document_at,
+    p.docs > 0,
+    COALESCE(fs.first_sent_at >= b.from_ts AND fs.first_sent_at < b.to_ts
+             AND fs.first_sent_at >= h.first_at + make_interval(days => r.active_days), false),
+    p.docs = 0 AND p.docs_before > 0,
+    p.docs > 0 AND p.last_document_at < b.to_ts - make_interval(days => r.quiet_days),
+    p.docs >= r.no_success_min_docs AND p.docs_success = 0,
+    CASE
+        WHEN p.docs >= r.volume_heavy_min_docs THEN 'heavy'
+        WHEN p.docs >= r.volume_medium_min_docs THEN 'medium'
+        WHEN p.docs > 0 THEN 'sleeping'
+    END,
+    CASE
+        WHEN p.docs >= r.volume_heavy_min_docs THEN 'Тяжёлые (от ' || r.volume_heavy_min_docs || ' док.)'
+        WHEN p.docs >= r.volume_medium_min_docs
+            THEN 'Средние (' || r.volume_medium_min_docs || '–' || (r.volume_heavy_min_docs - 1) || ')'
+        WHEN p.docs > 0 THEN 'Спящие (менее ' || r.volume_medium_min_docs || ')'
+    END,
+    CASE
+        WHEN p.docs >= r.volume_heavy_min_docs THEN 1
+        WHEN p.docs >= r.volume_medium_min_docs THEN 2
+        WHEN p.docs > 0 THEN 3
+    END::smallint,
+    f.jid_monthly_fee
+FROM per_jid p
+CROSS JOIN bounds b
+CROSS JOIN rules r
+CROSS JOIN fee f
+CROSS JOIN history h
+LEFT JOIN mart_egisz.dim_organizations o ON o.jid = p.clinic_jid
+LEFT JOIN LATERAL (
+    SELECT MIN(d.first_sent_at) AS first_sent_at
+    FROM mart_egisz.documents d
+    WHERE d.jid = p.clinic_jid
+      AND COALESCE(d.is_current_version, true)
+      AND NULLIF(btrim(d.dwh_id), '') IS NOT NULL
+) fs ON TRUE
+$$;
+
+COMMENT ON FUNCTION serving_egisz.clinic_activity_period(timestamptz, timestamptz) IS
+'Показатели клиник (JID) за период [p_from; p_to): строка — JID с документами в периоде либо в окне active_days перед ним. docs … docs_no_response — документы периода по исходу и состоянию отправки, docs_before — документы окна перед периодом, first_sent_at — первая отправка JID за всю историю. is_active — есть документы в периоде; is_new — первая отправка в периоде и не раньше active_days от начала истории; is_churned — документы только в окне перед периодом; is_silent — активен, но без документов последние quiet_days суток периода; is_no_success — от no_success_min_docs документов и ни одного успешного; volume_segment — сегмент по числу документов периода. Правила — mart_egisz.dim_jid_activity_rules, monthly_fee — mart_egisz.jid_fee_rates на последний день периода.';
 
 -- ---------------------------------------------------------------- section: filter dimensions
 -- Значения фильтров «Клиника» и «Тип СЭМД» дашбордов: пары клиника — тип СЭМД текущих версий
@@ -1601,6 +1926,29 @@ FROM mart_egisz.dim_pending_segments g;
 COMMENT ON VIEW serving_egisz.pending_segments IS
 'Ступени лестницы ожидания ответа под именами столбцов витрин (pending_segment, pending_segment_label, pending_segment_sort): значения фильтра «Срок ожидания».';
 
+-- Значения поисковых фильтров архива (localUid, связанное сообщение, рег. номер РЭМД, LOGID):
+-- ключи текущих версий документов, индекс на каждый ключ. Выбор значений и поиск по
+-- подстроке читают узкую витрину, а не всю документную.
+CREATE MATERIALIZED VIEW serving_egisz.document_search_keys AS
+SELECT d.dwh_id, d.semd_local_uid, d.relates_to_msgid, d.semd_emdr_id, d.logid
+FROM serving_egisz.document_versions d
+WHERE d.is_current_version
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_document_search_keys
+    ON serving_egisz.document_search_keys (dwh_id);
+CREATE INDEX IF NOT EXISTS idx_document_search_keys_local_uid
+    ON serving_egisz.document_search_keys (semd_local_uid);
+CREATE INDEX IF NOT EXISTS idx_document_search_keys_relates_to
+    ON serving_egisz.document_search_keys (relates_to_msgid);
+CREATE INDEX IF NOT EXISTS idx_document_search_keys_emdr_id
+    ON serving_egisz.document_search_keys (semd_emdr_id);
+CREATE INDEX IF NOT EXISTS idx_document_search_keys_logid
+    ON serving_egisz.document_search_keys (logid);
+
+COMMENT ON MATERIALIZED VIEW serving_egisz.document_search_keys IS
+'Ключи поиска документа: строка — текущая версия документа (dwh_id), столбцы — как в document_versions: semd_local_uid, relates_to_msgid, semd_emdr_id, logid. Источник значений поисковых фильтров архива. Обновляется refresh_report_marts().';
+
 -- Обновление материализованных витрин — единственное определение их состава и порядка:
 -- функцию вызывают DAG-и и сценарий применения схемы. Порядок обязателен: ошибки
 -- документа, недельный и месячный слои читают текущие ошибки документа. CONCURRENTLY не
@@ -1628,7 +1976,8 @@ BEGIN
         'serving_egisz.semd_error_categories_daily',
         'serving_egisz.registration_speed_daily',
         'serving_egisz.clinic_revenue_daily',
-        'serving_egisz.clinic_semd_types'
+        'serving_egisz.clinic_semd_types',
+        'serving_egisz.document_search_keys'
     ]::regclass[]
     LOOP
         IF p_concurrently AND (SELECT c.relispopulated FROM pg_class c WHERE c.oid = mart) THEN
@@ -2096,6 +2445,7 @@ ANALYZE serving_egisz.semd_error_categories_daily;
 ANALYZE serving_egisz.registration_speed_daily;
 ANALYZE serving_egisz.clinic_revenue_daily;
 ANALYZE serving_egisz.clinic_semd_types;
+ANALYZE serving_egisz.document_search_keys;
 ANALYZE mart_egisz_admin.document_error_texts;
 ANALYZE mart_egisz_admin.document_quality;
 

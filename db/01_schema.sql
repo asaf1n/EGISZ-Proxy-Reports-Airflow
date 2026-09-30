@@ -316,33 +316,60 @@ WHERE (dim_sent_state.label, dim_sent_state.sort_order)
 
 DELETE FROM mart_egisz.dim_sent_state WHERE code NOT IN ('pending', 'no_response');
 
--- Тариф сервиса для ориентировочных денежных показателей: плоская абонентская плата за JID в
--- месяц и окна, которыми показатели определяют активную базу и риск оттока. Договорная
--- сетка сложнее плоской ставки, поэтому показатели — порядок величины, а не биллинг.
--- Строка действует с valid_from до следующей строки; смена ставки — новая строка.
-CREATE TABLE IF NOT EXISTS mart_egisz.dim_tariff (
+-- Ставка за JID в месяц для ориентировочных денежных показателей. Тарифицируется
+-- юридическое лицо, а JID — точка подключения, договорная сетка сложнее плоской ставки,
+-- поэтому показатели — порядок величины, а не биллинг. Строка действует с valid_from до
+-- следующей строки; смена ставки — новая строка.
+CREATE TABLE IF NOT EXISTS mart_egisz.jid_fee_rates (
     valid_from date PRIMARY KEY,
-    jid_monthly_fee numeric(12, 2) NOT NULL CHECK (jid_monthly_fee >= 0),
-    active_days integer NOT NULL CHECK (active_days > 0),
-    quiet_days integer NOT NULL CHECK (quiet_days > 0),
-    no_success_min_docs integer NOT NULL CHECK (no_success_min_docs > 0)
+    jid_monthly_fee numeric(12, 2) NOT NULL CHECK (jid_monthly_fee >= 0)
 );
 
-COMMENT ON TABLE mart_egisz.dim_tariff IS
-'Тариф для ориентировочных денежных показателей: jid_monthly_fee — абонентская плата за JID в месяц, ₽; active_days — окно активной базы (JID с документами за последние active_days суток); quiet_days — клиника замолчала, если в активной базе и без документов quiet_days суток; no_success_min_docs — клиника без успехов, если за окно активной базы от стольких документов и ни одного успешного. Строка действует с valid_from.';
+COMMENT ON TABLE mart_egisz.jid_fee_rates IS
+'Ставка для ориентировочных денежных показателей: jid_monthly_fee — абонентская плата за JID в месяц, ₽. Строка действует с valid_from до следующей строки.';
 
-INSERT INTO mart_egisz.dim_tariff (valid_from, jid_monthly_fee, active_days, quiet_days, no_success_min_docs)
-VALUES ('-infinity', 10000, 30, 7, 10)
+INSERT INTO mart_egisz.jid_fee_rates (valid_from, jid_monthly_fee)
+VALUES ('-infinity', 10000)
 ON CONFLICT (valid_from) DO UPDATE SET
-    jid_monthly_fee = EXCLUDED.jid_monthly_fee,
+    jid_monthly_fee = EXCLUDED.jid_monthly_fee
+WHERE jid_fee_rates.jid_monthly_fee IS DISTINCT FROM EXCLUDED.jid_monthly_fee;
+
+DELETE FROM mart_egisz.jid_fee_rates WHERE valid_from <> '-infinity';
+
+-- Правила активности JID: окна и пороги, по которым денежные показатели и показатели
+-- клиник за период определяют активную базу, замолчавшие клиники, клиники без успехов и
+-- сегменты по объёму. Одни правила на все показатели; строка действует с valid_from до
+-- следующей строки.
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_jid_activity_rules (
+    valid_from date PRIMARY KEY,
+    active_days integer NOT NULL CHECK (active_days > 0),
+    quiet_days integer NOT NULL CHECK (quiet_days > 0),
+    no_success_min_docs integer NOT NULL CHECK (no_success_min_docs > 0),
+    volume_medium_min_docs integer NOT NULL CHECK (volume_medium_min_docs > 0),
+    volume_heavy_min_docs integer NOT NULL,
+    CHECK (quiet_days < active_days),
+    CHECK (volume_heavy_min_docs > volume_medium_min_docs)
+);
+
+COMMENT ON TABLE mart_egisz.dim_jid_activity_rules IS
+'Правила активности JID: active_days — окно активной базы (JID с документами за active_days суток); quiet_days — JID замолчал, если без документов последние quiet_days суток окна; no_success_min_docs — JID без успехов, если за окно от стольких документов и ни одного успешного; volume_medium_min_docs и volume_heavy_min_docs — нижние границы сегментов «Средние» и «Тяжёлые» по числу документов за период, ниже — «Спящие». Строка действует с valid_from до следующей строки.';
+
+INSERT INTO mart_egisz.dim_jid_activity_rules
+    (valid_from, active_days, quiet_days, no_success_min_docs, volume_medium_min_docs, volume_heavy_min_docs)
+VALUES ('-infinity', 30, 7, 10, 50, 1000)
+ON CONFLICT (valid_from) DO UPDATE SET
     active_days = EXCLUDED.active_days,
     quiet_days = EXCLUDED.quiet_days,
-    no_success_min_docs = EXCLUDED.no_success_min_docs
-WHERE (dim_tariff.jid_monthly_fee, dim_tariff.active_days, dim_tariff.quiet_days, dim_tariff.no_success_min_docs)
+    no_success_min_docs = EXCLUDED.no_success_min_docs,
+    volume_medium_min_docs = EXCLUDED.volume_medium_min_docs,
+    volume_heavy_min_docs = EXCLUDED.volume_heavy_min_docs
+WHERE (dim_jid_activity_rules.active_days, dim_jid_activity_rules.quiet_days, dim_jid_activity_rules.no_success_min_docs,
+       dim_jid_activity_rules.volume_medium_min_docs, dim_jid_activity_rules.volume_heavy_min_docs)
       IS DISTINCT FROM
-      (EXCLUDED.jid_monthly_fee, EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs);
+      (EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs,
+       EXCLUDED.volume_medium_min_docs, EXCLUDED.volume_heavy_min_docs);
 
-DELETE FROM mart_egisz.dim_tariff WHERE valid_from <> '-infinity';
+DELETE FROM mart_egisz.dim_jid_activity_rules WHERE valid_from <> '-infinity';
 
 -- Фазы контрольных карт: отрезки с неизменными условиями работы сервиса. Центр и границы
 -- фазы считаются по её опорному периоду и продлеваются вперёд до следующей фазы. Опорный
@@ -1577,7 +1604,7 @@ CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     xml_snils text,
     xml_doctor_name text,
     xml_has_fault_marker boolean,
-    xml_has_error_ilike boolean,
+    xml_mentions_error boolean,
     xml_parsed_at timestamptz,
     loaded_at timestamptz DEFAULT now(),
     PRIMARY KEY (logid, log_date)
@@ -1590,7 +1617,7 @@ COMMENT ON COLUMN stg_egisz.exchange_messages.status IS
 COMMENT ON COLUMN stg_egisz.exchange_messages.message IS
 'Текст сообщения: при LOGSTATE = 3 — исходный текст шлюза, иначе текст из payload.';
 -- Столбцы ошибок существующей таблицы приводятся к разбору по источникам: у каждого
--- источника своя схема ответа, общая форма собирается выше stage (mart_egisz.message_errors).
+-- источника своя схема ответа, общая форма собирается выше stage (mart_egisz.exchangelog_errors).
 ALTER TABLE stg_egisz.exchange_messages
     ADD COLUMN IF NOT EXISTS network_error_code text,
     ADD COLUMN IF NOT EXISTS network_error_text text,

@@ -53,7 +53,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Сейчас | Цель | Примечание |
 |---|---|---|
 | `transactions` | `exchange_messages` | строка журнала — сообщение обмена; имя отличает её от реестра `egisz_messages`; разделы `exchange_messages_yYYYYmMM` |
-| `stg_egisz.message_error` | `network_errors`, `remd_errors`, `ihe_errors` | представления по источникам с исходным текстом; общая форма без текста — `mart_egisz.message_errors` |
+| `stg_egisz.message_error` | `network_errors`, `remd_errors`, `ihe_errors` | представления по источникам с исходным текстом; общая форма без текста — `mart_egisz.exchangelog_errors` |
 | `stg_egisz.document_error_current` | `mart_egisz.document_errors` | ошибки текущего состояния документа в общей форме, выше stage |
 | — | `message_registry` (представление) | реестр подач: правило ИЭМК и нормализация localUid вместо триггера |
 
