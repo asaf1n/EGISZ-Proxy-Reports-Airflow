@@ -34,10 +34,12 @@ RAW_LOG_COLUMNS = ("logid", "logdate", "createdate", "msgid", "logstate", "logte
 REPORT_MARTS = (
     "stg_egisz.document_error_current",
     "mart_egisz_selfservice.document_error",
+    "mart_egisz_selfservice.document_error_type",
     "public.rpt_documents_weekly",
     "mart_egisz.agg_document_error_weekly",
     "public.rpt_documents_monthly",
     "mart_egisz.agg_document_error_monthly",
+    "public.rpt_pending_queue_daily",
 )
 
 ALLOWED_SYNC_TABLES = {"dim_organizations", "dim_licenses"}

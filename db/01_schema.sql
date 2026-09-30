@@ -1741,10 +1741,12 @@ CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
 CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
--- Сигнал здоровья читает последние размеченные ответы по LOGID.
-CREATE INDEX IF NOT EXISTS idx_transactions_link_method_logid
-    ON transactions (link_method, logid DESC)
-    WHERE link_method IS NOT NULL;
+-- Сигнал здоровья читает последние размеченные ответы по LOGID: упорядоченный по LOGID
+-- индекс даёт остановку после 500 строк, составной с link_method впереди сортировал бы все.
+CREATE INDEX IF NOT EXISTS idx_transactions_logid_linked
+    ON transactions (logid DESC)
+    WHERE link_method IS NOT NULL AND relates_to_msgid IS NOT NULL;
+DROP INDEX IF EXISTS idx_transactions_link_method_logid;
 
 -- Реестр подач: связь msgid→document_uid и подсчёт попыток подачи документа.
 CREATE INDEX IF NOT EXISTS idx_dim_message_document_msgid

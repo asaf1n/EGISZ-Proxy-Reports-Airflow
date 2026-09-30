@@ -106,6 +106,13 @@ AS $$
     SELECT NULLIF(upper(replace(public.normalize_message_id(p_value), '-', '')), '');
 $$;
 
+-- Ключ relatesToMessage у разобранных сообщений: детализация «реестр без DOCUMENTID» идёт от
+-- небольшого числа подач без документа к их ответам, а не от каждого ответа к реестру.
+-- Выражение повторяет ключ реестра: без совпадения индекс не применяется.
+CREATE INDEX IF NOT EXISTS idx_transactions_relates_to_key
+    ON public.transactions (public.message_registry_key(relates_to_msgid))
+    WHERE relates_to_msgid IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION public.safe_cast_timestamptz(p_text text)
 RETURNS timestamptz
 LANGUAGE plpgsql
@@ -375,7 +382,32 @@ $$;
 -- Ступень — первая по sort_order, чья граница покрывает возраст ожидания; терминальная
 -- (max_age_minutes IS NULL) замыкает лестницу и ловит в том числе отправки без
 -- first_sent_at: без известного момента запроса файла возраст не определён. Пороги
--- остаются данными справочника — функция читает dim_pending_segments, поэтому STABLE.
+-- остаются данными справочника — функции читают dim_pending_segments, поэтому STABLE.
+--
+-- Единственное определение — табличная функция: SQL-функция, возвращающая множество,
+-- подставляется планировщиком в запрос, а скалярный вызов на каждой строке стоил бы
+-- запуска отдельного исполнителя (для 180 тыс. документов — около двух секунд). Отчётный
+-- слой соединяет её через LATERAL, точечные запросы читают скалярную обёртку.
+CREATE OR REPLACE FUNCTION public.pending_segment_at(
+    p_first_sent_at timestamptz,
+    p_anchor timestamptz
+) RETURNS SETOF public.dim_pending_segments
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT (t.segment).*
+    FROM (
+        SELECT (array_agg(s ORDER BY s.sort_order))[1] AS segment
+        FROM public.dim_pending_segments s
+        WHERE s.max_age_minutes IS NULL
+           OR (
+               p_first_sent_at IS NOT NULL
+               AND p_anchor IS NOT NULL
+               AND EXTRACT(EPOCH FROM (p_anchor - p_first_sent_at)) / 60.0 <= s.max_age_minutes
+           )
+    ) t;
+$$;
+
 CREATE OR REPLACE FUNCTION public.pending_segment_code_at(
     p_first_sent_at timestamptz,
     p_anchor timestamptz
@@ -383,16 +415,7 @@ CREATE OR REPLACE FUNCTION public.pending_segment_code_at(
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT s.code
-    FROM public.dim_pending_segments s
-    WHERE s.max_age_minutes IS NULL
-       OR (
-           p_first_sent_at IS NOT NULL
-           AND p_anchor IS NOT NULL
-           AND EXTRACT(EPOCH FROM (p_anchor - p_first_sent_at)) / 60.0 <= s.max_age_minutes
-       )
-    ORDER BY s.sort_order
-    LIMIT 1;
+    SELECT code FROM public.pending_segment_at(p_first_sent_at, p_anchor);
 $$;
 
 -- Подсистема ЕГИСЗ, к которой относится строка журнала.

@@ -102,7 +102,12 @@ def test_membership_and_segment_have_one_definition() -> None:
     # Одна сигнатура: вторая версия сосуществовала бы с первой как перегрузка.
     assert FUNCTIONS_SQL.count("FUNCTION public.is_pending_at(") == 1
 
-    segment = function_body("pending_segment_code_at")
+    segment = function_body("pending_segment_at")
+    # Табличная функция подставляется в запрос; скалярная обёртка не повторяет предикат.
+    assert "RETURNS SETOF public.dim_pending_segments" in segment
+    scalar = function_body("pending_segment_code_at")
+    assert "public.pending_segment_at(p_first_sent_at, p_anchor)" in scalar
+    assert "max_age_minutes" not in scalar
     # Пороги остаются данными справочника: ужесточение делается UPDATE'ом.
     assert "FROM public.dim_pending_segments s" in segment
     assert "s.max_age_minutes IS NULL" in segment
@@ -111,8 +116,8 @@ def test_membership_and_segment_have_one_definition() -> None:
     assert not re.search(r"\b\d{3,}\b", segment), "порог ступени захардкожен в функции"
 
     # Представления только подставляют момент.
-    assert "public.pending_segment_code_at(d.first_sent_at, now())" in VIEWS_SQL
-    assert "public.pending_segment_code_at(r.first_sent_at, anchor.ts)" in VIEWS_SQL
+    assert "public.pending_segment_at(d.first_sent_at, now())" in VIEWS_SQL
+    assert "public.pending_segment_code_at(d.first_sent_at, anchor.ts)" in VIEWS_SQL
     assert "<= s.max_age_minutes" not in VIEWS_SQL
 
 
