@@ -262,43 +262,18 @@ def _proxy_connection():
     return connect_fb(Connection.get(PROXY_CONN_ID))
 
 
-def source_window_low(con: Any, *, since: datetime) -> int:
-    """Наименьший LOGID источника в окне проверки."""
-    cur = con.cursor()
-    try:
+def raw_window_low(con: psycopg2.extensions.connection, *, since: datetime) -> int:
+    """Наименьший LOGID в raw_egisz.exchangelog среди строк окна проверки.
+
+    Граница считается в DWH: обращения к источнику — только выгрузка строк по ключу.
+    """
+    with con.cursor() as cur:
         cur.execute(
-            "SELECT MIN(LOGID) FROM EXCHANGELOG WHERE COALESCE(LOGDATE, CREATEDATE) >= ?",
+            "SELECT MIN(logid) FROM raw_egisz.exchangelog WHERE createdate >= %s",
             (since,),
         )
         row = cur.fetchone()
-    finally:
-        cur.close()
     return int(row[0]) if row and row[0] is not None else 0
-
-
-def count_source_logids(con: Any, *, low: int, high: int) -> int:
-    """Число строк источника в диапазоне [low, high]."""
-    cur = con.cursor()
-    try:
-        cur.execute(
-            "SELECT COUNT(*) FROM EXCHANGELOG WHERE LOGID >= ? AND LOGID <= ?",
-            (int(low), int(high)),
-        )
-        row = cur.fetchone()
-    finally:
-        cur.close()
-    return int(row[0] or 0) if row else 0
-
-
-def count_raw_logids(con: psycopg2.extensions.connection, *, low: int, high: int) -> int:
-    """Число строк raw_egisz.exchangelog в том же диапазоне."""
-    with con.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM raw_egisz.exchangelog WHERE logid >= %s AND logid <= %s",
-            (int(low), int(high)),
-        )
-        row = cur.fetchone()
-    return int(row[0] or 0) if row else 0
 
 
 def fetch_source_logids_range(con: Any, *, low: int, high: int) -> set[int]:
@@ -401,11 +376,11 @@ def check_journal_window(
     lookback_days: int,
     now: datetime | None = None,
 ) -> dict[str, int]:
-    """Сверка числа строк источника и raw_egisz.exchangelog в окне проверки.
+    """Сверка LOGID источника и raw_egisz.exchangelog в окне проверки.
 
-    Сравниваются счётчики, а не множества: при исправной выгрузке они совпадают, и задача
-    завершается пропуском. Разность множеств — только по расхождению, чтобы найти
-    конкретные строки и догрузить их.
+    Нижняя граница берётся из raw, верхняя — отметка выгрузки. Недостающие строки
+    находятся разностью множеств LOGID и догружаются по ключу; при исправной выгрузке
+    разность пуста, и задача завершается пропуском.
 
     Верхняя граница — отметка выгрузки: выше неё строк в raw закономерно может не быть.
     """
@@ -414,27 +389,17 @@ def check_journal_window(
         raise AirflowSkipException("Отметка выгрузки ещё не двигалась.")
 
     since = (now or datetime.now(timezone.utc)) - timedelta(days=lookback_days)
-    low = source_window_low(fb_conn, since=since)
+    low = raw_window_low(pg_conn, since=since)
     if low <= 0 or low > high:
         raise AirflowSkipException(
-            f"Ниже отметки {high} строк источника за {lookback_days} сут. нет."
+            f"В raw ниже отметки {high} строк за {lookback_days} сут. нет."
         )
 
-    source_rows = count_source_logids(fb_conn, low=low, high=high)
-    raw_rows = count_raw_logids(pg_conn, low=low, high=high)
-    if source_rows == raw_rows:
-        raise AirflowSkipException(
-            f"Журнал полон в LOGID [{low}, {high}]: {source_rows} строк с обеих сторон."
-        )
-
-    missing = sorted(
-        fetch_source_logids_range(fb_conn, low=low, high=high)
-        - fetch_raw_logids_range(pg_conn, low=low, high=high)
-    )
+    source_ids = fetch_source_logids_range(fb_conn, low=low, high=high)
+    missing = sorted(source_ids - fetch_raw_logids_range(pg_conn, low=low, high=high))
     if not missing:
         raise AirflowSkipException(
-            f"В LOGID [{low}, {high}] источник отдал {source_rows} строк против {raw_rows} "
-            "в raw, недостающих нет — строки удалены на стороне шлюза."
+            f"Журнал полон в LOGID [{low}, {high}]: {len(source_ids)} строк источника есть в raw."
         )
 
     log.warning(

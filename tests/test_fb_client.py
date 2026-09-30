@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import MagicMock
 
 from conftest import load_dag_module
 
@@ -14,8 +15,7 @@ fetch_organizations = _refresh_dag.fetch_organizations
 
 _maintenance_dag = load_dag_module("egisz_maintenance_dag")
 fetch_exchangelog_by_logids = _maintenance_dag.fetch_exchangelog_by_logids
-source_window_low = _maintenance_dag.source_window_low
-count_source_logids = _maintenance_dag.count_source_logids
+raw_window_low = _maintenance_dag.raw_window_low
 fetch_source_logids_range = _maintenance_dag.fetch_source_logids_range
 
 
@@ -140,28 +140,23 @@ def test_fetch_message_registry_empty_limit_skips_query() -> None:
     assert con.executed_sql == []
 
 
-def test_source_window_low_limits_scan_to_window() -> None:
-    con = FakeConnection([(100,)])
+def test_raw_window_low_reads_dwh_only() -> None:
+    pg = MagicMock()
+    cur = pg.cursor.return_value.__enter__.return_value
+    cur.fetchone.return_value = (100,)
     since = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
-    assert source_window_low(con, since=since) == 100
-    assert "COALESCE(LOGDATE, CREATEDATE) >= ?" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (since,)
+    assert raw_window_low(pg, since=since) == 100
+    sql, params = cur.execute.call_args.args
+    assert "FROM raw_egisz.exchangelog WHERE createdate >= %s" in sql
+    assert params == (since,)
 
 
-def test_source_window_low_empty_window_returns_zero() -> None:
-    con = FakeConnection([(None,)])
+def test_raw_window_low_empty_window_returns_zero() -> None:
+    pg = MagicMock()
+    pg.cursor.return_value.__enter__.return_value.fetchone.return_value = (None,)
 
-    assert source_window_low(con, since=datetime(2026, 6, 1, tzinfo=timezone.utc)) == 0
-
-
-def test_count_source_logids_asks_for_a_count_not_a_set() -> None:
-    """Штатный прогон проверки сравнивает счётчики: множества по проводам не гоняются."""
-    con = FakeConnection([(901,)])
-
-    assert count_source_logids(con, low=100, high=1000) == 901
-    assert "COUNT(*)" in con.cursor_instance.executed_sql
-    assert con.cursor_instance.params == (100, 1000)
+    assert raw_window_low(pg, since=datetime(2026, 6, 1, tzinfo=timezone.utc)) == 0
 
 
 def test_fetch_source_logids_range_reads_one_chunk() -> None:
