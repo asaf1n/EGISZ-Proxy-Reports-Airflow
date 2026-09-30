@@ -124,7 +124,7 @@ def test_extract_dag_uses_entity_named_tasks_and_metadata_only_xcom() -> None:
     assert "safe_transform_ceiling" not in src
     assert "pending_transform_tail" not in src
     assert "extract_logid_cursor" in src
-    assert "contiguous_prefix_end(" not in src
+    assert "contiguous_prefix_end(" in src
 
     # Витрины обновляются там же, где меняется их основание; пропущенный пересчёт
     # не должен снимать обновление.

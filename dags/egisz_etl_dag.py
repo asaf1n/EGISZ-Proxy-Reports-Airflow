@@ -214,20 +214,57 @@ def is_iemk_reply_to(reply_to: Any) -> bool:
     return end == len(text) or not text[end].isdigit()
 
 
+def is_in_window(row: dict[str, Any], *, since: datetime | None) -> bool:
+    """Создана ли строка журнала не раньше ``since``; строка без даты считается входящей."""
+    if since is None or row["createdate"] is None:
+        return True
+    return datetime.fromisoformat(row["createdate"]) >= since
+
+
 def rows_in_window(rows: list[dict[str, Any]], *, since: datetime | None) -> list[dict[str, Any]]:
     """Оставляет строки журнала, созданные не раньше ``since``.
 
     Отбор по дате выполняется над уже прочитанной страницей: на источнике CREATEDATE не
     проиндексирована, а границу читаемого диапазона задаёт только отметка.
-    Строка без даты сохраняется — отнести её к окну нельзя.
     """
-    if since is None:
-        return rows
-    return [
-        row
-        for row in rows
-        if row["createdate"] is None or datetime.fromisoformat(row["createdate"]) >= since
-    ]
+    return [row for row in rows if is_in_window(row, since=since)]
+
+
+def contiguous_prefix_end(
+    rows: list[dict[str, Any]],
+    *,
+    after: int,
+    since: datetime | None,
+    after_in_window: bool,
+) -> tuple[int, bool]:
+    """Последний LOGID непрерывного участка страницы, начинающегося за ``after``.
+
+    Отметка выгрузки не переступает разрыв LOGID внутри окна приёма: пропуск — это строка,
+    которую источник ещё не закоммитил. Строки старше окна в raw не нужны, поэтому
+    отметка проходит через них и через разрывы среди них; первая строка окна открывает
+    непрерывный участок (``after_in_window`` — лежит ли сама отметка уже в окне).
+    Возвращает конец участка и признак, что он находится в окне.
+    """
+    end = after
+    in_window = after_in_window
+    for row in rows:
+        logid = int(row["logid"])
+        row_in_window = is_in_window(row, since=since)
+        if in_window and row_in_window and logid != end + 1:
+            break
+        end = logid
+        in_window = in_window or row_in_window
+    return end, in_window
+
+
+def is_cursor_in_window(con: psycopg2.extensions.connection, *, logid: int) -> bool:
+    """Отметка лежит в окне приёма, если её строка загружена в raw (старше окна не грузятся)."""
+    if logid <= 0:
+        return False
+    with con.cursor() as cur:
+        cur.execute("SELECT EXISTS (SELECT 1 FROM public.exchangelog_raw WHERE logid = %s)", (logid,))
+        row = cur.fetchone()
+    return bool(row and row[0])
 
 
 def bounded_transform_to_logid(
@@ -749,6 +786,7 @@ def extract_exchangelog_batch(
     total_loaded = 0
 
     since = datetime.now() - timedelta(days=depth_days) if depth_days > 0 else None
+    cursor_in_window = is_cursor_in_window(pg_conn, logid=cursor_logid)
 
     for round_index in range(raw_rounds):
         started_at = time.monotonic()
@@ -773,7 +811,20 @@ def extract_exchangelog_batch(
             load_raw_logs(pg_conn, window_rows)
             total_loaded += len(window_rows)
 
-        cursor_logid = int(log_rows[-1]["logid"])
+        advanced, cursor_in_window = contiguous_prefix_end(
+            log_rows, after=cursor_logid, since=since, after_in_window=cursor_in_window
+        )
+        if advanced < int(log_rows[-1]["logid"]):
+            log.warning(
+                "EXCHANGELOG gap above LOGID=%s: %s row(s) read, extract cursor holds until "
+                "the missing row arrives.",
+                advanced,
+                len(log_rows),
+            )
+            cursor_logid = advanced
+            break
+
+        cursor_logid = advanced
         if len(log_rows) < raw_rows:
             break
 
@@ -855,7 +906,7 @@ def transform_exchangelog_batch(
     """exchangelog_raw → documents/transactions; двигает отметку разбора.
 
     Отметка разбора считает по exchangelog_raw: докуда raw разобрана. Верхняя
-    граница — отметка последней успешно загруженной строки журнала.
+    граница — отметка выгрузки: только до неё журнал заведомо вычитан без пропусков.
 
     Обе отметки читаются из etl_state, а не приходят от выгрузки: сорванная выгрузка
     (недоступный Firebird) не должна мешать разобрать то, что уже лежит в raw.
