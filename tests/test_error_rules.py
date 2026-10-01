@@ -364,7 +364,7 @@ def test_network_error_type_is_masked_gateway_text(con):
         "Error while receiving data from service: <endpoint> Error code: 500"
 
 
-# --- Ошибки сообщения по источникам ------------------------------------------------------
+# --- Ошибки строки журнала обмена по источникам ----------------------------------------
 
 def test_network_error_code_comes_from_gateway_text(con):
     assert network_code(con, "Synapse TCP/IP Socket error 11001: Host not found") == "11001"

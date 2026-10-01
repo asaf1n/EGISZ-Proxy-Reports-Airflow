@@ -108,7 +108,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Схема | Функции |
 |---|---|
 | `etl_meta` | `egisz_ensure_time_partitions` (было `ensure_time_partitions`) |
-| `stg_egisz` | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `classify_error`, `parse_message_errors`, `reclassify_errors` |
+| `stg_egisz` | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
 | `mart_egisz` | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal` |
 | `serving_egisz` | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |
 

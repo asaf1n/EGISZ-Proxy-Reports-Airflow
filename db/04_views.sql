@@ -20,10 +20,6 @@ DROP VIEW IF EXISTS mart_egisz.exchangelog_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.remd_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.ihe_errors CASCADE;
--- Общие объекты элементов ошибки в stg заменены представлениями по источникам и общей
--- формой в mart_egisz; снятие приводит к этому состоянию базу, где они остались.
-DROP VIEW IF EXISTS stg_egisz.message_errors CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS stg_egisz.document_errors_current CASCADE;
 -- Недельный и месячный слои читают document_versions и текущие ошибки документа —
 -- удаляются до них.
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_weekly CASCADE;
@@ -33,7 +29,7 @@ DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_errors_monthly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.pending_queue_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.semd_error_categories_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.registration_speed_daily CASCADE;
-DROP MATERIALIZED VIEW IF EXISTS serving_egisz.clinic_revenue_daily CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS serving_egisz.clinic_activity_daily CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.clinic_semd_types CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_search_keys CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_status_details CASCADE;
@@ -1426,15 +1422,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_registration_speed_daily
 COMMENT ON MATERIALIZED VIEW serving_egisz.registration_speed_daily IS
 'Скорость регистрации в РЭМД: грейн (ips_day — отчётный день МСК по ips_date, клиника, тип СЭМД, ступень лестницы ожидания). docs — документы, первый ответ которых пришёл в пределах ступени от первой отправки; ступень answered («Получен ответ», порядок 0) — все документы с ответом. Ступени — mart_egisz.dim_pending_segments без терминальной. Обновляется refresh_report_marts().';
 
--- ---------------------------------------------------------------- section: revenue
--- Ориентировочные денежные показатели по плоской ставке (mart_egisz.jid_fee_rates): состояние
--- каждого JID активной базы на конец каждого отчётного дня (для текущего дня — на момент
--- обновления). Окна и пороги — mart_egisz.dim_jid_activity_rules. Активная база дня D —
+-- ---------------------------------------------------------------- section: clinic activity
+-- Состояние клиник на день: активность каждого JID активной базы на конец каждого отчётного
+-- дня (для текущего дня — на момент обновления) и ориентировочные денежные показатели по
+-- плоской ставке (mart_egisz.jid_fee_rates). Показатели за произвольный период —
+-- serving_egisz.clinic_activity(p_from, p_to). Окна и пороги — mart_egisz.dim_jid_activity_rules. Активная база дня D —
 -- JID с документами в окне [D − active_days + 1; D];
 -- замолчавший — нет документов в последние quiet_days суток окна; без успехов — не
 -- замолчавший, от no_success_min_docs документов за окно и ни одного успешного. Документ
 -- относится к дню по ips_date, как во всех витринах.
-CREATE MATERIALIZED VIEW serving_egisz.clinic_revenue_daily AS
+CREATE MATERIALIZED VIEW serving_egisz.clinic_activity_daily AS
 WITH calendar AS (
     SELECT
         serving_egisz.report_timezone() AS tz,
@@ -1533,11 +1530,11 @@ CROSS JOIN history h
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = f.clinic_jid
 WITH DATA;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_revenue_daily
-    ON serving_egisz.clinic_revenue_daily (snapshot_date, clinic_jid);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_activity_daily
+    ON serving_egisz.clinic_activity_daily (snapshot_date, clinic_jid);
 
-COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_revenue_daily IS
-'Ориентировочные денежные показатели по плоской ставке mart_egisz.jid_fee_rates и правилам активности mart_egisz.dim_jid_activity_rules: грейн (snapshot_date — отчётный день МСК, JID активной базы этого дня). Активная база — JID с документами за active_days суток по день включительно (для текущего дня — на момент обновления); docs_window, docs_success_window, docs_answered_window — документы, успешные и с ответом РЭМД за окно; last_document_day — день последнего документа. is_silent — замолчал: нет документов quiet_days суток; is_no_success — не замолчал, от no_success_min_docs документов и ни одного успешного. monthly_fee — MRR JID, annual_fee — ARR; monthly_fee_at_risk — MRR под риском (замолчавшие и без успехов, JID один раз), monthly_fee_silent и monthly_fee_no_success — по спискам. MRR дня = SUM(monthly_fee) по дню. is_full_window — окно дня целиком лежит в истории. Ставка — порядок величины, а не биллинг. Обновляется refresh_report_marts().';
+COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_activity_daily IS
+'Состояние клиник на день: активность и ориентировочные денежные показатели по плоской ставке mart_egisz.jid_fee_rates и правилам активности mart_egisz.dim_jid_activity_rules; грейн (snapshot_date — отчётный день МСК, JID активной базы этого дня). Активная база — JID с документами за active_days суток по день включительно (для текущего дня — на момент обновления); docs_window, docs_success_window, docs_answered_window — документы, успешные и с ответом РЭМД за окно; last_document_day — день последнего документа. is_silent — замолчал: нет документов quiet_days суток; is_no_success — не замолчал, от no_success_min_docs документов и ни одного успешного. monthly_fee — MRR JID, annual_fee — ARR; monthly_fee_at_risk — MRR под риском (замолчавшие и без успехов, JID один раз), monthly_fee_silent и monthly_fee_no_success — по спискам. MRR дня = SUM(monthly_fee) по дню. is_full_window — окно дня целиком лежит в истории. Ставка — порядок величины, а не биллинг. Обновляется refresh_report_marts().';
 
 -- ---------------------------------------------------------------- section: period functions
 -- Показатели, зависящие от периода фильтра дашборда. Параметр NULL или пустой массив —
@@ -1722,7 +1719,7 @@ COMMENT ON FUNCTION serving_egisz.clinic_error_rate_contribution(timestamptz, ti
 -- в окне active_days перед ним. Правила и ставка — действующие на последний день периода;
 -- конец периода в будущем ограничен текущим моментом. Определения — README, раздел
 -- «Показатели клиник за период».
-CREATE OR REPLACE FUNCTION serving_egisz.clinic_activity_period(
+CREATE OR REPLACE FUNCTION serving_egisz.clinic_activity(
     p_from timestamptz,
     p_to timestamptz
 )
@@ -1745,9 +1742,6 @@ RETURNS TABLE (
     is_churned boolean,
     is_silent boolean,
     is_no_success boolean,
-    volume_segment text,
-    volume_segment_label text,
-    volume_segment_sort smallint,
     monthly_fee numeric
 )
 LANGUAGE sql
@@ -1820,22 +1814,6 @@ SELECT
     p.docs = 0 AND p.docs_before > 0,
     p.docs > 0 AND p.last_document_at < b.to_ts - make_interval(days => r.quiet_days),
     p.docs >= r.no_success_min_docs AND p.docs_success = 0,
-    CASE
-        WHEN p.docs >= r.volume_heavy_min_docs THEN 'heavy'
-        WHEN p.docs >= r.volume_medium_min_docs THEN 'medium'
-        WHEN p.docs > 0 THEN 'sleeping'
-    END,
-    CASE
-        WHEN p.docs >= r.volume_heavy_min_docs THEN 'Тяжёлые (от ' || r.volume_heavy_min_docs || ' док.)'
-        WHEN p.docs >= r.volume_medium_min_docs
-            THEN 'Средние (' || r.volume_medium_min_docs || '–' || (r.volume_heavy_min_docs - 1) || ')'
-        WHEN p.docs > 0 THEN 'Спящие (менее ' || r.volume_medium_min_docs || ')'
-    END,
-    CASE
-        WHEN p.docs >= r.volume_heavy_min_docs THEN 1
-        WHEN p.docs >= r.volume_medium_min_docs THEN 2
-        WHEN p.docs > 0 THEN 3
-    END::smallint,
     f.jid_monthly_fee
 FROM per_jid p
 CROSS JOIN bounds b
@@ -1852,8 +1830,8 @@ LEFT JOIN LATERAL (
 ) fs ON TRUE
 $$;
 
-COMMENT ON FUNCTION serving_egisz.clinic_activity_period(timestamptz, timestamptz) IS
-'Показатели клиник (JID) за период [p_from; p_to): строка — JID с документами в периоде либо в окне active_days перед ним. docs … docs_no_response — документы периода по исходу и состоянию отправки, docs_before — документы окна перед периодом, first_sent_at — первая отправка JID за всю историю. is_active — есть документы в периоде; is_new — первая отправка в периоде и не раньше active_days от начала истории; is_churned — документы только в окне перед периодом; is_silent — активен, но без документов последние quiet_days суток периода; is_no_success — от no_success_min_docs документов и ни одного успешного; volume_segment — сегмент по числу документов периода. Правила — mart_egisz.dim_jid_activity_rules, monthly_fee — mart_egisz.jid_fee_rates на последний день периода.';
+COMMENT ON FUNCTION serving_egisz.clinic_activity(timestamptz, timestamptz) IS
+'Показатели клиник (JID) за период [p_from; p_to): строка — JID с документами в периоде либо в окне active_days перед ним. docs … docs_no_response — документы периода по исходу и состоянию отправки, docs_before — документы окна перед периодом, first_sent_at — первая отправка JID за всю историю. is_active — есть документы в периоде; is_new — первая отправка в периоде и не раньше active_days от начала истории; is_churned — документы только в окне перед периодом; is_silent — активен, но без документов последние quiet_days суток периода; is_no_success — от no_success_min_docs документов и ни одного успешного. Правила — mart_egisz.dim_jid_activity_rules, monthly_fee — mart_egisz.jid_fee_rates на последний день периода.';
 
 -- ---------------------------------------------------------------- section: filter dimensions
 -- Значения фильтров «Клиника» и «Тип СЭМД» дашбордов: пары клиника — тип СЭМД текущих версий
@@ -1975,7 +1953,7 @@ BEGIN
         'serving_egisz.pending_queue_daily',
         'serving_egisz.semd_error_categories_daily',
         'serving_egisz.registration_speed_daily',
-        'serving_egisz.clinic_revenue_daily',
+        'serving_egisz.clinic_activity_daily',
         'serving_egisz.clinic_semd_types',
         'serving_egisz.document_search_keys'
     ]::regclass[]
@@ -2443,7 +2421,7 @@ ANALYZE serving_egisz.document_errors_monthly;
 ANALYZE serving_egisz.pending_queue_daily;
 ANALYZE serving_egisz.semd_error_categories_daily;
 ANALYZE serving_egisz.registration_speed_daily;
-ANALYZE serving_egisz.clinic_revenue_daily;
+ANALYZE serving_egisz.clinic_activity_daily;
 ANALYZE serving_egisz.clinic_semd_types;
 ANALYZE serving_egisz.document_search_keys;
 ANALYZE mart_egisz_admin.document_error_texts;

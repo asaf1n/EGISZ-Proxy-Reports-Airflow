@@ -337,37 +337,29 @@ WHERE jid_fee_rates.jid_monthly_fee IS DISTINCT FROM EXCLUDED.jid_monthly_fee;
 DELETE FROM mart_egisz.jid_fee_rates WHERE valid_from <> '-infinity';
 
 -- Правила активности JID: окна и пороги, по которым денежные показатели и показатели
--- клиник за период определяют активную базу, замолчавшие клиники, клиники без успехов и
--- сегменты по объёму. Одни правила на все показатели; строка действует с valid_from до
--- следующей строки.
+-- клиник за период определяют активную базу, замолчавшие клиники и клиники без успехов.
+-- Одни правила на все показатели; строка действует с valid_from до следующей строки.
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_jid_activity_rules (
     valid_from date PRIMARY KEY,
     active_days integer NOT NULL CHECK (active_days > 0),
     quiet_days integer NOT NULL CHECK (quiet_days > 0),
     no_success_min_docs integer NOT NULL CHECK (no_success_min_docs > 0),
-    volume_medium_min_docs integer NOT NULL CHECK (volume_medium_min_docs > 0),
-    volume_heavy_min_docs integer NOT NULL,
-    CHECK (quiet_days < active_days),
-    CHECK (volume_heavy_min_docs > volume_medium_min_docs)
+    CHECK (quiet_days < active_days)
 );
 
 COMMENT ON TABLE mart_egisz.dim_jid_activity_rules IS
-'Правила активности JID: active_days — окно активной базы (JID с документами за active_days суток); quiet_days — JID замолчал, если без документов последние quiet_days суток окна; no_success_min_docs — JID без успехов, если за окно от стольких документов и ни одного успешного; volume_medium_min_docs и volume_heavy_min_docs — нижние границы сегментов «Средние» и «Тяжёлые» по числу документов за период, ниже — «Спящие». Строка действует с valid_from до следующей строки.';
+'Правила активности JID: active_days — окно активной базы (JID с документами за active_days суток); quiet_days — JID замолчал, если без документов последние quiet_days суток окна; no_success_min_docs — JID без успехов, если за окно от стольких документов и ни одного успешного. Строка действует с valid_from до следующей строки.';
 
 INSERT INTO mart_egisz.dim_jid_activity_rules
-    (valid_from, active_days, quiet_days, no_success_min_docs, volume_medium_min_docs, volume_heavy_min_docs)
-VALUES ('-infinity', 30, 7, 10, 50, 1000)
+    (valid_from, active_days, quiet_days, no_success_min_docs)
+VALUES ('-infinity', 30, 7, 10)
 ON CONFLICT (valid_from) DO UPDATE SET
     active_days = EXCLUDED.active_days,
     quiet_days = EXCLUDED.quiet_days,
-    no_success_min_docs = EXCLUDED.no_success_min_docs,
-    volume_medium_min_docs = EXCLUDED.volume_medium_min_docs,
-    volume_heavy_min_docs = EXCLUDED.volume_heavy_min_docs
-WHERE (dim_jid_activity_rules.active_days, dim_jid_activity_rules.quiet_days, dim_jid_activity_rules.no_success_min_docs,
-       dim_jid_activity_rules.volume_medium_min_docs, dim_jid_activity_rules.volume_heavy_min_docs)
+    no_success_min_docs = EXCLUDED.no_success_min_docs
+WHERE (dim_jid_activity_rules.active_days, dim_jid_activity_rules.quiet_days, dim_jid_activity_rules.no_success_min_docs)
       IS DISTINCT FROM
-      (EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs,
-       EXCLUDED.volume_medium_min_docs, EXCLUDED.volume_heavy_min_docs);
+      (EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs);
 
 DELETE FROM mart_egisz.dim_jid_activity_rules WHERE valid_from <> '-infinity';
 

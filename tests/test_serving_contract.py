@@ -148,12 +148,12 @@ def test_fee_rate_and_activity_rules_are_separate_parameter_tables() -> None:
     assert "jid_monthly_fee numeric(12, 2)" in fee
     assert "active_days" not in fee
     rules = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS mart_egisz.dim_jid_activity_rules (", 1)[1].split(");", 1)[0]
-    for column in ("active_days", "quiet_days", "no_success_min_docs", "volume_medium_min_docs", "volume_heavy_min_docs"):
+    for column in ("active_days", "quiet_days", "no_success_min_docs"):
         assert f"{column} integer NOT NULL" in rules
     assert "jid_monthly_fee" not in rules
 
-    revenue = view_body("CREATE MATERIALIZED VIEW serving_egisz.clinic_revenue_daily AS",
-                        "COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_revenue_daily IS")
+    revenue = view_body("CREATE MATERIALIZED VIEW serving_egisz.clinic_activity_daily AS",
+                        "COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_activity_daily IS")
     assert "FROM mart_egisz.jid_fee_rates f" in revenue
     assert "FROM mart_egisz.dim_jid_activity_rules r" in revenue
 
@@ -166,13 +166,13 @@ def test_period_dependent_metrics_are_functions_of_the_period() -> None:
     assert "FROM mart_egisz.dim_control_chart_phases p" in contribution
     assert "WHERE d.is_current_version" in contribution
 
-    activity = function_body("serving_egisz.clinic_activity_period")
+    activity = function_body("serving_egisz.clinic_activity")
     assert "p_from timestamptz" in activity and "p_to timestamptz" in activity
     # Окна и пороги — из правил активности, ставка — из таблицы ставок, как у денежной витрины.
     assert "FROM mart_egisz.dim_jid_activity_rules r" in activity
     assert "FROM mart_egisz.jid_fee_rates f" in activity
     for column in ("is_active boolean", "is_new boolean", "is_churned boolean", "is_silent boolean",
-                   "is_no_success boolean", "volume_segment text", "monthly_fee numeric"):
+                   "is_no_success boolean", "monthly_fee numeric"):
         assert column in activity
 
     # Тело — один запрос на STABLE-функциях: планировщик подставляет его в запрос потребителя.

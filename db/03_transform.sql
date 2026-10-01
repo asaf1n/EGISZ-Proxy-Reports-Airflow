@@ -708,7 +708,7 @@ BEGIN
 
     -- Ошибки разбираются после записи исхода: элементы ответа ищутся только в ответе с
     -- распознанным исходом.
-    PERFORM stg_egisz.parse_message_errors(from_logid, to_logid);
+    PERFORM stg_egisz.parse_exchangelog_errors(from_logid, to_logid);
 
     -- РЭМД-ответ с MSGID в EGISZ_MESSAGES и пустым DOCUMENTID.
     WITH registry_match AS (
@@ -917,14 +917,14 @@ BEGIN
 END;
 $$;
 
--- Разбор ошибок разобранных сообщений диапазона LOGID по источникам: ошибка связи, элементы
--- ответа РЭМД, элементы ответа ИЭМК. Элементы ответа ищутся только в сообщении с
+-- Разбор ошибок разобранных строк журнала обмена диапазона LOGID по источникам: ошибка связи,
+-- элементы ответа РЭМД, элементы ответа ИЭМК. Элементы ответа ищутся только в строке с
 -- распознанным исходом. Ответ об ошибке без элементов сохраняет код и текст ответа
 -- элементом источника своего контура. Одинаковые элементы классифицируются один раз; тип
 -- без правила заводится в справочнике типов при первом появлении: категория «Прочие» у
 -- асинхронного ответа, без категории у ошибки связи. Вызывается приёмом для пакета и
 -- повторным разбором журнала по участкам LOGID.
-CREATE OR REPLACE FUNCTION stg_egisz.parse_message_errors(p_from_logid bigint, p_to_logid bigint)
+CREATE OR REPLACE FUNCTION stg_egisz.parse_exchangelog_errors(p_from_logid bigint, p_to_logid bigint)
 RETURNS integer
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
@@ -945,8 +945,8 @@ BEGIN
 
     -- Сообщения диапазона, у которых ошибки есть или были: прежние значения снимаются,
     -- если источник их больше не даёт. Payload в набор не копируется — он большой.
-    DROP TABLE IF EXISTS pg_temp.message_error_scope;
-    CREATE TEMP TABLE message_error_scope AS
+    DROP TABLE IF EXISTS pg_temp.exchangelog_error_scope;
+    CREATE TEMP TABLE exchangelog_error_scope AS
     SELECT tx.logid, tx.log_date
     FROM stg_egisz.exchange_messages tx
     JOIN raw_egisz.exchangelog r
@@ -963,12 +963,12 @@ BEGIN
            OR tx.network_error_text IS NOT NULL
            OR tx.remd_errors IS NOT NULL
            OR tx.ihe_errors IS NOT NULL);
-    ANALYZE pg_temp.message_error_scope;
+    ANALYZE pg_temp.exchangelog_error_scope;
 
-    DROP TABLE IF EXISTS pg_temp.message_error_items;
-    CREATE TEMP TABLE message_error_items AS
+    DROP TABLE IF EXISTS pg_temp.exchangelog_error_items;
+    CREATE TEMP TABLE exchangelog_error_items AS
     SELECT s.logid, s.log_date, i.*
-    FROM pg_temp.message_error_scope s
+    FROM pg_temp.exchangelog_error_scope s
     JOIN stg_egisz.exchange_messages tx ON tx.logid = s.logid AND tx.log_date = s.log_date
     JOIN raw_egisz.exchangelog r
       ON r.logid = s.logid
@@ -1002,19 +1002,19 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM remd)
           AND NOT EXISTS (SELECT 1 FROM ihe)
     ) i;
-    ANALYZE pg_temp.message_error_items;
+    ANALYZE pg_temp.exchangelog_error_items;
 
-    DROP TABLE IF EXISTS pg_temp.message_error_types;
-    CREATE TEMP TABLE message_error_types AS
+    DROP TABLE IF EXISTS pg_temp.exchangelog_error_types;
+    CREATE TEMP TABLE exchangelog_error_types AS
     SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
-    FROM (SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.message_error_items) k
+    FROM (SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.exchangelog_error_items) k
     CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
-    ANALYZE pg_temp.message_error_types;
+    ANALYZE pg_temp.exchangelog_error_types;
 
     INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
     SELECT DISTINCT ON (t.error_type)
         t.error_type, t.error_kind, c.error_category, c.responsibility, c.is_retryable
-    FROM pg_temp.message_error_types t
+    FROM pg_temp.exchangelog_error_types t
     JOIN mart_egisz.dim_error_category c
       ON c.error_kind = t.error_kind
      AND c.error_category IS NOT DISTINCT FROM
@@ -1026,8 +1026,8 @@ BEGIN
     -- Значения собираются во временную таблицу со статистикой: соединение наборов без
     -- статистики планировщик сводил к перебору пар. Сравнение массивов считает NULL
     -- равными и соединяется хешем.
-    DROP TABLE IF EXISTS pg_temp.message_error_parsed;
-    CREATE TEMP TABLE message_error_parsed AS
+    DROP TABLE IF EXISTS pg_temp.exchangelog_error_parsed;
+    CREATE TEMP TABLE exchangelog_error_parsed AS
     SELECT
         s.logid,
         s.log_date,
@@ -1043,12 +1043,12 @@ BEGIN
             'severity', i.severity, 'location', i.location,
             'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid
         ) ORDER BY i.item_no) FILTER (WHERE i.source = 'ihe') AS ihe_errors
-    FROM pg_temp.message_error_scope s
-    LEFT JOIN pg_temp.message_error_items i ON i.logid = s.logid AND i.log_date = s.log_date
-    LEFT JOIN pg_temp.message_error_types t
+    FROM pg_temp.exchangelog_error_scope s
+    LEFT JOIN pg_temp.exchangelog_error_items i ON i.logid = s.logid AND i.log_date = s.log_date
+    LEFT JOIN pg_temp.exchangelog_error_types t
       ON ARRAY[t.error_kind, t.error_code, t.error_text] = ARRAY[i.error_kind, i.error_code, i.error_text]
     GROUP BY s.logid, s.log_date;
-    ANALYZE pg_temp.message_error_parsed;
+    ANALYZE pg_temp.exchangelog_error_parsed;
 
     UPDATE stg_egisz.exchange_messages tx
     SET network_error_code = p.network_error_code,
@@ -1056,7 +1056,7 @@ BEGIN
         network_error_type = p.network_error_type,
         remd_errors = p.remd_errors,
         ihe_errors = p.ihe_errors
-    FROM pg_temp.message_error_parsed p
+    FROM pg_temp.exchangelog_error_parsed p
     WHERE tx.logid = p.logid
       AND tx.log_date = p.log_date
       AND tx.log_date >= cd_min
@@ -1065,10 +1065,10 @@ BEGIN
           IS DISTINCT FROM (p.network_error_code, p.network_error_text, p.network_error_type, p.remd_errors, p.ihe_errors);
     GET DIAGNOSTICS updated = ROW_COUNT;
 
-    DROP TABLE pg_temp.message_error_parsed;
-    DROP TABLE pg_temp.message_error_types;
-    DROP TABLE pg_temp.message_error_items;
-    DROP TABLE pg_temp.message_error_scope;
+    DROP TABLE pg_temp.exchangelog_error_parsed;
+    DROP TABLE pg_temp.exchangelog_error_types;
+    DROP TABLE pg_temp.exchangelog_error_items;
+    DROP TABLE pg_temp.exchangelog_error_scope;
     RETURN updated;
 END;
 $$;

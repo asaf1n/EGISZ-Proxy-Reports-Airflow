@@ -236,13 +236,13 @@ def test_errors_are_parsed_per_source_and_classified_once_per_batch() -> None:
                    "remd_errors jsonb", "ihe_errors jsonb"):
         assert column in schema
     transform = (DWH_INIT_SQL_PATH.parent / "03_transform.sql").read_text(encoding="utf-8")
-    parse = transform.split("CREATE OR REPLACE FUNCTION stg_egisz.parse_message_errors")[1].split("$$;")[0]
+    parse = transform.split("CREATE OR REPLACE FUNCTION stg_egisz.parse_exchangelog_errors")[1].split("$$;")[0]
     assert "stg_egisz.remd_error_items(r.msgtext)" in parse
     assert "stg_egisz.ihe_error_items(r.msgtext)" in parse
     assert "stg_egisz.network_error_code(r.logtext)" in parse
-    assert "SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.message_error_items" in parse
+    assert "SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.exchangelog_error_items" in parse
     assert "CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c" in parse
-    assert "PERFORM stg_egisz.parse_message_errors(from_logid, to_logid);" in transform
+    assert "PERFORM stg_egisz.parse_exchangelog_errors(from_logid, to_logid);" in transform
 
 
 def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
