@@ -225,11 +225,15 @@ def test_status_filter_values_follow_documents_current() -> None:
     assert "WHERE NOT g.is_no_response" in segments
 
 
-def test_error_text_is_masked_by_the_masking_rules() -> None:
-    """Маскирование текста ошибки определено один раз: тип ошибки без правила и текст ошибок
-    документа применяют одни шаги маскирования dim_error_rules."""
-    mask = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text(", 1)[1].split("$$;", 1)[0]
-    assert "WHERE r.rule_kind = 'маскирование'" in mask
+def test_error_text_masking_hides_only_personal_data() -> None:
+    """Маскирование текста для выдачи — функция слоя витрин: применяет только шаги нормализации,
+    скрывающие персональные данные. Классификация на stage нормализует текст в тип сама и
+    функцию маскирования не вызывает."""
+    mask = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION mart_egisz.mask_error_text(", 1)[1].split("$$;", 1)[0]
+    assert "WHERE r.rule_kind = 'нормализация'" in mask
+    assert "AND r.masks_personal_data" in mask
     assert "ORDER BY r.apply_order" in mask
     classify = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.classify_error(", 1)[1].split("$$;", 1)[0]
-    assert "error_type := stg_egisz.mask_error_text(p_error_kind, p_error_text);" in classify
+    assert "mask_error_text" not in classify
+    assert "WHERE r.rule_kind = 'нормализация'" in classify
+    assert "CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text" not in FUNCTIONS_SQL

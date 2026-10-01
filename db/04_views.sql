@@ -640,9 +640,10 @@ WHERE tx.ihe_errors IS NOT NULL;
 COMMENT ON VIEW stg_egisz.ihe_errors IS
 'Элементы ответа ИЭМК: строка — IHE RegistryError, ключ (logid, message_at, item_no). error_code — errorCode, code_context — codeContext (исходный текст), severity и location — атрибуты элемента.';
 
--- Общая форма ошибок журнала обмена без исходного текста: вид, код, тип и признак
--- предупреждения из атрибута своего источника. Ключ элемента — (logid, message_at,
--- error_source, item_no); по нему исходный текст присоединяется из представления источника.
+-- Общая форма ошибок журнала обмена: вид, код, тип и признак предупреждения из атрибута
+-- своего источника. Ключ элемента — (logid, message_at, error_source, item_no). Тексты
+-- источников объединяются здесь, выше stage, и выходят только маскированными
+-- (mart_egisz.mask_error_text): исходный текст без маскирования остаётся в stg.
 CREATE VIEW mart_egisz.exchangelog_errors AS
 SELECT
     n.message_at, n.logid, n.msgid, n.dwh_id, n.clinic_jid, n.semd_code, n.egisz_subsystem, n.source_action,
@@ -652,28 +653,33 @@ SELECT
     n.error_code,
     n.error_type,
     NULL::text AS nsi_dictionary_oid,
-    false AS is_warning
+    false AS is_warning,
+    mart_egisz.mask_error_text('Ошибка связи', n.error_text) AS error_text
 FROM stg_egisz.network_errors n
 UNION ALL
 SELECT
     r.message_at, r.logid, r.msgid, r.dwh_id, r.clinic_jid, r.semd_code, r.egisz_subsystem, r.source_action,
     'РЭМД', r.item_no, 'Ошибка асинхронного ответа', r.code, r.error_type, r.nsi_dictionary_oid,
-    r.section IS NOT DISTINCT FROM 'registrationWarnings'
+    r.section IS NOT DISTINCT FROM 'registrationWarnings',
+    mart_egisz.mask_error_text('Ошибка асинхронного ответа', r.message)
 FROM stg_egisz.remd_errors r
 UNION ALL
 SELECT
     h.message_at, h.logid, h.msgid, h.dwh_id, h.clinic_jid, h.semd_code, h.egisz_subsystem, h.source_action,
     'ИЭМК', h.item_no, 'Ошибка асинхронного ответа', h.error_code, h.error_type, h.nsi_dictionary_oid,
-    COALESCE(h.severity ~* 'Warning$', false)
+    COALESCE(h.severity ~* 'Warning$', false),
+    mart_egisz.mask_error_text('Ошибка асинхронного ответа', h.code_context)
 FROM stg_egisz.ihe_errors h;
 
 COMMENT ON VIEW mart_egisz.exchangelog_errors IS
-'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. Исходный текст — в stg_egisz.network_errors, remd_errors, ihe_errors по ключу.';
+'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. error_text — текст источника (LOGTEXT ошибки связи, message РЭМД, codeContext ИЭМК) с маскированными персональными данными, без обрезки и нормализации.';
 
 -- Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки
 -- связи после него; у документа без асинхронного ответа — все его ошибки связи. Время
 -- последнего ответа берётся из тех же разобранных сообщений. error_no нумерует ошибки
--- документа по порядку сообщений.
+-- документа по порядку сообщений. Текст источника маскируется один раз на различный текст
+-- и только у отобранных ошибок: маскирование в общей форме считалось бы для всех ошибок
+-- журнала до отбора.
 CREATE MATERIALIZED VIEW mart_egisz.document_errors AS
 WITH last_response AS (
     SELECT t.dwh_id, max(t.log_date) AS responded_at
@@ -681,25 +687,58 @@ WITH last_response AS (
     WHERE t.dwh_id IS NOT NULL
       AND t.status IN ('success', 'error')
     GROUP BY t.dwh_id
+),
+current_errors AS (
+    SELECT
+        m.dwh_id,
+        row_number() OVER (PARTITION BY m.dwh_id ORDER BY m.message_at, m.logid, m.item_no, m.error_source)::integer AS error_no,
+        m.message_at,
+        m.logid,
+        m.error_source,
+        m.item_no,
+        m.egisz_subsystem,
+        m.source_action,
+        m.error_kind,
+        m.error_code,
+        m.error_type,
+        m.nsi_dictionary_oid,
+        m.is_warning
+    FROM mart_egisz.exchangelog_errors m
+    LEFT JOIN last_response lr ON lr.dwh_id = m.dwh_id
+    WHERE m.dwh_id IS NOT NULL
+      AND m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
+),
+source_texts AS (
+    SELECT c.*, COALESCE(n.error_text, r.message, h.code_context) AS source_text
+    FROM current_errors c
+    LEFT JOIN stg_egisz.network_errors n
+      ON c.error_source = 'связь' AND n.logid = c.logid AND n.message_at = c.message_at
+    LEFT JOIN stg_egisz.remd_errors r
+      ON c.error_source = 'РЭМД' AND r.logid = c.logid AND r.message_at = c.message_at AND r.item_no = c.item_no
+    LEFT JOIN stg_egisz.ihe_errors h
+      ON c.error_source = 'ИЭМК' AND h.logid = c.logid AND h.message_at = c.message_at AND h.item_no = c.item_no
+),
+masked_texts AS (
+    SELECT d.error_kind, d.source_text, mart_egisz.mask_error_text(d.error_kind, d.source_text) AS error_text
+    FROM (SELECT DISTINCT s.error_kind, s.source_text FROM source_texts s WHERE s.source_text IS NOT NULL) d
 )
 SELECT
-    m.dwh_id,
-    row_number() OVER (PARTITION BY m.dwh_id ORDER BY m.message_at, m.logid, m.item_no, m.error_source)::integer AS error_no,
-    m.message_at,
-    m.logid,
-    m.error_source,
-    m.item_no,
-    m.egisz_subsystem,
-    m.source_action,
-    m.error_kind,
-    m.error_code,
-    m.error_type,
-    m.nsi_dictionary_oid,
-    m.is_warning
-FROM mart_egisz.exchangelog_errors m
-LEFT JOIN last_response lr ON lr.dwh_id = m.dwh_id
-WHERE m.dwh_id IS NOT NULL
-  AND m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
+    s.dwh_id,
+    s.error_no,
+    s.message_at,
+    s.logid,
+    s.error_source,
+    s.item_no,
+    s.egisz_subsystem,
+    s.source_action,
+    s.error_kind,
+    s.error_code,
+    s.error_type,
+    s.nsi_dictionary_oid,
+    s.is_warning,
+    t.error_text
+FROM source_texts s
+LEFT JOIN masked_texts t ON t.error_kind = s.error_kind AND t.source_text = s.source_text
 WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mart_document_errors
@@ -708,7 +747,7 @@ CREATE INDEX IF NOT EXISTS idx_mart_document_errors_kind
     ON mart_egisz.document_errors (error_kind);
 
 COMMENT ON MATERIALIZED VIEW mart_egisz.document_errors IS
-'Ошибки текущего состояния документа в общей форме: элементы последнего асинхронного ответа и ошибки связи после него. Строка — одна ошибка документа, ключ (dwh_id, error_no); ключ источника (logid, message_at, error_source, item_no) присоединяет исходный текст из stg. Обновляется refresh_report_marts() после transform.';
+'Ошибки текущего состояния документа в общей форме: элементы последнего асинхронного ответа и ошибки связи после него. Строка — одна ошибка документа, ключ (dwh_id, error_no); ключ источника (logid, message_at, error_source, item_no). error_text — текст источника с маскированными персональными данными (материализован для разбора поддержкой). Обновляется refresh_report_marts() после transform.';
 
 -- Опубликованные ошибки текущего состояния документа (состояние к выдаче): тип, вид,
 -- категория, код и атрибуты справочников вместе с реквизитами документа. Материализовано:
@@ -768,7 +807,7 @@ CREATE INDEX IF NOT EXISTS idx_document_errors_responsibility ON serving_egisz.d
 CREATE INDEX IF NOT EXISTS idx_document_errors_corpus ON serving_egisz.document_errors (ips_date) WHERE is_error_corpus;
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors IS
-'Ошибки текущего состояния документа для документов состояния к выдаче serving_egisz.documents_current. Строка — одна ошибка документа, ключ (dwh_id, error_no): error_type — тип с замаскированными значениями; вид, категория, код и атрибуты справочников; is_warning — предупреждение источника. Исходный текст — в stg_egisz по ключу источника (logid, message_at, error_source, item_no). Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly и semd_error_categories_daily, типы ошибок документа — в document_error_types.';
+'Ошибки текущего состояния документа для документов состояния к выдаче serving_egisz.documents_current. Строка — одна ошибка документа, ключ (dwh_id, error_no): error_type — нормализованный тип без значений документа; вид, категория, код и атрибуты справочников; is_warning — предупреждение источника. Текст ошибки — в mart_egisz.document_errors.error_text по ключу (dwh_id, error_no). Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly и semd_error_categories_daily, типы ошибок документа — в document_error_types.';
 
 -- Ошибки на уровне документа: строка — один документ с ошибками текущего состояния, списки
 -- типов, категорий и видов — по всем его элементам. Нужна потребителям, которым удобнее
@@ -798,7 +837,7 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.document_error_types IS
 'Ошибки на уровне документа: строка — документ с ошибками текущего состояния (ключ dwh_id); errors_count — число элементов, error_types / error_categories / error_kinds — списки различных значений, has_network_error / has_remd_error — есть ли ошибка данного вида, is_error_corpus — документ входит в корпус ошибок. Строится из serving_egisz.document_errors; обновляется refresh_report_marts() после него.';
 
 -- Ошибки связи за период: шлюз не доставил сообщение. Строка — одна ошибка связи, в том
--- числе в сообщениях без связи с документом. Исходный текст — в stg_egisz.network_errors.
+-- числе в сообщениях без связи с документом. Текст ошибки — в mart_egisz.exchangelog_errors.
 CREATE VIEW serving_egisz.network_errors AS
 SELECT
     m.message_at,
@@ -837,33 +876,22 @@ LEFT JOIN LATERAL (
 WHERE m.error_source = 'связь';
 
 COMMENT ON VIEW serving_egisz.network_errors IS
-'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Исходный текст — в stg_egisz.network_errors по сообщению (logid, message_at): ошибка связи у сообщения одна.';
+'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Текст ошибки — в mart_egisz.exchangelog_errors по сообщению (logid, message_at, error_source = связь): ошибка связи у сообщения одна.';
 
--- Текст текущих ошибок документа одной строкой для разбора поддержкой. Исходный текст
--- собирается из представлений источников по ключу ошибки и проходит маскирование своего вида
--- (stg_egisz.mask_error_text); результат не хранится. Функция лежит в слое ограниченного
--- доступа: она читает исходный текст stg.
-CREATE OR REPLACE FUNCTION stg_egisz.document_error_text(p_dwh_id text)
+-- Текст текущих ошибок документа одной строкой для разбора поддержкой: материализованные
+-- тексты mart_egisz.document_errors в порядке ошибок документа.
+CREATE OR REPLACE FUNCTION mart_egisz.document_error_text(p_dwh_id text)
 RETURNS text
 LANGUAGE sql
 STABLE
 AS $$
-SELECT string_agg(
-    stg_egisz.mask_error_text(c.error_kind, COALESCE(n.error_text, r.message, h.code_context)),
-    ' · ' ORDER BY c.error_no
-)
+SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no)
 FROM mart_egisz.document_errors c
-LEFT JOIN stg_egisz.network_errors n
-  ON c.error_source = 'связь' AND n.logid = c.logid AND n.message_at = c.message_at
-LEFT JOIN stg_egisz.remd_errors r
-  ON c.error_source = 'РЭМД' AND r.logid = c.logid AND r.message_at = c.message_at AND r.item_no = c.item_no
-LEFT JOIN stg_egisz.ihe_errors h
-  ON c.error_source = 'ИЭМК' AND h.logid = c.logid AND h.message_at = c.message_at AND h.item_no = c.item_no
 WHERE c.dwh_id = p_dwh_id
 $$;
 
-COMMENT ON FUNCTION stg_egisz.document_error_text(text) IS
-'Текст текущих ошибок документа p_dwh_id: тексты источников (stg_egisz.network_errors, remd_errors, ihe_errors по ключу ошибки mart_egisz.document_errors) после маскирования своего вида stg_egisz.mask_error_text, через « · » в порядке error_no. NULL — у документа нет текущих ошибок. Результат не хранится.';
+COMMENT ON FUNCTION mart_egisz.document_error_text(text) IS
+'Текст текущих ошибок документа p_dwh_id: error_text из mart_egisz.document_errors (текст источника с маскированными персональными данными) через « · » в порядке error_no. NULL — у документа нет текущих ошибок.';
 
 CREATE OR REPLACE VIEW mart_egisz_admin.document_lineage AS
 SELECT

@@ -1603,7 +1603,7 @@ COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_code IS
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_text IS
 'Ошибка связи (LOGSTATE = 3): исходный текст шлюза (LOGTEXT). Пусто, если сообщение доставлено.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_type IS
-'Тип ошибки связи из mart_egisz.dim_error_type: текст с замаскированными значениями.';
+'Тип ошибки связи из mart_egisz.dim_error_type: нормализованный текст: значения документа заменены обозначениями.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.remd_errors IS
 'Элементы ответа РЭМД (<item>): item_no, section (раздел ответа: errors либо registrationWarnings — предупреждения при успешной регистрации), code, message (исходный текст), error_type, nsi_dictionary_oid. Пусто, если элементов нет.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.ihe_errors IS

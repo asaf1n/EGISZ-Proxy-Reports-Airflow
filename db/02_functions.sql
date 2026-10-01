@@ -585,9 +585,11 @@ $$;
 -- ============================================================================
 
 -- Правило двух родов. Классификация относит элемент асинхронного ответа к типу ошибки
--- по коду и тексту. Маскирование — упорядоченный шаг нормализации текста, по которому
--- тип строится, когда правило классификации не нашлось; различия источников задаются
--- здесь данными, а не отдельными функциями.
+-- по коду и тексту. Нормализация — упорядоченный шаг, по которому тип строится из текста,
+-- когда правило классификации не нашлось; различия источников задаются здесь данными, а
+-- не отдельными функциями. Шаги нормализации с признаком masks_personal_data скрывают
+-- персональные данные и составляют маскирование текста ошибки для выдачи
+-- (mart_egisz.mask_error_text).
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
     rule_code text PRIMARY KEY,
     rule_kind text NOT NULL,
@@ -603,8 +605,9 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
     interpretation text,
     error_category text,
     updated_at timestamptz DEFAULT now(),
+    masks_personal_data boolean NOT NULL DEFAULT false,
     CONSTRAINT chk_dim_error_rules_kind CHECK (
-        (rule_kind = 'маскирование'
+        (rule_kind = 'нормализация'
             AND apply_order IS NOT NULL AND replacement IS NOT NULL
             AND (error_kind IS NULL OR error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа'))
             AND match_tier IS NULL AND match_code IS NULL AND nsi_error_code IS NULL
@@ -614,14 +617,17 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
             AND apply_order IS NULL AND replacement IS NULL AND match_flags = ''
             AND match_tier BETWEEN 1 AND 4
             AND (match_tier <= 2) = (match_code IS NOT NULL)
-            AND interpretation IS NOT NULL AND error_category IS NOT NULL)
+            AND interpretation IS NOT NULL AND error_category IS NOT NULL
+            AND NOT masks_personal_data)
     )
 );
 
 COMMENT ON TABLE mart_egisz.dim_error_rules IS
-'Правила обработки ошибок. Строка — одно правило: классификация (код и текст элемента асинхронного ответа → тип и категория) либо шаг маскирования текста (порядок, шаблон, замена).';
+'Правила обработки ошибок. Строка — одно правило: классификация (код и текст элемента асинхронного ответа → тип и категория) либо шаг нормализации текста в тип (порядок, шаблон, замена). Справочник правил, сид — db/02_functions.sql.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.error_kind IS
-'Вид ошибки, к которому применяется правило. У шага маскирования NULL означает оба вида.';
+'Вид ошибки, к которому применяется правило. У шага нормализации NULL означает оба вида.';
+COMMENT ON COLUMN mart_egisz.dim_error_rules.masks_personal_data IS
+'Шаг нормализации скрывает персональные данные (ФИО, СНИЛС, дата рождения, ДУЛ, идентификатор пациента, субъект сертификата, e-mail). Только такие шаги применяет маскирование текста ошибки для выдачи mart_egisz.mask_error_text.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.match_tier IS
 'Ярус классификации: 1 — код и специфичный текст; 2 — только код; 3 — специфичный текст без кода; 4 — широкий текстовый фолбэк. Первый ярус с совпадением побеждает, внутри яруса — правило с меньшим rule_code.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.nsi_error_code IS
@@ -638,9 +644,9 @@ DROP TABLE IF EXISTS seed_error_rules;
 CREATE TEMP TABLE seed_error_rules (LIKE mart_egisz.dim_error_rules INCLUDING DEFAULTS);
 
 -- ------------------------------------------------------------------
--- Маскирование. Тип ошибки без правила — текст элемента, в котором значения конкретного
+-- Нормализация. Тип ошибки без правила — текст элемента, в котором значения конкретного
 -- документа заменены обозначениями. Шаги применяются по apply_order к виду из error_kind.
--- Снятие служебной обёртки ответов ИЭМК и ФРМСС идёт до маскирования: иначе значения
+-- Снятие служебной обёртки ответов ИЭМК и ФРМСС идёт до замены значений: иначе значения
 -- скрыли бы формулировку вместе с вложенными скобками. Реквизит в «Указанное значение
 -- [Имя пациента] …» — указание, что именно не совпало с ГИП, поэтому шаг скобок его
 -- не трогает. Граница слова и регистр для кириллицы заданы явными классами: под
@@ -648,39 +654,71 @@ CREATE TEMP TABLE seed_error_rules (LIKE mart_egisz.dim_error_rules INCLUDING DE
 -- ------------------------------------------------------------------
 INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, apply_order, match_pattern, match_flags, replacement)
 VALUES
-    ('mask_iemk_rule_prefix', 'маскирование', 'Ошибка асинхронного ответа', 10, '^\[[A-Z]+-[0-9]+\]:\s*[A-Z]+-[0-9]+;\s*', '', ''),
-    ('mask_iemk_patient_tail', 'маскирование', 'Ошибка асинхронного ответа', 20, ';\s*Patient\(.*$', '', ''),
-    ('mask_iemk_patient_brackets', 'маскирование', 'Ошибка асинхронного ответа', 30, '^(Пациент не определен:\s*)\[(.*)\]$', '', '\1\2'),
-    ('mask_check_digit', 'маскирование', 'Ошибка асинхронного ответа', 40, 'контрольное число [0-9]+', 'g', 'контрольное число'),
+    ('mask_iemk_rule_prefix', 'нормализация', 'Ошибка асинхронного ответа', 10, '^\[[A-Z]+-[0-9]+\]:\s*[A-Z]+-[0-9]+;\s*', '', ''),
+    ('mask_iemk_patient_tail', 'нормализация', 'Ошибка асинхронного ответа', 20, ';\s*Patient\(.*$', '', ''),
+    ('mask_iemk_patient_brackets', 'нормализация', 'Ошибка асинхронного ответа', 30, '^(Пациент не определен:\s*)\[(.*)\]$', '', '\1\2'),
+    ('mask_check_digit', 'нормализация', 'Ошибка асинхронного ответа', 40, 'контрольное число [0-9]+', 'g', 'контрольное число'),
     -- ИЭМК пишет формат СНИЛС регулярным выражением; в типе — словами.
-    ('describe_snils_format', 'маскирование', 'Ошибка асинхронного ответа', 45, 'формату \\d\{11\}', '', 'формату (11 цифр)'),
-    ('mask_frmss_wrapper', 'маскирование', 'Ошибка асинхронного ответа', 50, '(?s)^(Ошибки валидации в ФРМСС):\s*\[code:\s*([A-Za-z_]+),\s*description:\s*(.*)\]\.?\s*$', '', '\1 (\2): \3'),
-    ('mask_error_uid', 'маскирование', 'Ошибка асинхронного ответа', 60, ',?\s*уникальный идентификатор ошибки:\s*\S+\s*$', '', ''),
-    ('mask_series_number', 'маскирование', 'Ошибка асинхронного ответа', 70, '(номером|серией) [0-9]+', 'g', '\1 […]'),
+    ('describe_snils_format', 'нормализация', 'Ошибка асинхронного ответа', 45, 'формату \\d\{11\}', '', 'формату (11 цифр)'),
+    ('mask_frmss_wrapper', 'нормализация', 'Ошибка асинхронного ответа', 50, '(?s)^(Ошибки валидации в ФРМСС):\s*\[code:\s*([A-Za-z_]+),\s*description:\s*(.*)\]\.?\s*$', '', '\1 (\2): \3'),
+    ('mask_error_uid', 'нормализация', 'Ошибка асинхронного ответа', 60, ',?\s*уникальный идентификатор ошибки:\s*\S+\s*$', '', ''),
     -- Хвост с реквизитами сертификата (субъект, серийный номер, e-mail) принадлежит экземпляру.
-    ('mask_certificate_tail', 'маскирование', 'Ошибка асинхронного ответа', 80, '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', '', ''),
-    ('mask_fio_snils', 'маскирование', 'Ошибка асинхронного ответа', 90, ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', 'g', ': […] (СНИЛС: […])'),
-    ('trim_spaces', 'маскирование', NULL, 100, '^ +| +$', 'g', ''),
+    ('mask_certificate_tail', 'нормализация', 'Ошибка асинхронного ответа', 80, '(?is)\s*:?\s*(Validation failed|PKUP of the certificate|serial:|subject:).*$', '', ''),
+    ('trim_spaces', 'нормализация', NULL, 100, '^ +| +$', 'g', ''),
     -- «Путь: /ClinicalDocument[1]/…» описывает место в документе, а не причину.
-    ('mask_document_path', 'маскирование', 'Ошибка асинхронного ответа', 110, '(?is)\s*Путь:\s*/.*$', 'g', ''),
-    ('mask_quoted_value', 'маскирование', 'Ошибка асинхронного ответа', 120, '''[^'']{0,200}''', 'g', '''[…]'''),
-    ('mask_email', 'маскирование', 'Ошибка асинхронного ответа', 130, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', 'g', '<e-mail>'),
-    ('mask_url', 'маскирование', NULL, 140, 'https?://[^\s<>"'',;]+', 'gi', '<endpoint>'),
-    ('mask_gost_host', 'маскирование', 'Ошибка связи', 150, '(?i)gost-[0-9]+\.[a-z0-9._-]+(?::[0-9]+)?', 'g', '<gost-endpoint>'),
-    ('mask_uuid', 'маскирование', NULL, 160, '(?i)(?:<urn:uuid:|<uuid:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}>?', 'g', '<uuid>'),
-    ('mask_ip', 'маскирование', 'Ошибка связи', 170, '\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?', 'g', '<ip>'),
-    ('mask_bracket_value', 'маскирование', NULL, 180, '(?<!^Указанное значение )\[[^\]]{0,200}\]|(?<=^Указанное значение )\[(?![А-Яа-яЁё :0-9]{1,40}\])[^\]]{0,200}\]', 'g', '[…]'),
+    ('mask_document_path', 'нормализация', 'Ошибка асинхронного ответа', 110, '(?is)\s*Путь:\s*/.*$', 'g', ''),
+    ('mask_quoted_value', 'нормализация', 'Ошибка асинхронного ответа', 120, '''[^'']{0,200}''', 'g', '''[…]'''),
+    ('mask_url', 'нормализация', NULL, 140, 'https?://[^\s<>"'',;]+', 'gi', '<endpoint>'),
+    ('mask_gost_host', 'нормализация', 'Ошибка связи', 150, '(?i)gost-[0-9]+\.[a-z0-9._-]+(?::[0-9]+)?', 'g', '<gost-endpoint>'),
+    ('mask_uuid', 'нормализация', NULL, 160, '(?i)(?:<urn:uuid:|<uuid:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}>?', 'g', '<uuid>'),
+    ('mask_ip', 'нормализация', 'Ошибка связи', 170, '\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?', 'g', '<ip>'),
+    ('mask_bracket_value', 'нормализация', NULL, 180, '(?<!^Указанное значение )\[[^\]]{0,200}\]|(?<=^Указанное значение )\[(?![А-Яа-яЁё :0-9]{1,40}\])[^\]]{0,200}\]', 'g', '[…]'),
     -- Номер правила схематрона задаётся Руководством по виду СЭМД: один дефект нумеруется
     -- по-разному в разных видах.
-    ('mask_rule_number', 'маскирование', 'Ошибка асинхронного ответа', 190, '(^|[^0-9A-Za-zА-Яа-яЁё])[Уу]\d+(?:[-.]\d+)+', 'g', '\1<правило>'),
-    ('mask_oid', 'маскирование', 'Ошибка асинхронного ответа', 200, '\y\d+(?:\.\d+){3,}\y', 'g', '<oid>'),
-    ('mask_long_number', 'маскирование', 'Ошибка асинхронного ответа', 210, '\y\d{6,}\y', 'g', '<значение>'),
-    ('collapse_spaces', 'маскирование', NULL, 220, '\s+', 'g', ' '),
-    ('trim_spaces_final', 'маскирование', NULL, 230, '^ +| +$', 'g', ''),
-    ('cut_length', 'маскирование', NULL, 240, '^(.{220}).+$', '', '\1'),
-    ('mask_date', 'маскирование', 'Ошибка асинхронного ответа', 250, '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+Z?)?', 'g', '[…]'),
-    -- Вложенные скобки источника «[[…]]» после маскирования оставляют лишнюю «]».
-    ('collapse_masked_brackets', 'маскирование', 'Ошибка асинхронного ответа', 260, '\[…\]\]+', 'g', '[…]');
+    ('mask_rule_number', 'нормализация', 'Ошибка асинхронного ответа', 190, '(^|[^0-9A-Za-zА-Яа-яЁё])[Уу]\d+(?:[-.]\d+)+', 'g', '\1<правило>'),
+    ('mask_oid', 'нормализация', 'Ошибка асинхронного ответа', 200, '\y\d+(?:\.\d+){3,}\y', 'g', '<oid>'),
+    ('mask_long_number', 'нормализация', 'Ошибка асинхронного ответа', 210, '\y\d{6,}\y', 'g', '<значение>'),
+    ('collapse_spaces', 'нормализация', NULL, 220, '\s+', 'g', ' '),
+    ('trim_spaces_final', 'нормализация', NULL, 230, '^ +| +$', 'g', ''),
+    ('cut_length', 'нормализация', NULL, 240, '^(.{220}).+$', '', '\1'),
+    ('mask_date', 'нормализация', 'Ошибка асинхронного ответа', 250, '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+Z?)?', 'g', '[…]'),
+    -- Вложенные скобки источника «[[…]]» после замены значений оставляют лишнюю «]».
+    ('collapse_masked_brackets', 'нормализация', 'Ошибка асинхронного ответа', 260, '\[…\]\]+', 'g', '[…]');
+
+-- ------------------------------------------------------------------
+-- Шаги, скрывающие персональные данные (masks_personal_data). Ими же маскируется текст
+-- ошибки для выдачи (mart_egisz.mask_error_text), поэтому шаг заменяет только значение
+-- человека и оставляет формулировку, адреса и реквизиты документа. Значение в квадратных
+-- скобках узнаётся по реквизиту перед ним: СНИЛС, сравнение с ГИП и ФРМР, сравнение
+-- реквизитов пациента в ЭМД и в запросе, подписант в метаданных и в сертификате. Шаблон
+-- начинается с литерала: общий шаблон с перечнем реквизитов в начале проверяется на
+-- порядок дольше. В нормализации результат шага совпадает с последующей заменой значения
+-- в скобках; СНИЛС в типе обозначается псевдонимом <snils>.
+-- ------------------------------------------------------------------
+INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, apply_order, match_pattern, match_flags, replacement, masks_personal_data)
+VALUES
+    ('mask_series_number', 'нормализация', 'Ошибка асинхронного ответа', 70, '(номером|серией) [0-9]+', 'g', '\1 […]', true),
+    ('mask_certificate_subject', 'нормализация', 'Ошибка асинхронного ответа', 72, '(subject:? )(?:(?!\s+issuer:).)+', 'g', '\1[…]', true),
+    -- СНИЛС заменяется псевдонимом <snils>: тип называет, какой реквизит не прошёл проверку.
+    ('mask_signer_snils', 'нормализация', 'Ошибка асинхронного ответа', 71, '(SNILS )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>', true),
+    ('mask_patient_snils', 'нормализация', 'Ошибка асинхронного ответа', 73, '^(СНИЛС пациента в ЭМД )\[[^\]]{0,200}\]( отличается от СНИЛС пациента в запросе на регистрацию сведений )\[[^\]]{0,200}\]', '', '\1<snils>\2<snils>', true),
+    ('mask_snils_value', 'нормализация', 'Ошибка асинхронного ответа', 74, '(СНИЛС(?: сотрудника| пациента)? ?)\[[^\]]{0,200}\]', 'g', '\1<snils>', true),
+    ('mask_snils_entity', 'нормализация', 'Ошибка асинхронного ответа', 75, '(СНИЛС сотрудника &lt;)[0-9 -]{11,14}(&gt;)', 'g', '\1<snils>\2', true),
+    -- «Дата рождения сотрудника со СНИЛС <snils> ([дата])».
+    ('mask_birth_date_after_snils', 'нормализация', 'Ошибка асинхронного ответа', 76, '(СНИЛС <snils> \()\[[^\]]{0,200}\]', 'g', '\1[…]', true),
+    ('mask_patient_value', 'нормализация', 'Ошибка асинхронного ответа', 77, '(пациента в (?:ЭМД|запросе на регистрацию сведений) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
+    ('mask_registry_person_value', 'нормализация', 'Ошибка асинхронного ответа', 78, '(данным (?:ГИП|ФРМР) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
+    -- РЭМД называет владельца сертификата его СНИЛС без обрамления.
+    ('mask_certificate_holder_snils', 'нормализация', 'Ошибка асинхронного ответа', 79, '(сертификата недоступен: )[0-9]{11}(?![0-9])', 'g', '\1<snils>', true),
+    ('mask_specified_snils', 'нормализация', 'Ошибка асинхронного ответа', 81, '^(Указанное значение \[СНИЛС\] )\[[^\]]{0,200}\]( не соответствует данным ГИП )\[[^\]]{0,200}\]', '', '\1<snils>\2<snils>', true),
+    ('mask_specified_value', 'нормализация', 'Ошибка асинхронного ответа', 82, '^(Указанное значение \[[^\]]{1,40}\] )\[[^\]]{0,200}\]', '', '\1[…]', true),
+    ('mask_name_value', 'нормализация', 'Ошибка асинхронного ответа', 84, '(^(?:Фамилия|Имя|Отчество) |от (?:фамилии|имени|отчества) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
+    ('mask_signer_value', 'нормализация', 'Ошибка асинхронного ответа', 86, '((?:GIVEN_NAME|SURNAME|MIDDLE_NAME|SNILS) )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1[…]\2[…]', true),
+    -- Получатель сведений РЭМД обозначен своим СНИЛС.
+    ('mask_recipient_snils', 'нормализация', 'Ошибка асинхронного ответа', 87, '^(Получатель )\[[^\]]{0,200}\]( из запроса на регистрацию сведений)', '', '\1<snils>\2', true),
+    ('mask_person_identifier', 'нормализация', 'Ошибка асинхронного ответа', 88, '(^По локальному id |patientId: |ДУЛ\. Номер )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
+    ('mask_fio_snils', 'нормализация', 'Ошибка асинхронного ответа', 90, ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', 'g', ': […] (СНИЛС: <snils>)', true),
+    ('mask_email', 'нормализация', 'Ошибка асинхронного ответа', 130, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', 'g', '<e-mail>', true);
 
 -- ------------------------------------------------------------------
 -- Классификация, ярус 2: только код. Покрывается весь классификатор НСИ 305: правило
@@ -958,10 +996,12 @@ WHERE rule_code = 'schematron_allowed_values';
 
 INSERT INTO mart_egisz.dim_error_rules (
     rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
-    match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category
+    match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
+    masks_personal_data
 )
 SELECT rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
-       match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category
+       match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
+       masks_personal_data
 FROM seed_error_rules
 ON CONFLICT (rule_code) DO UPDATE SET
     rule_kind = EXCLUDED.rule_kind,
@@ -976,18 +1016,20 @@ ON CONFLICT (rule_code) DO UPDATE SET
     nsi_dictionary_pattern = EXCLUDED.nsi_dictionary_pattern,
     interpretation = EXCLUDED.interpretation,
     error_category = EXCLUDED.error_category,
+    masks_personal_data = EXCLUDED.masks_personal_data,
     updated_at = now()
 WHERE (mart_egisz.dim_error_rules.rule_kind, mart_egisz.dim_error_rules.error_kind,
        mart_egisz.dim_error_rules.apply_order, mart_egisz.dim_error_rules.match_tier,
        mart_egisz.dim_error_rules.match_code, mart_egisz.dim_error_rules.nsi_error_code,
        mart_egisz.dim_error_rules.match_pattern, mart_egisz.dim_error_rules.match_flags,
        mart_egisz.dim_error_rules.replacement, mart_egisz.dim_error_rules.nsi_dictionary_pattern,
-       mart_egisz.dim_error_rules.interpretation, mart_egisz.dim_error_rules.error_category)
+       mart_egisz.dim_error_rules.interpretation, mart_egisz.dim_error_rules.error_category,
+       mart_egisz.dim_error_rules.masks_personal_data)
   IS DISTINCT FROM
       (EXCLUDED.rule_kind, EXCLUDED.error_kind, EXCLUDED.apply_order, EXCLUDED.match_tier,
        EXCLUDED.match_code, EXCLUDED.nsi_error_code, EXCLUDED.match_pattern, EXCLUDED.match_flags,
        EXCLUDED.replacement, EXCLUDED.nsi_dictionary_pattern, EXCLUDED.interpretation,
-       EXCLUDED.error_category);
+       EXCLUDED.error_category, EXCLUDED.masks_personal_data);
 
 DELETE FROM mart_egisz.dim_error_rules r
 WHERE NOT EXISTS (SELECT 1 FROM seed_error_rules s WHERE s.rule_code = r.rule_code);
@@ -1051,7 +1093,7 @@ WHERE NOT EXISTS (
 
 -- ============================================================================
 -- Типы ошибок. Строка — одна нормализованная ошибка. Типы правил заводит этот сид;
--- тип без правила (текст элемента с замаскированными значениями) заводит разбор журнала
+-- тип без правила (нормализованный текст элемента) заводит разбор журнала
 -- при первом появлении, с категорией «Прочие» либо без категории у вида «Ошибка связи».
 -- rule_code пуст у типов без правила: они живут, пока на них ссылаются элементы, и
 -- снимаются пересчётом ошибок.
@@ -1075,7 +1117,7 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_type (
 COMMENT ON TABLE mart_egisz.dim_error_type IS
 'Типы ошибок. Строка — одна нормализованная ошибка: вид, категория (у вида «Ошибка связи» пуста), мнемоника НСИ 305 у типа, привязанного к коду, зона ответственности и признак повтора.';
 COMMENT ON COLUMN mart_egisz.dim_error_type.rule_code IS
-'Правило классификации, задающее тип. Пусто у типа без правила: его наименование — текст элемента с замаскированными значениями.';
+'Правило классификации, задающее тип. Пусто у типа без правила: его наименование — нормализованный текст элемента.';
 
 -- Тип правила наследует код уточняемого сообщения: при нескольких правилах одного типа
 -- приоритет у нижнего яруса.
@@ -1291,11 +1333,10 @@ BEGIN
 END;
 $$;
 
--- Маскирование текста ошибки: шаги маскирования справочника dim_error_rules своего вида по
--- apply_order. Значения конкретного документа, в том числе реквизиты людей, заменяются
--- обозначениями. Одно определение служит типу ошибки без правила и тексту ошибки документа
--- для разбора поддержкой.
-CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text(
+-- Маскирование текста ошибки для выдачи поддержке: шаги нормализации своего вида с
+-- признаком masks_personal_data по apply_order. Заменяются только персональные данные;
+-- длина текста, адрес сервиса клиники и реквизиты документа сохраняются.
+CREATE OR REPLACE FUNCTION mart_egisz.mask_error_text(
     p_error_kind text,
     p_error_text text
 )
@@ -1306,30 +1347,34 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     v_step record;
-    v_masked text := COALESCE(p_error_text, '');
+    v_masked text := p_error_text;
 BEGIN
+    IF v_masked IS NULL THEN
+        RETURN NULL;
+    END IF;
     FOR v_step IN
         SELECT r.match_pattern, r.replacement, r.match_flags
         FROM mart_egisz.dim_error_rules r
-        WHERE r.rule_kind = 'маскирование'
+        WHERE r.rule_kind = 'нормализация'
+          AND r.masks_personal_data
           AND (r.error_kind IS NULL OR r.error_kind = p_error_kind)
         ORDER BY r.apply_order
     LOOP
         v_masked := regexp_replace(v_masked, v_step.match_pattern, v_step.replacement, v_step.match_flags);
     END LOOP;
-    RETURN NULLIF(v_masked, '');
+    RETURN v_masked;
 END;
 $$;
 
-COMMENT ON FUNCTION stg_egisz.mask_error_text(text, text) IS
-'Текст ошибки с замаскированными значениями: шаги маскирования mart_egisz.dim_error_rules для вида ошибки p_error_kind (Ошибка связи либо Ошибка асинхронного ответа) по apply_order. Пустой результат — NULL.';
+COMMENT ON FUNCTION mart_egisz.mask_error_text(text, text) IS
+'Текст ошибки для выдачи: исходный текст, в котором шаги нормализации mart_egisz.dim_error_rules с признаком masks_personal_data для вида p_error_kind (Ошибка связи либо Ошибка асинхронного ответа) по apply_order заменили персональные данные обозначениями. Остальной текст не меняется.';
 
 -- Тип элемента ошибки. Для асинхронного ответа — наименование первого совпавшего правила
 -- классификации: ярусы по возрастанию, внутри яруса меньший rule_code; синоним кода из
 -- dim_nsi_error_code_alias разрешается до сравнения. Без правила и для ошибки связи тип —
--- текст с замаскированными значениями по шагам маскирования своего вида. Пустой текст
--- без правила типа не получает: такой элемент виден в контроле качества, а не скрыт
--- подставленным наименованием.
+-- текст, нормализованный шагами нормализации своего вида: значения документа и персональные
+-- данные заменены обозначениями. Пустой текст без правила типа не получает: такой элемент
+-- виден в контроле качества, а не скрыт подставленным наименованием.
 CREATE OR REPLACE FUNCTION stg_egisz.classify_error(
     p_error_kind text,
     p_error_code text,
@@ -1345,6 +1390,7 @@ DECLARE
     v_text text := btrim(COALESCE(p_error_text, ''));
     v_interpretation text;
     v_tier integer;
+    v_step record;
 BEGIN
     IF p_error_kind = 'Ошибка асинхронного ответа' THEN
         SELECT COALESCE((SELECT a.nsi_error_code FROM mart_egisz.dim_nsi_error_code_alias a
@@ -1381,7 +1427,17 @@ BEGIN
         END LOOP;
     END IF;
 
-    error_type := stg_egisz.mask_error_text(p_error_kind, p_error_text);
+    v_text := COALESCE(p_error_text, '');
+    FOR v_step IN
+        SELECT r.match_pattern, r.replacement, r.match_flags
+        FROM mart_egisz.dim_error_rules r
+        WHERE r.rule_kind = 'нормализация'
+          AND (r.error_kind IS NULL OR r.error_kind = p_error_kind)
+        ORDER BY r.apply_order
+    LOOP
+        v_text := regexp_replace(v_text, v_step.match_pattern, v_step.replacement, v_step.match_flags);
+    END LOOP;
+    error_type := NULLIF(v_text, '');
     nsi_dictionary_oid := NULL;
     RETURN NEXT;
 END;

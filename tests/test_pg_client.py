@@ -199,7 +199,7 @@ def test_error_classification_takes_one_rule_per_element() -> None:
 
 
 def test_error_rules_dictionary_contract() -> None:
-    """Справочник правил несёт классификацию по ярусам и шаги маскирования; зона
+    """Справочник правил несёт классификацию по ярусам и шаги нормализации; зона
     ответственности и признак повтора наследуются от категории."""
     rules = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules" in rules
@@ -267,9 +267,10 @@ def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
     assert "ON serving_egisz.document_errors (dwh_id, error_no)" in sql
 
 
-def test_source_error_text_stays_in_parsing_layer() -> None:
-    """Исходный текст ошибки хранится в слое разбора: общая форма и опубликованные ошибки его
-    не несут; функция слоя разбора собирает его по ключу источника и маскирует."""
+def test_error_text_is_materialized_masked_in_mart() -> None:
+    """Исходный текст ошибки разобран на stage по источникам; объединение источников и
+    маскирование персональных данных — в слое витрин, текст текущих ошибок документа
+    материализован в mart_egisz.document_errors. Опубликованные ошибки текста не несут."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     def body(start: str, end: str) -> str:
@@ -279,18 +280,25 @@ def test_source_error_text_stays_in_parsing_layer() -> None:
     remd = body("CREATE VIEW stg_egisz.remd_errors AS", "COMMENT ON VIEW stg_egisz.remd_errors")
     ihe = body("CREATE VIEW stg_egisz.ihe_errors AS", "COMMENT ON VIEW stg_egisz.ihe_errors")
     common = body("CREATE VIEW mart_egisz.exchangelog_errors AS", "COMMENT ON VIEW mart_egisz.exchangelog_errors")
+    current = body("CREATE MATERIALIZED VIEW mart_egisz.document_errors AS",
+                   "COMMENT ON MATERIALIZED VIEW mart_egisz.document_errors")
     document = body("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS",
                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")
-    texts = body("CREATE OR REPLACE FUNCTION stg_egisz.document_error_text(p_dwh_id text)",
-                 "COMMENT ON FUNCTION stg_egisz.document_error_text")
+    texts = body("CREATE OR REPLACE FUNCTION mart_egisz.document_error_text(p_dwh_id text)",
+                 "COMMENT ON FUNCTION mart_egisz.document_error_text")
 
     assert 'tx.network_error_text COLLATE "und-x-icu" AS error_text' in network
     assert 'e.message COLLATE "und-x-icu" AS message' in remd
     assert 'e.code_context COLLATE "und-x-icu" AS code_context' in ihe
-    assert "error_text" not in common
+    assert "mart_egisz.mask_error_text('Ошибка связи', n.error_text) AS error_text" in common
+    assert "mart_egisz.mask_error_text('Ошибка асинхронного ответа', r.message)" in common
+    assert "mart_egisz.mask_error_text('Ошибка асинхронного ответа', h.code_context)" in common
+    assert "mart_egisz.mask_error_text(d.error_kind, d.source_text) AS error_text" in current
+    assert "SELECT DISTINCT s.error_kind, s.source_text FROM source_texts s" in current
     assert "error_text" not in document
-    assert "stg_egisz.mask_error_text(c.error_kind, COALESCE(n.error_text, r.message, h.code_context))" in texts
+    assert "string_agg(c.error_text, ' · ' ORDER BY c.error_no)" in texts
     assert "FROM mart_egisz.document_errors c" in texts and "WHERE c.dwh_id = p_dwh_id" in texts
+    assert "FUNCTION stg_egisz.document_error_text" not in sql
 
 
 def test_document_versions_carry_no_error_columns() -> None:

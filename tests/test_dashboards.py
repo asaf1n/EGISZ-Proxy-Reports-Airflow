@@ -89,7 +89,7 @@ def test_service_network_top_groups_by_typed_label() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
     view = sql[sql.index("CREATE VIEW serving_egisz.network_errors AS"):]
 
-    # Тип ошибки связи — текст шлюза с замаскированными значениями; счёт по времени
+    # Тип ошибки связи — нормализованный текст шлюза; счёт по времени
     # сообщения, в том числе у сообщений без связи с документом.
     assert "FROM serving_egisz.network_errors" in query
     assert "error_type AS lbl" in query

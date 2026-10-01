@@ -14,6 +14,7 @@ db/01_schema.sql, поэтому тесты проверяют текущий к
 from __future__ import annotations
 
 import json
+import re
 import os
 import uuid
 from pathlib import Path
@@ -248,11 +249,11 @@ CORPUS = [
     ("", "[CRE-122]: PAT-001; Пациент не определен: [СНИЛС [111] не валидно контрольное число]",
      "ИЭМК: пациент не определён", "Данные пациента"),
 
-    # --- Без правила: тип — текст с замаскированными значениями -------------------------
+    # --- Без правила: тип — нормализованный текст -------------------------
     ("", "совершенно нераспознаваемый текст", "совершенно нераспознаваемый текст", None),
     ("VALIDATION_ERROR",
      "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x",
-     "Неизвестная проверка со СНИЛС […] и OID […].", None),
+     "Неизвестная проверка со СНИЛС <snils> и OID […].", None),
     # Код вне классификатора и без текста типа не получает: элемент виден в контроле
     # качества, а не скрыт подставленным наименованием.
     ("SOME_UNSEEN_CODE", "", None, None),
@@ -305,15 +306,15 @@ def test_rule_type_replaces_readable_message(con):
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
 
 
-# --- Маскирование текста без правила -----------------------------------------------------
+# --- Нормализация текста без правила ---------------------------------------------------
 
 @pytest.mark.parametrize("message,expected", [
     ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.12345], patientId: [B1234567-B123-4C12-8A1B-1234E12DDFFA])",
-     "Пациент не определен: СНИЛС […] не валидно контрольное число"),
+     "Пациент не определен: СНИЛС <snils> не валидно контрольное число"),
     ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678] не соответствует формату \\d{11}];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.1234], patientId: [DFD1F2A3-4EEF-5B6A-A7E8-9CC01C23BC45])",
-     "Пациент не определен: СНИЛС […] не соответствует формату (11 цифр)"),
+     "Пациент не определен: СНИЛС <snils> не соответствует формату (11 цифр)"),
     ("Ошибки валидации в ФРМСС: [code: DUPLICATE, description: Свидетельство с номером 123456789 и серией 12"
      " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа.].",
      "Ошибки валидации в ФРМСС (DUPLICATE): Свидетельство с номером […] и серией […]"
@@ -528,16 +529,16 @@ def test_all_patterns_compile(con):
     assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules r WHERE ('' ~* r.match_pattern) IS NULL") == 0
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_rules r
-        WHERE r.rule_kind = 'маскирование'
+        WHERE r.rule_kind = 'нормализация'
           AND regexp_replace('x', r.match_pattern, r.replacement, r.match_flags) IS NULL
     """) == 0
 
 
-def test_masking_steps_have_distinct_order(con):
+def test_normalization_steps_have_distinct_order(con):
     assert one(con, """
         SELECT count(*) FROM (
             SELECT apply_order FROM mart_egisz.dim_error_rules
-            WHERE rule_kind = 'маскирование' GROUP BY apply_order HAVING count(*) > 1) d
+            WHERE rule_kind = 'нормализация' GROUP BY apply_order HAVING count(*) > 1) d
     """) == 0
 
 
@@ -667,6 +668,98 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
         SELECT count(*) FROM mart_egisz.dim_error_rules
         WHERE error_category = 'Ошибки справочника НСИ' AND nsi_dictionary_pattern IS NULL
     """) == 0
+
+
+# --- Маскирование текста для выдачи -----------------------------------------------------
+
+def mask(con, text: str, kind: str = ASYNC) -> str | None:
+    return one(con, "SELECT mart_egisz.mask_error_text(%s, %s)", kind, text)
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("Указанное значение [Имя пациента] [Иванова Анна Петровна] не соответствует данным ГИП [Петрова Анна Петровна]."
+     " Пациент найден по локальному идентификатору",
+     "Указанное значение [Имя пациента] […] не соответствует данным ГИП […]. Пациент найден по локальному идентификатору"),
+    ("ФИО сотрудника со СНИЛС [12345678901] не соответствуют данным ФРМР [Сидоров Иван Иванович].",
+     "ФИО сотрудника со СНИЛС <snils> не соответствуют данным ФРМР […]."),
+    ("Дата рождения сотрудника со СНИЛС [12345678901] ([01.02.1980]) не соответствует данным ФРМР [02.01.1980]",
+     "Дата рождения сотрудника со СНИЛС <snils> ([…]) не соответствует данным ФРМР […]"),
+    ("Фамилия пациента в ЭМД [Иванова] отличается от фамилии пациента в запросе на регистрацию сведений [Петрова]",
+     "Фамилия пациента в ЭМД […] отличается от фамилии пациента в запросе на регистрацию сведений […]"),
+    ("Несоответствие данных подписанта в запросе и в сертификате. GIVEN_NAME [АннаПетровна] в метаданных и [Анна] в сертификате",
+     "Несоответствие данных подписанта в запросе и в сертификате. GIVEN_NAME […] в метаданных и […] в сертификате"),
+    ("В ФРМР не найдена карточка МР c данными из сертификата подписи МО: Иванов Иван Иванович (СНИЛС: 12345678901)",
+     "В ФРМР не найдена карточка МР c данными из сертификата подписи МО: […] (СНИЛС: <snils>)"),
+    ("Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД",
+     "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД"),
+    ("Удостоверяющий центр сертификата недоступен: 12345678901",
+     "Удостоверяющий центр сертификата недоступен: <snils>"),
+    ("Удостоверяющий центр сертификата недоступен: Validation failed for the target: serial: 1a2b subject: "
+     "EMAILADDRESS=user@example.ru, CN=Иванов Иван, SURNAME=Иванов issuer: CN=УЦ",
+     "Удостоверяющий центр сертификата недоступен: Validation failed for the target: serial: 1a2b subject: […] issuer: CN=УЦ"),
+])
+def test_masking_hides_personal_data(con, message, expected):
+    assert mask(con, message) == expected
+
+
+SNILS_CANDIDATE = re.compile(r"(?:^|[^0-9A-Za-z.:#_-])(\d{3}-\d{3}-\d{3}[ -]\d{2}|\d{11})(?![0-9A-Za-z.])")
+
+
+def is_snils(value: str) -> bool:
+    """СНИЛС по формату, запрету трёх одинаковых цифр подряд и контрольному числу; номера до
+    001-001-998 контрольным числом не проверяются."""
+    digits = re.sub(r"[^0-9]", "", value)
+    if len(digits) != 11 or re.search(r"(\d)\1\1", digits[:9]):
+        return False
+    if int(digits[:9]) <= 1001998:
+        return True
+    total = sum(int(d) * (9 - i) for i, d in enumerate(digits[:9]))
+    check = total if total < 100 else 0 if total in (100, 101) else (total % 101) % 100
+    return check == int(digits[9:])
+
+
+def test_masking_leaves_no_snils_in_rule_described_texts(con):
+    """Тексты ответов, где СНИЛС стоит при реквизите из правил, после маскирования СНИЛС не
+    содержат: проверка контрольным числом, а не по числу цифр."""
+    with con.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT t FROM (
+                SELECT message AS t FROM stg_egisz.remd_errors
+                UNION ALL SELECT code_context FROM stg_egisz.ihe_errors) s
+            WHERE t ~ '\d{3}-?\d{3}-?\d{3}[ -]?\d{2}'
+        """)
+        texts = [row[0] for row in cur.fetchall()]
+    with_snils = [t for t in texts if any(is_snils(v) for v in SNILS_CANDIDATE.findall(t))]
+    if not with_snils:
+        pytest.skip("в разобранных ответах нет СНИЛС; проверять нечего")
+    leaked = [m for m in (mask(con, t) for t in with_snils) if any(is_snils(v) for v in SNILS_CANDIDATE.findall(m))]
+    assert leaked == []
+
+
+def test_masking_keeps_text_length_and_document_values(con):
+    """Маскирование для выдачи не обрезает текст и не заменяет реквизиты документа:
+    идентификатор документа, OID и путь в документе нужны поддержке."""
+    tail = " Путь: /ClinicalDocument[1]/recordTarget[1]/patientRole[1]/addr[1]/@code" * 5
+    message = ("Уникальный идентификатор документа в ЭМД [7F622F826A194F74AAC3F37BD5DEFD1D] отличается от"
+               " уникального идентификатора документа в запросе на регистрацию сведений"
+               " [D6C1851F-1C6F-43B4-8609-5CE7175F7127]" + tail)
+    assert len(message) > 240
+    assert mask(con, message) == message
+
+
+def test_masking_keeps_clinic_service_address(con):
+    message = "Error while receiving data from service: http://gost-1234.infoclinica.lan:9945\nError code: 500"
+    assert mask(con, message, NETWORK) == message
+
+
+def test_masking_steps_are_normalization_steps(con):
+    """Каждый шаг маскирования для выдачи — шаг нормализации: тип ошибки без правила
+    персональных данных не содержит."""
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE masks_personal_data AND rule_kind <> 'нормализация'
+    """) == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules WHERE masks_personal_data") > 0
 
 
 # --- Текущие ошибки документа ------------------------------------------------------------
