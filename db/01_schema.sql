@@ -119,8 +119,6 @@ CREATE TABLE IF NOT EXISTS mart_egisz.documents (
     result_logid bigint,
     document_created_at timestamptz,
     registered_at timestamptz,
-    patient_hash text,
-    doctor_hash text,
     request_logid bigint,
     first_sent_at timestamptz,
     first_callback_at timestamptz,
@@ -1574,11 +1572,6 @@ CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     network_error_type text,
     remd_errors jsonb,
     ihe_errors jsonb,
-    patient_name_masked text,
-    snils_masked text,
-    doctor_name text,
-    patient_hash text,
-    doctor_hash text,
     source_action text,
     egisz_subsystem text,
     xml_dwh_id text,
@@ -1592,9 +1585,6 @@ CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     xml_raw_status text,
     xml_document_status text,
     xml_creation_date timestamptz,
-    xml_patient_name text,
-    xml_snils text,
-    xml_doctor_name text,
     xml_has_fault_marker boolean,
     xml_mentions_error boolean,
     xml_parsed_at timestamptz,
@@ -1608,17 +1598,6 @@ COMMENT ON COLUMN stg_egisz.exchange_messages.status IS
 'Исход асинхронного ответа: success либо error. Пусто у сообщения, которое асинхронным ответом не является, и у ответа с нераспознанным исходом.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.message IS
 'Текст сообщения: при LOGSTATE = 3 — исходный текст шлюза, иначе текст из payload.';
--- Столбцы ошибок существующей таблицы приводятся к разбору по источникам: у каждого
--- источника своя схема ответа, общая форма собирается выше stage (mart_egisz.exchangelog_errors).
-ALTER TABLE stg_egisz.exchange_messages
-    ADD COLUMN IF NOT EXISTS network_error_code text,
-    ADD COLUMN IF NOT EXISTS network_error_text text,
-    ADD COLUMN IF NOT EXISTS network_error_type text,
-    ADD COLUMN IF NOT EXISTS remd_errors jsonb,
-    ADD COLUMN IF NOT EXISTS ihe_errors jsonb;
-DROP INDEX IF EXISTS stg_egisz.idx_exchange_messages_error_log_date;
-ALTER TABLE stg_egisz.exchange_messages DROP COLUMN IF EXISTS error_details CASCADE;
-
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_code IS
 'Ошибка связи (LOGSTATE = 3): код из текста шлюза — код сокета Windows либо код ответа HTTP.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_text IS
@@ -1790,8 +1769,6 @@ CREATE INDEX IF NOT EXISTS idx_exchange_messages_network_error_log_date
     ON stg_egisz.exchange_messages (log_date) WHERE network_error_text IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_response_error_log_date
     ON stg_egisz.exchange_messages (log_date) WHERE remd_errors IS NOT NULL OR ihe_errors IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchange_messages_patient_hash ON stg_egisz.exchange_messages (patient_hash);
-CREATE INDEX IF NOT EXISTS idx_exchange_messages_doctor_hash ON stg_egisz.exchange_messages (doctor_hash);
 -- Scoped semd backfill: DISTINCT ON (dwh_id) по последней транзакции с semd_code.
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_dwh_id_semd
     ON stg_egisz.exchange_messages (dwh_id, log_date DESC, logid DESC)
@@ -1805,5 +1782,4 @@ CREATE INDEX IF NOT EXISTS idx_exchange_messages_xml_parsed_at ON stg_egisz.exch
 CREATE INDEX IF NOT EXISTS idx_exchange_messages_logid_linked
     ON stg_egisz.exchange_messages (logid DESC)
     WHERE link_method IS NOT NULL AND relates_to_msgid IS NOT NULL;
-DROP INDEX IF EXISTS stg_egisz.idx_exchange_messages_link_method_logid;
 

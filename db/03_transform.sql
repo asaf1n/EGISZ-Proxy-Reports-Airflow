@@ -225,7 +225,6 @@ BEGIN
         source_action, egisz_subsystem, jid, xml_semd_code, xml_doc_number, xml_org_oid,
         xml_error_code, xml_message, xml_raw_status, xml_document_status,
         xml_creation_date,
-        xml_patient_name, xml_snils, xml_doctor_name,
         xml_has_fault_marker, xml_mentions_error,
         xml_parsed_at, loaded_at
     )
@@ -248,9 +247,6 @@ BEGIN
         p.raw_status,
         p.document_status,
         p.creation_date,
-        p.raw_patient_name,
-        p.raw_snils,
-        p.raw_doctor_name,
         p.has_fault_marker,
         p.mentions_error,
         now(),
@@ -291,9 +287,6 @@ BEGIN
         xml_raw_status = COALESCE(EXCLUDED.xml_raw_status, stg_egisz.exchange_messages.xml_raw_status),
         xml_document_status = COALESCE(EXCLUDED.xml_document_status, stg_egisz.exchange_messages.xml_document_status),
         xml_creation_date = COALESCE(EXCLUDED.xml_creation_date, stg_egisz.exchange_messages.xml_creation_date),
-        xml_patient_name = COALESCE(EXCLUDED.xml_patient_name, stg_egisz.exchange_messages.xml_patient_name),
-        xml_snils = COALESCE(EXCLUDED.xml_snils, stg_egisz.exchange_messages.xml_snils),
-        xml_doctor_name = COALESCE(EXCLUDED.xml_doctor_name, stg_egisz.exchange_messages.xml_doctor_name),
         xml_has_fault_marker = COALESCE(EXCLUDED.xml_has_fault_marker, stg_egisz.exchange_messages.xml_has_fault_marker),
         xml_mentions_error = COALESCE(EXCLUDED.xml_mentions_error, stg_egisz.exchange_messages.xml_mentions_error),
         xml_parsed_at = COALESCE(EXCLUDED.xml_parsed_at, stg_egisz.exchange_messages.xml_parsed_at),
@@ -497,9 +490,6 @@ BEGIN
             tx.xml_message,
             tx.xml_raw_status AS raw_status,
             tx.xml_creation_date AS creation_date,
-            tx.xml_patient_name AS raw_patient_name,
-            tx.xml_snils AS raw_snils,
-            tx.xml_doctor_name AS raw_doctor_name,
             tx.xml_document_status AS document_status,
             tx.xml_has_fault_marker AS has_fault_marker,
             tx.xml_mentions_error AS mentions_error,
@@ -564,9 +554,6 @@ BEGIN
             r.xml_message,
             r.raw_status,
             r.creation_date,
-            r.raw_patient_name,
-            r.raw_snils,
-            r.raw_doctor_name,
             r.document_status,
             r.has_fault_marker,
             r.mentions_error,
@@ -622,45 +609,19 @@ BEGIN
             COALESCE(p.logtext, '') || ' ' || COALESCE(p.msgtext, '') || ' ' || COALESCE(p.registry_reply_to, '')
         ) res ON TRUE
     )
-    SELECT
-        e.*,
-        regexp_split_to_array(stg_egisz.clean_text_value(e.raw_patient_name), '\s+') AS patient_parts,
-        regexp_replace(COALESCE(e.raw_snils, ''), '\D', '', 'g') AS snils_digits,
-        stg_egisz.clean_text_value(e.raw_doctor_name) AS doctor_name_clean
+    SELECT e.*
     FROM enriched e;
 
     INSERT INTO stg_egisz.exchange_messages (
         logid, dwh_id, log_date, msgid, relates_to_msgid, local_uid_semd, emdr_id,
         doc_number, org_oid, status, message, jid, jid_resolve_method, semd_code,
-        creation_date, loaded_at, link_method,
-        patient_name_masked, snils_masked, doctor_name, patient_hash, doctor_hash
+        creation_date, loaded_at, link_method
     )
     SELECT
         e.logid, e.dwh_id, e.logdate, e.msgid, e.relates_to_msgid, e.local_uid_semd, e.emdr_id,
         e.doc_number, e.org_oid, e.outcome, e.message_text,
         e.resolved_jid, e.resolved_method, e.resolved_semd_code,
-        e.creation_date, now(), e.link_method,
-        CASE
-            WHEN e.patient_parts IS NULL OR array_length(e.patient_parts, 1) IS NULL THEN '(нет данных)'
-            ELSE substring(e.patient_parts[1] FROM 1 FOR 1) || '***'
-                 || CASE WHEN array_length(e.patient_parts, 1) >= 2 THEN ' ' || substring(e.patient_parts[2] FROM 1 FOR 1) || '.' ELSE '' END
-                 || CASE WHEN array_length(e.patient_parts, 1) >= 3 THEN substring(e.patient_parts[3] FROM 1 FOR 1) || '.' ELSE '' END
-        END,
-        CASE
-            WHEN length(e.snils_digits) >= 4 THEN '***-***-*** ' || right(e.snils_digits, 4)
-            WHEN length(e.snils_digits) >= 2 THEN '***-***-*** ' || right(e.snils_digits, 2)
-            ELSE '(нет данных)'
-        END,
-        COALESCE(NULLIF(e.doctor_name_clean, ''), '(нет данных)'),
-        CASE
-            WHEN COALESCE(NULLIF(btrim(e.raw_patient_name), ''), '') = ''
-             AND COALESCE(NULLIF(e.snils_digits, ''), '') = '' THEN NULL
-            ELSE md5(lower(COALESCE(btrim(e.raw_patient_name), '')) || '|' || COALESCE(e.snils_digits, ''))
-        END,
-        CASE
-            WHEN e.doctor_name_clean IS NULL THEN NULL
-            ELSE md5(lower(e.doctor_name_clean))
-        END
+        e.creation_date, now(), e.link_method
     FROM pg_temp.batch_responses e
     WHERE (e.outcome IS NOT NULL OR e.logstate = 3)
       AND e.dwh_id IS NOT NULL
@@ -680,12 +641,7 @@ BEGIN
         semd_code = EXCLUDED.semd_code,
         creation_date = EXCLUDED.creation_date,
         loaded_at = now(),
-        link_method = EXCLUDED.link_method,
-        patient_name_masked = EXCLUDED.patient_name_masked,
-        snils_masked = EXCLUDED.snils_masked,
-        doctor_name = EXCLUDED.doctor_name,
-        patient_hash = EXCLUDED.patient_hash,
-        doctor_hash = EXCLUDED.doctor_hash;
+        link_method = EXCLUDED.link_method;
     GET DIAGNOSTICS inserted_rows = ROW_COUNT;
     affected := affected + inserted_rows;
 
@@ -783,7 +739,7 @@ BEGIN
         status, msgid, relates_to_msgid,
         result_logid, document_created_at, registered_at,
         first_callback_at, last_callback_at, last_status, jid, org_oid, jid_resolve_method,
-        patient_hash, doctor_hash, updated_at
+        updated_at
     )
     SELECT DISTINCT ON (f.dwh_id)
         f.dwh_id,
@@ -804,8 +760,6 @@ BEGIN
         f.jid,
         f.org_oid,
         f.jid_resolve_method,
-        f.patient_hash,
-        f.doctor_hash,
         now()
     FROM stg_egisz.exchange_messages f
     WHERE f.logid > from_logid
@@ -846,8 +800,6 @@ BEGIN
             THEN mart_egisz.documents.jid_resolve_method
             ELSE COALESCE(EXCLUDED.jid_resolve_method, mart_egisz.documents.jid_resolve_method)
         END,
-        patient_hash = COALESCE(EXCLUDED.patient_hash, mart_egisz.documents.patient_hash),
-        doctor_hash = COALESCE(EXCLUDED.doctor_hash, mart_egisz.documents.doctor_hash),
         updated_at = now();
 
     -- Ответ может прийти без KIND, а тип СЭМД уже известен из отправки.
@@ -1073,7 +1025,6 @@ BEGIN
 END;
 $$;
 
-DROP FUNCTION IF EXISTS stg_egisz.reclassify_error_details();
 
 -- Приведение ошибок к текущим правилам: после изменения правил или шагов маскирования
 -- типы в разобранных сообщениях пересчитываются по уникальным элементам (вид, код,

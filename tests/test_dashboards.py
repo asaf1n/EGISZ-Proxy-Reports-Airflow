@@ -1144,16 +1144,10 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
     assert "{{clinic_label}}" in text_card["text"]
 
 
-def test_client_dashboard_dwh_view_masks_patient_fields_and_exposes_hashes() -> None:
+def test_client_dashboard_dwh_view_exposes_clinic_oid() -> None:
     sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
     assert "CREATE OR REPLACE VIEW serving_egisz.document_versions" in sql
-    assert "patient_name_masked" in sql
-    assert "snils_masked" in sql
-    assert "doctor_name" in sql
-    # surrogate-ID для BI-дашборда: считать уникальных пациентов/врачей по hash без раскрытия ФИО/СНИЛС
-    assert "patient_hash" in sql
-    assert "doctor_hash" in sql
     assert "organization_oid" not in sql
     assert "clinic_oid" in sql
     assert "JID (EGISZ_LICENSES)" not in sql

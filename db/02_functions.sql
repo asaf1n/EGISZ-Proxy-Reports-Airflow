@@ -469,9 +469,6 @@ RETURNS TABLE (
     document_status text,
     jid_from_payload bigint,
     creation_date timestamptz,
-    raw_patient_name text,
-    raw_snils text,
-    raw_doctor_name text,
     has_fault_marker boolean,
     mentions_error boolean
 )
@@ -501,23 +498,6 @@ DECLARE
     v_document_status text;
     v_creation_datetime text;
     v_creation_date text;
-    v_patient_name text;
-    v_patient_fio text;
-    v_fio text;
-    v_patient text;
-    v_patient_name_cap text;
-    v_family_name text;
-    v_given_name text;
-    v_patronymic text;
-    v_snils text;
-    v_snils_cap text;
-    v_patient_snils text;
-    v_doctor_name text;
-    v_doctor_fio text;
-    v_physician_name text;
-    v_medical_worker_name text;
-    v_author_name text;
-    v_doctor text;
 BEGIN
     v_action := stg_egisz.xml_text(p_msgtext, 'action');
     v_message_id_xml := stg_egisz.xml_text(p_msgtext, 'messageId');
@@ -541,23 +521,6 @@ BEGIN
     v_document_status := stg_egisz.xml_text(p_msgtext, 'documentStatus');
     v_creation_datetime := stg_egisz.xml_text(p_msgtext, 'creationDateTime');
     v_creation_date := stg_egisz.xml_text(p_msgtext, 'creationDate');
-    v_patient_name := stg_egisz.xml_text(p_msgtext, 'patientName');
-    v_patient_fio := stg_egisz.xml_text(p_msgtext, 'patientFio');
-    v_fio := stg_egisz.xml_text(p_msgtext, 'fio');
-    v_patient := stg_egisz.xml_text(p_msgtext, 'patient');
-    v_patient_name_cap := stg_egisz.xml_text(p_msgtext, 'PatientName');
-    v_family_name := stg_egisz.xml_text(p_msgtext, 'familyName');
-    v_given_name := stg_egisz.xml_text(p_msgtext, 'givenName');
-    v_patronymic := stg_egisz.xml_text(p_msgtext, 'patronymic');
-    v_snils := stg_egisz.xml_text(p_msgtext, 'snils');
-    v_snils_cap := stg_egisz.xml_text(p_msgtext, 'SNILS');
-    v_patient_snils := stg_egisz.xml_text(p_msgtext, 'patientSnils');
-    v_doctor_name := stg_egisz.xml_text(p_msgtext, 'doctorName');
-    v_doctor_fio := stg_egisz.xml_text(p_msgtext, 'doctorFio');
-    v_physician_name := stg_egisz.xml_text(p_msgtext, 'physicianName');
-    v_medical_worker_name := stg_egisz.xml_text(p_msgtext, 'medicalWorkerName');
-    v_author_name := stg_egisz.xml_text(p_msgtext, 'authorName');
-    v_doctor := stg_egisz.xml_text(p_msgtext, 'doctor');
 
     RETURN QUERY
     SELECT
@@ -576,23 +539,6 @@ BEGIN
         v_document_status,
         NULLIF((regexp_match(v_text_blob, 'gost-([0-9]+)', 'i'))[1], '')::bigint,
         NULLIF(btrim(COALESCE(v_creation_datetime, v_creation_date)), '')::timestamptz,
-        COALESCE(
-            v_patient_name,
-            v_patient_fio,
-            v_fio,
-            v_patient,
-            v_patient_name_cap,
-            NULLIF(concat_ws(' ', v_family_name, v_given_name, v_patronymic), '')
-        ),
-        COALESCE(v_snils, v_snils_cap, v_patient_snils),
-        COALESCE(
-            v_doctor_name,
-            v_doctor_fio,
-            v_physician_name,
-            v_medical_worker_name,
-            v_author_name,
-            v_doctor
-        ),
         v_payload ~* '<(ns[0-9]+:)?(error|fault)|<faultstring|<errorCode',
         v_payload ILIKE '%error%';
 END;
@@ -1237,7 +1183,6 @@ WHERE t.error_type = v.error_type
 
 -- Функция общего разбора элементов заменена разбором по источникам; снятие приводит к
 -- этому состоянию базу, где она осталась.
-DROP FUNCTION IF EXISTS stg_egisz.error_items(integer, text, text, text, text, text);
 
 -- Разбор ошибок сообщения журнала по источникам. У каждого источника своя схема ответа,
 -- поэтому функции не объединяют результаты: общую форму собирает mart_egisz.exchangelog_errors.
@@ -1346,6 +1291,39 @@ BEGIN
 END;
 $$;
 
+-- Маскирование текста ошибки: шаги маскирования справочника dim_error_rules своего вида по
+-- apply_order. Значения конкретного документа, в том числе реквизиты людей, заменяются
+-- обозначениями. Одно определение служит типу ошибки без правила и тексту ошибки документа
+-- для разбора поддержкой.
+CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text(
+    p_error_kind text,
+    p_error_text text
+)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    v_step record;
+    v_masked text := COALESCE(p_error_text, '');
+BEGIN
+    FOR v_step IN
+        SELECT r.match_pattern, r.replacement, r.match_flags
+        FROM mart_egisz.dim_error_rules r
+        WHERE r.rule_kind = 'маскирование'
+          AND (r.error_kind IS NULL OR r.error_kind = p_error_kind)
+        ORDER BY r.apply_order
+    LOOP
+        v_masked := regexp_replace(v_masked, v_step.match_pattern, v_step.replacement, v_step.match_flags);
+    END LOOP;
+    RETURN NULLIF(v_masked, '');
+END;
+$$;
+
+COMMENT ON FUNCTION stg_egisz.mask_error_text(text, text) IS
+'Текст ошибки с замаскированными значениями: шаги маскирования mart_egisz.dim_error_rules для вида ошибки p_error_kind (Ошибка связи либо Ошибка асинхронного ответа) по apply_order. Пустой результат — NULL.';
+
 -- Тип элемента ошибки. Для асинхронного ответа — наименование первого совпавшего правила
 -- классификации: ярусы по возрастанию, внутри яруса меньший rule_code; синоним кода из
 -- dim_nsi_error_code_alias разрешается до сравнения. Без правила и для ошибки связи тип —
@@ -1367,8 +1345,6 @@ DECLARE
     v_text text := btrim(COALESCE(p_error_text, ''));
     v_interpretation text;
     v_tier integer;
-    v_step record;
-    v_masked text := COALESCE(p_error_text, '');
 BEGIN
     IF p_error_kind = 'Ошибка асинхронного ответа' THEN
         SELECT COALESCE((SELECT a.nsi_error_code FROM mart_egisz.dim_nsi_error_code_alias a
@@ -1405,16 +1381,7 @@ BEGIN
         END LOOP;
     END IF;
 
-    FOR v_step IN
-        SELECT r.match_pattern, r.replacement, r.match_flags
-        FROM mart_egisz.dim_error_rules r
-        WHERE r.rule_kind = 'маскирование'
-          AND (r.error_kind IS NULL OR r.error_kind = p_error_kind)
-        ORDER BY r.apply_order
-    LOOP
-        v_masked := regexp_replace(v_masked, v_step.match_pattern, v_step.replacement, v_step.match_flags);
-    END LOOP;
-    error_type := NULLIF(v_masked, '');
+    error_type := stg_egisz.mask_error_text(p_error_kind, p_error_text);
     nsi_dictionary_oid := NULL;
     RETURN NEXT;
 END;

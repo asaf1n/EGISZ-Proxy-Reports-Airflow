@@ -269,7 +269,7 @@ def test_current_document_errors_are_built_above_stage_in_common_form() -> None:
 
 def test_source_error_text_stays_in_parsing_layer() -> None:
     """Исходный текст ошибки хранится в слое разбора: общая форма и опубликованные ошибки его
-    не несут, служебная витрина собирает его по ключу источника."""
+    не несут; функция слоя разбора собирает его по ключу источника и маскирует."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
 
     def body(start: str, end: str) -> str:
@@ -281,15 +281,16 @@ def test_source_error_text_stays_in_parsing_layer() -> None:
     common = body("CREATE VIEW mart_egisz.exchangelog_errors AS", "COMMENT ON VIEW mart_egisz.exchangelog_errors")
     document = body("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS",
                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors")
-    texts = body("CREATE MATERIALIZED VIEW mart_egisz_admin.document_error_texts AS",
-                 "COMMENT ON MATERIALIZED VIEW mart_egisz_admin.document_error_texts")
+    texts = body("CREATE OR REPLACE FUNCTION stg_egisz.document_error_text(p_dwh_id text)",
+                 "COMMENT ON FUNCTION stg_egisz.document_error_text")
 
     assert 'tx.network_error_text COLLATE "und-x-icu" AS error_text' in network
     assert 'e.message COLLATE "und-x-icu" AS message' in remd
     assert 'e.code_context COLLATE "und-x-icu" AS code_context' in ihe
     assert "error_text" not in common
     assert "error_text" not in document
-    assert "COALESCE(n.error_text, r.message, h.code_context)" in texts
+    assert "stg_egisz.mask_error_text(c.error_kind, COALESCE(n.error_text, r.message, h.code_context))" in texts
+    assert "FROM mart_egisz.document_errors c" in texts and "WHERE c.dwh_id = p_dwh_id" in texts
 
 
 def test_document_versions_carry_no_error_columns() -> None:

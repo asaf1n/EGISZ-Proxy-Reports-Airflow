@@ -18,7 +18,8 @@
 
 ## Потребители
 
-- Дашборды Metabase (`metabase_dashboards/`) и репозиторий `bi_superset` читают `serving_egisz`, `mart_egisz` и служебные представления `mart_egisz_admin`. Новые отчёты на `raw_egisz` и `stg_egisz` не строятся; исходный текст ошибок читается только из представлений источников `stg_egisz.network_errors`, `stg_egisz.remd_errors`, `stg_egisz.ihe_errors` по ключу источника либо через `mart_egisz_admin.document_error_texts`.
+- Дашборды Metabase (`metabase_dashboards/`) и репозиторий `bi_superset` читают `serving_egisz`, `mart_egisz` и служебные представления `mart_egisz_admin`. Новые отчёты на `raw_egisz` и `stg_egisz` не строятся; исходный текст ошибок читается только из представлений источников `stg_egisz.network_errors`, `stg_egisz.remd_errors`, `stg_egisz.ihe_errors` по ключу источника; текст для отчётов проходит маскирование (`stg_egisz.mask_error_text`, `stg_egisz.document_error_text`).
+- Состояние документа к выдаче — `serving_egisz.documents_current`; документы без ответа за срок ожидания — только `serving_egisz.documents_no_response`. `serving_egisz.document_versions` читают объекты, которым нужны все версии или состояние на прошлый момент.
 - Изменение столбцов `serving_egisz` синхронно отражается в дашбордах Metabase, в `bi_superset` (или в описании изменения, если тот репозиторий не входит в задачу), в README и в тестах.
 
 ## Проверка

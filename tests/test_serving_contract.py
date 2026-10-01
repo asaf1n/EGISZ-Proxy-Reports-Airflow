@@ -122,14 +122,12 @@ def test_health_signals_do_not_rebuild_the_registry_detail_or_sort_the_journal()
     assert "(logid DESC)" in SCHEMA_SQL.split("idx_exchange_messages_logid_linked", 1)[1].split(";", 1)[0]
 
 
-def test_documents_sent_reuses_the_segment_of_document_versions() -> None:
+def test_queue_is_read_from_documents_current_at_the_current_moment() -> None:
     body = view_body("CREATE OR REPLACE VIEW serving_egisz.documents_sent AS",
                      "COMMENT ON VIEW serving_egisz.documents_sent IS")
-    assert "pending_segment_code_at" not in body
-    assert "pending_segment_at" not in body
-    assert "r.pending_segment," in body
-    assert "r.sent_state," in body
-    assert "WHERE r.is_current_version\n  AND r.sent_state IS NOT NULL" in body
+    assert "FROM serving_egisz.documents_current r" in body
+    assert "serving_egisz.pending_segment_at(r.first_sent_at, now()) seg" in body
+    assert "WHERE r.status = 'sent'\n  AND NOT seg.is_no_response" in body
 
     versions = view_body("CREATE OR REPLACE VIEW serving_egisz.document_versions AS",
                          "COMMENT ON VIEW serving_egisz.document_versions IS")
@@ -164,7 +162,7 @@ def test_period_dependent_metrics_are_functions_of_the_period() -> None:
                       "p_error_types text[]"):
         assert parameter in contribution
     assert "FROM mart_egisz.dim_control_chart_phases p" in contribution
-    assert "WHERE d.is_current_version" in contribution
+    assert "FROM serving_egisz.documents_current d" in contribution
 
     activity = function_body("serving_egisz.clinic_activity")
     assert "p_from timestamptz" in activity and "p_to timestamptz" in activity
@@ -180,14 +178,58 @@ def test_period_dependent_metrics_are_functions_of_the_period() -> None:
         assert "LANGUAGE sql\nSTABLE" in body
 
 
-def test_search_keys_are_indexed_current_document_keys() -> None:
-    body = view_body("CREATE MATERIALIZED VIEW serving_egisz.document_search_keys AS",
-                     "COMMENT ON MATERIALIZED VIEW serving_egisz.document_search_keys IS")
-    assert "FROM serving_egisz.document_versions d\nWHERE d.is_current_version" in body
-    for column in ("semd_local_uid", "relates_to_msgid", "semd_emdr_id", "logid"):
-        assert f"ON serving_egisz.document_search_keys ({column});" in body
-    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_document_search_keys" in body
+def test_documents_current_is_the_indexed_state_of_the_document() -> None:
+    """Состояние документа к выдаче — текущие версии без документов за сроком ожидания; ключи поиска
+    индексированы; список без ответа — отдельный объект, оба обновляются одним вызовом."""
+    body = view_body("CREATE MATERIALIZED VIEW serving_egisz.documents_current AS",
+                     "COMMENT ON MATERIALIZED VIEW serving_egisz.documents_current IS")
+    assert "FROM serving_egisz.document_versions v\nWHERE v.is_current_version\n  AND v.sent_state IS DISTINCT FROM 'no_response'" in body
+    for column in ("ips_date", "clinic_label", "semd_label", "semd_local_uid", "relates_to_msgid", "semd_emdr_id", "logid"):
+        assert f"ON serving_egisz.documents_current ({column});" in body
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_current" in body
+
+    no_response = view_body("CREATE MATERIALIZED VIEW serving_egisz.documents_no_response AS",
+                            "COMMENT ON MATERIALIZED VIEW serving_egisz.documents_no_response IS")
+    assert "WHERE v.is_current_version\n  AND v.sent_state = 'no_response'" in no_response
+    for column in ("semd_local_uid", "relates_to_msgid", "request_logid"):
+        assert f"ON serving_egisz.documents_no_response ({column});" in no_response
 
     refresh = VIEWS_SQL.split("CREATE OR REPLACE FUNCTION serving_egisz.refresh_report_marts(", 1)[1].split("$$;", 1)[0]
-    assert "'serving_egisz.document_search_keys'" in refresh
-    assert "ANALYZE serving_egisz.document_search_keys;" in VIEWS_SQL
+    marts = re.findall(r"'([a-z_]+\.\w+)'", refresh.split("ARRAY[", 1)[1].split("]::regclass[]", 1)[0])
+    assert marts.index("serving_egisz.documents_current") < marts.index("serving_egisz.document_errors")
+    assert marts.index("serving_egisz.documents_no_response") == marts.index("serving_egisz.documents_current") + 1
+    for mart in ("documents_current", "documents_no_response"):
+        assert f"ANALYZE serving_egisz.{mart};" in VIEWS_SQL
+
+
+def test_current_state_consumers_read_documents_current() -> None:
+    """Опубликованные ошибки, контроль качества, витрины текущего состояния и вклад клиник читают
+    состояние документа к выдаче."""
+    for create, comment in (
+        ("CREATE MATERIALIZED VIEW serving_egisz.document_errors AS", "COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors IS"),
+        ("CREATE MATERIALIZED VIEW mart_egisz_admin.document_quality AS", "COMMENT ON MATERIALIZED VIEW mart_egisz_admin.document_quality IS"),
+        ("CREATE MATERIALIZED VIEW serving_egisz.semd_error_categories_daily AS",
+         "COMMENT ON MATERIALIZED VIEW serving_egisz.semd_error_categories_daily IS"),
+        ("CREATE MATERIALIZED VIEW serving_egisz.registration_speed_daily AS",
+         "COMMENT ON MATERIALIZED VIEW serving_egisz.registration_speed_daily IS"),
+        ("CREATE OR REPLACE VIEW serving_egisz.clinic_semd_activity AS", "COMMENT ON VIEW serving_egisz.clinic_semd_activity IS"),
+    ):
+        assert "serving_egisz.documents_current" in view_body(create, comment), create
+
+
+def test_status_filter_values_follow_documents_current() -> None:
+    statuses = view_body("CREATE VIEW serving_egisz.document_status_details AS",
+                         "COMMENT ON VIEW serving_egisz.document_status_details IS")
+    assert "AND ss.code <> 'no_response'" in statuses
+    segments = view_body("CREATE VIEW serving_egisz.pending_segments AS", "COMMENT ON VIEW serving_egisz.pending_segments IS")
+    assert "WHERE NOT g.is_no_response" in segments
+
+
+def test_error_text_is_masked_by_the_masking_rules() -> None:
+    """Маскирование текста ошибки определено один раз: тип ошибки без правила и текст ошибок
+    документа применяют одни шаги маскирования dim_error_rules."""
+    mask = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text(", 1)[1].split("$$;", 1)[0]
+    assert "WHERE r.rule_kind = 'маскирование'" in mask
+    assert "ORDER BY r.apply_order" in mask
+    classify = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.classify_error(", 1)[1].split("$$;", 1)[0]
+    assert "error_type := stg_egisz.mask_error_text(p_error_kind, p_error_text);" in classify

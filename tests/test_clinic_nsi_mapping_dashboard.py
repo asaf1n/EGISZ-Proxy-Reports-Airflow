@@ -44,7 +44,7 @@ def test_clinic_nsi_mapping_view_contract() -> None:
     assert "stg_egisz.clean_text_value(o.fir_oid) AS oid" in views_sql
     assert "AS is_mapped" in views_sql
     assert "doc.last_success_registered_at" in views_sql
-    assert "WHERE r.is_current_version AND r.clinic_jid = o.jid AND r.status = 'success'" in views_sql
+    assert "FROM serving_egisz.documents_current r\n    WHERE r.clinic_jid = o.jid AND r.status = 'success'" in views_sql
 
 
 def test_load_nsi_organization_1461_maps_source_fields() -> None:
