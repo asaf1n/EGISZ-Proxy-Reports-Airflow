@@ -184,15 +184,47 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_jids(p_dwh_ids text[] DEFAULT NULL)
+-- Пересчёт JID документов после изменения справочников. Проверяются только документы,
+-- чей резолв мог измениться: с изменённым OID медорганизации, а также разрешённые не по
+-- OID, у которых JID пуст или принадлежит изменённому ЮЛ либо ЮЛ с тем же хостом обмена.
+-- Полный проход по архиву занимает минуты и не укладывается в пятиминутный цикл приёма.
+CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_jids(p_oids text[], p_jids bigint[])
 RETURNS bigint
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
+    affected_oids text[];
+    affected_jids bigint[];
     affected_dwh_ids text[] := ARRAY[]::text[];
     refreshed bigint := 0;
 BEGIN
+    SELECT COALESCE(array_agg(DISTINCT oid) FILTER (WHERE oid IS NOT NULL), ARRAY[]::text[])
+    INTO affected_oids
+    FROM unnest(COALESCE(p_oids, ARRAY[]::text[])) AS o (raw_oid)
+    CROSS JOIN LATERAL (SELECT NULLIF(btrim(o.raw_oid), '') AS oid) n;
+
+    -- Хост обмена изменённого ЮЛ (по лицензии или gost-<N>) мог разрешаться в другое ЮЛ:
+    -- документы этого ЮЛ проверяются вместе с изменённым.
+    SELECT COALESCE(array_agg(DISTINCT jid) FILTER (WHERE jid IS NOT NULL), ARRAY[]::bigint[])
+    INTO affected_jids
+    FROM (
+        SELECT unnest(COALESCE(p_jids, ARRAY[]::bigint[]))
+        UNION
+        SELECT dl.jid
+        FROM mart_egisz.dim_licenses dl
+        WHERE stg_egisz.clean_host(dl.mo_domen) IN (
+            SELECT stg_egisz.clean_host(l.mo_domen)
+            FROM mart_egisz.dim_licenses l
+            WHERE l.jid = ANY (p_jids)
+               OR (regexp_match(COALESCE(l.mo_domen, ''), 'gost-([0-9]+)'))[1]::bigint = ANY (p_jids)
+        )
+    ) t (jid);
+
+    IF cardinality(affected_oids) = 0 AND cardinality(affected_jids) = 0 THEN
+        RETURN 0;
+    END IF;
+
     WITH target_documents AS (
         SELECT
             d.dwh_id,
@@ -218,7 +250,13 @@ BEGIN
             LIMIT 1
         ) reg ON TRUE
         WHERE d.dwh_id IS NOT NULL
-          AND (p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids))
+          AND (
+              btrim(d.org_oid) = ANY (affected_oids)
+           OR (
+                  d.jid_resolve_method IS DISTINCT FROM 'mo_uid'
+              AND (d.jid IS NULL OR d.jid = ANY (affected_jids))
+              )
+          )
     ),
     resolved AS (
         SELECT
@@ -1212,7 +1250,10 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors_monthly IS
 -- в тот же день в конце дня в ней уже не числится. Хранятся счётчики документов: доли и
 -- скользящие суммы считает потребитель.
 -- Пояс и текущий день вычисляются один раз: report_timezone() читает каталог, и вызов на
--- каждой паре «документ — день» стоил бы минут.
+-- каждой паре «документ — день» стоил бы минут. Пары «документ — день» (миллионы строк)
+-- группируются по узким ключам — JID, код СЭМД, код ступени; подписи клиники, СЭМД и
+-- ступени присоединяются к итогу: группировка по текстовым подписям уходила в сортировку
+-- на диск. Подпись клиники однозначно задаётся JID, подпись СЭМД — кодом.
 CREATE MATERIALIZED VIEW serving_egisz.pending_queue_daily AS
 WITH calendar AS (
     SELECT
@@ -1226,7 +1267,6 @@ ladder AS (
 ),
 queue_documents AS (
     SELECT
-        r.dwh_id,
         r.clinic_jid,
         r.clinic_name,
         r.clinic_label,
@@ -1245,32 +1285,56 @@ queue_documents AS (
     CROSS JOIN calendar c
     WHERE r.is_current_version
       AND r.first_sent_at IS NOT NULL
+),
+queue_labels AS (
+    SELECT
+        clinic_jid,
+        semd_code,
+        MAX(clinic_name) AS clinic_name,
+        MAX(clinic_label) AS clinic_label,
+        MAX(semd_label) AS semd_label
+    FROM queue_documents
+    GROUP BY clinic_jid, semd_code
+),
+queue_days AS (
+    SELECT
+        g.snapshot_date,
+        q.clinic_jid,
+        q.semd_code,
+        seg.code AS pending_segment,
+        COUNT(*)::bigint AS docs_pending
+    FROM queue_documents q
+    CROSS JOIN calendar c
+    CROSS JOIN LATERAL (
+        SELECT d::date AS snapshot_date
+        FROM generate_series(q.first_day::timestamp, q.last_day::timestamp, interval '1 day') d
+    ) g
+    CROSS JOIN LATERAL (
+        SELECT LEAST(((g.snapshot_date + 1)::timestamp AT TIME ZONE c.tz), now()) AS ts
+    ) anchor
+    CROSS JOIN LATERAL serving_egisz.pending_segment_at(q.first_sent_at, anchor.ts) seg
+    WHERE serving_egisz.is_pending_at(q.first_sent_at, q.first_callback_at, anchor.ts)
+      AND NOT seg.is_no_response
+    GROUP BY g.snapshot_date, q.clinic_jid, q.semd_code, seg.code
 )
 SELECT
-    g.snapshot_date,
-    q.clinic_jid,
-    MAX(q.clinic_name) AS clinic_name,
-    q.clinic_label,
-    q.semd_code,
-    MAX(q.semd_label) AS semd_label,
-    seg.code AS pending_segment,
-    seg.label AS pending_segment_label,
-    seg.sort_order AS pending_segment_sort,
-    COUNT(*)::bigint AS docs_pending,
-    (g.snapshot_date < c.today) AS is_complete_day
-FROM queue_documents q
+    qd.snapshot_date,
+    qd.clinic_jid,
+    ql.clinic_name,
+    ql.clinic_label,
+    qd.semd_code,
+    ql.semd_label,
+    s.code AS pending_segment,
+    s.label AS pending_segment_label,
+    s.sort_order AS pending_segment_sort,
+    qd.docs_pending,
+    (qd.snapshot_date < c.today) AS is_complete_day
+FROM queue_days qd
 CROSS JOIN calendar c
-CROSS JOIN LATERAL (
-    SELECT d::date AS snapshot_date
-    FROM generate_series(q.first_day::timestamp, q.last_day::timestamp, interval '1 day') d
-) g
-CROSS JOIN LATERAL (
-    SELECT LEAST(((g.snapshot_date + 1)::timestamp AT TIME ZONE c.tz), now()) AS ts
-) anchor
-CROSS JOIN LATERAL serving_egisz.pending_segment_at(q.first_sent_at, anchor.ts) seg
-WHERE serving_egisz.is_pending_at(q.first_sent_at, q.first_callback_at, anchor.ts)
-  AND NOT seg.is_no_response
-GROUP BY g.snapshot_date, q.clinic_jid, q.clinic_label, q.semd_code, seg.code, seg.label, seg.sort_order, c.today
+JOIN queue_labels ql
+  ON ql.clinic_jid IS NOT DISTINCT FROM qd.clinic_jid
+ AND ql.semd_code IS NOT DISTINCT FROM qd.semd_code
+JOIN mart_egisz.dim_pending_segments s ON s.code = qd.pending_segment
 WITH DATA;
 
 -- Уникальный ключ — clinic_label, а не clinic_jid: jid nullable, а label NOT NULL по
@@ -1932,7 +1996,10 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.document_search_keys IS
 -- документа, недельный и месячный слои читают текущие ошибки документа. CONCURRENTLY не
 -- блокирует чтение дашбордов, но требует наполненного представления — ненаполненное
 -- обновляется обычным способом. Статистика собирается сразу после обновления.
-CREATE OR REPLACE FUNCTION serving_egisz.refresh_report_marts(p_concurrently boolean DEFAULT true)
+CREATE OR REPLACE FUNCTION serving_egisz.refresh_report_marts(
+    p_concurrently boolean DEFAULT true,
+    p_include_periodic boolean DEFAULT true
+)
 RETURNS void
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
@@ -1958,6 +2025,16 @@ BEGIN
         'serving_egisz.document_search_keys'
     ]::regclass[]
     LOOP
+        -- Периодические срезы читают уже обновлённые ошибки документа, но их полное
+        -- построение не задерживает очередной приём журнала.
+        IF NOT p_include_periodic AND mart = ANY(ARRAY[
+            'serving_egisz.documents_weekly',
+            'serving_egisz.document_errors_weekly',
+            'serving_egisz.documents_monthly',
+            'serving_egisz.document_errors_monthly'
+        ]::regclass[]) THEN
+            CONTINUE;
+        END IF;
         IF p_concurrently AND (SELECT c.relispopulated FROM pg_class c WHERE c.oid = mart) THEN
             EXECUTE format('REFRESH MATERIALIZED VIEW CONCURRENTLY %s', mart);
         ELSE
@@ -2389,7 +2466,7 @@ $$;
 -- Первичное наполнение отчётного слоя: выполняется, только когда в схеме уже есть
 -- документы, а атрибуты ещё пусты (развёртывание на существующий архив).
 -- Сопровождение архива — пересчёт атрибутов, слоя версий и текстов ошибок — ведёт
--- суточный DAG обслуживания, обновление витрин — задача refresh_marts DAG-а приёма. Полные проходы в теле
+-- суточный DAG обслуживания, обновление витрин — задачи refresh_marts обоих DAG. Полные проходы в теле
 -- наката пересекались по блокировкам с пятиминутным приёмом и давали взаимоблокировки.
 DO $$
 BEGIN

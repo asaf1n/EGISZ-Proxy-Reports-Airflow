@@ -55,6 +55,20 @@ DIRECTORY_MERGE_EXPRESSIONS = {
         ")"
     ),
 }
+# Ключи резолва JID документа, изменённые строкой справочника: OID медорганизации и ЮЛ,
+# чьи документы проверяет mart_egisz.recompute_document_jids. c — строка после записи,
+# p — до неё. Наименование, ИНН, адрес и сроки лицензии на резолв не влияют.
+DIRECTORY_RESOLUTION_KEYS = {
+    "mart_egisz.dim_organizations": (
+        "CASE WHEN p.jid IS NULL OR c.fir_oid IS DISTINCT FROM p.fir_oid THEN c.fir_oid END",
+        "CASE WHEN p.jid IS NULL THEN ARRAY[c.jid] END",
+    ),
+    "mart_egisz.dim_licenses": (
+        "NULL::text",
+        "CASE WHEN p.id IS NULL OR c.jid IS DISTINCT FROM p.jid OR c.mo_domen IS DISTINCT FROM p.mo_domen "
+        "THEN ARRAY[c.jid, p.jid] END",
+    ),
+}
 DIRECTORY_SYNC_LOCK_TIMEOUT = "15s"
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = "5min"
 DIRECTORY_SYNC_PAGE_SIZE = 5000
@@ -91,6 +105,12 @@ def get_int(key: str) -> int:
 class ExtractResult(TypedDict):
     count: int
     extract_logid_cursor: int
+
+
+class DirectoryChanges(TypedDict):
+    changed: int
+    oids: list[str]
+    jids: list[int]
 
 
 class TransformResult(TypedDict):
@@ -403,10 +423,13 @@ def transform_raw_to_facts(
     return {str(key): int(value or 0) for key, value in dict(result).items()}
 
 
-def recompute_document_jids(con: psycopg2.extensions.connection) -> int:
-    """Re-resolve stored document JID after organization/endpoint dictionaries changed."""
+def recompute_document_jids(con: psycopg2.extensions.connection, changes: DirectoryChanges) -> int:
+    """Re-resolve stored document JID for the resolution keys changed in dictionaries."""
     with con.cursor() as cur:
-        cur.execute("SELECT mart_egisz.recompute_document_jids(NULL::text[])")
+        cur.execute(
+            "SELECT mart_egisz.recompute_document_jids(%s::text[], %s::bigint[])",
+            (changes["oids"], changes["jids"]),
+        )
         row = cur.fetchone()
     con.commit()
     return int((row or [0])[0] or 0)
@@ -431,14 +454,17 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
         con.set_session(autocommit=previous_autocommit)
 
 
-def refresh_report_marts(con: psycopg2.extensions.connection) -> None:
-    """Refresh materialized marts after facts change.
+def refresh_report_marts(con: psycopg2.extensions.connection, *, include_periodic: bool) -> None:
+    """Refresh materialized marts; weekly and monthly marts only with include_periodic.
 
     Состав и порядок витрин определяет serving_egisz.refresh_report_marts(): обновление
     CONCURRENTLY не блокирует чтение дашбордов, статистика собирается там же.
     """
     with con.cursor() as cur:
-        cur.execute("SELECT serving_egisz.refresh_report_marts()")
+        cur.execute(
+            "SELECT serving_egisz.refresh_report_marts(p_include_periodic => %s)",
+            (include_periodic,),
+        )
     con.commit()
 
 
@@ -580,7 +606,8 @@ def sync_directory(
     rows: list[tuple[Any, ...]],
     *,
     commit: bool = True,
-) -> int:
+) -> DirectoryChanges:
+    """Upsert directory rows; return the changed row count and changed resolution keys."""
     if table_name not in ALLOWED_SYNC_TABLES:
         raise ValueError(f"Unsupported directory table: {table_name}")
     columns = DIRECTORY_COLUMNS[table_name]
@@ -606,42 +633,61 @@ def sync_directory(
         for column_name in columns
         if column_name not in pk_columns
     )
+    oid_key, jid_keys = DIRECTORY_RESOLUTION_KEYS[table_name]
+    join_sql = " AND ".join(f"p.{column_name} = c.{column_name}" for column_name in pk_columns)
     with con.cursor() as cur:
         cur.execute("SET LOCAL lock_timeout = %s", (DIRECTORY_SYNC_LOCK_TIMEOUT,))
         cur.execute("SET LOCAL statement_timeout = %s", (DIRECTORY_SYNC_STATEMENT_TIMEOUT,))
         if not rows:
-            return 0
+            return {"changed": 0, "oids": [], "jids": []}
 
-        execute_values(
+        # prior и INSERT видят один снимок: prior — состояние строк до записи.
+        changed_rows = execute_values(
             cur,
             f"""
-            INSERT INTO {table_name} ({column_sql})
-            VALUES %s
-            ON CONFLICT ({conflict_sql}) DO UPDATE SET
-                {update_sql},
-                updated_at = now()
-            WHERE {change_predicate}
+            WITH prior AS (
+                SELECT * FROM {table_name}
+            ),
+            changed AS (
+                INSERT INTO {table_name} ({column_sql})
+                VALUES %s
+                ON CONFLICT ({conflict_sql}) DO UPDATE SET
+                    {update_sql},
+                    updated_at = now()
+                WHERE {change_predicate}
+                RETURNING *
+            )
+            SELECT {oid_key} AS oid, {jid_keys} AS jids
+            FROM changed c
+            LEFT JOIN prior p ON {join_sql}
             """,
             rows,
             page_size=DIRECTORY_SYNC_PAGE_SIZE,
+            fetch=True,
         )
-        changed = cur.rowcount
     if commit:
         con.commit()
-    return int(changed or 0)
+    return {
+        "changed": len(changed_rows),
+        "oids": sorted({str(oid) for oid, _ in changed_rows if oid}),
+        "jids": sorted({int(jid) for _, jids in changed_rows for jid in (jids or []) if jid is not None}),
+    }
 
 
 def sync_directories(
     con: psycopg2.extensions.connection,
     organization_rows: list[tuple[Any, ...]],
     license_rows: list[tuple[Any, ...]],
-) -> int:
+) -> DirectoryChanges:
     """Upsert both dimension tables in one transaction."""
-    changed = 0
-    changed += sync_directory(con, "mart_egisz.dim_organizations", organization_rows, commit=False)
-    changed += sync_directory(con, "mart_egisz.dim_licenses", license_rows, commit=False)
+    organizations = sync_directory(con, "mart_egisz.dim_organizations", organization_rows, commit=False)
+    licenses = sync_directory(con, "mart_egisz.dim_licenses", license_rows, commit=False)
     con.commit()
-    return changed
+    return {
+        "changed": organizations["changed"] + licenses["changed"],
+        "oids": sorted(set(organizations["oids"]) | set(licenses["oids"])),
+        "jids": sorted(set(organizations["jids"]) | set(licenses["jids"])),
+    }
 
 
 def _analyze_exchangelog(pg_conn: psycopg2.extensions.connection) -> None:
@@ -857,14 +903,9 @@ def egisz_etl_pipeline() -> None:
             pg_conn.close()
 
     # Реестр подач наполняется ДО transform: без него асинхронный ответ ЕГИСЗ
-    # не с чем связать, и исход отправки был бы потерян. Недоступный источник не снимает
-    # остальную цепочку — то, что уже лежит в raw, разбирается и без него.
-    @task(
-        pool=DWH_POOL,
-        retries=2,
-        retry_delay=timedelta(minutes=1),
-        trigger_rule="all_done",
-    )
+    # не с чем связать, и исход отправки был бы потерян. От выгрузки журнала реестр
+    # не зависит и читается параллельно с ней.
+    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1))
     def extract_registry() -> int:
         pg_conn = _dwh_connection()
         fb_conn = _proxy_connection()
@@ -881,14 +922,9 @@ def egisz_etl_pipeline() -> None:
             pg_conn.close()
 
     # Справочники читаются до transform: клиника и вид СЭМД резолвятся по ним при разборе.
-    # Пересчёт архива задача не ведёт: хранимые реквизиты документа справочников не читают —
-    # клиника подставляется живым соединением витрины, реестр OID тоже читается на чтении.
-    @task(
-        pool=DWH_POOL,
-        retries=2,
-        retry_delay=timedelta(minutes=1),
-        trigger_rule="all_done",
-    )
+    # Сохранённый JID пересчитывается только у документов, чей резолв затронут изменёнными
+    # OID медорганизаций, ЮЛ и хостами обмена.
+    @task(pool=DWH_POOL, retries=2, retry_delay=timedelta(minutes=1))
     def sync_dictionaries() -> int:
         pg_conn = _dwh_connection()
         fb_conn = _proxy_connection()
@@ -900,16 +936,21 @@ def egisz_etl_pipeline() -> None:
                 len(organization_rows),
                 len(license_rows),
             )
-            changed = sync_directories(pg_conn, organization_rows, license_rows)
-            relinked = recompute_document_jids(pg_conn) if changed else 0
+            changes = sync_directories(pg_conn, organization_rows, license_rows)
+            relinked = (
+                recompute_document_jids(pg_conn, changes) if changes["oids"] or changes["jids"] else 0
+            )
             if relinked:
                 _analyze_exchangelog_documents(pg_conn)
             log.info(
-                "%s dictionary row(s) changed; %s document row(s) re-resolved.",
-                changed,
+                "%s dictionary row(s) changed (%s OID, %s JID resolution key(s)); "
+                "%s document row(s) re-resolved.",
+                changes["changed"],
+                len(changes["oids"]),
+                len(changes["jids"]),
                 relinked,
             )
-            return changed + relinked
+            return changes["changed"] + relinked
         finally:
             fb_conn.close()
             pg_conn.close()
@@ -917,6 +958,8 @@ def egisz_etl_pipeline() -> None:
     # Ретраи гасят транзиентный DeadlockDetected: суточное обслуживание пересекается
     # с пятиминутным батчем по блокировкам documents/document_attributes; откат
     # и повтор безопасны — transform идемпотентен, отметка двигается только после успеха.
+    # Недоступный источник не снимает разбор: то, что уже лежит в raw, разбирается и без
+    # свежей выгрузки.
     @task(
         pool=DWH_POOL,
         retries=2,
@@ -950,7 +993,7 @@ def egisz_etl_pipeline() -> None:
             raise AirflowSkipException("Факты не менялись — обновлять нечего.")
         pg_conn = _dwh_connection()
         try:
-            refresh_report_marts(pg_conn)
+            refresh_report_marts(pg_conn, include_periodic=False)
         finally:
             pg_conn.close()
 
@@ -960,7 +1003,7 @@ def egisz_etl_pipeline() -> None:
     transformed = transform(dictionaries)
     refreshed = refresh_marts(transformed)
 
-    extracted >> registry >> dictionaries >> transformed >> refreshed
+    [extracted, registry] >> transformed >> refreshed
 
 
 egisz_etl_pipeline()

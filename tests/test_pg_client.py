@@ -18,6 +18,7 @@ update_cursors = extract_dag.update_cursors
 
 refresh_dag = extract_dag  # общий блок живёт в DAG фактов
 DIRECTORY_MERGE_EXPRESSIONS = refresh_dag.DIRECTORY_MERGE_EXPRESSIONS
+DIRECTORY_RESOLUTION_KEYS = refresh_dag.DIRECTORY_RESOLUTION_KEYS
 DIRECTORY_SYNC_LOCK_TIMEOUT = refresh_dag.DIRECTORY_SYNC_LOCK_TIMEOUT
 DIRECTORY_SYNC_PAGE_SIZE = refresh_dag.DIRECTORY_SYNC_PAGE_SIZE
 DIRECTORY_SYNC_STATEMENT_TIMEOUT = refresh_dag.DIRECTORY_SYNC_STATEMENT_TIMEOUT
@@ -733,21 +734,21 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
         page_size: int,
         *,
         fetch: bool = False,
-    ) -> None:
+    ) -> list[tuple[object, ...]]:
         captured["cursor"] = cursor
         captured["sql"] = sql
         captured["values"] = values
         captured["page_size"] = page_size
         captured["fetch"] = fetch
-        con.cursor_instance.rowcount = len(values)
+        return [("1.2.643.5.1.13.13.12.2.1.1", [1])]
 
     monkeypatch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
 
-    changed = sync_directory(
+    changes = sync_directory(
         con, "mart_egisz.dim_organizations", [(1, "Clinic", "1234567890", "Address", "1.2.643.5.1.13.13.12.2.1.1")]
     )
 
-    assert changed == 1
+    assert changes == {"changed": 1, "oids": ["1.2.643.5.1.13.13.12.2.1.1"], "jids": [1]}
     assert con.cursor_instance.calls == [
         ("SET LOCAL lock_timeout = %s", (DIRECTORY_SYNC_LOCK_TIMEOUT,)),
         ("SET LOCAL statement_timeout = %s", (DIRECTORY_SYNC_STATEMENT_TIMEOUT,)),
@@ -757,7 +758,43 @@ def test_sync_directory_sets_timeouts_and_uses_paged_execute_values(monkeypatch:
     assert "IS DISTINCT FROM EXCLUDED." in str(captured["sql"])
     assert captured["values"] == [(1, "Clinic", "1234567890", "Address", "1.2.643.5.1.13.13.12.2.1.1")]
     assert captured["page_size"] == DIRECTORY_SYNC_PAGE_SIZE
+    assert captured["fetch"] is True
     assert con.committed is True
+
+
+def test_sync_directory_returns_changed_resolution_keys() -> None:
+    """Пересчёт JID документов получает только ключи резолва, изменённые строкой справочника.
+
+    Состояние строки до записи читается в том же операторе (CTE prior): наименование,
+    ИНН и адрес ЮЛ на резолв не влияют, а смена ЮЛ или адреса обмена лицензии затрагивает
+    документы и прежнего, и нового ЮЛ.
+    """
+    organizations_oid, organizations_jids = DIRECTORY_RESOLUTION_KEYS["mart_egisz.dim_organizations"]
+    assert "c.fir_oid IS DISTINCT FROM p.fir_oid" in organizations_oid
+    assert "name" not in organizations_oid + organizations_jids
+    licenses_oid, licenses_jids = DIRECTORY_RESOLUTION_KEYS["mart_egisz.dim_licenses"]
+    assert licenses_oid == "NULL::text"
+    assert "c.mo_domen IS DISTINCT FROM p.mo_domen" in licenses_jids
+    assert "ARRAY[c.jid, p.jid]" in licenses_jids
+
+    con = FakeSyncConnection()
+    captured: dict[str, object] = {}
+
+    def fake_execute_values(
+        cursor: object, sql: str, values: list[tuple[object, ...]], page_size: int, *, fetch: bool = False
+    ) -> list[tuple[object, ...]]:
+        captured["sql"] = sql
+        return [(None, [7, 8]), (None, None), (None, [8, None])]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("egisz_etl_dag.execute_values", fake_execute_values)
+        changes = sync_directory(con, "mart_egisz.dim_licenses", [(1,) * 9, (2,) * 9, (3,) * 9])
+
+    assert changes == {"changed": 3, "oids": [], "jids": [7, 8]}
+    sql = str(captured["sql"])
+    assert sql.index("WITH prior AS") < sql.index("INSERT INTO mart_egisz.dim_licenses")
+    assert "RETURNING *" in sql
+    assert "LEFT JOIN prior p ON p.id = c.id" in sql
 
 
 def test_sync_directory_never_clears_known_org_oid() -> None:
@@ -776,9 +813,11 @@ def test_sync_directory_never_clears_known_org_oid() -> None:
     con = FakeSyncConnection()
     captured: dict[str, object] = {}
 
-    def fake_execute_values(cursor: object, sql: str, values: list[tuple[object, ...]], page_size: int) -> None:
+    def fake_execute_values(
+        cursor: object, sql: str, values: list[tuple[object, ...]], page_size: int, *, fetch: bool = False
+    ) -> list[tuple[object, ...]]:
         captured["sql"] = sql
-        con.cursor_instance.rowcount = len(values)
+        return []
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr("egisz_etl_dag.execute_values", fake_execute_values)

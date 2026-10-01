@@ -243,14 +243,17 @@ def run_analyze(con: psycopg2.extensions.connection, *statements: str) -> None:
         con.set_session(autocommit=previous_autocommit)
 
 
-def refresh_report_marts(con: psycopg2.extensions.connection) -> None:
-    """Refresh materialized marts after facts change.
+def refresh_report_marts(con: psycopg2.extensions.connection, *, include_periodic: bool) -> None:
+    """Refresh materialized marts; weekly and monthly marts only with include_periodic.
 
     Состав и порядок витрин определяет serving_egisz.refresh_report_marts(): обновление
     CONCURRENTLY не блокирует чтение дашбордов, статистика собирается там же.
     """
     with con.cursor() as cur:
-        cur.execute("SELECT serving_egisz.refresh_report_marts()")
+        cur.execute(
+            "SELECT serving_egisz.refresh_report_marts(p_include_periodic => %s)",
+            (include_periodic,),
+        )
     con.commit()
 
 
@@ -482,15 +485,24 @@ def egisz_maintenance_pipeline() -> None:
                 updated = int(cur.fetchone()[0] or 0)
             pg_conn.commit()
             run_analyze(pg_conn, "ANALYZE stg_egisz.exchange_messages")
-            refresh_report_marts(pg_conn)
             log.info("Error reclassification updated %s message(s).", updated)
             return updated
         finally:
             pg_conn.close()
 
-    consistency_check()
+    @task(pool=DWH_POOL, trigger_rule="none_failed")
+    def refresh_marts() -> None:
+        pg_conn = _dwh_connection()
+        try:
+            refresh_report_marts(pg_conn, include_periodic=True)
+        finally:
+            pg_conn.close()
+
+    checked = consistency_check()
     maintain_partitions()
-    reclassify_errors()
+    classified = reclassify_errors()
+    refreshed = refresh_marts()
+    checked >> classified >> refreshed
 
 
 egisz_maintenance_pipeline()
