@@ -63,7 +63,8 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | `dim_control_chart_phases` | Фазы контрольных карт: периодичность, начало фазы, опорный период и условия работы |
 | `dim_clinic_oids`, `dim_clinic_hosts` | Представления для определения юридического лица по OID или адресу обмена |
 | `dim_semd_guide_oids` | Представление для сопоставления опубликованного OID руководства с основным OID |
-| `dim_error_rules` | Правила классификации и нормализации текста ошибок; шаги, скрывающие персональные данные, — маскирование текста для выдачи |
+| `dim_error_rules` | Правила классификации ошибок и нормализации текста нераспознанной ошибки |
+| `dim_masking_rules` | Правила скрытия персональных данных в свободном тексте при выдаче |
 | `dim_error_categories` | Категории ошибок, зона ответственности и повторяемость по умолчанию |
 | `dim_error_types` | Типы ошибок с видом, категорией, кодом НСИ, правилом, зоной ответственности и повторяемостью |
 | `dim_nsi_error_codes`, `dim_error_code_aliases` | Коды и описания ошибок НСИ 305, а также варианты написания кодов в ответах РЭМД |
@@ -105,5 +106,5 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 |---|---|---|
 | `etl_meta` | Управление временными разделами | `egisz_ensure_time_partitions` |
 | `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `normalize_error_text`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
-| `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `masking_personal_data` |
+| `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
 | `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |

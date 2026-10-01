@@ -18,7 +18,7 @@
 
 ## Потребители
 
-- Дашборды Metabase (`metabase_dashboards/`) и репозиторий `bi_superset` читают `serving_egisz`, `mart_egisz` и служебные представления `mart_egisz_admin`. Новые отчёты на `raw_egisz` и `stg_egisz` не строятся; исходный текст ошибок для отчётов — из слоя витрин (`mart_egisz.documents.error_text`, `mart_egisz.exchangelog_errors.error_text`) и выдаётся только через функцию скрытия персональных данных `mart_egisz.masking_personal_data`. В `stg_egisz` — только разобранные данные: функций объединения источников и скрытия персональных данных там нет. Исходные записи справочников НСИ (`raw_json`) на слое витрин не хранятся.
+- Дашборды Metabase (`metabase_dashboards/`) и репозиторий `bi_superset` читают `serving_egisz`, `mart_egisz` и служебные представления `mart_egisz_admin`. Новые отчёты на `raw_egisz` и `stg_egisz` не строятся; исходный текст ошибок для отчётов — из слоя витрин (`mart_egisz.documents.error_text`, `mart_egisz.exchangelog_errors.error_text`) и выдаётся только через функцию скрытия персональных данных `mart_egisz.mask_personal_data`. В `stg_egisz` — только разобранные данные: функций объединения источников и скрытия персональных данных там нет. Исходные записи справочников НСИ (`raw_json`) на слое витрин не хранятся.
 - Состояние документа к выдаче — `serving_egisz.documents_current`; документы без ответа за срок ожидания — только `serving_egisz.documents_no_response`. `serving_egisz.document_versions` читают объекты, которым нужны все версии или состояние на прошлый момент.
 - Изменение столбцов `serving_egisz` синхронно отражается в дашбордах Metabase, в `bi_superset` (или в описании изменения, если тот репозиторий не входит в задачу), в README и в тестах.
 

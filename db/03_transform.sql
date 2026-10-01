@@ -970,22 +970,12 @@ BEGIN
 
     DROP TABLE IF EXISTS pg_temp.exchangelog_error_types;
     CREATE TEMP TABLE exchangelog_error_types AS
-    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
+    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid,
+           CASE WHEN NOT c.is_recognized
+                THEN stg_egisz.normalize_error_text(k.error_kind, k.error_text) END AS normalized_text
     FROM (SELECT DISTINCT error_kind, error_code, error_text FROM pg_temp.exchangelog_error_items) k
     CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
     ANALYZE pg_temp.exchangelog_error_types;
-
-    INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
-    SELECT DISTINCT ON (t.error_type)
-        t.error_type, t.error_kind, c.error_category, c.responsibility, c.is_retryable
-    FROM pg_temp.exchangelog_error_types t
-    JOIN mart_egisz.dim_error_categories c
-      ON c.error_kind = t.error_kind
-     AND c.error_category IS NOT DISTINCT FROM
-         CASE WHEN t.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
-    WHERE t.error_type IS NOT NULL
-    ORDER BY t.error_type
-    ON CONFLICT (error_type) DO NOTHING;
 
     -- Значения собираются во временную таблицу со статистикой: соединение наборов без
     -- статистики планировщик сводил к перебору пар. Сравнение массивов считает NULL
@@ -998,14 +988,17 @@ BEGIN
         max(i.error_code) FILTER (WHERE i.source = 'network') AS network_error_code,
         max(i.error_text) FILTER (WHERE i.source = 'network') AS network_error_text,
         max(t.error_type) FILTER (WHERE i.source = 'network') AS network_error_type,
+        max(t.normalized_text) FILTER (WHERE i.source = 'network') AS network_error_normalized_text,
         jsonb_agg(jsonb_build_object(
             'item_no', i.item_no, 'section', i.section, 'code', i.error_code, 'message', i.error_text,
-            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid
+            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid,
+            'normalized_text', t.normalized_text
         ) ORDER BY i.item_no) FILTER (WHERE i.source = 'remd') AS remd_errors,
         jsonb_agg(jsonb_build_object(
             'item_no', i.item_no, 'error_code', i.error_code, 'code_context', i.error_text,
             'severity', i.severity, 'location', i.location,
-            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid
+            'error_type', t.error_type, 'nsi_dictionary_oid', t.nsi_dictionary_oid,
+            'normalized_text', t.normalized_text
         ) ORDER BY i.item_no) FILTER (WHERE i.source = 'ihe') AS ihe_errors
     FROM pg_temp.exchangelog_error_scope s
     LEFT JOIN pg_temp.exchangelog_error_items i ON i.logid = s.logid AND i.log_date = s.log_date
@@ -1018,6 +1011,7 @@ BEGIN
     SET network_error_code = p.network_error_code,
         network_error_text = p.network_error_text,
         network_error_type = p.network_error_type,
+        network_error_normalized_text = p.network_error_normalized_text,
         remd_errors = p.remd_errors,
         ihe_errors = p.ihe_errors
     FROM pg_temp.exchangelog_error_parsed p
@@ -1025,8 +1019,10 @@ BEGIN
       AND tx.log_date = p.log_date
       AND tx.log_date >= cd_min
       AND tx.log_date <= cd_max
-      AND (tx.network_error_code, tx.network_error_text, tx.network_error_type, tx.remd_errors, tx.ihe_errors)
-          IS DISTINCT FROM (p.network_error_code, p.network_error_text, p.network_error_type, p.remd_errors, p.ihe_errors);
+      AND (tx.network_error_code, tx.network_error_text, tx.network_error_type,
+           tx.network_error_normalized_text, tx.remd_errors, tx.ihe_errors)
+          IS DISTINCT FROM (p.network_error_code, p.network_error_text, p.network_error_type,
+                            p.network_error_normalized_text, p.remd_errors, p.ihe_errors);
     GET DIAGNOSTICS updated = ROW_COUNT;
 
     DROP TABLE pg_temp.exchangelog_error_parsed;
@@ -1038,11 +1034,7 @@ END;
 $$;
 
 
--- Приведение ошибок к текущим правилам: после изменения правил классификации или шагов нормализации
--- типы в разобранных сообщениях пересчитываются по уникальным элементам (вид, код,
--- исходный текст) каждого источника. Тип без правила заводится в справочнике, тип без
--- правила, на который больше не ссылается ни один элемент, снимается. Запускается вручную
--- задачей DAG обслуживания; приём на это время ставится на паузу.
+-- Запускается вручную задачей DAG обслуживания; приём на это время ставится на паузу.
 CREATE OR REPLACE FUNCTION stg_egisz.reclassify_errors()
 RETURNS integer
 LANGUAGE plpgsql
@@ -1054,7 +1046,9 @@ DECLARE
 BEGIN
     DROP TABLE IF EXISTS pg_temp.reclassified;
     CREATE TEMP TABLE reclassified AS
-    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid
+    SELECT k.error_kind, k.error_code, k.error_text, c.error_type, c.nsi_dictionary_oid,
+           CASE WHEN NOT c.is_recognized
+                THEN stg_egisz.normalize_error_text(k.error_kind, k.error_text) END AS normalized_text
     FROM (
         SELECT 'Ошибка связи'::text AS error_kind, t.network_error_code AS error_code, t.network_error_text AS error_text
         FROM stg_egisz.exchange_messages t
@@ -1074,25 +1068,15 @@ BEGIN
     -- Временные таблицы автоанализ не обрабатывает; без статистики план соединений слеп.
     ANALYZE pg_temp.reclassified;
 
-    INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
-    SELECT DISTINCT ON (r.error_type)
-        r.error_type, r.error_kind, c.error_category, c.responsibility, c.is_retryable
-    FROM pg_temp.reclassified r
-    JOIN mart_egisz.dim_error_categories c
-      ON c.error_kind = r.error_kind
-     AND c.error_category IS NOT DISTINCT FROM
-         CASE WHEN r.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
-    WHERE r.error_type IS NOT NULL
-    ORDER BY r.error_type
-    ON CONFLICT (error_type) DO NOTHING;
-
     UPDATE stg_egisz.exchange_messages t
-    SET network_error_type = r.error_type
+    SET network_error_type = r.error_type,
+        network_error_normalized_text = r.normalized_text
     FROM pg_temp.reclassified r
     WHERE t.network_error_text IS NOT NULL
       AND r.error_kind = 'Ошибка связи'
       AND ARRAY[r.error_code, r.error_text] = ARRAY[t.network_error_code, t.network_error_text]
-      AND t.network_error_type IS DISTINCT FROM r.error_type;
+      AND (t.network_error_type, t.network_error_normalized_text)
+          IS DISTINCT FROM (r.error_type, r.normalized_text);
     GET DIAGNOSTICS step_rows = ROW_COUNT;
     updated := updated + step_rows;
 
@@ -1107,7 +1091,8 @@ BEGIN
     ),
     rebuilt AS (
         SELECT el.logid, el.log_date,
-               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid)
+               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid,
+                                                       'normalized_text', r.normalized_text)
                          ORDER BY el.ord) AS items
         FROM elements el
         JOIN pg_temp.reclassified r
@@ -1132,7 +1117,8 @@ BEGIN
     ),
     rebuilt AS (
         SELECT el.logid, el.log_date,
-               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid)
+               jsonb_agg(el.item || jsonb_build_object('error_type', r.error_type, 'nsi_dictionary_oid', r.nsi_dictionary_oid,
+                                                       'normalized_text', r.normalized_text)
                          ORDER BY el.ord) AS items
         FROM elements el
         JOIN pg_temp.reclassified r
@@ -1148,10 +1134,6 @@ BEGIN
       AND t.ihe_errors IS DISTINCT FROM n.items;
     GET DIAGNOSTICS step_rows = ROW_COUNT;
     updated := updated + step_rows;
-
-    DELETE FROM mart_egisz.dim_error_types d
-    WHERE d.rule_code IS NULL
-      AND NOT EXISTS (SELECT 1 FROM pg_temp.reclassified r WHERE r.error_type = d.error_type);
 
     DROP TABLE pg_temp.reclassified;
     RETURN updated;

@@ -47,6 +47,7 @@ DROP VIEW IF EXISTS serving_egisz.clinic_semd_activity CASCADE;
 DROP VIEW IF EXISTS serving_egisz.semd_dictionaries CASCADE;
 DROP VIEW IF EXISTS serving_egisz.semd_guides CASCADE;
 DROP VIEW IF EXISTS serving_egisz.error_types CASCADE;
+DROP VIEW IF EXISTS mart_egisz_admin.unrecognized_errors CASCADE;
 DROP VIEW IF EXISTS serving_egisz.nsi_dictionary_versions CASCADE;
 
 -- ---------------------------------------------------------------- section: document_attributes
@@ -573,12 +574,13 @@ SELECT
     tx.source_action,
     tx.network_error_code AS error_code,
     tx.network_error_text COLLATE "und-x-icu" AS error_text,
-    tx.network_error_type COLLATE "und-x-icu" AS error_type
+    tx.network_error_type COLLATE "und-x-icu" AS error_type,
+    tx.network_error_normalized_text COLLATE "und-x-icu" AS normalized_text
 FROM stg_egisz.exchange_messages tx
 WHERE tx.network_error_text IS NOT NULL;
 
 COMMENT ON VIEW stg_egisz.network_errors IS
-'Ошибки связи: шлюз не доставил сообщение (LOGSTATE = 3). Строка — сообщение с ошибкой связи, ключ (logid, message_at); dwh_id пуст у сообщения без связи с документом. error_text — исходный текст шлюза.';
+'Ошибки связи: шлюз не доставил сообщение (LOGSTATE = 3). Строка — сообщение с ошибкой связи, ключ (logid, message_at); dwh_id пуст у сообщения без связи с документом. error_text — исходный текст шлюза; normalized_text — нормализованный текст нераспознанной ошибки.';
 
 CREATE VIEW stg_egisz.remd_errors AS
 SELECT
@@ -595,14 +597,16 @@ SELECT
     e.code,
     e.message COLLATE "und-x-icu" AS message,
     e.error_type COLLATE "und-x-icu" AS error_type,
-    e.nsi_dictionary_oid
+    e.nsi_dictionary_oid,
+    e.normalized_text COLLATE "und-x-icu" AS normalized_text
 FROM stg_egisz.exchange_messages tx
 CROSS JOIN LATERAL jsonb_to_recordset(tx.remd_errors)
-    AS e(item_no integer, section text, code text, message text, error_type text, nsi_dictionary_oid text)
+    AS e(item_no integer, section text, code text, message text, error_type text, nsi_dictionary_oid text,
+         normalized_text text)
 WHERE tx.remd_errors IS NOT NULL;
 
 COMMENT ON VIEW stg_egisz.remd_errors IS
-'Элементы ответа РЭМД: строка — <item>, ключ (logid, message_at, item_no). section — раздел ответа: errors либо registrationWarnings (предупреждения при успешной регистрации); code, message — исходные код и текст.';
+'Элементы ответа РЭМД: строка — <item>, ключ (logid, message_at, item_no). section — раздел ответа: errors либо registrationWarnings (предупреждения при успешной регистрации); code, message — исходные код и текст; normalized_text — нормализованный текст нераспознанного элемента.';
 
 CREATE VIEW stg_egisz.ihe_errors AS
 SELECT
@@ -620,20 +624,20 @@ SELECT
     e.severity,
     e.location,
     e.error_type COLLATE "und-x-icu" AS error_type,
-    e.nsi_dictionary_oid
+    e.nsi_dictionary_oid,
+    e.normalized_text COLLATE "und-x-icu" AS normalized_text
 FROM stg_egisz.exchange_messages tx
 CROSS JOIN LATERAL jsonb_to_recordset(tx.ihe_errors)
     AS e(item_no integer, error_code text, code_context text, severity text, location text,
-         error_type text, nsi_dictionary_oid text)
+         error_type text, nsi_dictionary_oid text, normalized_text text)
 WHERE tx.ihe_errors IS NOT NULL;
 
 COMMENT ON VIEW stg_egisz.ihe_errors IS
-'Элементы ответа ИЭМК: строка — IHE RegistryError, ключ (logid, message_at, item_no). error_code — errorCode, code_context — codeContext (исходный текст), severity и location — атрибуты элемента.';
+'Элементы ответа ИЭМК: строка — IHE RegistryError, ключ (logid, message_at, item_no). error_code — errorCode, code_context — codeContext (исходный текст), severity и location — атрибуты элемента; normalized_text — нормализованный текст нераспознанного элемента.';
 
 -- Общая форма ошибок журнала обмена: вид, код, тип, признак предупреждения и исходный текст
 -- из атрибутов своего источника. Ключ элемента — (logid, message_at, error_source, item_no).
--- Тексты источников объединяются здесь, выше stage; персональные данные скрывает функция
--- выдачи mart_egisz.masking_personal_data.
+-- Тексты источников объединяются здесь, выше stage.
 CREATE VIEW mart_egisz.exchangelog_errors AS
 SELECT
     n.message_at, n.logid, n.msgid, n.dwh_id, n.clinic_jid, n.semd_code, n.egisz_subsystem, n.source_action,
@@ -644,25 +648,28 @@ SELECT
     n.error_type,
     NULL::text AS nsi_dictionary_oid,
     false AS is_warning,
-    n.error_text
+    n.error_text,
+    n.normalized_text
 FROM stg_egisz.network_errors n
 UNION ALL
 SELECT
     r.message_at, r.logid, r.msgid, r.dwh_id, r.clinic_jid, r.semd_code, r.egisz_subsystem, r.source_action,
     'РЭМД', r.item_no, 'Ошибка асинхронного ответа', r.code, r.error_type, r.nsi_dictionary_oid,
     r.section IS NOT DISTINCT FROM 'registrationWarnings',
-    r.message
+    r.message,
+    r.normalized_text
 FROM stg_egisz.remd_errors r
 UNION ALL
 SELECT
     h.message_at, h.logid, h.msgid, h.dwh_id, h.clinic_jid, h.semd_code, h.egisz_subsystem, h.source_action,
     'ИЭМК', h.item_no, 'Ошибка асинхронного ответа', h.error_code, h.error_type, h.nsi_dictionary_oid,
     COALESCE(h.severity ~* 'Warning$', false),
-    h.code_context
+    h.code_context,
+    h.normalized_text
 FROM stg_egisz.ihe_errors h;
 
 COMMENT ON VIEW mart_egisz.exchangelog_errors IS
-'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. error_text — исходный текст источника (LOGTEXT ошибки связи, message РЭМД, codeContext ИЭМК); при выдаче персональные данные скрывает mart_egisz.masking_personal_data.';
+'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. error_text — исходный текст источника (LOGTEXT ошибки связи, message РЭМД, codeContext ИЭМК); при выдаче персональные данные скрывает mart_egisz.mask_personal_data. normalized_text — нормализованный текст нераспознанной ошибки (тип «Не распознано»), без персональных данных.';
 
 -- Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки
 -- связи после него; у документа без асинхронного ответа — все его ошибки связи. Время
@@ -762,7 +769,7 @@ CREATE INDEX IF NOT EXISTS idx_document_errors_responsibility ON serving_egisz.d
 CREATE INDEX IF NOT EXISTS idx_document_errors_corpus ON serving_egisz.document_errors (ips_date) WHERE is_error_corpus;
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.document_errors IS
-'Ошибки текущего состояния документа для документов состояния к выдаче serving_egisz.documents_current. Строка — одна ошибка документа, ключ (dwh_id, error_no): error_type — нормализованный тип без значений документа; вид, категория, код и атрибуты справочников; is_warning — предупреждение источника. Текст ошибки — в mart_egisz.document_errors.error_text по ключу (dwh_id, error_no). Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly и semd_error_categories_daily, типы ошибок документа — в document_error_types.';
+'Ошибки текущего состояния документа для документов состояния к выдаче serving_egisz.documents_current. Строка — одна ошибка документа, ключ (dwh_id, error_no): error_type — тип ошибки из правил классификации либо «Не распознано» своего вида; вид, категория, код и атрибуты справочников; is_warning — предупреждение источника. Исходный текст ошибок документа — в mart_egisz.documents.error_text. Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly и semd_error_categories_daily, типы ошибок документа — в document_error_types.';
 
 -- Ошибки на уровне документа: строка — один документ с ошибками текущего состояния, списки
 -- типов, категорий и видов — по всем его элементам. Нужна потребителям, которым удобнее
@@ -1090,8 +1097,6 @@ JOIN mart_egisz.dim_nsi_semd_guide_dictionaries gd ON gd.guide_oid = s.guide_oid
 COMMENT ON VIEW serving_egisz.semd_dictionaries IS
 'Справочники НСИ, предписанные руководством по реализации для вида медицинской документации: грейн (semd_code, dict_oid).';
 
--- Справочник типов ошибок для раздела «Справочная информация»: тип, вид, категория, зона
--- ответственности, повторяемость и код справочника «РЭМД. Классификатор кодов сообщений».
 CREATE VIEW serving_egisz.error_types AS
 SELECT
     t.error_type,
@@ -1101,12 +1106,32 @@ SELECT
     t.is_retryable,
     t.nsi_error_code,
     c.nsi_error_description,
-    (t.rule_code IS NOT NULL) AS has_rule
+    (t.rule_code IS NOT NULL) AS is_recognized,
+    r.definition,
+    r.definition_source
 FROM mart_egisz.dim_error_types t
-LEFT JOIN mart_egisz.dim_nsi_error_codes c ON c.nsi_error_code = t.nsi_error_code;
+LEFT JOIN mart_egisz.dim_nsi_error_codes c ON c.nsi_error_code = t.nsi_error_code
+LEFT JOIN mart_egisz.dim_error_rules r ON r.rule_code = t.rule_code;
 
 COMMENT ON VIEW serving_egisz.error_types IS
-'Типы ошибок: строка — тип (ключ error_type) с видом, категорией, зоной ответственности, признаком повтора и кодом справочника НСИ «РЭМД. Классификатор кодов сообщений» с его описанием. has_rule — тип задан правилом классификации; иначе тип — нормализованный текст ошибки без правила.';
+'Типы ошибок — закрытый список: строка — тип (ключ error_type) с видом, категорией, зоной ответственности, признаком повтора и кодом справочника НСИ «РЭМД. Классификатор кодов сообщений» с его описанием. is_recognized — тип задан правилом классификации; ложь только у типа «Не распознано» своего вида. definition и definition_source — общепринятое определение ошибки и его источник (заданы у ошибок связи).';
+
+CREATE VIEW mart_egisz_admin.unrecognized_errors AS
+SELECT
+    e.error_kind,
+    e.normalized_text,
+    count(*) AS error_count,
+    count(DISTINCT e.clinic_jid) AS clinic_count,
+    min(e.message_at) AS first_seen_at,
+    max(e.message_at) AS last_seen_at,
+    min(e.error_code) AS error_code_example
+FROM mart_egisz.exchangelog_errors e
+JOIN mart_egisz.dim_error_types t ON t.error_type = e.error_type
+WHERE t.rule_code IS NULL
+GROUP BY e.error_kind, e.normalized_text;
+
+COMMENT ON VIEW mart_egisz_admin.unrecognized_errors IS
+'Нераспознанные ошибки (тип «Не распознано»), сгруппированные по виду и нормализованному тексту: число ошибок и клиник, первое и последнее появление, пример кода. Контроль полноты правил классификации: строка — кандидат на новое правило в mart_egisz.dim_error_rules.';
 
 -- Версии справочников НСИ в DWH: какой справочник, какая версия и когда загружена.
 -- Наименование справочника — из общего перечня справочников НСИ, при отсутствии в нём —
@@ -2313,8 +2338,7 @@ no_response_docs AS (
     FROM mart_egisz.documents d, no_response_after c
     WHERE d.status = 'sent' AND d.first_sent_at < c.ts
 ),
--- Отказы, чью формулировку ни одно правило не распознало: они видны в разборе текстом,
--- и каждая такая строка — кандидат на новое правило либо на код, отсутствующий в ФНСИ.
+-- Отказы с типом «Не распознано»; их тексты сгруппированы в mart_egisz_admin.unrecognized_errors.
 uncovered_types AS (
     SELECT DISTINCT c.dwh_id
     FROM mart_egisz.document_errors c
@@ -2322,8 +2346,7 @@ uncovered_types AS (
     WHERE c.error_kind = 'Ошибка асинхронного ответа'
       AND t.rule_code IS NULL
 ),
--- Элемент ошибки без строки в справочнике типов — сбой архитектуры: тип заводится при
--- разборе, и расхождение означает, что элементы не приведены к текущим правилам.
+-- Элемент ошибки без строки в справочнике типов — элементы не приведены к текущим правилам.
 untyped_errors AS (
     SELECT COUNT(*) AS cnt
     FROM mart_egisz.document_errors c
@@ -2418,8 +2441,8 @@ SELECT * FROM (
          END,
          (SELECT COUNT(*)::numeric FROM uncovered_types),
          'документов',
-         'mart_egisz.document_errors: тип без правила классификации',
-         'Разобрать формулировки на вкладке «Анализ ошибок» и завести правило в dim_error_rules'),
+         'mart_egisz.document_errors: тип «Не распознано»',
+         'Разобрать нормализованные тексты в mart_egisz_admin.unrecognized_errors и завести правило в dim_error_rules'),
         ('untyped_errors',
          'Элементы ошибки без типа в справочнике',
          CASE WHEN (SELECT cnt FROM untyped_errors) >= 1 THEN 'red' ELSE 'green' END,

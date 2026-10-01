@@ -193,7 +193,8 @@ def test_error_classification_takes_one_rule_per_element() -> None:
     sql = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     classify = sql.split("CREATE OR REPLACE FUNCTION stg_egisz.classify_error")[1].split("$$;")[0]
     assert "FOR v_tier IN 1..4 LOOP" in classify
-    assert "ORDER BY r.rule_code\n            LIMIT 1;" in classify
+    assert "ORDER BY r.rule_code\n        LIMIT 1;" in classify
+    assert "AND r.error_kind = p_error_kind" in classify
     assert "error_matching_rule_labels" not in sql
     assert "error_item_atoms" not in sql
 
@@ -291,9 +292,9 @@ def test_source_error_text_is_kept_in_document_row() -> None:
     assert 'tx.network_error_text COLLATE "und-x-icu" AS error_text' in network
     assert 'e.message COLLATE "und-x-icu" AS message' in remd
     assert 'e.code_context COLLATE "und-x-icu" AS code_context' in ihe
-    assert "    n.error_text\nFROM stg_egisz.network_errors n" in common
-    assert "    r.message\nFROM stg_egisz.remd_errors r" in common
-    assert "    h.code_context\nFROM stg_egisz.ihe_errors h" in common
+    assert "    n.error_text,\n    n.normalized_text\nFROM stg_egisz.network_errors n" in common
+    assert "    r.message,\n    r.normalized_text\nFROM stg_egisz.remd_errors r" in common
+    assert "    h.code_context,\n    h.normalized_text\nFROM stg_egisz.ihe_errors h" in common
     assert "error_text text" in documents
     assert "string_agg(e.error_text, ' · ' ORDER BY e.message_at, e.logid, e.item_no, e.error_source)" in texts
     assert "UPDATE mart_egisz.documents d" in texts

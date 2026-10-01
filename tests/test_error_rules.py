@@ -80,11 +80,25 @@ def one(con, sql: str, *params):
         return cur.fetchone()[0]
 
 
+UNRECOGNIZED = {
+    ASYNC: "Не распознано: ошибка асинхронного ответа",
+    NETWORK: "Не распознано: ошибка связи",
+}
+
+
 def classify(con, code: str | None, text: str | None, kind: str = ASYNC) -> tuple[str | None, str | None]:
     with con.cursor() as cur:
         cur.execute("SELECT error_type, nsi_dictionary_oid FROM stg_egisz.classify_error(%s, %s, %s)",
                     (kind, code, text))
         return cur.fetchone()
+
+
+def recognized(con, code: str | None, text: str | None, kind: str = ASYNC) -> bool:
+    return one(con, "SELECT is_recognized FROM stg_egisz.classify_error(%s, %s, %s)", kind, code, text)
+
+
+def normalize(con, text: str | None, kind: str = ASYNC) -> str | None:
+    return one(con, "SELECT stg_egisz.normalize_error_text(%s, %s)", kind, text)
 
 
 def category(con, error_type: str | None) -> str | None:
@@ -112,8 +126,7 @@ def ihe_items(con, msgtext: str | None):
 
 
 # --- Корпус: (code, message, ожидаемый тип, ожидаемая категория) ------------------------
-# Сообщения — обезличенные образцы из архива ответов (значения заменены на […]). Категория
-# None — тип без правила: его заводит в справочнике разбор журнала при первом появлении.
+# Сообщения — обезличенные образцы из архива ответов (значения заменены на […]).
 CORPUS = [
     # --- Ярус 2: код закрывает разбор, тип — наименование из ФНСИ ------------------------
     ("PATIENT_MPI_MISMATCH",
@@ -249,14 +262,12 @@ CORPUS = [
     ("", "[CRE-122]: PAT-001; Пациент не определен: [СНИЛС [111] не валидно контрольное число]",
      "ИЭМК: пациент не определён", "Данные пациента"),
 
-    # --- Без правила: тип — нормализованный текст -------------------------
-    ("", "совершенно нераспознаваемый текст", "совершенно нераспознаваемый текст", None),
+    # --- Без правила: тип «Не распознано» -------------------------------------------------
+    ("", "совершенно нераспознаваемый текст", UNRECOGNIZED[ASYNC], "Прочие"),
     ("VALIDATION_ERROR",
      "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x",
-     "Неизвестная проверка со СНИЛС <snils> и OID […].", None),
-    # Код вне классификатора и без текста типа не получает: элемент виден в контроле
-    # качества, а не скрыт подставленным наименованием.
-    ("SOME_UNSEEN_CODE", "", None, None),
+     UNRECOGNIZED[ASYNC], "Прочие"),
+    ("SOME_UNSEEN_CODE", "", UNRECOGNIZED[ASYNC], "Прочие"),
 ]
 
 
@@ -306,7 +317,29 @@ def test_rule_type_replaces_readable_message(con):
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
 
 
-# --- Нормализация текста без правила ---------------------------------------------------
+# --- Нераспознанные ошибки: тип «Не распознано», нормализованный текст — отдельно ------
+
+def test_unrecognized_error_gets_closed_type_and_keeps_normalized_text(con):
+    message = "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x"
+    assert classify(con, "VALIDATION_ERROR", message) == (UNRECOGNIZED[ASYNC], None)
+    assert recognized(con, "VALIDATION_ERROR", message) is False
+    assert normalize(con, message) == "Неизвестная проверка со СНИЛС <snils> и OID […]."
+    assert recognized(con, "NO_SNILS", "любой текст") is True
+
+
+def test_type_list_is_closed(con):
+    """Набор типов задают правила: новый текст ошибки новый тип не заводит."""
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_types t
+        WHERE t.rule_code IS NULL
+    """) == len(UNRECOGNIZED)
+    assert set(one(con, "SELECT array_agg(error_type) FROM mart_egisz.dim_error_types WHERE rule_code IS NULL")) == \
+        set(UNRECOGNIZED.values())
+    for kind, error_type in UNRECOGNIZED.items():
+        assert one(con, "SELECT error_kind FROM mart_egisz.dim_error_types WHERE error_type = %s", error_type) == kind
+
+
+# --- Нормализация текста нераспознанной ошибки ------------------------------------------
 
 @pytest.mark.parametrize("message,expected", [
     ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
@@ -324,13 +357,13 @@ def test_rule_type_replaces_readable_message(con):
      "Ошибки валидации в ФРМСС (MSSCERT): Внутренняя ошибка сервиса ФРМСС"),
 ])
 def test_wrapped_responses_are_unwrapped(con, message, expected):
-    assert classify(con, "", message)[0] == expected
+    assert normalize(con, message) == expected
 
 
 def test_attribute_name_survives_bracket_masking(con):
     """«Указанное значение [Имя пациента] …» называет, что именно не совпало: реквизит
     остаётся, значения скрываются."""
-    assert classify(con, "", "Указанное значение [Имя пациента] [Петрова Анна] отличается от сведений [Петрова А.]")[0] == \
+    assert normalize(con, "Указанное значение [Имя пациента] [Петрова Анна] отличается от сведений [Петрова А.]") == \
         "Указанное значение [Имя пациента] […] отличается от сведений […]"
 
 
@@ -342,27 +375,71 @@ def test_attribute_name_survives_bracket_masking(con):
     ("", "Неверный формат e-mail 'Ivanov.I.I@example.ru '", "Ivanov"),
     ("", "Адрес ivanov@example.ru недоступен", "ivanov@"),
 ])
-def test_error_type_carries_no_instance_values(con, code, message, leak):
-    """Тип уходит в фильтры и сводки дашбордов, в том числе клиентских."""
-    error_type, _ = classify(con, code, message)
-    assert error_type and leak not in error_type
+def test_normalized_text_carries_no_instance_values(con, code, message, leak):
+    """Нормализованный текст группирует нераспознанные ошибки и читается в контроле качества."""
+    normalized = normalize(con, message)
+    assert normalized and leak not in normalized
 
 
-def test_masking_strips_document_values(con):
-    error_type, _ = classify(con, "VALIDATION_ERROR",
-                             "Проверка без правила: элемент [x] со СНИЛС 11122233344"
-                             " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
-    assert "11122233344" not in error_type
-    assert "1.2.643.5.1.13.13" not in error_type
-    assert "Путь:" not in error_type
+def test_normalization_strips_document_values(con):
+    normalized = normalize(con, "Проверка без правила: элемент [x] со СНИЛС 11122233344"
+                                " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
+    assert "11122233344" not in normalized
+    assert "1.2.643.5.1.13.13" not in normalized
+    assert "Путь:" not in normalized
 
 
-def test_network_error_type_is_masked_gateway_text(con):
-    assert classify(con, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out", NETWORK)[0] == \
-        "Synapse TCP/IP Socket error 10060: Connection timed out"
-    assert classify(con, "500", "Error while receiving data from service: https://gost-123.example.ru:9945/api"
-                    " Error code: 500", NETWORK)[0] == \
-        "Error while receiving data from service: <endpoint> Error code: 500"
+def test_normalization_masks_personal_data_first(con):
+    """Нормализация начинается со скрытия персональных данных: СНИЛС получает псевдоним
+    <snils>, а не общее обозначение значения в скобках."""
+    assert normalize(con, "Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД") == \
+        "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД"
+
+
+# --- Ошибки связи: правила по общепринятым определениям ---------------------------------
+
+NETWORK_TEXTS = [
+    ("10054", "Synapse TCP/IP Socket error 10054: Connection reset by peer", "Соединение сброшено удалённой стороной"),
+    ("10060", "Synapse TCP/IP Socket error 10060: Connection timed out", "Истекло время ожидания соединения"),
+    ("10061", "Synapse TCP/IP Socket error 10061: Connection refused", "В соединении отказано"),
+    ("10065", "Synapse TCP/IP Socket error 10065: No route to host", "Нет маршрута до узла"),
+    ("10091", "Synapse TCP/IP Socket error 10091: ", "Сетевая подсистема недоступна"),
+    ("10091", "Synapse TCP/IP Socket error 10091: Network subsystem is unusable", "Сетевая подсистема недоступна"),
+    ("11001", "Synapse TCP/IP Socket error 11001: Host not found", "DNS: узел не найден"),
+    ("11002", "Synapse TCP/IP Socket error 11002: Non authoritative - host not found",
+     "DNS: узел не найден, ответ не окончательный"),
+    ("408", "Error while receiving data from service: https://gost-123.example.ru:9945/api Error code: 408",
+     "HTTP 408: истекло время ожидания запроса"),
+    ("500", "Error while receiving data from service: http://gost-1234.infoclinica.lan:9945\nError code: 500",
+     "HTTP 500: внутренняя ошибка сервера"),
+    ("503", "Error while receiving data from service: https://10.0.0.1:443/ws Error code: 503",
+     "HTTP 503: сервис недоступен"),
+]
+
+
+@pytest.mark.parametrize("code,text,expected", NETWORK_TEXTS)
+def test_network_errors_are_recognized_by_rules(con, code, text, expected):
+    assert network_code(con, text) == code
+    assert classify(con, code, text, NETWORK)[0] == expected
+
+
+def test_unknown_network_error_is_unrecognized(con):
+    text = "Synapse TCP/IP Socket error 10013: Permission denied"
+    assert classify(con, network_code(con, text), text, NETWORK)[0] == UNRECOGNIZED[NETWORK]
+    assert normalize(con, "Error while receiving data from service: https://gost-1.example.ru:9945 Error code: 418",
+                     NETWORK) == "Error while receiving data from service: <endpoint> Error code: 418"
+
+
+def test_network_rules_carry_definition_with_source(con):
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE rule_kind = 'классификация' AND error_kind = 'Ошибка связи'
+    """) == len({row[2] for row in NETWORK_TEXTS})
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_rules
+        WHERE rule_kind = 'классификация' AND error_kind = 'Ошибка связи'
+          AND (btrim(COALESCE(definition, '')) = '' OR definition_source !~ 'https://')
+    """) == 0
 
 
 # --- Ошибки строки журнала обмена по источникам ----------------------------------------
@@ -497,7 +574,8 @@ def test_every_rule_interpretation_is_a_type_with_its_category(con):
         SELECT count(*) FROM mart_egisz.dim_error_rules r
         WHERE r.rule_kind = 'классификация' AND NOT EXISTS (
             SELECT 1 FROM mart_egisz.dim_error_types t
-            WHERE t.error_type = r.interpretation AND t.error_category = r.error_category)
+            WHERE t.error_type = r.interpretation
+              AND t.error_category IS NOT DISTINCT FROM r.error_category)
     """) == 0
 
 
@@ -673,7 +751,7 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
 # --- Маскирование текста для выдачи -----------------------------------------------------
 
 def mask(con, text: str) -> str | None:
-    return one(con, "SELECT mart_egisz.masking_personal_data(%s)", text)
+    return one(con, "SELECT mart_egisz.mask_personal_data(%s)", text)
 
 
 @pytest.mark.parametrize("message,expected", [
@@ -756,14 +834,16 @@ def test_masking_keeps_clinic_service_address(con):
     assert mask(con, message) == message
 
 
-def test_masking_steps_are_normalization_steps(con):
-    """Каждый шаг маскирования для выдачи — шаг нормализации: тип ошибки без правила
-    персональных данных не содержит."""
+def test_masking_rules_are_a_separate_dictionary(con):
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_masking_rules") > 0
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_rules
-        WHERE masks_personal_data AND rule_kind <> 'нормализация'
+        SELECT count(*) FROM mart_egisz.dim_masking_rules m
+        JOIN mart_egisz.dim_error_rules r ON r.rule_code = m.rule_code
     """) == 0
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules WHERE masks_personal_data") > 0
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_masking_rules r
+        WHERE regexp_replace('x', r.match_pattern, r.replacement, r.match_flags) IS NULL
+    """) == 0
 
 
 # --- Текущие ошибки документа ------------------------------------------------------------

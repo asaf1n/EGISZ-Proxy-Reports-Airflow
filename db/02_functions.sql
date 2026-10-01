@@ -585,12 +585,62 @@ $$;
 -- Вид, категория и тип ошибки определены в README, раздел «Классификация ошибок».
 -- ============================================================================
 
--- Правило двух родов. Классификация относит элемент асинхронного ответа к типу ошибки
--- по коду и тексту. Нормализация — упорядоченный шаг, по которому тип строится из текста,
--- когда правило классификации не нашлось; различия источников задаются здесь данными, а
--- не отдельными функциями. Шаги нормализации с признаком masks_personal_data скрывают
--- персональные данные; их же применяет функция выдачи свободного текста
--- mart_egisz.masking_personal_data.
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_masking_rules (
+    rule_code text PRIMARY KEY,
+    apply_order integer NOT NULL UNIQUE,
+    match_pattern text NOT NULL,
+    match_flags text NOT NULL DEFAULT '',
+    replacement text NOT NULL,
+    updated_at timestamptz DEFAULT now()
+);
+
+COMMENT ON TABLE mart_egisz.dim_masking_rules IS
+'Правила скрытия персональных данных в свободном тексте. Строка — шаг замены (порядок, шаблон, замена): значение человека (СНИЛС — псевдоним <snils>, ФИО, дата рождения, ДУЛ, идентификатор пациента, субъект сертификата, e-mail) заменяется обозначением, формулировка, адреса и реквизиты документа сохраняются. Применяют функция выдачи mart_egisz.mask_personal_data и первым шагом нормализация stg_egisz.normalize_error_text. Справочник правил, сид — db/02_functions.sql.';
+
+-- Сид собирается во временной таблице, чтобы прунинг снимал правила, убранные из исходника.
+DROP TABLE IF EXISTS seed_masking_rules;
+CREATE TEMP TABLE seed_masking_rules (LIKE mart_egisz.dim_masking_rules INCLUDING DEFAULTS);
+
+INSERT INTO seed_masking_rules (rule_code, apply_order, match_pattern, match_flags, replacement)
+VALUES
+    ('mask_series_number', 70, '(номером|серией) [0-9]+', 'g', '\1 […]'),
+    ('mask_certificate_subject', 72, '(subject:? )(?:(?!\s+issuer:| · ).)+', 'g', '\1[…]'),
+    ('mask_signer_snils', 71, '(SNILS )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>'),
+    ('mask_patient_snils', 73, '(СНИЛС пациента в ЭМД )\[[^\]]{0,200}\]( отличается от СНИЛС пациента в запросе на регистрацию сведений )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>'),
+    ('mask_snils_value', 74, '(СНИЛС(?: сотрудника| пациента)? ?)\[[^\]]{0,200}\]', 'g', '\1<snils>'),
+    ('mask_snils_entity', 75, '(СНИЛС сотрудника &lt;)[0-9 -]{11,14}(&gt;)', 'g', '\1<snils>\2'),
+    ('mask_birth_date_after_snils', 76, '(СНИЛС <snils> \()\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_patient_value', 77, '(пациента в (?:ЭМД|запросе на регистрацию сведений) )\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_registry_person_value', 78, '(данным (?:ГИП|ФРМР) )\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_certificate_holder_snils', 79, '(сертификата недоступен: )[0-9]{11}(?![0-9])', 'g', '\1<snils>'),
+    ('mask_specified_snils', 81, '(Указанное значение \[СНИЛС\] )\[[^\]]{0,200}\]( не соответствует данным ГИП )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>'),
+    ('mask_specified_value', 82, '(Указанное значение \[[^\]]{1,40}\] )\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_name_value', 84, '((?:^|[^А-Яа-яЁё])(?:Фамилия|Имя|Отчество) |от (?:фамилии|имени|отчества) )\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_signer_value', 86, '((?:GIVEN_NAME|SURNAME|MIDDLE_NAME|SNILS) )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1[…]\2[…]'),
+    ('mask_recipient_snils', 87, '(Получатель )\[[^\]]{0,200}\]( из запроса на регистрацию сведений)', 'g', '\1<snils>\2'),
+    ('mask_person_identifier', 88, '(По локальному id |patientId: |ДУЛ\. Номер )\[[^\]]{0,200}\]', 'g', '\1[…]'),
+    ('mask_fio_snils', 90, ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', 'g', ': […] (СНИЛС: <snils>)'),
+    ('mask_email', 130, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', 'g', '<e-mail>');
+
+INSERT INTO mart_egisz.dim_masking_rules (rule_code, apply_order, match_pattern, match_flags, replacement)
+SELECT rule_code, apply_order, match_pattern, match_flags, replacement
+FROM seed_masking_rules
+ON CONFLICT (rule_code) DO UPDATE SET
+    apply_order = EXCLUDED.apply_order,
+    match_pattern = EXCLUDED.match_pattern,
+    match_flags = EXCLUDED.match_flags,
+    replacement = EXCLUDED.replacement,
+    updated_at = now()
+WHERE (mart_egisz.dim_masking_rules.apply_order, mart_egisz.dim_masking_rules.match_pattern,
+       mart_egisz.dim_masking_rules.match_flags, mart_egisz.dim_masking_rules.replacement)
+  IS DISTINCT FROM
+      (EXCLUDED.apply_order, EXCLUDED.match_pattern, EXCLUDED.match_flags, EXCLUDED.replacement);
+
+DELETE FROM mart_egisz.dim_masking_rules r
+WHERE NOT EXISTS (SELECT 1 FROM seed_masking_rules s WHERE s.rule_code = r.rule_code);
+
+DROP TABLE seed_masking_rules;
+
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
     rule_code text PRIMARY KEY,
     rule_kind text NOT NULL,
@@ -605,30 +655,35 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
     nsi_dictionary_pattern text,
     interpretation text,
     error_category text,
+    definition text,
+    definition_source text,
     updated_at timestamptz DEFAULT now(),
-    masks_personal_data boolean NOT NULL DEFAULT false,
     CONSTRAINT chk_dim_error_rules_kind CHECK (
         (rule_kind = 'нормализация'
             AND apply_order IS NOT NULL AND replacement IS NOT NULL
             AND (error_kind IS NULL OR error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа'))
             AND match_tier IS NULL AND match_code IS NULL AND nsi_error_code IS NULL
-            AND nsi_dictionary_pattern IS NULL AND interpretation IS NULL AND error_category IS NULL)
+            AND nsi_dictionary_pattern IS NULL AND interpretation IS NULL AND error_category IS NULL
+            AND definition IS NULL AND definition_source IS NULL)
         OR (rule_kind = 'классификация'
-            AND error_kind = 'Ошибка асинхронного ответа'
+            AND error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа')
             AND apply_order IS NULL AND replacement IS NULL AND match_flags = ''
             AND match_tier BETWEEN 1 AND 4
             AND (match_tier <= 2) = (match_code IS NOT NULL)
-            AND interpretation IS NOT NULL AND error_category IS NOT NULL
-            AND NOT masks_personal_data)
+            AND interpretation IS NOT NULL
+            AND (error_kind = 'Ошибка связи') = (error_category IS NULL)
+            AND (error_kind <> 'Ошибка связи' OR (definition IS NOT NULL AND definition_source IS NOT NULL)))
     )
 );
 
 COMMENT ON TABLE mart_egisz.dim_error_rules IS
-'Правила обработки ошибок. Строка — одно правило: классификация (код и текст элемента асинхронного ответа → тип и категория) либо шаг нормализации текста в тип (порядок, шаблон, замена). Справочник правил, сид — db/02_functions.sql.';
+'Правила обработки ошибок. Строка — одно правило: классификация (код и текст ошибки → тип, у асинхронного ответа — и категория) либо шаг нормализации текста нераспознанной ошибки (порядок, шаблон, замена). Справочник правил, сид — db/02_functions.sql.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.error_kind IS
 'Вид ошибки, к которому применяется правило. У шага нормализации NULL означает оба вида.';
-COMMENT ON COLUMN mart_egisz.dim_error_rules.masks_personal_data IS
-'Шаг нормализации скрывает персональные данные (ФИО, СНИЛС, дата рождения, ДУЛ, идентификатор пациента, субъект сертификата, e-mail). Только такие шаги применяет функция выдачи свободного текста mart_egisz.masking_personal_data, независимо от вида ошибки.';
+COMMENT ON COLUMN mart_egisz.dim_error_rules.definition IS
+'Общепринятое определение ошибки, которую распознаёт правило. Обязательно у правил ошибок связи.';
+COMMENT ON COLUMN mart_egisz.dim_error_rules.definition_source IS
+'Источник определения: документ, раздел и адрес. Обязателен у правил ошибок связи.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.match_tier IS
 'Ярус классификации: 1 — код и специфичный текст; 2 — только код; 3 — специфичный текст без кода; 4 — широкий текстовый фолбэк. Первый ярус с совпадением побеждает, внутри яруса — правило с меньшим rule_code.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.nsi_error_code IS
@@ -645,13 +700,9 @@ DROP TABLE IF EXISTS seed_error_rules;
 CREATE TEMP TABLE seed_error_rules (LIKE mart_egisz.dim_error_rules INCLUDING DEFAULTS);
 
 -- ------------------------------------------------------------------
--- Нормализация. Тип ошибки без правила — текст элемента, в котором значения конкретного
--- документа заменены обозначениями. Шаги применяются по apply_order к виду из error_kind.
--- Снятие служебной обёртки ответов ИЭМК и ФРМСС идёт до замены значений: иначе значения
--- скрыли бы формулировку вместе с вложенными скобками. Реквизит в «Указанное значение
--- [Имя пациента] …» — указание, что именно не совпало с ГИП, поэтому шаг скобок его
--- не трогает. Граница слова и регистр для кириллицы заданы явными классами: под
--- lc_ctype = C \y и (?i) рядом с кириллицей не срабатывают.
+-- Нормализация: шаги по apply_order для вида из error_kind. Обёртка ответов ИЭМК и ФРМСС
+-- снимается до замены значений. Граница слова и регистр для кириллицы заданы явными
+-- классами: под lc_ctype = C \y и (?i) рядом с кириллицей не срабатывают.
 -- ------------------------------------------------------------------
 INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, apply_order, match_pattern, match_flags, replacement)
 VALUES
@@ -685,42 +736,6 @@ VALUES
     ('mask_date', 'нормализация', 'Ошибка асинхронного ответа', 250, '[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+Z?)?', 'g', '[…]'),
     -- Вложенные скобки источника «[[…]]» после замены значений оставляют лишнюю «]».
     ('collapse_masked_brackets', 'нормализация', 'Ошибка асинхронного ответа', 260, '\[…\]\]+', 'g', '[…]');
-
--- ------------------------------------------------------------------
--- Шаги, скрывающие персональные данные (masks_personal_data). Их же применяет функция выдачи
--- свободного текста mart_egisz.masking_personal_data, поэтому шаг заменяет только значение
--- человека и оставляет формулировку, адреса и реквизиты документа. Значение в квадратных
--- скобках узнаётся по реквизиту перед ним: СНИЛС, сравнение с ГИП и ФРМР, сравнение
--- реквизитов пациента в ЭМД и в запросе, подписант в метаданных и в сертификате. Шаблон
--- начинается с литерала: общий шаблон с перечнем реквизитов в начале проверяется на
--- порядок дольше. В нормализации результат шага совпадает с последующей заменой значения
--- в скобках; СНИЛС в типе обозначается псевдонимом <snils>. Шаги не привязаны к началу
--- строки: функция выдачи применяет их и к сводному тексту ошибок документа через « · ».
--- ------------------------------------------------------------------
-INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, apply_order, match_pattern, match_flags, replacement, masks_personal_data)
-VALUES
-    ('mask_series_number', 'нормализация', 'Ошибка асинхронного ответа', 70, '(номером|серией) [0-9]+', 'g', '\1 […]', true),
-    ('mask_certificate_subject', 'нормализация', 'Ошибка асинхронного ответа', 72, '(subject:? )(?:(?!\s+issuer:| · ).)+', 'g', '\1[…]', true),
-    -- СНИЛС заменяется псевдонимом <snils>: тип называет, какой реквизит не прошёл проверку.
-    ('mask_signer_snils', 'нормализация', 'Ошибка асинхронного ответа', 71, '(SNILS )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>', true),
-    ('mask_patient_snils', 'нормализация', 'Ошибка асинхронного ответа', 73, '(СНИЛС пациента в ЭМД )\[[^\]]{0,200}\]( отличается от СНИЛС пациента в запросе на регистрацию сведений )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>', true),
-    ('mask_snils_value', 'нормализация', 'Ошибка асинхронного ответа', 74, '(СНИЛС(?: сотрудника| пациента)? ?)\[[^\]]{0,200}\]', 'g', '\1<snils>', true),
-    ('mask_snils_entity', 'нормализация', 'Ошибка асинхронного ответа', 75, '(СНИЛС сотрудника &lt;)[0-9 -]{11,14}(&gt;)', 'g', '\1<snils>\2', true),
-    -- «Дата рождения сотрудника со СНИЛС <snils> ([дата])».
-    ('mask_birth_date_after_snils', 'нормализация', 'Ошибка асинхронного ответа', 76, '(СНИЛС <snils> \()\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    ('mask_patient_value', 'нормализация', 'Ошибка асинхронного ответа', 77, '(пациента в (?:ЭМД|запросе на регистрацию сведений) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    ('mask_registry_person_value', 'нормализация', 'Ошибка асинхронного ответа', 78, '(данным (?:ГИП|ФРМР) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    -- РЭМД называет владельца сертификата его СНИЛС без обрамления.
-    ('mask_certificate_holder_snils', 'нормализация', 'Ошибка асинхронного ответа', 79, '(сертификата недоступен: )[0-9]{11}(?![0-9])', 'g', '\1<snils>', true),
-    ('mask_specified_snils', 'нормализация', 'Ошибка асинхронного ответа', 81, '(Указанное значение \[СНИЛС\] )\[[^\]]{0,200}\]( не соответствует данным ГИП )\[[^\]]{0,200}\]', 'g', '\1<snils>\2<snils>', true),
-    ('mask_specified_value', 'нормализация', 'Ошибка асинхронного ответа', 82, '(Указанное значение \[[^\]]{1,40}\] )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    ('mask_name_value', 'нормализация', 'Ошибка асинхронного ответа', 84, '((?:^|[^А-Яа-яЁё])(?:Фамилия|Имя|Отчество) |от (?:фамилии|имени|отчества) )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    ('mask_signer_value', 'нормализация', 'Ошибка асинхронного ответа', 86, '((?:GIVEN_NAME|SURNAME|MIDDLE_NAME|SNILS) )\[[^\]]{0,200}\]( в метаданных и )\[[^\]]{0,200}\]', 'g', '\1[…]\2[…]', true),
-    -- Получатель сведений РЭМД обозначен своим СНИЛС.
-    ('mask_recipient_snils', 'нормализация', 'Ошибка асинхронного ответа', 87, '(Получатель )\[[^\]]{0,200}\]( из запроса на регистрацию сведений)', 'g', '\1<snils>\2', true),
-    ('mask_person_identifier', 'нормализация', 'Ошибка асинхронного ответа', 88, '(По локальному id |patientId: |ДУЛ\. Номер )\[[^\]]{0,200}\]', 'g', '\1[…]', true),
-    ('mask_fio_snils', 'нормализация', 'Ошибка асинхронного ответа', 90, ':[^:()]+\([Сс][Нн][Ии][Лл][Сс]:[^)]*\)', 'g', ': […] (СНИЛС: <snils>)', true),
-    ('mask_email', 'нормализация', 'Ошибка асинхронного ответа', 130, '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}', 'g', '<e-mail>', true);
 
 -- ------------------------------------------------------------------
 -- Классификация, ярус 2: только код. Покрывается весь классификатор НСИ 305: правило
@@ -983,6 +998,45 @@ FROM (VALUES
 ) AS v(rule_code, match_tier, match_code, nsi_error_code, match_pattern, interpretation, error_category);
 
 -- ------------------------------------------------------------------
+-- Классификация ошибок связи: код из текста шлюза (stg_egisz.network_error_code) и шаблон
+-- уровня — сокет либо ответ HTTP.
+-- ------------------------------------------------------------------
+INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, match_tier, match_code, match_pattern, interpretation, definition, definition_source)
+SELECT v.rule_code, 'классификация', 'Ошибка связи', 1, v.match_code, v.match_pattern, v.interpretation, v.definition, v.definition_source
+FROM (VALUES
+    ('socket_connection_reset', '10054', '(?i)Socket error', 'Соединение сброшено удалённой стороной',
+     'WSAECONNRESET: существующее соединение принудительно закрыто удалённым узлом (остановка приложения или перезагрузка узла, отключение сетевого интерфейса, жёсткое закрытие сокета).',
+     'Microsoft Learn, Windows Sockets Error Codes, WSAECONNRESET 10054: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('socket_connection_timed_out', '10060', '(?i)Socket error', 'Истекло время ожидания соединения',
+     'WSAETIMEDOUT: удалённая сторона не ответила за отведённое время — при установке соединения либо в уже установленном соединении.',
+     'Microsoft Learn, Windows Sockets Error Codes, WSAETIMEDOUT 10060: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('socket_connection_refused', '10061', '(?i)Socket error', 'В соединении отказано',
+     'WSAECONNREFUSED: узел назначения отклонил соединение; обычно на адресе не запущен принимающий сервис.',
+     'Microsoft Learn, Windows Sockets Error Codes, WSAECONNREFUSED 10061: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('socket_host_unreachable', '10065', '(?i)Socket error', 'Нет маршрута до узла',
+     'WSAEHOSTUNREACH: операция с сокетом адресована недостижимому узлу.',
+     'Microsoft Learn, Windows Sockets Error Codes, WSAEHOSTUNREACH 10065: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('socket_network_subsystem_unavailable', '10091', '(?i)Socket error', 'Сетевая подсистема недоступна',
+     'WSASYSNOTREADY: реализация Windows Sockets на стороне отправителя не может работать, потому что сетевая подсистема недоступна.',
+     'Microsoft Learn, Windows Sockets Error Codes, WSASYSNOTREADY 10091: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('dns_host_not_found', '11001', '(?i)Socket error', 'DNS: узел не найден',
+     'WSAHOST_NOT_FOUND: имя узла не является официальным именем или псевдонимом либо не найдено в запрошенных базах имён (DNS).',
+     'Microsoft Learn, Windows Sockets Error Codes, WSAHOST_NOT_FOUND 11001: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('dns_try_again', '11002', '(?i)Socket error', 'DNS: узел не найден, ответ не окончательный',
+     'WSATRY_AGAIN: временная ошибка разрешения имени — локальный сервер не получил ответа от авторитетного сервера DNS; повтор позже может пройти.',
+     'Microsoft Learn, Windows Sockets Error Codes, WSATRY_AGAIN 11002: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
+    ('http_request_timeout', '408', '(?i)Error while receiving data from service', 'HTTP 408: истекло время ожидания запроса',
+     '408 Request Timeout: сервер не получил полное сообщение запроса за время, которое был готов ждать.',
+     'RFC 9110 HTTP Semantics, раздел 15.5.9: https://www.rfc-editor.org/rfc/rfc9110#section-15.5.9'),
+    ('http_internal_server_error', '500', '(?i)Error while receiving data from service', 'HTTP 500: внутренняя ошибка сервера',
+     '500 Internal Server Error: сервер столкнулся с непредвиденным условием, которое помешало выполнить запрос.',
+     'RFC 9110 HTTP Semantics, раздел 15.6.1: https://www.rfc-editor.org/rfc/rfc9110#section-15.6.1'),
+    ('http_service_unavailable', '503', '(?i)Error while receiving data from service', 'HTTP 503: сервис недоступен',
+     '503 Service Unavailable: сервер временно не может обработать запрос из-за перегрузки или плановых работ; состояние, вероятно, пройдёт после задержки.',
+     'RFC 9110 HTTP Semantics, раздел 15.6.4: https://www.rfc-editor.org/rfc/rfc9110#section-15.6.4')
+) AS v(rule_code, match_code, match_pattern, interpretation, definition, definition_source);
+
+-- ------------------------------------------------------------------
 -- Справочник, к которому относится отказ, задаётся на класс целиком. Регистр задан
 -- явно: (?i) под lc_ctype = C рядом с кириллицей не работает.
 -- ------------------------------------------------------------------
@@ -999,11 +1053,11 @@ WHERE rule_code = 'schematron_allowed_values';
 INSERT INTO mart_egisz.dim_error_rules (
     rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
     match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
-    masks_personal_data
+    definition, definition_source
 )
 SELECT rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
        match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
-       masks_personal_data
+       definition, definition_source
 FROM seed_error_rules
 ON CONFLICT (rule_code) DO UPDATE SET
     rule_kind = EXCLUDED.rule_kind,
@@ -1018,7 +1072,8 @@ ON CONFLICT (rule_code) DO UPDATE SET
     nsi_dictionary_pattern = EXCLUDED.nsi_dictionary_pattern,
     interpretation = EXCLUDED.interpretation,
     error_category = EXCLUDED.error_category,
-    masks_personal_data = EXCLUDED.masks_personal_data,
+    definition = EXCLUDED.definition,
+    definition_source = EXCLUDED.definition_source,
     updated_at = now()
 WHERE (mart_egisz.dim_error_rules.rule_kind, mart_egisz.dim_error_rules.error_kind,
        mart_egisz.dim_error_rules.apply_order, mart_egisz.dim_error_rules.match_tier,
@@ -1026,12 +1081,12 @@ WHERE (mart_egisz.dim_error_rules.rule_kind, mart_egisz.dim_error_rules.error_ki
        mart_egisz.dim_error_rules.match_pattern, mart_egisz.dim_error_rules.match_flags,
        mart_egisz.dim_error_rules.replacement, mart_egisz.dim_error_rules.nsi_dictionary_pattern,
        mart_egisz.dim_error_rules.interpretation, mart_egisz.dim_error_rules.error_category,
-       mart_egisz.dim_error_rules.masks_personal_data)
+       mart_egisz.dim_error_rules.definition, mart_egisz.dim_error_rules.definition_source)
   IS DISTINCT FROM
       (EXCLUDED.rule_kind, EXCLUDED.error_kind, EXCLUDED.apply_order, EXCLUDED.match_tier,
        EXCLUDED.match_code, EXCLUDED.nsi_error_code, EXCLUDED.match_pattern, EXCLUDED.match_flags,
        EXCLUDED.replacement, EXCLUDED.nsi_dictionary_pattern, EXCLUDED.interpretation,
-       EXCLUDED.error_category, EXCLUDED.masks_personal_data);
+       EXCLUDED.error_category, EXCLUDED.definition, EXCLUDED.definition_source);
 
 DELETE FROM mart_egisz.dim_error_rules r
 WHERE NOT EXISTS (SELECT 1 FROM seed_error_rules s WHERE s.rule_code = r.rule_code);
@@ -1094,11 +1149,8 @@ WHERE NOT EXISTS (
     WHERE v.error_kind = c.error_kind AND v.error_category IS NOT DISTINCT FROM c.error_category);
 
 -- ============================================================================
--- Типы ошибок. Строка — одна нормализованная ошибка. Типы правил заводит этот сид;
--- тип без правила (нормализованный текст элемента) заводит разбор журнала
--- при первом появлении, с категорией «Прочие» либо без категории у вида «Ошибка связи».
--- rule_code пуст у типов без правила: они живут, пока на них ссылаются элементы, и
--- снимаются пересчётом ошибок.
+-- Типы ошибок — закрытый список: типы правил классификации и по одному типу «Не распознано»
+-- на вид ошибки. Все типы заводит этот сид.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_types (
     error_type text PRIMARY KEY,
@@ -1117,9 +1169,9 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_types (
 );
 
 COMMENT ON TABLE mart_egisz.dim_error_types IS
-'Типы ошибок. Строка — одна нормализованная ошибка: вид, категория (у вида «Ошибка связи» пуста), мнемоника НСИ 305 у типа, привязанного к коду, зона ответственности и признак повтора.';
+'Типы ошибок — закрытый список. Строка — тип: вид, категория (у вида «Ошибка связи» пуста), мнемоника НСИ «РЭМД. Классификатор кодов сообщений» у типа, привязанного к коду, зона ответственности и признак повтора. Тип задаёт правило классификации; ошибка без правила получает тип «Не распознано» своего вида.';
 COMMENT ON COLUMN mart_egisz.dim_error_types.rule_code IS
-'Правило классификации, задающее тип. Пусто у типа без правила: его наименование — нормализованный текст элемента.';
+'Правило классификации, задающее тип. Пусто только у типа «Не распознано» (один на вид ошибки).';
 
 -- Тип правила наследует код уточняемого сообщения: при нескольких правилах одного типа
 -- приоритет у нижнего яруса.
@@ -1131,7 +1183,7 @@ SELECT DISTINCT ON (r.interpretation)
     c.responsibility, c.is_retryable
 FROM mart_egisz.dim_error_rules r
 JOIN mart_egisz.dim_error_categories c
-  ON c.error_kind = r.error_kind AND c.error_category = r.error_category
+  ON c.error_kind = r.error_kind AND c.error_category IS NOT DISTINCT FROM r.error_category
 WHERE r.rule_kind = 'классификация'
 ORDER BY r.interpretation, r.match_tier, r.rule_code
 ON CONFLICT (error_type) DO UPDATE SET
@@ -1147,15 +1199,35 @@ WHERE (mart_egisz.dim_error_types.error_kind, mart_egisz.dim_error_types.error_c
       IS DISTINCT FROM
       (EXCLUDED.error_kind, EXCLUDED.error_category, EXCLUDED.nsi_error_code, EXCLUDED.rule_code);
 
--- Тип правила, чьё наименование в правилах больше не встречается, снимается: элементы,
--- которые на него ссылаются, приводит к текущим правилам пересчёт ошибок.
-DELETE FROM mart_egisz.dim_error_types t
-WHERE t.rule_code IS NOT NULL
-  AND NOT EXISTS (
-      SELECT 1 FROM mart_egisz.dim_error_rules r
-      WHERE r.rule_kind = 'классификация' AND r.interpretation = t.error_type);
+INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
+SELECT v.error_type, v.error_kind, c.error_category, c.responsibility, c.is_retryable
+FROM (VALUES
+    ('Не распознано: ошибка связи', 'Ошибка связи', NULL::text),
+    ('Не распознано: ошибка асинхронного ответа', 'Ошибка асинхронного ответа', 'Прочие')
+) AS v(error_type, error_kind, error_category)
+JOIN mart_egisz.dim_error_categories c
+  ON c.error_kind = v.error_kind AND c.error_category IS NOT DISTINCT FROM v.error_category
+ON CONFLICT (error_type) DO UPDATE SET
+    error_kind = EXCLUDED.error_kind,
+    error_category = EXCLUDED.error_category,
+    nsi_error_code = NULL,
+    rule_code = NULL,
+    updated_at = now()
+WHERE (mart_egisz.dim_error_types.error_kind, mart_egisz.dim_error_types.error_category,
+       mart_egisz.dim_error_types.nsi_error_code, mart_egisz.dim_error_types.rule_code)
+      IS DISTINCT FROM (EXCLUDED.error_kind, EXCLUDED.error_category, NULL::text, NULL::text);
 
--- Типы без правила наследуют значения категории.
+-- Элементы, которые ссылаются на снятый тип, приводит к текущим правилам пересчёт ошибок.
+DELETE FROM mart_egisz.dim_error_types t
+WHERE NOT EXISTS (
+      SELECT 1 FROM mart_egisz.dim_error_rules r
+      WHERE r.rule_kind = 'классификация' AND r.interpretation = t.error_type)
+  AND t.error_type NOT IN ('Не распознано: ошибка связи', 'Не распознано: ошибка асинхронного ответа');
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_error_types_unrecognized
+    ON mart_egisz.dim_error_types (error_kind) WHERE rule_code IS NULL;
+
+-- Тип «Не распознано» наследует значения категории.
 UPDATE mart_egisz.dim_error_types t
 SET responsibility = c.responsibility, is_retryable = c.is_retryable, updated_at = now()
 FROM mart_egisz.dim_error_categories c
@@ -1335,8 +1407,34 @@ BEGIN
 END;
 $$;
 
--- Нормализация текста ошибки в тип: шаги нормализации своего вида по apply_order. Значения
--- конкретного документа, в том числе персональные данные, заменяются обозначениями.
+CREATE OR REPLACE FUNCTION mart_egisz.mask_personal_data(p_text text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SET search_path = pg_catalog, pg_temp
+AS $$
+DECLARE
+    v_step record;
+    v_text text := p_text;
+BEGIN
+    IF v_text IS NULL THEN
+        RETURN NULL;
+    END IF;
+    FOR v_step IN
+        SELECT r.match_pattern, r.replacement, r.match_flags
+        FROM mart_egisz.dim_masking_rules r
+        ORDER BY r.apply_order
+    LOOP
+        v_text := regexp_replace(v_text, v_step.match_pattern, v_step.replacement, v_step.match_flags);
+    END LOOP;
+    RETURN v_text;
+END;
+$$;
+
+COMMENT ON FUNCTION mart_egisz.mask_personal_data(text) IS
+'Скрывает персональные данные в свободном тексте при выдаче: правила mart_egisz.dim_masking_rules по apply_order (СНИЛС — псевдоним <snils>, ФИО, дата рождения, ДУЛ, идентификатор пациента, субъект сертификата, e-mail). Вид текста не учитывается; остальной текст, его длина и адрес сервиса клиники не меняются.';
+
+-- Персональные данные скрываются до шагов нормализации.
 CREATE OR REPLACE FUNCTION stg_egisz.normalize_error_text(
     p_error_kind text,
     p_error_text text
@@ -1348,7 +1446,7 @@ SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     v_step record;
-    v_text text := COALESCE(p_error_text, '');
+    v_text text := COALESCE(mart_egisz.mask_personal_data(p_error_text), '');
 BEGIN
     FOR v_step IN
         SELECT r.match_pattern, r.replacement, r.match_flags
@@ -1364,49 +1462,15 @@ END;
 $$;
 
 COMMENT ON FUNCTION stg_egisz.normalize_error_text(text, text) IS
-'Нормализует текст ошибки вида p_error_kind в формулировку типа: шаги нормализации mart_egisz.dim_error_rules по apply_order заменяют значения документа и персональные данные обозначениями. Пустой результат — NULL.';
+'Нормализует текст ошибки вида p_error_kind для группировки нераспознанных ошибок: персональные данные скрывает mart_egisz.mask_personal_data, затем шаги нормализации mart_egisz.dim_error_rules по apply_order заменяют значения конкретного документа или сообщения обозначениями. Пустой результат — NULL.';
 
--- Скрытие персональных данных в свободном тексте при выдаче: шаги правил с признаком
--- masks_personal_data по apply_order, независимо от вида ошибки. Остальной текст не меняется.
-CREATE OR REPLACE FUNCTION mart_egisz.masking_personal_data(p_text text)
-RETURNS text
-LANGUAGE plpgsql
-STABLE
-SET search_path = pg_catalog, pg_temp
-AS $$
-DECLARE
-    v_step record;
-    v_text text := p_text;
-BEGIN
-    IF v_text IS NULL THEN
-        RETURN NULL;
-    END IF;
-    FOR v_step IN
-        SELECT r.match_pattern, r.replacement, r.match_flags
-        FROM mart_egisz.dim_error_rules r
-        WHERE r.masks_personal_data
-        ORDER BY r.apply_order
-    LOOP
-        v_text := regexp_replace(v_text, v_step.match_pattern, v_step.replacement, v_step.match_flags);
-    END LOOP;
-    RETURN v_text;
-END;
-$$;
-
-COMMENT ON FUNCTION mart_egisz.masking_personal_data(text) IS
-'Скрывает персональные данные в свободном тексте при выдаче: шаги mart_egisz.dim_error_rules с признаком masks_personal_data по apply_order (СНИЛС — псевдоним <snils>, ФИО, дата рождения, ДУЛ, идентификатор пациента, субъект сертификата, e-mail). Вид ошибки не учитывается; остальной текст, его длина и адрес сервиса клиники не меняются.';
-
--- Тип элемента ошибки. Для асинхронного ответа — наименование первого совпавшего правила
--- классификации: ярусы по возрастанию, внутри яруса меньший rule_code; синоним кода из
--- dim_error_code_aliases разрешается до сравнения. Без правила и для ошибки связи тип —
--- текст, нормализованный функцией stg_egisz.normalize_error_text. Пустой текст без правила типа не получает: такой элемент
--- виден в контроле качества, а не скрыт подставленным наименованием.
+-- Ярусы по возрастанию, внутри яруса меньший rule_code; синоним кода разрешается до сравнения.
 CREATE OR REPLACE FUNCTION stg_egisz.classify_error(
     p_error_kind text,
     p_error_code text,
     p_error_text text
 )
-RETURNS TABLE (error_type text, nsi_dictionary_oid text)
+RETURNS TABLE (error_type text, nsi_dictionary_oid text, is_recognized boolean)
 LANGUAGE plpgsql
 STABLE
 SET search_path = pg_catalog, pg_temp
@@ -1417,43 +1481,49 @@ DECLARE
     v_interpretation text;
     v_tier integer;
 BEGIN
-    IF p_error_kind = 'Ошибка асинхронного ответа' THEN
-        SELECT COALESCE((SELECT a.nsi_error_code FROM mart_egisz.dim_error_code_aliases a
-                         WHERE a.alias = v_code), v_code)
-        INTO v_code;
-        FOR v_tier IN 1..4 LOOP
-            SELECT r.interpretation
-            INTO v_interpretation
+    SELECT COALESCE((SELECT a.nsi_error_code FROM mart_egisz.dim_error_code_aliases a
+                     WHERE a.alias = v_code), v_code)
+    INTO v_code;
+    FOR v_tier IN 1..4 LOOP
+        SELECT r.interpretation
+        INTO v_interpretation
+        FROM mart_egisz.dim_error_rules r
+        WHERE r.rule_kind = 'классификация'
+          AND r.error_kind = p_error_kind
+          AND r.match_tier = v_tier
+          AND CASE v_tier
+              WHEN 1 THEN v_code <> '' AND r.match_code = v_code
+                          AND v_text <> '' AND v_text ~* r.match_pattern
+              WHEN 2 THEN v_code <> '' AND r.match_code = v_code AND v_text ~* r.match_pattern
+              ELSE v_text <> '' AND v_text ~* r.match_pattern
+          END
+        ORDER BY r.rule_code
+        LIMIT 1;
+        IF v_interpretation IS NOT NULL THEN
+            error_type := v_interpretation;
+            is_recognized := true;
+            SELECT (regexp_match(COALESCE(p_error_text, ''), r.nsi_dictionary_pattern))[1]
+            INTO nsi_dictionary_oid
             FROM mart_egisz.dim_error_rules r
             WHERE r.rule_kind = 'классификация'
-              AND r.match_tier = v_tier
-              AND CASE v_tier
-                  WHEN 1 THEN v_code <> '' AND r.match_code = v_code
-                              AND v_text <> '' AND v_text ~* r.match_pattern
-                  WHEN 2 THEN v_code <> '' AND r.match_code = v_code AND v_text ~* r.match_pattern
-                  ELSE v_text <> '' AND v_text ~* r.match_pattern
-              END
-            ORDER BY r.rule_code
+              AND r.interpretation = v_interpretation
+              AND r.nsi_dictionary_pattern IS NOT NULL
+              AND COALESCE(p_error_text, '') ~ r.nsi_dictionary_pattern
+            ORDER BY r.match_tier, r.rule_code
             LIMIT 1;
-            IF v_interpretation IS NOT NULL THEN
-                error_type := v_interpretation;
-                SELECT (regexp_match(COALESCE(p_error_text, ''), r.nsi_dictionary_pattern))[1]
-                INTO nsi_dictionary_oid
-                FROM mart_egisz.dim_error_rules r
-                WHERE r.rule_kind = 'классификация'
-                  AND r.interpretation = v_interpretation
-                  AND r.nsi_dictionary_pattern IS NOT NULL
-                  AND COALESCE(p_error_text, '') ~ r.nsi_dictionary_pattern
-                ORDER BY r.match_tier, r.rule_code
-                LIMIT 1;
-                RETURN NEXT;
-                RETURN;
-            END IF;
-        END LOOP;
-    END IF;
+            RETURN NEXT;
+            RETURN;
+        END IF;
+    END LOOP;
 
-    error_type := stg_egisz.normalize_error_text(p_error_kind, p_error_text);
+    SELECT t.error_type INTO error_type
+    FROM mart_egisz.dim_error_types t
+    WHERE t.rule_code IS NULL AND t.error_kind = p_error_kind;
     nsi_dictionary_oid := NULL;
+    is_recognized := false;
     RETURN NEXT;
 END;
 $$;
+
+COMMENT ON FUNCTION stg_egisz.classify_error(text, text, text) IS
+'Распознаёт ошибку вида p_error_kind по правилам классификации mart_egisz.dim_error_rules (код, шаблон исходного текста, ярус): тип первого совпавшего правила и OID справочника НСИ из текста. Без правила — тип «Не распознано» своего вида и is_recognized = false.';

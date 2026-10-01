@@ -142,7 +142,7 @@ CREATE TABLE IF NOT EXISTS mart_egisz.documents (
 COMMENT ON TABLE mart_egisz.documents IS
 'Экземпляр (версия) СЭМД и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях stg_egisz.exchange_messages, исходный текст ошибок текущего состояния — в error_text.';
 COMMENT ON COLUMN mart_egisz.documents.error_text IS
-'Исходный текст ошибок текущего состояния: элементы последнего асинхронного ответа и ошибки связи после него в порядке ошибок документа, через « · ». Поддерживает mart_egisz.recompute_document_error_texts; при выдаче персональные данные скрывает mart_egisz.masking_personal_data.';
+'Исходный текст ошибок текущего состояния: элементы последнего асинхронного ответа и ошибки связи после него в порядке ошибок документа, через « · ». Поддерживает mart_egisz.recompute_document_error_texts; при выдаче персональные данные скрывает mart_egisz.mask_personal_data.';
 COMMENT ON COLUMN mart_egisz.documents.first_callback_at IS
 'Время первого асинхронного ответа. Выход документа из очереди обработки определяет оно: last_callback_at перезаписывается каждым повторным ответом.';
 COMMENT ON COLUMN mart_egisz.documents.last_callback_at IS
@@ -1573,6 +1573,7 @@ CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     network_error_code text,
     network_error_text text,
     network_error_type text,
+    network_error_normalized_text text,
     remd_errors jsonb,
     ihe_errors jsonb,
     source_action text,
@@ -1606,11 +1607,13 @@ COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_code IS
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_text IS
 'Ошибка связи (LOGSTATE = 3): исходный текст шлюза (LOGTEXT). Пусто, если сообщение доставлено.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_type IS
-'Тип ошибки связи из mart_egisz.dim_error_types: нормализованный текст: значения документа заменены обозначениями.';
+'Тип ошибки связи из mart_egisz.dim_error_types: тип правила классификации либо «Не распознано: ошибка связи».';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_normalized_text IS
+'Нормализованный текст нераспознанной ошибки связи (stg_egisz.normalize_error_text): персональные данные скрыты, значения конкретного сообщения заменены обозначениями. Группирует нераспознанные ошибки для заведения правил; у распознанной ошибки пуст.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.remd_errors IS
-'Элементы ответа РЭМД (<item>): item_no, section (раздел ответа: errors либо registrationWarnings — предупреждения при успешной регистрации), code, message (исходный текст), error_type, nsi_dictionary_oid. Пусто, если элементов нет.';
+'Элементы ответа РЭМД (<item>): item_no, section (раздел ответа: errors либо registrationWarnings — предупреждения при успешной регистрации), code, message (исходный текст), error_type, nsi_dictionary_oid, normalized_text (нормализованный текст нераспознанного элемента). Пусто, если элементов нет.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.ihe_errors IS
-'Элементы ответа ИЭМК (IHE RegistryError): item_no, error_code (errorCode), code_context (codeContext, исходный текст), severity, location, error_type, nsi_dictionary_oid. Пусто, если элементов нет.';
+'Элементы ответа ИЭМК (IHE RegistryError): item_no, error_code (errorCode), code_context (codeContext, исходный текст), severity, location, error_type, nsi_dictionary_oid, normalized_text (нормализованный текст нераспознанного элемента). Пусто, если элементов нет.';
 COMMENT ON COLUMN stg_egisz.exchange_messages.egisz_subsystem IS
 'Контур обмена (РЭМД или ИЭМК), см. egisz_subsystem().';
 COMMENT ON COLUMN stg_egisz.exchange_messages.link_method IS
