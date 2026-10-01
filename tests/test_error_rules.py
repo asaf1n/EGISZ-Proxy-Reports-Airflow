@@ -89,7 +89,7 @@ def classify(con, code: str | None, text: str | None, kind: str = ASYNC) -> tupl
 
 def category(con, error_type: str | None) -> str | None:
     with con.cursor() as cur:
-        cur.execute("SELECT error_category FROM mart_egisz.dim_error_type WHERE error_type = %s", (error_type,))
+        cur.execute("SELECT error_category FROM mart_egisz.dim_error_types WHERE error_type = %s", (error_type,))
         row = cur.fetchone()
         return row[0] if row else None
 
@@ -441,7 +441,7 @@ def test_every_nsi_code_is_covered_by_a_rule(con):
     """Каждая мнемоника ФНСИ, кроме зонтичных кодов, закрыта правилом яруса 2."""
     uncovered = one(con, """
         SELECT array_agg(c.nsi_error_code ORDER BY c.nsi_error_code)
-        FROM mart_egisz.dim_nsi_error_code c
+        FROM mart_egisz.dim_nsi_error_codes c
         WHERE NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
                           WHERE r.rule_kind = 'классификация' AND r.nsi_error_code = c.nsi_error_code)
     """)
@@ -462,17 +462,17 @@ def test_code_rules_reference_the_dictionary(con):
 
 
 def test_nsi_dictionary_matches_published_revision(con):
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code") == 127
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_codes") == 127
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_error_code
-        WHERE oid <> '1.2.643.5.1.13.13.99.2.305' OR version <> '3.18'
+        SELECT count(*) FROM mart_egisz.dim_nsi_error_codes
+        WHERE source_oid <> '1.2.643.5.1.13.13.99.2.305' OR source_version <> '3.18'
     """) == 0
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code_alias WHERE alias = nsi_error_code") == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_code_aliases WHERE alias = nsi_error_code") == 0
 
 
 def test_types_carry_nsi_code_when_rule_is_code_gated(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_type t
+        SELECT count(*) FROM mart_egisz.dim_error_types t
         JOIN mart_egisz.dim_error_rules r ON r.rule_code = t.rule_code
         WHERE r.nsi_error_code IS NOT NULL AND t.nsi_error_code IS DISTINCT FROM r.nsi_error_code
     """) == 0
@@ -482,12 +482,12 @@ def test_types_carry_nsi_code_when_rule_is_code_gated(con):
 
 def test_categories_are_cause_groups(con):
     assert set(one(con, """
-        SELECT array_agg(error_category) FROM mart_egisz.dim_error_category
+        SELECT array_agg(error_category) FROM mart_egisz.dim_error_categories
         WHERE error_kind = 'Ошибка асинхронного ответа'
     """)) == set(CATEGORIES)
     # У вида «Ошибка связи» категорий нет.
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_category
+        SELECT count(*) FROM mart_egisz.dim_error_categories
         WHERE error_kind = 'Ошибка связи' AND error_category IS NOT NULL
     """) == 0
 
@@ -496,14 +496,14 @@ def test_every_rule_interpretation_is_a_type_with_its_category(con):
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_rules r
         WHERE r.rule_kind = 'классификация' AND NOT EXISTS (
-            SELECT 1 FROM mart_egisz.dim_error_type t
+            SELECT 1 FROM mart_egisz.dim_error_types t
             WHERE t.error_type = r.interpretation AND t.error_category = r.error_category)
     """) == 0
 
 
 def test_dictionary_has_no_orphan_rule_types(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_type t
+        SELECT count(*) FROM mart_egisz.dim_error_types t
         WHERE t.rule_code IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
                           WHERE r.rule_kind = 'классификация' AND r.interpretation = t.error_type)
@@ -512,14 +512,14 @@ def test_dictionary_has_no_orphan_rule_types(con):
 
 def test_rule_type_names_carry_no_document_values(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_type
+        SELECT count(*) FROM mart_egisz.dim_error_types
         WHERE rule_code IS NOT NULL AND (error_type LIKE '%%[%%' OR error_type LIKE '%%]%%')
     """) == 0
 
 
 def test_every_type_has_responsibility_and_retryable(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_type
+        SELECT count(*) FROM mart_egisz.dim_error_types
         WHERE responsibility IS NULL OR is_retryable IS NULL OR responsibility NOT IN %s
     """, RESPONSIBILITY_DOMAIN) == 0
 
@@ -672,8 +672,8 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
 
 # --- Маскирование текста для выдачи -----------------------------------------------------
 
-def mask(con, text: str, kind: str = ASYNC) -> str | None:
-    return one(con, "SELECT mart_egisz.mask_error_text(%s, %s)", kind, text)
+def mask(con, text: str) -> str | None:
+    return one(con, "SELECT mart_egisz.masking_personal_data(%s)", text)
 
 
 @pytest.mark.parametrize("message,expected", [
@@ -692,6 +692,10 @@ def mask(con, text: str, kind: str = ASYNC) -> str | None:
      "В ФРМР не найдена карточка МР c данными из сертификата подписи МО: […] (СНИЛС: <snils>)"),
     ("Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД",
      "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД"),
+    ("Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД · "
+     "Указанное значение [СНИЛС] [12345678901] не соответствует данным ГИП [10987654321]. Пациент найден по локальному идентификатору",
+     "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД · "
+     "Указанное значение [СНИЛС] <snils> не соответствует данным ГИП <snils>. Пациент найден по локальному идентификатору"),
     ("Удостоверяющий центр сертификата недоступен: 12345678901",
      "Удостоверяющий центр сертификата недоступен: <snils>"),
     ("Удостоверяющий центр сертификата недоступен: Validation failed for the target: serial: 1a2b subject: "
@@ -722,7 +726,7 @@ def test_masking_leaves_no_snils_in_rule_described_texts(con):
     """Тексты ответов, где СНИЛС стоит при реквизите из правил, после маскирования СНИЛС не
     содержат: проверка контрольным числом, а не по числу цифр."""
     with con.cursor() as cur:
-        cur.execute("""
+        cur.execute(r"""
             SELECT DISTINCT t FROM (
                 SELECT message AS t FROM stg_egisz.remd_errors
                 UNION ALL SELECT code_context FROM stg_egisz.ihe_errors) s
@@ -749,7 +753,7 @@ def test_masking_keeps_text_length_and_document_values(con):
 
 def test_masking_keeps_clinic_service_address(con):
     message = "Error while receiving data from service: http://gost-1234.infoclinica.lan:9945\nError code: 500"
-    assert mask(con, message, NETWORK) == message
+    assert mask(con, message) == message
 
 
 def test_masking_steps_are_normalization_steps(con):
@@ -800,20 +804,20 @@ def test_current_errors_follow_last_async_response(con):
 # --- Реестр наименований справочников ФНСИ ---------------------------------------------
 
 def test_nsi_dictionary_matches_published_805_revision(con):
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries") == NSI_DICTIONARY_SIZE
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries
         WHERE source_oid <> %s OR source_version <> %s
            OR name IS NULL OR btrim(name) = ''
     """, *NSI_DICTIONARY_SOURCE) == 0
 
 
-def test_nsi_dictionary_agrees_with_805_snapshot(con):
-    if one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_dictionary") == 0:
-        pytest.skip("снимок НСИ 805 не загружен; сверять нечего")
+def test_nsi_dictionary_agrees_with_805_dictionary(con):
+    if one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_dictionaries") == 0:
+        pytest.skip("справочник НСИ 805 не загружен; сверять нечего")
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary d
-        JOIN (SELECT DISTINCT dict_oid, dict_name FROM mart_egisz.dim_nsi_semd_guide_dictionary) g
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries d
+        JOIN (SELECT DISTINCT dict_oid, dict_name FROM mart_egisz.dim_nsi_semd_guide_dictionaries) g
           ON g.dict_oid = d.oid
         WHERE g.dict_name <> d.name
     """) == 0
@@ -821,11 +825,11 @@ def test_nsi_dictionary_agrees_with_805_snapshot(con):
 
 def test_nsi_dictionary_short_name_only_shortens(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionary
+        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries
         WHERE short_name IS NOT NULL
           AND (btrim(short_name) = '' OR length(short_name) >= length(name))
     """) == 0
-    assert one(con, "SELECT short_name FROM mart_egisz.dim_nsi_dictionary WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
+    assert one(con, "SELECT short_name FROM mart_egisz.dim_nsi_dictionaries WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
 
 
 def test_document_error_names_every_registered_dictionary(con):
@@ -836,20 +840,20 @@ def test_document_error_names_every_registered_dictionary(con):
         SELECT count(*) FROM serving_egisz.document_errors e
         WHERE e.nsi_dictionary_oid IS NOT NULL
           AND e.nsi_dictionary_name IS NULL
-          AND EXISTS (SELECT 1 FROM mart_egisz.dim_nsi_dictionary d WHERE d.oid = e.nsi_dictionary_oid)
+          AND EXISTS (SELECT 1 FROM mart_egisz.dim_nsi_dictionaries d WHERE d.oid = e.nsi_dictionary_oid)
     """) == 0
 
 
 def test_nsi_dictionary_schema_contract() -> None:
     """Комментарий к таблице — единственное место, где записано назначение реестра и его
     потребитель."""
-    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionary (" in SCHEMA_SQL
-    assert "COMMENT ON TABLE mart_egisz.dim_nsi_dictionary IS" in SCHEMA_SQL
-    assert "COMMENT ON COLUMN mart_egisz.dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionaries (" in SCHEMA_SQL
+    assert "COMMENT ON TABLE mart_egisz.dim_nsi_dictionaries IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN mart_egisz.dim_nsi_dictionaries.short_name IS" in SCHEMA_SQL
     assert "rpt_error_messages" not in SCHEMA_SQL
     assert "rpt_error_breakdown" not in SCHEMA_SQL
-    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionary ("):]
+    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionaries ("):]
     assert "short_name text," in dictionary_ddl[:dictionary_ddl.index(");")]
     # редакция объявляется сидом, а не умолчанием колонки
     assert "SELECT v.oid, v.name, '%s'" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
-    assert "DELETE FROM mart_egisz.dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
+    assert "DELETE FROM mart_egisz.dim_nsi_dictionaries WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL

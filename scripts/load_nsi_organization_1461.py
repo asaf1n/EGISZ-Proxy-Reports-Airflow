@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Load NSI 1461 medical organization dictionary into DWH.
 
-The loader replaces the permanent NSI snapshot in mart_egisz.dim_nsi_organization and
+The loader replaces the permanent NSI snapshot in mart_egisz.dim_nsi_organizations and
 refreshes mart_egisz.dim_organizations.nsi_name for already matched OIDs. OID backfill for
 CASH/JPERSONS rows is optional and uses only active parent .12.2. records with a
 single OID per INN. Tables, indexes and views are declared in db/ only.
@@ -25,7 +25,7 @@ SOURCE_OID = "1.2.643.5.1.13.13.11.1461"
 DEFAULT_PAGE_SIZE = 1000
 
 COPY_SQL = """
-COPY mart_egisz.dim_nsi_organization (
+COPY mart_egisz.dim_nsi_organizations (
     nsi_id, oid, source_oid, source_version, name_full, name_short,
     medical_subject_id, medical_subject_name, inn, kpp, ogrn, region_id,
     region_name, organization_type, mo_dept_id, mo_dept_name, delete_date,
@@ -34,7 +34,7 @@ COPY mart_egisz.dim_nsi_organization (
     addr_region_id, addr_region_name, area_name, prefix_area, street_name,
     prefix_street, house, building, struct, latitude, longitude, founder,
     profile_agency_kind_id, profile_agency_kind, cadastral_number, old_oid,
-    parent_id, raw_json
+    parent_id
 ) FROM STDIN WITH (FORMAT csv)
 """
 
@@ -43,7 +43,7 @@ UPDATE mart_egisz.dim_organizations o
 SET
     nsi_name = COALESCE(NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), '')),
     updated_at = now()
-FROM mart_egisz.dim_nsi_organization n
+FROM mart_egisz.dim_nsi_organizations n
 WHERE n.oid = stg_egisz.clean_text_value(o.fir_oid)
   AND o.nsi_name IS DISTINCT FROM COALESCE(NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), ''));
 """
@@ -54,7 +54,7 @@ WITH active_mo AS (
         NULLIF(btrim(inn), '') AS inn,
         oid,
         COALESCE(NULLIF(btrim(name_short), ''), NULLIF(btrim(name_full), '')) AS nsi_name
-    FROM mart_egisz.dim_nsi_organization
+    FROM mart_egisz.dim_nsi_organizations
     WHERE delete_date IS NULL
       AND parent_id IS NULL
       AND oid LIKE '1.2.643.5.1.13.13.12.2.%'
@@ -174,7 +174,6 @@ def record_to_row(record: dict[str, Any], source_version: str) -> tuple[Any, ...
         clean_text(record.get("cadastralNumber")),
         clean_text(record.get("oldOid")),
         clean_text(record.get("parentId")),
-        json.dumps(record, ensure_ascii=False, separators=(",", ":")),
     )
 
 
@@ -195,7 +194,7 @@ def write_copy_file(records: list[dict[str, Any]], source_version: str) -> Path:
         "w",
         encoding="utf-8",
         newline="",
-        prefix="dim_nsi_organization_",
+        prefix="dim_nsi_organizations_",
         suffix=".csv",
         delete=False,
     )
@@ -234,7 +233,7 @@ def main() -> None:
             with con.cursor() as cur:
                 cur.execute("SET LOCAL lock_timeout = %s", ("15s",))
                 cur.execute("SET LOCAL statement_timeout = %s", ("30min",))
-                cur.execute("TRUNCATE mart_egisz.dim_nsi_organization")
+                cur.execute("TRUNCATE mart_egisz.dim_nsi_organizations")
                 with copy_path.open("r", encoding="utf-8", newline="") as fh:
                     cur.copy_expert(COPY_SQL, fh)
                 cur.execute(REFRESH_ORG_NAMES_SQL)
@@ -243,7 +242,7 @@ def main() -> None:
                 if args.backfill_fir_oid:
                     cur.execute(BACKFILL_ORG_OIDS_SQL)
                     backfilled_oids = cur.rowcount
-                cur.execute("ANALYZE mart_egisz.dim_nsi_organization")
+                cur.execute("ANALYZE mart_egisz.dim_nsi_organizations")
                 cur.execute("ANALYZE mart_egisz.dim_organizations")
     finally:
         with contextlib.suppress(OSError):

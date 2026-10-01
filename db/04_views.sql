@@ -46,6 +46,8 @@ DROP VIEW IF EXISTS serving_egisz.clinic_nsi_mapping CASCADE;
 DROP VIEW IF EXISTS serving_egisz.clinic_semd_activity CASCADE;
 DROP VIEW IF EXISTS serving_egisz.semd_dictionaries CASCADE;
 DROP VIEW IF EXISTS serving_egisz.semd_guides CASCADE;
+DROP VIEW IF EXISTS serving_egisz.error_types CASCADE;
+DROP VIEW IF EXISTS serving_egisz.nsi_dictionary_versions CASCADE;
 
 -- ---------------------------------------------------------------- section: document_attributes
 -- ============================================================================
@@ -289,10 +291,10 @@ SELECT
     stg_egisz.normalize_semd_code(d.semd_code) AS semd_code,
     st.name AS semd_name,
     CASE
-        WHEN st.code IS NOT NULL AND st.name IS NOT NULL
-            THEN st.code || ' · ' || st.name
-        WHEN st.code IS NOT NULL
-            THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+        WHEN st.oid IS NOT NULL AND st.name IS NOT NULL
+            THEN st.oid || ' · ' || st.name
+        WHEN st.oid IS NOT NULL
+            THEN st.oid || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
         ELSE NULL
     END AS semd_label,
     stg_egisz.clean_text_value(d.local_uid) AS semd_local_uid,
@@ -348,8 +350,8 @@ FROM mart_egisz.documents d
 LEFT JOIN mart_egisz.document_attributes a ON a.dwh_id = d.dwh_id
 -- Реестр OID — маленькое соединение (тысячи строк): коррелированный NOT EXISTS на грейне
 -- документа пересобирал бы представление реестра на каждую строку.
-LEFT JOIN mart_egisz.dim_clinic_oid oid_ref ON oid_ref.oid = btrim(stg_egisz.clean_text_value(d.org_oid))
-LEFT JOIN mart_egisz.dim_document_status ds ON ds.code = d.status
+LEFT JOIN mart_egisz.dim_clinic_oids oid_ref ON oid_ref.oid = btrim(stg_egisz.clean_text_value(d.org_oid))
+LEFT JOIN mart_egisz.dim_document_statuses ds ON ds.code = d.status
 -- Ступень подбирает pending_segment_at от якоря представления — текущего момента.
 -- Условие внутри LATERAL оставляет вызов только нефинальным статусам: у документа с исходом
 -- ожидания нет. OFFSET 0 не даёт планировщику вынести условие в соединение — тогда ступень
@@ -360,20 +362,14 @@ LEFT JOIN LATERAL (
     WHERE ds.is_final IS NOT TRUE
     OFFSET 0
 ) ps ON TRUE
-LEFT JOIN mart_egisz.dim_sent_state ss
+LEFT JOIN mart_egisz.dim_sent_states ss
     ON ss.code = CASE
         WHEN ps.code IS NULL THEN NULL          -- финальный статус: состояния отправки нет
         WHEN ps.is_no_response THEN 'no_response'
         ELSE 'pending'
     END
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = d.jid
-LEFT JOIN LATERAL (
-    SELECT dst.*
-    FROM mart_egisz.dim_semd_types dst
-    WHERE dst.oid = stg_egisz.normalize_semd_code(d.semd_code)
-    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
-    LIMIT 1
-) st ON TRUE
+LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = stg_egisz.normalize_semd_code(d.semd_code)
 WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
 
 COMMENT ON VIEW serving_egisz.document_versions IS
@@ -543,13 +539,7 @@ SELECT
 FROM stg_egisz.exchange_messages tx
 LEFT JOIN stg_egisz.exchange_messages next_tx ON next_tx.logid = tx.logid + 1
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = tx.jid
-LEFT JOIN LATERAL (
-    SELECT dst.*
-    FROM mart_egisz.dim_semd_types dst
-    WHERE dst.oid = stg_egisz.normalize_semd_code(tx.xml_semd_code)
-    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
-    LIMIT 1
-) st ON TRUE
+LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = stg_egisz.normalize_semd_code(tx.xml_semd_code)
 LEFT JOIN LATERAL (
     SELECT d.dwh_id, d.status, d.registered_at
     FROM mart_egisz.documents d
@@ -640,10 +630,10 @@ WHERE tx.ihe_errors IS NOT NULL;
 COMMENT ON VIEW stg_egisz.ihe_errors IS
 'Элементы ответа ИЭМК: строка — IHE RegistryError, ключ (logid, message_at, item_no). error_code — errorCode, code_context — codeContext (исходный текст), severity и location — атрибуты элемента.';
 
--- Общая форма ошибок журнала обмена: вид, код, тип и признак предупреждения из атрибута
--- своего источника. Ключ элемента — (logid, message_at, error_source, item_no). Тексты
--- источников объединяются здесь, выше stage, и выходят только маскированными
--- (mart_egisz.mask_error_text): исходный текст без маскирования остаётся в stg.
+-- Общая форма ошибок журнала обмена: вид, код, тип, признак предупреждения и исходный текст
+-- из атрибутов своего источника. Ключ элемента — (logid, message_at, error_source, item_no).
+-- Тексты источников объединяются здесь, выше stage; персональные данные скрывает функция
+-- выдачи mart_egisz.masking_personal_data.
 CREATE VIEW mart_egisz.exchangelog_errors AS
 SELECT
     n.message_at, n.logid, n.msgid, n.dwh_id, n.clinic_jid, n.semd_code, n.egisz_subsystem, n.source_action,
@@ -654,32 +644,30 @@ SELECT
     n.error_type,
     NULL::text AS nsi_dictionary_oid,
     false AS is_warning,
-    mart_egisz.mask_error_text('Ошибка связи', n.error_text) AS error_text
+    n.error_text
 FROM stg_egisz.network_errors n
 UNION ALL
 SELECT
     r.message_at, r.logid, r.msgid, r.dwh_id, r.clinic_jid, r.semd_code, r.egisz_subsystem, r.source_action,
     'РЭМД', r.item_no, 'Ошибка асинхронного ответа', r.code, r.error_type, r.nsi_dictionary_oid,
     r.section IS NOT DISTINCT FROM 'registrationWarnings',
-    mart_egisz.mask_error_text('Ошибка асинхронного ответа', r.message)
+    r.message
 FROM stg_egisz.remd_errors r
 UNION ALL
 SELECT
     h.message_at, h.logid, h.msgid, h.dwh_id, h.clinic_jid, h.semd_code, h.egisz_subsystem, h.source_action,
     'ИЭМК', h.item_no, 'Ошибка асинхронного ответа', h.error_code, h.error_type, h.nsi_dictionary_oid,
     COALESCE(h.severity ~* 'Warning$', false),
-    mart_egisz.mask_error_text('Ошибка асинхронного ответа', h.code_context)
+    h.code_context
 FROM stg_egisz.ihe_errors h;
 
 COMMENT ON VIEW mart_egisz.exchangelog_errors IS
-'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. error_text — текст источника (LOGTEXT ошибки связи, message РЭМД, codeContext ИЭМК) с маскированными персональными данными, без обрезки и нормализации.';
+'Ошибки разобранного журнала обмена (EXCHANGELOG) в общей форме: строка — ошибка связи либо элемент ответа РЭМД или ИЭМК, ключ (logid, message_at, error_source, item_no). is_warning — предупреждение: раздел registrationWarnings РЭМД либо severity Warning ИЭМК. error_text — исходный текст источника (LOGTEXT ошибки связи, message РЭМД, codeContext ИЭМК); при выдаче персональные данные скрывает mart_egisz.masking_personal_data.';
 
 -- Ошибки текущего состояния документа: элементы последнего асинхронного ответа и ошибки
 -- связи после него; у документа без асинхронного ответа — все его ошибки связи. Время
 -- последнего ответа берётся из тех же разобранных сообщений. error_no нумерует ошибки
--- документа по порядку сообщений. Текст источника маскируется один раз на различный текст
--- и только у отобранных ошибок: маскирование в общей форме считалось бы для всех ошибок
--- журнала до отбора.
+-- документа по порядку сообщений. Исходный текст — в строке документа mart_egisz.documents.
 CREATE MATERIALIZED VIEW mart_egisz.document_errors AS
 WITH last_response AS (
     SELECT t.dwh_id, max(t.log_date) AS responded_at
@@ -687,58 +675,25 @@ WITH last_response AS (
     WHERE t.dwh_id IS NOT NULL
       AND t.status IN ('success', 'error')
     GROUP BY t.dwh_id
-),
-current_errors AS (
-    SELECT
-        m.dwh_id,
-        row_number() OVER (PARTITION BY m.dwh_id ORDER BY m.message_at, m.logid, m.item_no, m.error_source)::integer AS error_no,
-        m.message_at,
-        m.logid,
-        m.error_source,
-        m.item_no,
-        m.egisz_subsystem,
-        m.source_action,
-        m.error_kind,
-        m.error_code,
-        m.error_type,
-        m.nsi_dictionary_oid,
-        m.is_warning
-    FROM mart_egisz.exchangelog_errors m
-    LEFT JOIN last_response lr ON lr.dwh_id = m.dwh_id
-    WHERE m.dwh_id IS NOT NULL
-      AND m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
-),
-source_texts AS (
-    SELECT c.*, COALESCE(n.error_text, r.message, h.code_context) AS source_text
-    FROM current_errors c
-    LEFT JOIN stg_egisz.network_errors n
-      ON c.error_source = 'связь' AND n.logid = c.logid AND n.message_at = c.message_at
-    LEFT JOIN stg_egisz.remd_errors r
-      ON c.error_source = 'РЭМД' AND r.logid = c.logid AND r.message_at = c.message_at AND r.item_no = c.item_no
-    LEFT JOIN stg_egisz.ihe_errors h
-      ON c.error_source = 'ИЭМК' AND h.logid = c.logid AND h.message_at = c.message_at AND h.item_no = c.item_no
-),
-masked_texts AS (
-    SELECT d.error_kind, d.source_text, mart_egisz.mask_error_text(d.error_kind, d.source_text) AS error_text
-    FROM (SELECT DISTINCT s.error_kind, s.source_text FROM source_texts s WHERE s.source_text IS NOT NULL) d
 )
 SELECT
-    s.dwh_id,
-    s.error_no,
-    s.message_at,
-    s.logid,
-    s.error_source,
-    s.item_no,
-    s.egisz_subsystem,
-    s.source_action,
-    s.error_kind,
-    s.error_code,
-    s.error_type,
-    s.nsi_dictionary_oid,
-    s.is_warning,
-    t.error_text
-FROM source_texts s
-LEFT JOIN masked_texts t ON t.error_kind = s.error_kind AND t.source_text = s.source_text
+    m.dwh_id,
+    row_number() OVER (PARTITION BY m.dwh_id ORDER BY m.message_at, m.logid, m.item_no, m.error_source)::integer AS error_no,
+    m.message_at,
+    m.logid,
+    m.error_source,
+    m.item_no,
+    m.egisz_subsystem,
+    m.source_action,
+    m.error_kind,
+    m.error_code,
+    m.error_type,
+    m.nsi_dictionary_oid,
+    m.is_warning
+FROM mart_egisz.exchangelog_errors m
+LEFT JOIN last_response lr ON lr.dwh_id = m.dwh_id
+WHERE m.dwh_id IS NOT NULL
+  AND m.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
 WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_mart_document_errors
@@ -747,7 +702,7 @@ CREATE INDEX IF NOT EXISTS idx_mart_document_errors_kind
     ON mart_egisz.document_errors (error_kind);
 
 COMMENT ON MATERIALIZED VIEW mart_egisz.document_errors IS
-'Ошибки текущего состояния документа в общей форме: элементы последнего асинхронного ответа и ошибки связи после него. Строка — одна ошибка документа, ключ (dwh_id, error_no); ключ источника (logid, message_at, error_source, item_no). error_text — текст источника с маскированными персональными данными (материализован для разбора поддержкой). Обновляется refresh_report_marts() после transform.';
+'Ошибки текущего состояния документа в общей форме: элементы последнего асинхронного ответа и ошибки связи после него. Строка — одна ошибка документа, ключ (dwh_id, error_no); ключ источника (logid, message_at, error_source, item_no). Исходный текст ошибок текущего состояния — mart_egisz.documents.error_text. Обновляется refresh_report_marts() после transform.';
 
 -- Опубликованные ошибки текущего состояния документа (состояние к выдаче): тип, вид,
 -- категория, код и атрибуты справочников вместе с реквизитами документа. Материализовано:
@@ -787,11 +742,11 @@ SELECT
     (r.status = 'async_error' OR c.error_kind = 'Ошибка связи') AS is_error_corpus
 FROM mart_egisz.document_errors c
 JOIN serving_egisz.documents_current r ON r.dwh_id = c.dwh_id
-LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
-LEFT JOIN mart_egisz.dim_nsi_error_code_alias a ON a.alias = upper(btrim(c.error_code))
-LEFT JOIN mart_egisz.dim_nsi_error_code n
+LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
+LEFT JOIN mart_egisz.dim_error_code_aliases a ON a.alias = upper(btrim(c.error_code))
+LEFT JOIN mart_egisz.dim_nsi_error_codes n
   ON n.nsi_error_code = COALESCE(a.nsi_error_code, upper(btrim(c.error_code)))
-LEFT JOIN mart_egisz.dim_nsi_dictionary nd ON nd.oid = c.nsi_dictionary_oid
+LEFT JOIN mart_egisz.dim_nsi_dictionaries nd ON nd.oid = c.nsi_dictionary_oid
 WITH DATA;
 
 -- Уникальный индекс нужен для REFRESH ... CONCURRENTLY.
@@ -852,10 +807,10 @@ SELECT
     m.semd_code,
     -- Подпись СЭМД та же, что в document_versions: фильтр «Код СЭМД» дашборда передаёт её.
     CASE
-        WHEN st.code IS NOT NULL AND st.name IS NOT NULL
-            THEN st.code || ' · ' || st.name
-        WHEN st.code IS NOT NULL
-            THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+        WHEN st.oid IS NOT NULL AND st.name IS NOT NULL
+            THEN st.oid || ' · ' || st.name
+        WHEN st.oid IS NOT NULL
+            THEN st.oid || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
     END AS semd_label,
     m.egisz_subsystem,
     m.source_action,
@@ -864,34 +819,72 @@ SELECT
     t.responsibility,
     t.is_retryable
 FROM mart_egisz.exchangelog_errors m
-LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = m.error_type
+LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = m.error_type
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = m.clinic_jid
-LEFT JOIN LATERAL (
-    SELECT dst.code, dst.name
-    FROM mart_egisz.dim_semd_types dst
-    WHERE dst.oid = m.semd_code
-    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
-    LIMIT 1
-) st ON TRUE
+LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = m.semd_code
 WHERE m.error_source = 'связь';
 
 COMMENT ON VIEW serving_egisz.network_errors IS
 'Ошибки связи по времени сообщения: шлюз не доставил сообщение (LOGSTATE = 3). Строка — одна ошибка связи; dwh_id пуст у сообщения без связи с документом. Текст ошибки — в mart_egisz.exchangelog_errors по сообщению (logid, message_at, error_source = связь): ошибка связи у сообщения одна.';
 
--- Текст текущих ошибок документа одной строкой для разбора поддержкой: материализованные
--- тексты mart_egisz.document_errors в порядке ошибок документа.
-CREATE OR REPLACE FUNCTION mart_egisz.document_error_text(p_dwh_id text)
-RETURNS text
-LANGUAGE sql
-STABLE
+-- Исходный текст ошибок текущего состояния документа в строке документа: элементы последнего
+-- асинхронного ответа и ошибки связи после него, в порядке ошибок документа
+-- (mart_egisz.document_errors), через « · ». Пересчитывается для документов пакета приёма;
+-- NULL в p_dwh_ids — для всех документов.
+CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_error_texts(p_dwh_ids text[] DEFAULT NULL)
+RETURNS bigint
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
 AS $$
-SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no)
-FROM mart_egisz.document_errors c
-WHERE c.dwh_id = p_dwh_id
+DECLARE
+    refreshed bigint;
+BEGIN
+    WITH scope AS (
+        SELECT d.dwh_id
+        FROM mart_egisz.documents d
+        WHERE p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids)
+    ),
+    last_response AS (
+        SELECT t.dwh_id, max(t.log_date) AS responded_at
+        FROM stg_egisz.exchange_messages t
+        JOIN scope s ON s.dwh_id = t.dwh_id
+        WHERE t.status IN ('success', 'error')
+        GROUP BY t.dwh_id
+    ),
+    source_errors AS (
+        SELECT n.dwh_id, n.message_at, n.logid, 0 AS item_no, 'связь'::text AS error_source, n.error_text
+        FROM stg_egisz.network_errors n JOIN scope s ON s.dwh_id = n.dwh_id
+        UNION ALL
+        SELECT r.dwh_id, r.message_at, r.logid, r.item_no, 'РЭМД', r.message
+        FROM stg_egisz.remd_errors r JOIN scope s ON s.dwh_id = r.dwh_id
+        UNION ALL
+        SELECT h.dwh_id, h.message_at, h.logid, h.item_no, 'ИЭМК', h.code_context
+        FROM stg_egisz.ihe_errors h JOIN scope s ON s.dwh_id = h.dwh_id
+    ),
+    texts AS (
+        SELECT
+            s.dwh_id,
+            string_agg(e.error_text, ' · ' ORDER BY e.message_at, e.logid, e.item_no, e.error_source) AS error_text
+        FROM scope s
+        LEFT JOIN last_response lr ON lr.dwh_id = s.dwh_id
+        LEFT JOIN source_errors e
+          ON e.dwh_id = s.dwh_id
+         AND e.message_at >= COALESCE(lr.responded_at, '-infinity'::timestamptz)
+        GROUP BY s.dwh_id
+    )
+    UPDATE mart_egisz.documents d
+    SET error_text = x.error_text,
+        updated_at = now()
+    FROM texts x
+    WHERE d.dwh_id = x.dwh_id
+      AND d.error_text IS DISTINCT FROM x.error_text;
+    GET DIAGNOSTICS refreshed = ROW_COUNT;
+    RETURN refreshed;
+END;
 $$;
 
-COMMENT ON FUNCTION mart_egisz.document_error_text(text) IS
-'Текст текущих ошибок документа p_dwh_id: error_text из mart_egisz.document_errors (текст источника с маскированными персональными данными) через « · » в порядке error_no. NULL — у документа нет текущих ошибок.';
+COMMENT ON FUNCTION mart_egisz.recompute_document_error_texts(text[]) IS
+'Пересчитывает исходный текст ошибок текущего состояния в mart_egisz.documents.error_text: тексты источников (stg_egisz.network_errors, remd_errors, ihe_errors) последнего асинхронного ответа и ошибок связи после него через « · ». p_dwh_ids NULL — все документы. Возвращает число изменённых строк.';
 
 CREATE OR REPLACE VIEW mart_egisz_admin.document_lineage AS
 SELECT
@@ -907,7 +900,7 @@ SELECT
 FROM mart_egisz.documents d
 LEFT JOIN mart_egisz.document_attributes a ON a.dwh_id = d.dwh_id
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = d.jid
-LEFT JOIN mart_egisz.dim_clinic_oid r ON r.oid = btrim(stg_egisz.clean_text_value(d.org_oid))
+LEFT JOIN mart_egisz.dim_clinic_oids r ON r.oid = btrim(stg_egisz.clean_text_value(d.org_oid))
 WHERE d.dwh_id IS NOT NULL;
 
 COMMENT ON VIEW mart_egisz_admin.document_lineage IS
@@ -967,7 +960,7 @@ SELECT
     (NULLIF(btrim(o.fir_oid), '') IS NOT NULL) AS is_mapped,
     doc.last_success_registered_at
 FROM mart_egisz.dim_organizations o
-LEFT JOIN mart_egisz.dim_nsi_organization n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)
+LEFT JOIN mart_egisz.dim_nsi_organizations n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)
 LEFT JOIN LATERAL (
     SELECT MAX(r.registered_at) AS last_success_registered_at
     FROM serving_egisz.documents_current r
@@ -1013,7 +1006,7 @@ FROM (
     GROUP BY 1, 2
 ) f
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = f.clinic_jid
-LEFT JOIN mart_egisz.dim_semd_types st ON st.code = f.semd_code;
+LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = f.semd_code;
 
 COMMENT ON VIEW serving_egisz.clinic_semd_activity IS
 'Типы СЭМД в обмене клиники: грейн (clinic_jid, semd_code) по документам; последняя отправка, последняя регистрация и число документов.';
@@ -1021,7 +1014,7 @@ COMMENT ON VIEW serving_egisz.clinic_semd_activity IS
 -- ---------------------------------------------------------------- section: semd_guides
 -- ============================================================================
 -- Требования руководств по реализации: какие справочники НСИ обязан использовать
--- документ данного вида. Источник — НСИ 638 и 805, якорь — dim_semd_types.
+-- документ данного вида. Источник — НСИ 638 и 805, якорь — dim_nsi_semd_types.
 -- ============================================================================
 
 -- Одна строка на вид медицинской документации, включая виды без руководства. Иначе вид
@@ -1029,9 +1022,9 @@ COMMENT ON VIEW serving_egisz.clinic_semd_activity IS
 -- в реестре, одинаково пропадали бы из выборки; различает их guide_match.
 CREATE OR REPLACE VIEW serving_egisz.semd_guides AS
 SELECT
-    st.code AS semd_code,
+    st.oid AS semd_code,
     st.name AS semd_name,
-    st.code || ' · ' || COALESCE(NULLIF(btrim(st.name), ''), '—') AS semd_label,
+    st.oid || ' · ' || COALESCE(NULLIF(btrim(st.name), ''), '—') AS semd_label,
     st.type_code AS semd_type_code,
     st.level AS semd_level,
     (st.level = '3') AS semd_is_cda,
@@ -1051,12 +1044,12 @@ SELECT
         ELSE 'сопоставлено'
     END AS guide_match,
     d.dictionaries_total
-FROM mart_egisz.dim_semd_types st
-LEFT JOIN mart_egisz.dim_semd_guide_oid r ON r.published_oid = NULLIF(btrim(st.ig_oid), '')
-LEFT JOIN mart_egisz.dim_nsi_semd_guide g ON g.oid = r.guide_oid
+FROM mart_egisz.dim_nsi_semd_types st
+LEFT JOIN mart_egisz.dim_semd_guide_oids r ON r.published_oid = NULLIF(btrim(st.ig_oid), '')
+LEFT JOIN mart_egisz.dim_nsi_semd_guides g ON g.oid = r.guide_oid
 LEFT JOIN LATERAL (
     SELECT count(*) AS dictionaries_total
-    FROM mart_egisz.dim_nsi_semd_guide_dictionary gd
+    FROM mart_egisz.dim_nsi_semd_guide_dictionaries gd
     WHERE gd.guide_oid = g.oid
 ) d ON TRUE;
 
@@ -1092,10 +1085,68 @@ SELECT
     (gd.dict_version = '*') AS dict_any_version,
     gd.dict_ids_systemname AS dict_id_field
 FROM serving_egisz.semd_guides s
-JOIN mart_egisz.dim_nsi_semd_guide_dictionary gd ON gd.guide_oid = s.guide_oid;
+JOIN mart_egisz.dim_nsi_semd_guide_dictionaries gd ON gd.guide_oid = s.guide_oid;
 
 COMMENT ON VIEW serving_egisz.semd_dictionaries IS
 'Справочники НСИ, предписанные руководством по реализации для вида медицинской документации: грейн (semd_code, dict_oid).';
+
+-- Справочник типов ошибок для раздела «Справочная информация»: тип, вид, категория, зона
+-- ответственности, повторяемость и код справочника «РЭМД. Классификатор кодов сообщений».
+CREATE VIEW serving_egisz.error_types AS
+SELECT
+    t.error_type,
+    t.error_kind,
+    t.error_category,
+    t.responsibility,
+    t.is_retryable,
+    t.nsi_error_code,
+    c.nsi_error_description,
+    (t.rule_code IS NOT NULL) AS has_rule
+FROM mart_egisz.dim_error_types t
+LEFT JOIN mart_egisz.dim_nsi_error_codes c ON c.nsi_error_code = t.nsi_error_code;
+
+COMMENT ON VIEW serving_egisz.error_types IS
+'Типы ошибок: строка — тип (ключ error_type) с видом, категорией, зоной ответственности, признаком повтора и кодом справочника НСИ «РЭМД. Классификатор кодов сообщений» с его описанием. has_rule — тип задан правилом классификации; иначе тип — нормализованный текст ошибки без правила.';
+
+-- Версии справочников НСИ в DWH: какой справочник, какая версия и когда загружена.
+-- Наименование справочника — из общего перечня справочников НСИ, при отсутствии в нём —
+-- по паспорту справочника.
+CREATE VIEW serving_egisz.nsi_dictionary_versions AS
+SELECT
+    v.dictionary_oid,
+    COALESCE(n.name, v.passport_name) AS dictionary_name,
+    v.dictionary_version,
+    v.loaded_at,
+    v.record_count,
+    v.purpose
+FROM (
+    SELECT source_oid AS dictionary_oid, max(source_version) AS dictionary_version, max(loaded_at) AS loaded_at,
+           count(*) AS record_count, 'Реестр медицинских и фармацевтических организаций Российской Федерации'::text AS passport_name,
+           'Сопоставление клиник с медицинскими организациями'::text AS purpose
+    FROM mart_egisz.dim_nsi_organizations GROUP BY source_oid
+    UNION ALL
+    SELECT source_oid, max(source_version), max(updated_at), count(*), 'Электронные медицинские документы',
+           'Виды медицинской документации (СЭМД)'
+    FROM mart_egisz.dim_nsi_semd_types GROUP BY source_oid
+    UNION ALL
+    SELECT source_oid, max(source_version), max(loaded_at), count(*),
+           'Реестр руководств по реализации структурированных электронных медицинских документов и протоколов информационного взаимодействия',
+           'Руководства по реализации видов медицинской документации'
+    FROM mart_egisz.dim_nsi_semd_guides GROUP BY source_oid
+    UNION ALL
+    SELECT source_oid, max(source_version), max(loaded_at), count(*),
+           'Реестр справочников, использующихся в руководствах по реализации структурированных электронных медицинских документов',
+           'Справочники НСИ, предписанные руководствами'
+    FROM mart_egisz.dim_nsi_semd_guide_dictionaries GROUP BY source_oid
+    UNION ALL
+    SELECT source_oid, max(source_version), max(updated_at), count(*), 'РЭМД. Классификатор кодов сообщений',
+           'Коды и описания ошибок регистрации ЭМД'
+    FROM mart_egisz.dim_nsi_error_codes GROUP BY source_oid
+) v
+LEFT JOIN mart_egisz.dim_nsi_dictionaries n ON n.oid = v.dictionary_oid;
+
+COMMENT ON VIEW serving_egisz.nsi_dictionary_versions IS
+'Справочники НСИ в DWH: строка — справочник (OID dictionary_oid) с наименованием, версией справочника, датой загрузки, числом записей и назначением в DWH. Наименование — из общего перечня справочников НСИ mart_egisz.dim_nsi_dictionaries, при отсутствии — по паспорту справочника.';
 
 -- ---------------------------------------------------------------- section: weekly
 -- ============================================================================
@@ -1196,7 +1247,7 @@ SELECT
         < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_week
 FROM mart_egisz.document_errors c
 JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
-LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_weekly p
   ON p.week_start = date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
  AND p.clinic_label = r.clinic_label
@@ -1310,7 +1361,7 @@ SELECT
         < date_trunc('month', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_month
 FROM mart_egisz.document_errors c
 JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
-LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_monthly p
   ON p.month_start = date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
  AND p.clinic_label = r.clinic_label
@@ -1480,7 +1531,7 @@ hits AS (
         COUNT(DISTINCT d.dwh_id)::bigint AS docs_with_category
     FROM documents d
     JOIN mart_egisz.document_errors c ON c.dwh_id = d.dwh_id
-    LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+    LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
     WHERE d.status = 'async_error' OR c.error_kind = 'Ошибка связи'
     GROUP BY 1, 2, 3, 4, 5
 )
@@ -1498,7 +1549,7 @@ SELECT
     -- Отказ считается от документов с ответом РЭМД, ошибка связи — от всех документов.
     CASE WHEN k.error_kind = 'Ошибка связи' THEN tt.docs_all ELSE tt.docs_total END AS docs_denominator
 FROM totals tt
-CROSS JOIN mart_egisz.dim_error_category k
+CROSS JOIN mart_egisz.dim_error_categories k
 LEFT JOIN hits h
   ON h.ips_day = tt.ips_day
  AND h.clinic_label = tt.clinic_label
@@ -1996,10 +2047,10 @@ SELECT
     o.name AS clinic_name,
     f.semd_code,
     CASE
-        WHEN st.code IS NOT NULL AND st.name IS NOT NULL
-            THEN st.code || ' · ' || st.name
-        WHEN st.code IS NOT NULL
-            THEN st.code || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
+        WHEN st.oid IS NOT NULL AND st.name IS NOT NULL
+            THEN st.oid || ' · ' || st.name
+        WHEN st.oid IS NOT NULL
+            THEN st.oid || ' · Наименование СЭМД отсутствует в справочнике СЭМД'
     END AS semd_label,
     f.documents_total
 FROM (
@@ -2013,13 +2064,7 @@ FROM (
     GROUP BY 1, 2
 ) f
 LEFT JOIN mart_egisz.dim_organizations o ON o.jid = f.clinic_jid
-LEFT JOIN LATERAL (
-    SELECT dst.code, dst.name
-    FROM mart_egisz.dim_semd_types dst
-    WHERE dst.oid = f.semd_code
-    ORDER BY dst.start_date DESC NULLS LAST, dst.code DESC
-    LIMIT 1
-) st ON TRUE
+LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = f.semd_code
 WITH DATA;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_semd_types
@@ -2033,12 +2078,12 @@ COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_semd_types IS
 -- Состояние «Ответ не получен» в состояние к выдаче не входит и значением фильтра не служит.
 CREATE VIEW serving_egisz.document_status_details AS
 SELECT ds.code AS status_detail, ds.label AS status_detail_label, ds.sort_order AS status_detail_sort
-FROM mart_egisz.dim_document_status ds
+FROM mart_egisz.dim_document_statuses ds
 WHERE ds.is_final
 UNION ALL
 SELECT ss.code, ss.label, ds.sort_order + ss.sort_order - 1
-FROM mart_egisz.dim_document_status ds
-CROSS JOIN mart_egisz.dim_sent_state ss
+FROM mart_egisz.dim_document_statuses ds
+CROSS JOIN mart_egisz.dim_sent_states ss
 WHERE NOT ds.is_final
   AND ss.code <> 'no_response';
 
@@ -2273,7 +2318,7 @@ no_response_docs AS (
 uncovered_types AS (
     SELECT DISTINCT c.dwh_id
     FROM mart_egisz.document_errors c
-    JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+    JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
     WHERE c.error_kind = 'Ошибка асинхронного ответа'
       AND t.rule_code IS NULL
 ),
@@ -2282,7 +2327,7 @@ uncovered_types AS (
 untyped_errors AS (
     SELECT COUNT(*) AS cnt
     FROM mart_egisz.document_errors c
-    LEFT JOIN mart_egisz.dim_error_type t ON t.error_type = c.error_type
+    LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
     WHERE t.error_type IS NULL
 ),
 -- Асинхронный ответ, исход которого не распознан, не отбрасывается молча: он остаётся без
@@ -2380,7 +2425,7 @@ SELECT * FROM (
          CASE WHEN (SELECT cnt FROM untyped_errors) >= 1 THEN 'red' ELSE 'green' END,
          (SELECT cnt FROM untyped_errors)::numeric,
          'элементов',
-         'mart_egisz.document_errors вне mart_egisz.dim_error_type',
+         'mart_egisz.document_errors вне mart_egisz.dim_error_types',
          'Выполнить пересчёт ошибок: элементы не приведены к текущим правилам'),
         ('unrecognized_async_responses',
          'Асинхронные ответы с нераспознанным исходом',
@@ -2538,6 +2583,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM mart_egisz.documents)
        AND NOT EXISTS (SELECT 1 FROM mart_egisz.document_attributes) THEN
+        PERFORM mart_egisz.recompute_document_error_texts(NULL::text[]);
         PERFORM mart_egisz.recompute_document_attributes(NULL::text[]);
         PERFORM mart_egisz.recompute_document_versions(NULL::text[]);
         -- Материализованные представления созданы выше с данными; пересобираем после

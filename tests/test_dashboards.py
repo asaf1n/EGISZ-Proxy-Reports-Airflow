@@ -362,7 +362,7 @@ def test_documents_view_exposes_canonical_status_label_and_code() -> None:
     core = Path("db/04_views.sql").read_text(encoding="utf-8")
     tables_sql = Path("db/01_schema.sql").read_text(encoding="utf-8")
 
-    # Канонические RU-лейблы задаются один раз в dim_document_status.
+    # Канонические RU-лейблы задаются один раз в dim_document_statuses.
     assert "'Успешно зарегистрирован'" in tables_sql
     assert "'Ошибка асинхронного ответа РЭМД'" in tables_sql
     assert "'Отправлено'" in tables_sql
@@ -1113,7 +1113,7 @@ def test_client_service_semd_types_tab_reads_exchange_facts() -> None:
     assert "MAX(r.first_sent_at) AS last_sent_at" in sql
     assert "MAX(r.registered_at) AS last_registered_at" in sql
     assert "FROM serving_egisz.document_versions r" in sql
-    assert "LEFT JOIN mart_egisz.dim_semd_types st ON st.code = f.semd_code" in sql
+    assert "LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = f.semd_code" in sql
     assert "CREATE OR REPLACE VIEW public.rpt_clinic_semd_licenses" not in sql
 
     dashboard = json.loads(Path("metabase_dashboards/07_client_service.json").read_text(encoding="utf-8"))
@@ -1505,7 +1505,7 @@ def test_top_error_type_card_is_table_with_share() -> None:
         "Зона ответственности",
         "Устраняется повтором",
     ]
-    # Зона ответственности и повторяемость — из mart_egisz.dim_error_type через document_errors.
+    # Зона ответственности и повторяемость — из mart_egisz.dim_error_types через document_errors.
     assert '"Зона ответственности"' in query
     assert '"Устраняется повтором"' in query
     assert viz["table.column_widths"] == [350, 96, 96, 128]
@@ -1606,7 +1606,7 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
     dashboard = _tab_dashboard("sent")
 
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_pending_segments" in tables
-    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_sent_state" in tables
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_sent_states" in tables
     for label in ("до 5 минут", "до 1 часа", "до 6 часов", "до 12 часов",
                   "до 24 часов", "до 3 суток", "до 7 суток", "до 15 суток", "свыше 15 суток"):
         assert f"'{label}'" in tables, f"ступень «{label}» отсутствует в справочнике"
@@ -1617,7 +1617,7 @@ def test_sent_view_derives_states_from_dictionaries() -> None:
 
     # Представление не должно содержать собственных порогов и подписей ступеней.
     assert "mart_egisz.dim_pending_segments" in views
-    assert "mart_egisz.dim_sent_state" in views
+    assert "mart_egisz.dim_sent_states" in views
     assert "CREATE OR REPLACE VIEW serving_egisz.documents_sent" in views
     for stale in ("'>30 дней'", "'>7 дней'", "'>3 дней'", "'до 3 дней'"):
         assert stale not in views, f"порог {stale} захардкожен в представлении"

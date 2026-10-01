@@ -54,19 +54,19 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | `documents` | Экземпляры и версии СЭМД: одна строка на `dwh_id`; версии объединяются по `document_group_id` |
 | `document_attributes` | Дополнительные атрибуты в связи 1:1 с экземпляром документа: OID происхождения клиники, host, endpoint, способ определения JID, подсистема ЕГИСЗ и маскированные реквизиты |
 | `dim_organizations`, `dim_licenses` | Организации и лицензии из справочников шлюза |
-| `dim_nsi_organization` | Организации из НСИ 1461 |
-| `dim_nsi_dictionary` | OID и наименования справочников НСИ |
-| `dim_nsi_semd_guide`, `dim_nsi_semd_guide_alias` | Руководства по реализации СЭМД и синонимы их OID |
-| `dim_nsi_semd_guide_dictionary` | Справочники НСИ, предписанные руководством; одна связь руководства со справочником |
-| `dim_semd_types` | Типы СЭМД |
-| `dim_document_status`, `dim_pending_segments`, `dim_sent_state` | Статусы документов, интервалы ожидания ответа и состояния отправки |
+| `dim_nsi_organizations` | Организации из НСИ 1461 |
+| `dim_nsi_dictionaries` | OID и наименования справочников НСИ |
+| `dim_nsi_semd_guides`, `dim_nsi_semd_guide_aliases` | Руководства по реализации СЭМД и синонимы их OID |
+| `dim_nsi_semd_guide_dictionaries` | Справочники НСИ, предписанные руководством; одна связь руководства со справочником |
+| `dim_nsi_semd_types` | Типы СЭМД |
+| `dim_document_statuses`, `dim_pending_segments`, `dim_sent_states` | Статусы документов, интервалы ожидания ответа и состояния отправки |
 | `dim_control_chart_phases` | Фазы контрольных карт: периодичность, начало фазы, опорный период и условия работы |
-| `dim_clinic_oid`, `dim_clinic_endpoint` | Представления для определения юридического лица по OID или адресу обмена |
-| `dim_semd_guide_oid` | Представление для сопоставления опубликованного OID руководства с основным OID |
+| `dim_clinic_oids`, `dim_clinic_hosts` | Представления для определения юридического лица по OID или адресу обмена |
+| `dim_semd_guide_oids` | Представление для сопоставления опубликованного OID руководства с основным OID |
 | `dim_error_rules` | Правила классификации и нормализации текста ошибок; шаги, скрывающие персональные данные, — маскирование текста для выдачи |
-| `dim_error_category` | Категории ошибок, зона ответственности и повторяемость по умолчанию |
-| `dim_error_type` | Типы ошибок с видом, категорией, кодом НСИ, правилом, зоной ответственности и повторяемостью |
-| `dim_nsi_error_code`, `dim_nsi_error_code_alias` | Коды и описания ошибок НСИ 305, а также варианты написания кодов в ответах РЭМД |
+| `dim_error_categories` | Категории ошибок, зона ответственности и повторяемость по умолчанию |
+| `dim_error_types` | Типы ошибок с видом, категорией, кодом НСИ, правилом, зоной ответственности и повторяемостью |
+| `dim_nsi_error_codes`, `dim_error_code_aliases` | Коды и описания ошибок НСИ 305, а также варианты написания кодов в ответах РЭМД |
 
 ## serving_egisz — отчётные представления и агрегаты
 
@@ -104,6 +104,6 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Схема | Назначение | Функции |
 |---|---|---|
 | `etl_meta` | Управление временными разделами | `egisz_ensure_time_partitions` |
-| `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
-| `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `mask_error_text`, `document_error_text` |
+| `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `normalize_error_text`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
+| `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `masking_personal_data` |
 | `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |

@@ -31,15 +31,13 @@ def test_clinic_nsi_mapping_view_contract() -> None:
 
     organizations_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_organizations ("):]
     assert "nsi_name text" in organizations_ddl[:organizations_ddl.index(");")]
-    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_organization" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_organizations" in schema_sql
     assert "source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1461'" in schema_sql
     assert "parent_id text" in schema_sql
-    assert "raw_json jsonb NOT NULL" in schema_sql
-    assert "idx_dim_nsi_organization_active_mo" in schema_sql
     assert "CREATE OR REPLACE VIEW serving_egisz.clinic_nsi_mapping AS" in views_sql
     assert "o.name AS cash_name" in views_sql
     assert "o.nsi_name" in views_sql
-    assert "LEFT JOIN mart_egisz.dim_nsi_organization n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)" in views_sql
+    assert "LEFT JOIN mart_egisz.dim_nsi_organizations n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)" in views_sql
     assert "NULLIF(btrim(n.name_short), '')" in views_sql
     assert "stg_egisz.clean_text_value(o.fir_oid) AS oid" in views_sql
     assert "AS is_mapped" in views_sql

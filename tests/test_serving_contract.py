@@ -225,15 +225,14 @@ def test_status_filter_values_follow_documents_current() -> None:
     assert "WHERE NOT g.is_no_response" in segments
 
 
-def test_error_text_masking_hides_only_personal_data() -> None:
-    """Маскирование текста для выдачи — функция слоя витрин: применяет только шаги нормализации,
-    скрывающие персональные данные. Классификация на stage нормализует текст в тип сама и
-    функцию маскирования не вызывает."""
-    mask = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION mart_egisz.mask_error_text(", 1)[1].split("$$;", 1)[0]
-    assert "WHERE r.rule_kind = 'нормализация'" in mask
-    assert "AND r.masks_personal_data" in mask
-    assert "ORDER BY r.apply_order" in mask
+def test_normalization_classification_and_masking_are_separate_functions() -> None:
+    """Нормализация текста в тип, классификация и скрытие персональных данных — отдельные
+    функции. Скрытие ПДн — общая функция выдачи свободного текста, не зависит от вида ошибки."""
+    normalize = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.normalize_error_text(", 1)[1].split("$$;", 1)[0]
+    assert "WHERE r.rule_kind = 'нормализация'" in normalize
+    assert "ORDER BY r.apply_order" in normalize
     classify = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION stg_egisz.classify_error(", 1)[1].split("$$;", 1)[0]
-    assert "mask_error_text" not in classify
-    assert "WHERE r.rule_kind = 'нормализация'" in classify
-    assert "CREATE OR REPLACE FUNCTION stg_egisz.mask_error_text" not in FUNCTIONS_SQL
+    assert "error_type := stg_egisz.normalize_error_text(p_error_kind, p_error_text);" in classify
+    masking = FUNCTIONS_SQL.split("CREATE OR REPLACE FUNCTION mart_egisz.masking_personal_data(p_text text)", 1)[1].split("$$;", 1)[0]
+    assert "WHERE r.masks_personal_data" in masking
+    assert "error_kind" not in masking

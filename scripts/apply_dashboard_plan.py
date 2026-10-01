@@ -17,7 +17,7 @@ with suppress(Exception):  # pragma: no cover
 ROOT = Path(__file__).resolve().parents[1]
 DASH_01 = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
 
-# Единая палитра по категориям ошибок (mart_egisz.dim_error_category) и виду «Ошибка
+# Единая палитра по категориям ошибок (mart_egisz.dim_error_categories) и виду «Ошибка
 # связи»: категорий у него нет, в разрезах по категории вид занимает её место. Каждый тип
 # наследует цвет своей категории → сунберст и стэк-бар «парных» карточек согласованы.
 CATEGORY_COLORS: dict[str, str] = {
@@ -56,7 +56,7 @@ def error_type_color_map() -> dict[str, str]:
     colors = {"Категория ошибки": "#BAB0AC"}
     colors.update(CATEGORY_COLORS)  # сами категории (внутреннее кольцо сунберста)
 
-    # ('CODE', <id>, '<описание>', '<контур>') — сид dim_nsi_error_code.
+    # ('CODE', <id>, '<описание>', '<контур>') — сид dim_nsi_error_codes.
     nsi = {
         code: descr.replace("''", "'")
         for code, descr in re.findall(r"\('([A-Z0-9_.]+)',\s*\d+,\s*'((?:[^']|'')+)',\s*'", schema_sql)
@@ -982,7 +982,7 @@ SENT_TABLE_COLUMN_SETTINGS = {
 }
 
 # Вкладка «Отправленные» целиком строится на documents_sent: состояние отправки и
-# ступень обработки приходят из справочников (dim_sent_state, dim_pending_segments),
+# ступень обработки приходят из справочников (dim_sent_states, dim_pending_segments),
 # поэтому карточки не содержат ни порогов, ни подписей — только отбор по состоянию.
 SENT_FILTERS = (
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "

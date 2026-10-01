@@ -861,6 +861,18 @@ BEGIN
         )
     );
 
+    -- Текст ошибок текущего состояния: ответы и ошибки связи пакета. Ошибка связи после ответа
+    -- строку документа не обновляет, поэтому пакет берётся по разобранным сообщениям.
+    PERFORM mart_egisz.recompute_document_error_texts(
+        ARRAY(
+            SELECT DISTINCT t.dwh_id
+            FROM stg_egisz.exchange_messages t
+            WHERE t.logid > from_logid
+              AND t.logid <= to_logid
+              AND t.dwh_id IS NOT NULL
+        )
+    );
+
     RETURN jsonb_build_object(
         'transformed', affected,
         'unlinked', unlinked_rows,
@@ -963,11 +975,11 @@ BEGIN
     CROSS JOIN LATERAL stg_egisz.classify_error(k.error_kind, k.error_code, k.error_text) c;
     ANALYZE pg_temp.exchangelog_error_types;
 
-    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
+    INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
     SELECT DISTINCT ON (t.error_type)
         t.error_type, t.error_kind, c.error_category, c.responsibility, c.is_retryable
     FROM pg_temp.exchangelog_error_types t
-    JOIN mart_egisz.dim_error_category c
+    JOIN mart_egisz.dim_error_categories c
       ON c.error_kind = t.error_kind
      AND c.error_category IS NOT DISTINCT FROM
          CASE WHEN t.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
@@ -1062,11 +1074,11 @@ BEGIN
     -- Временные таблицы автоанализ не обрабатывает; без статистики план соединений слеп.
     ANALYZE pg_temp.reclassified;
 
-    INSERT INTO mart_egisz.dim_error_type (error_type, error_kind, error_category, responsibility, is_retryable)
+    INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
     SELECT DISTINCT ON (r.error_type)
         r.error_type, r.error_kind, c.error_category, c.responsibility, c.is_retryable
     FROM pg_temp.reclassified r
-    JOIN mart_egisz.dim_error_category c
+    JOIN mart_egisz.dim_error_categories c
       ON c.error_kind = r.error_kind
      AND c.error_category IS NOT DISTINCT FROM
          CASE WHEN r.error_kind = 'Ошибка связи' THEN NULL ELSE 'Прочие' END
@@ -1137,7 +1149,7 @@ BEGIN
     GET DIAGNOSTICS step_rows = ROW_COUNT;
     updated := updated + step_rows;
 
-    DELETE FROM mart_egisz.dim_error_type d
+    DELETE FROM mart_egisz.dim_error_types d
     WHERE d.rule_code IS NULL
       AND NOT EXISTS (SELECT 1 FROM pg_temp.reclassified r WHERE r.error_type = d.error_type);
 

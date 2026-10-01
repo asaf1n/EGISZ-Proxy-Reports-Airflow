@@ -32,32 +32,32 @@ VERSION_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
 SYNONYM_SEPARATOR = ";"
 
 REQUIRED_TABLES = (
-    "mart_egisz.dim_nsi_semd_guide",
-    "mart_egisz.dim_nsi_semd_guide_alias",
-    "mart_egisz.dim_nsi_semd_guide_dictionary",
+    "mart_egisz.dim_nsi_semd_guides",
+    "mart_egisz.dim_nsi_semd_guide_aliases",
+    "mart_egisz.dim_nsi_semd_guide_dictionaries",
 )
 
 TRUNCATE_SQL = """
-TRUNCATE mart_egisz.dim_nsi_semd_guide_dictionary,
-         mart_egisz.dim_nsi_semd_guide_alias,
-         mart_egisz.dim_nsi_semd_guide
+TRUNCATE mart_egisz.dim_nsi_semd_guide_dictionaries,
+         mart_egisz.dim_nsi_semd_guide_aliases,
+         mart_egisz.dim_nsi_semd_guides
 """
 
 GUIDE_COPY_SQL = """
-COPY mart_egisz.dim_nsi_semd_guide (
+COPY mart_egisz.dim_nsi_semd_guides (
     oid, semd_id, full_name, release_number, format, git_pub_date, git_link,
-    source_oid, source_version, raw_json
+    source_oid, source_version
 ) FROM STDIN WITH (FORMAT csv)
 """
 
 ALIAS_COPY_SQL = """
-COPY mart_egisz.dim_nsi_semd_guide_alias (alias_oid, guide_oid) FROM STDIN WITH (FORMAT csv)
+COPY mart_egisz.dim_nsi_semd_guide_aliases (alias_oid, guide_oid) FROM STDIN WITH (FORMAT csv)
 """
 
 DICTIONARY_COPY_SQL = """
-COPY mart_egisz.dim_nsi_semd_guide_dictionary (
+COPY mart_egisz.dim_nsi_semd_guide_dictionaries (
     guide_oid, dict_oid, source_id, dict_name, dict_version, dict_ids_systemname,
-    source_oid, source_version, raw_json
+    source_oid, source_version, allowed_record_ids
 ) FROM STDIN WITH (FORMAT csv)
 """
 
@@ -151,7 +151,6 @@ def guide_row(record: dict[str, Any], source_version: str) -> tuple[Any, ...]:
         clean_text(record.get("GIT_LINK")),
         GUIDE_SOURCE_OID,
         source_version,
-        json.dumps(record, ensure_ascii=False),
     )
 
 
@@ -175,8 +174,22 @@ def dictionary_row(record: dict[str, Any], source_version: str) -> tuple[Any, ..
         clean_text(record.get("DICT_IDS_SYSTEMNAME")),
         DICTIONARY_SOURCE_OID,
         source_version,
-        json.dumps(record, ensure_ascii=False),
+        pg_text_array(allowed_record_ids(record)),
     )
+
+
+def allowed_record_ids(record: dict[str, Any]) -> list[str]:
+    """COLLECTION — допустимые записи справочника для руководства; пусто — допустимы все."""
+    collection = record.get("COLLECTION") or []
+    return [value for item in collection if (value := clean_text(item.get("DICT_IDS"))) is not None]
+
+
+def pg_text_array(values: list[str]) -> str | None:
+    """Литерал text[] для COPY в формате CSV; пустой список — NULL."""
+    if not values:
+        return None
+    quoted = ('"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"' for value in values)
+    return "{" + ",".join(quoted) + "}"
 
 
 def validate_references(
@@ -285,15 +298,15 @@ def main() -> None:
 
     guide_path = write_copy_file(
         (guide_row(record, guides_version) for record in guides.records),
-        "dim_nsi_semd_guide_",
+        "dim_nsi_semd_guides_",
     )
     alias_path = write_copy_file(
         (row for record in guides.records for row in alias_rows(record)),
-        "dim_nsi_semd_guide_alias_",
+        "dim_nsi_semd_guide_aliases_",
     )
     dictionary_path = write_copy_file(
         (dictionary_row(record, dictionaries_version) for record in dictionaries.records),
-        "dim_nsi_semd_guide_dictionary_",
+        "dim_nsi_semd_guide_dictionaries_",
     )
     copy_plan = (
         (guide_path, GUIDE_COPY_SQL),
@@ -313,7 +326,7 @@ def main() -> None:
                         cur.copy_expert(statement, fh)
                 for table in REQUIRED_TABLES:
                     cur.execute(f"ANALYZE {table}")
-                cur.execute("SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_alias")
+                cur.execute("SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_aliases")
                 loaded_aliases = cur.fetchone()[0]
     finally:
         for path, _ in copy_plan:
