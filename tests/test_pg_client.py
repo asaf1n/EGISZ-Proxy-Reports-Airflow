@@ -183,7 +183,7 @@ def test_dwh_init_sql_uses_semd_identifiers_before_transport_host_fallback() -> 
     assert "stg_egisz.clean_text_value(t.message_id),\n        t.logid::text" not in sql
     assert "stg_egisz.clean_text_value(t.msgid),\n        t.logid::text" not in sql
     assert "CREATE OR REPLACE FUNCTION stg_egisz.normalize_semd_code" in sql
-    assert "serving_egisz.document_versions" in sql
+    assert "serving_egisz.registration_requests" in sql
     assert 'f.clinic_jid AS "JID Клиники"' in sql
 
 
@@ -201,14 +201,16 @@ def test_error_classification_takes_one_rule_per_element() -> None:
 
 def test_error_rules_dictionary_contract() -> None:
     """Справочник правил несёт классификацию по ярусам и шаги нормализации; зона
-    ответственности и признак повтора наследуются от категории."""
+    ответственности — из справочника зон, она и признак повтора наследуются от категории."""
     rules = (DWH_INIT_SQL_PATH.parent / "02_functions.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules" in rules
     assert "chk_dim_error_rules_kind" in rules
     assert "(match_tier <= 2) = (match_code IS NOT NULL)" in rules
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_categories" in rules
     assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_types" in rules
-    assert "responsibility IN ('клиника', 'МИС', 'интегратор', 'РЭМД', 'смешанная')" in rules
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_responsibility_zones" in rules
+    assert rules.count("responsibility text REFERENCES mart_egisz.dim_responsibility_zones (name)") == 2
+    assert "definition" not in rules
     assert "is_active" not in rules
     remd = rules.split("CREATE OR REPLACE FUNCTION stg_egisz.remd_error_items")[1].split("$$;")[0]
     assert "registrationWarnings" in remd
@@ -302,45 +304,39 @@ def test_source_error_text_is_kept_in_document_row() -> None:
     assert "error_text" not in document
 
 
-def test_document_versions_carry_no_error_columns() -> None:
-    """Ошибки документа — отдельная витрина: у документной витрины нет колонок текста и
+def test_registration_requests_carry_no_error_columns() -> None:
+    """Ошибки документа — отдельная витрина: у витрины запросов нет колонок текста и
     типа ошибки."""
     sql = (DWH_INIT_SQL_PATH.parent / "04_views.sql").read_text(encoding="utf-8")
-    versions = sql.split("CREATE OR REPLACE VIEW serving_egisz.document_versions")[1].split("COMMENT ON VIEW serving_egisz.document_versions")[0]
-    assert "error_types" not in versions
-    assert "error_text" not in versions
+    requests = sql.split("CREATE OR REPLACE VIEW serving_egisz.registration_requests")[1].split(
+        "COMMENT ON VIEW serving_egisz.registration_requests")[0]
+    assert "error_types" not in requests
+    assert "error_text" not in requests
 
 
-def test_document_version_layer_groups_by_doc_number() -> None:
-    """Логический документ = (jid + semd_code + doc_number=PROTOCOLID); localUid — версия.
-    CDA setId источником не отдаётся — группируем по журналу."""
+def test_registration_requests_link_to_document() -> None:
+    """Документ — запросы на регистрацию с одним ключом (клиника, тип СЭМД, номер документа)
+    до регистрации включительно; связь пересчитывают приём и смена клиники."""
     parts = DWH_INIT_SQL_PATH.parent
     tables = (parts / "01_schema.sql").read_text(encoding="utf-8")
     transform = (parts / "03_transform.sql").read_text(encoding="utf-8")
     views = (parts / "04_views.sql").read_text(encoding="utf-8")
     documents_contract = tables.split("CREATE TABLE IF NOT EXISTS mart_egisz.documents (", 1)[1].split(");", 1)[0]
 
-    for col in (
-        "doc_number",
-        "document_group_id",
-        "document_group_confidence",
-        "semd_version_number",
-        "superseded_by_dwh_id",
-        "supersedes_dwh_id",
-        "is_current_version",
-    ):
+    for col in ("doc_number", "document_id", "request_number", "is_last_request"):
         assert f"    {col} " in documents_contract
 
-    assert "CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_versions" in transform
-    assert "lower(btrim(d.doc_number))" in transform
-    assert "'doc_number'" in transform
-    assert "c_cap" in transform
-    assert "PERFORM mart_egisz.recompute_document_versions" in transform
-    assert "mart_egisz.recompute_document_versions(NULL::text[])" in views
+    link = transform.split("CREATE OR REPLACE FUNCTION mart_egisz.link_document_requests")[1].split("$$;")[0]
+    assert "lower(btrim(d.doc_number))" in link
+    assert "FILTER (WHERE o.status = 'success')" in link
+    assert "PERFORM mart_egisz.link_document_requests" in transform
+    assert "mart_egisz.link_document_requests(NULL::text[])" in views
+    jids = views.split("CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_jids")[1].split("$$;")[0]
+    assert "PERFORM mart_egisz.link_document_requests(affected_dwh_ids)" in jids
 
-    assert "CREATE OR REPLACE VIEW serving_egisz.document_versions" in views
-    assert "r.is_current_version" in views
-    assert "health_versions" in views
+    assert "CREATE OR REPLACE VIEW serving_egisz.registration_requests" in views
+    assert "r.is_last_request" in views
+    assert "CREATE OR REPLACE VIEW mart_egisz_admin.health_document_requests" in views
 
 
 def test_response_links_to_document_through_message_registry() -> None:
@@ -564,7 +560,7 @@ def test_dwh_init_sql_maps_semd_kind_to_reference_oid() -> None:
     assert "LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = stg_egisz.normalize_semd_code(d.semd_code)" in sql
     assert "FROM mart_egisz.documents" in sql
     assert "CREATE OR REPLACE VIEW public.fact_egisz_messages AS" not in sql
-    assert "FROM serving_egisz.document_versions" in sql
+    assert "FROM serving_egisz.registration_requests" in sql
     assert "document_group_key" not in sql
     assert "CREATE MATERIALIZED VIEW public.v_documents_daily_ui" not in sql
     assert "p.error_code = 'NO_DOCUMENT_KIND_ON_DATE'" not in sql
@@ -583,7 +579,7 @@ def test_reporting_views_do_not_depend_on_raw_tables() -> None:
     # чтобы отчётному слою не приходилось этого делать.
     reporting_sql = "\n".join(
         line.split("--", 1)[0]
-        for line in sql_section(views_sql, "document_versions").splitlines()
+        for line in sql_section(views_sql, "registration_requests").splitlines()
     )
 
     assert "raw_egisz." not in reporting_sql

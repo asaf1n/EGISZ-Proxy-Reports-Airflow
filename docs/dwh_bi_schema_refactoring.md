@@ -51,7 +51,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 
 | Объект | Содержание |
 |---|---|
-| `documents` | Экземпляры и версии СЭМД: одна строка на `dwh_id`; версии объединяются по `document_group_id` |
+| `documents` | Запросы на регистрацию СЭМД: одна строка на `dwh_id`; запросы связаны с документом по `document_id` |
 | `document_attributes` | Дополнительные атрибуты в связи 1:1 с экземпляром документа: OID происхождения клиники, host, endpoint, способ определения JID, подсистема ЕГИСЗ и маскированные реквизиты |
 | `dim_organizations`, `dim_licenses` | Организации и лицензии из справочников шлюза |
 | `dim_nsi_organizations` | Организации из НСИ 1461 |
@@ -65,6 +65,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | `dim_semd_guide_oids` | Представление для сопоставления опубликованного OID руководства с основным OID |
 | `dim_error_rules` | Правила классификации ошибок и нормализации текста нераспознанной ошибки |
 | `dim_masking_rules` | Правила скрытия персональных данных в свободном тексте при выдаче |
+| `dim_responsibility_zones` | Зоны ответственности ошибок: наименование, описание, порядок вывода |
 | `dim_error_categories` | Категории ошибок, зона ответственности и повторяемость по умолчанию |
 | `dim_error_types` | Типы ошибок с видом, категорией, кодом НСИ, правилом, зоной ответственности и повторяемостью |
 | `dim_nsi_error_codes`, `dim_error_code_aliases` | Коды и описания ошибок НСИ 305, а также варианты написания кодов в ответах РЭМД |
@@ -73,7 +74,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 
 | Объект | Тип | Содержание |
 |---|---|---|
-| `document_versions` | Представление | Экземпляры и версии документов с атрибутами и справочными данными; текущие версии — `is_current_version` |
+| `registration_requests` | Представление | Запросы на регистрацию с атрибутами, справочными данными и связью с документом; последний запрос документа — `is_last_request` |
 | `documents_current` | Материализованное представление | Состояние документа к выдаче: текущая версия без документов за сроком ожидания, индексы по фильтрам и ключам поиска |
 | `documents_no_response` | Материализованное представление | Документы без ответа дольше последней ступени лестницы ожидания, с ключами поиска |
 | `documents_sent` | Представление | Очередь обработки: документы в статусе `sent` со сроком ожидания в пределах лестницы на текущий момент |
@@ -94,7 +95,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Представление | Содержание |
 |---|---|
 | `health_signals` | Контрольные сигналы состояния конвейера, свежести и качества данных |
-| `health_versions` | Контроль группировки и версий документов |
+| `health_document_requests` | Контроль связи запросов на регистрацию с документом |
 | `health_sync` | Сопоставление позиций выгрузки и разбора с данными документов |
 | `health_by_clinic` | Объёмы документов, доля ошибок и отправленные без ответа документы по клиникам |
 | `health_message_registry_no_document` | Ответы, связанные с записью реестра подач без идентификатора документа |
@@ -106,5 +107,5 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 |---|---|---|
 | `etl_meta` | Управление временными разделами | `egisz_ensure_time_partitions` |
 | `stg_egisz` | Разбор, нормализация и классификация | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `normalize_error_text`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
-| `mart_egisz` | Сборка документов, пересчёт версий, атрибутов, JID и определение статуса | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
+| `mart_egisz` | Сборка документов, связь запросов с документом, пересчёт атрибутов, JID и определение статуса | `transform_raw_to_facts`, `link_document_requests`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
 | `serving_egisz` | Отчётное время, ожидание ответа и обновление витрин | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |

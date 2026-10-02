@@ -379,16 +379,16 @@ def test_current_queue_equals_documents_awaiting_a_response(con) -> None:
         cur.execute(f"{rendered(shared_corpus())} SELECT COUNT(DISTINCT dwh_id) FROM queue")
         queue_size = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.document_versions d "
+            "SELECT COUNT(*) FROM serving_egisz.registration_requests d "
             "JOIN mart_egisz.dim_pending_segments g "
             "ON g.code = serving_egisz.pending_segment_code_at(d.first_sent_at, now()) "
-            "WHERE d.is_current_version AND d.status = 'sent' AND NOT g.is_no_response"
+            "WHERE d.is_last_request AND d.status = 'sent' AND NOT g.is_no_response"
         )
         awaiting = cur.fetchone()[0]
         # Отметка первого ответа и статус документа обязаны говорить об одном и том же.
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.document_versions "
-            "WHERE is_current_version AND (status = 'sent') <> serving_egisz.is_pending_at(first_sent_at, first_callback_at, now()) "
+            "SELECT COUNT(*) FROM serving_egisz.registration_requests "
+            "WHERE is_last_request AND (status = 'sent') <> serving_egisz.is_pending_at(first_sent_at, first_callback_at, now()) "
             "AND first_sent_at IS NOT NULL"
         )
         disagreements = cur.fetchone()[0]
@@ -406,10 +406,10 @@ def test_queue_flow_balances_to_the_queue(con) -> None:
         cur.execute(rendered(card_sql(by_name[FLOW])))
         moves = {row[1]: row[2] for row in cur.fetchall()}
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.document_versions d "
+            "SELECT COUNT(*) FROM serving_egisz.registration_requests d "
             "JOIN mart_egisz.dim_pending_segments g "
             "ON g.code = serving_egisz.pending_segment_code_at(d.first_sent_at, now()) "
-            "WHERE d.is_current_version AND serving_egisz.is_pending_at(d.first_sent_at, d.first_callback_at, now()) "
+            "WHERE d.is_last_request AND serving_egisz.is_pending_at(d.first_sent_at, d.first_callback_at, now()) "
             "AND NOT g.is_no_response"
         )
         queue = cur.fetchone()[0]

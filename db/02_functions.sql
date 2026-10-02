@@ -276,20 +276,7 @@ AS $$
     FROM normalized;
 $$;
 
--- dwh_id — ключ ЭКЗЕМПЛЯРА/ВЕРСИИ отправки СЭМД: всегда lower(localUid).
--- localUid = CDA ClinicalDocument/id (UUID конкретной версии документа). По правилам РЭМД
--- он ОБЯЗАН меняться при любой правке СЭМД и в ряде сценариев даже при повторной выгрузке
--- без изменений (UpdateCase/UpdateMedRecord) — то есть НЕ стабилен на жизненном цикле
--- документа: корректировка ошибок штатно порождает новый localUid ⇒ новый dwh_id (новый
--- экземпляр), без перезаписи существующего dwh_id.
--- Стабильный ключ набора версий (CDA setId) в журнал не попадает: тело СЭМД (base64-CDA)
--- шлюзом не сохраняется. Поэтому
--- группировка версий в один логический документ ведётся отдельным слоем document_group_id,
--- а не через dwh_id.
--- emdrId (рег. номер РЭМД) и OID (код типа в справочнике НСИ / OID организации) НЕ являются
--- ключом: emdrId — атрибут регистрации, OID — классификатор, не идентификатор экземпляра.
--- Колбэк без localUid не порождает новый ключ, а резолвится к существующей строке по
--- relatesToMessage / emdrId (см. egisz_transform_raw_to_facts).
+-- Ключ запроса на регистрацию: localUid в нижнем регистре.
 CREATE OR REPLACE FUNCTION stg_egisz.dwh_id(
     p_local_uid text
 ) RETURNS text
@@ -655,24 +642,20 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_rules (
     nsi_dictionary_pattern text,
     interpretation text,
     error_category text,
-    definition text,
-    definition_source text,
     updated_at timestamptz DEFAULT now(),
     CONSTRAINT chk_dim_error_rules_kind CHECK (
         (rule_kind = 'нормализация'
             AND apply_order IS NOT NULL AND replacement IS NOT NULL
             AND (error_kind IS NULL OR error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа'))
             AND match_tier IS NULL AND match_code IS NULL AND nsi_error_code IS NULL
-            AND nsi_dictionary_pattern IS NULL AND interpretation IS NULL AND error_category IS NULL
-            AND definition IS NULL AND definition_source IS NULL)
+            AND nsi_dictionary_pattern IS NULL AND interpretation IS NULL AND error_category IS NULL)
         OR (rule_kind = 'классификация'
             AND error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа')
             AND apply_order IS NULL AND replacement IS NULL AND match_flags = ''
             AND match_tier BETWEEN 1 AND 4
             AND (match_tier <= 2) = (match_code IS NOT NULL)
             AND interpretation IS NOT NULL
-            AND (error_kind = 'Ошибка связи') = (error_category IS NULL)
-            AND (error_kind <> 'Ошибка связи' OR (definition IS NOT NULL AND definition_source IS NOT NULL)))
+            AND (error_kind = 'Ошибка связи') = (error_category IS NULL))
     )
 );
 
@@ -680,10 +663,6 @@ COMMENT ON TABLE mart_egisz.dim_error_rules IS
 'Правила обработки ошибок. Строка — одно правило: классификация (код и текст ошибки → тип, у асинхронного ответа — и категория) либо шаг нормализации текста нераспознанной ошибки (порядок, шаблон, замена). Справочник правил, сид — db/02_functions.sql.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.error_kind IS
 'Вид ошибки, к которому применяется правило. У шага нормализации NULL означает оба вида.';
-COMMENT ON COLUMN mart_egisz.dim_error_rules.definition IS
-'Общепринятое определение ошибки, которую распознаёт правило. Обязательно у правил ошибок связи.';
-COMMENT ON COLUMN mart_egisz.dim_error_rules.definition_source IS
-'Источник определения: документ, раздел и адрес. Обязателен у правил ошибок связи.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.match_tier IS
 'Ярус классификации: 1 — код и специфичный текст; 2 — только код; 3 — специфичный текст без кода; 4 — широкий текстовый фолбэк. Первый ярус с совпадением побеждает, внутри яруса — правило с меньшим rule_code.';
 COMMENT ON COLUMN mart_egisz.dim_error_rules.nsi_error_code IS
@@ -1001,40 +980,20 @@ FROM (VALUES
 -- Классификация ошибок связи: код из текста шлюза (stg_egisz.network_error_code) и шаблон
 -- уровня — сокет либо ответ HTTP.
 -- ------------------------------------------------------------------
-INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, match_tier, match_code, match_pattern, interpretation, definition, definition_source)
-SELECT v.rule_code, 'классификация', 'Ошибка связи', 1, v.match_code, v.match_pattern, v.interpretation, v.definition, v.definition_source
+INSERT INTO seed_error_rules (rule_code, rule_kind, error_kind, match_tier, match_code, match_pattern, interpretation)
+SELECT v.rule_code, 'классификация', 'Ошибка связи', 1, v.match_code, v.match_pattern, v.interpretation
 FROM (VALUES
-    ('socket_connection_reset', '10054', '(?i)Socket error', 'Соединение сброшено удалённой стороной',
-     'WSAECONNRESET: существующее соединение принудительно закрыто удалённым узлом (остановка приложения или перезагрузка узла, отключение сетевого интерфейса, жёсткое закрытие сокета).',
-     'Microsoft Learn, Windows Sockets Error Codes, WSAECONNRESET 10054: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('socket_connection_timed_out', '10060', '(?i)Socket error', 'Истекло время ожидания соединения',
-     'WSAETIMEDOUT: удалённая сторона не ответила за отведённое время — при установке соединения либо в уже установленном соединении.',
-     'Microsoft Learn, Windows Sockets Error Codes, WSAETIMEDOUT 10060: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('socket_connection_refused', '10061', '(?i)Socket error', 'В соединении отказано',
-     'WSAECONNREFUSED: узел назначения отклонил соединение; обычно на адресе не запущен принимающий сервис.',
-     'Microsoft Learn, Windows Sockets Error Codes, WSAECONNREFUSED 10061: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('socket_host_unreachable', '10065', '(?i)Socket error', 'Нет маршрута до узла',
-     'WSAEHOSTUNREACH: операция с сокетом адресована недостижимому узлу.',
-     'Microsoft Learn, Windows Sockets Error Codes, WSAEHOSTUNREACH 10065: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('socket_network_subsystem_unavailable', '10091', '(?i)Socket error', 'Сетевая подсистема недоступна',
-     'WSASYSNOTREADY: реализация Windows Sockets на стороне отправителя не может работать, потому что сетевая подсистема недоступна.',
-     'Microsoft Learn, Windows Sockets Error Codes, WSASYSNOTREADY 10091: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('dns_host_not_found', '11001', '(?i)Socket error', 'DNS: узел не найден',
-     'WSAHOST_NOT_FOUND: имя узла не является официальным именем или псевдонимом либо не найдено в запрошенных базах имён (DNS).',
-     'Microsoft Learn, Windows Sockets Error Codes, WSAHOST_NOT_FOUND 11001: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('dns_try_again', '11002', '(?i)Socket error', 'DNS: узел не найден, ответ не окончательный',
-     'WSATRY_AGAIN: временная ошибка разрешения имени — локальный сервер не получил ответа от авторитетного сервера DNS; повтор позже может пройти.',
-     'Microsoft Learn, Windows Sockets Error Codes, WSATRY_AGAIN 11002: https://learn.microsoft.com/windows/win32/winsock/windows-sockets-error-codes-2'),
-    ('http_request_timeout', '408', '(?i)Error while receiving data from service', 'HTTP 408: истекло время ожидания запроса',
-     '408 Request Timeout: сервер не получил полное сообщение запроса за время, которое был готов ждать.',
-     'RFC 9110 HTTP Semantics, раздел 15.5.9: https://www.rfc-editor.org/rfc/rfc9110#section-15.5.9'),
-    ('http_internal_server_error', '500', '(?i)Error while receiving data from service', 'HTTP 500: внутренняя ошибка сервера',
-     '500 Internal Server Error: сервер столкнулся с непредвиденным условием, которое помешало выполнить запрос.',
-     'RFC 9110 HTTP Semantics, раздел 15.6.1: https://www.rfc-editor.org/rfc/rfc9110#section-15.6.1'),
-    ('http_service_unavailable', '503', '(?i)Error while receiving data from service', 'HTTP 503: сервис недоступен',
-     '503 Service Unavailable: сервер временно не может обработать запрос из-за перегрузки или плановых работ; состояние, вероятно, пройдёт после задержки.',
-     'RFC 9110 HTTP Semantics, раздел 15.6.4: https://www.rfc-editor.org/rfc/rfc9110#section-15.6.4')
-) AS v(rule_code, match_code, match_pattern, interpretation, definition, definition_source);
+    ('socket_connection_reset', '10054', '(?i)Socket error', 'Соединение сброшено удалённой стороной'),
+    ('socket_connection_timed_out', '10060', '(?i)Socket error', 'Истекло время ожидания соединения'),
+    ('socket_connection_refused', '10061', '(?i)Socket error', 'В соединении отказано'),
+    ('socket_host_unreachable', '10065', '(?i)Socket error', 'Нет маршрута до узла'),
+    ('socket_network_subsystem_unavailable', '10091', '(?i)Socket error', 'Сетевая подсистема недоступна'),
+    ('dns_host_not_found', '11001', '(?i)Socket error', 'DNS: узел не найден'),
+    ('dns_try_again', '11002', '(?i)Socket error', 'DNS: узел не найден, ответ не окончательный'),
+    ('http_request_timeout', '408', '(?i)Error while receiving data from service', 'HTTP 408: истекло время ожидания запроса'),
+    ('http_internal_server_error', '500', '(?i)Error while receiving data from service', 'HTTP 500: внутренняя ошибка сервера'),
+    ('http_service_unavailable', '503', '(?i)Error while receiving data from service', 'HTTP 503: сервис недоступен')
+) AS v(rule_code, match_code, match_pattern, interpretation);
 
 -- ------------------------------------------------------------------
 -- Справочник, к которому относится отказ, задаётся на класс целиком. Регистр задан
@@ -1052,12 +1011,10 @@ WHERE rule_code = 'schematron_allowed_values';
 
 INSERT INTO mart_egisz.dim_error_rules (
     rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
-    match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
-    definition, definition_source
+    match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category
 )
 SELECT rule_code, rule_kind, error_kind, apply_order, match_tier, match_code, nsi_error_code,
-       match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category,
-       definition, definition_source
+       match_pattern, match_flags, replacement, nsi_dictionary_pattern, interpretation, error_category
 FROM seed_error_rules
 ON CONFLICT (rule_code) DO UPDATE SET
     rule_kind = EXCLUDED.rule_kind,
@@ -1072,21 +1029,18 @@ ON CONFLICT (rule_code) DO UPDATE SET
     nsi_dictionary_pattern = EXCLUDED.nsi_dictionary_pattern,
     interpretation = EXCLUDED.interpretation,
     error_category = EXCLUDED.error_category,
-    definition = EXCLUDED.definition,
-    definition_source = EXCLUDED.definition_source,
     updated_at = now()
 WHERE (mart_egisz.dim_error_rules.rule_kind, mart_egisz.dim_error_rules.error_kind,
        mart_egisz.dim_error_rules.apply_order, mart_egisz.dim_error_rules.match_tier,
        mart_egisz.dim_error_rules.match_code, mart_egisz.dim_error_rules.nsi_error_code,
        mart_egisz.dim_error_rules.match_pattern, mart_egisz.dim_error_rules.match_flags,
        mart_egisz.dim_error_rules.replacement, mart_egisz.dim_error_rules.nsi_dictionary_pattern,
-       mart_egisz.dim_error_rules.interpretation, mart_egisz.dim_error_rules.error_category,
-       mart_egisz.dim_error_rules.definition, mart_egisz.dim_error_rules.definition_source)
+       mart_egisz.dim_error_rules.interpretation, mart_egisz.dim_error_rules.error_category)
   IS DISTINCT FROM
       (EXCLUDED.rule_kind, EXCLUDED.error_kind, EXCLUDED.apply_order, EXCLUDED.match_tier,
        EXCLUDED.match_code, EXCLUDED.nsi_error_code, EXCLUDED.match_pattern, EXCLUDED.match_flags,
        EXCLUDED.replacement, EXCLUDED.nsi_dictionary_pattern, EXCLUDED.interpretation,
-       EXCLUDED.error_category, EXCLUDED.definition, EXCLUDED.definition_source);
+       EXCLUDED.error_category);
 
 DELETE FROM mart_egisz.dim_error_rules r
 WHERE NOT EXISTS (SELECT 1 FROM seed_error_rules s WHERE s.rule_code = r.rule_code);
@@ -1094,14 +1048,48 @@ WHERE NOT EXISTS (SELECT 1 FROM seed_error_rules s WHERE s.rule_code = r.rule_co
 DROP TABLE seed_error_rules;
 
 -- ============================================================================
--- Категории ошибок: зона ответственности (кто устраняет причину) и признак повтора
--- (лечится ли повторной отправкой) по умолчанию для типов категории. У вида
--- «Ошибка связи» категорий нет, его строка задаёт значения для всех его типов.
+-- Зоны ответственности ошибок: кто устраняет причину. Единственный источник наименования и
+-- описания зоны для категорий, типов, выдачи и карточек; пустая зона — ошибка без явной
+-- классификации или правила.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_responsibility_zones (
+    name text PRIMARY KEY,
+    description text NOT NULL,
+    sort_order integer NOT NULL,
+    updated_at timestamptz DEFAULT now()
+);
+
+COMMENT ON TABLE mart_egisz.dim_responsibility_zones IS
+'Зоны ответственности ошибок. Строка — зона: наименование, описание и порядок вывода. Категории и типы ошибок ссылаются на зону; пустая зона — ошибка без явной классификации или правила.';
+
+DROP TABLE IF EXISTS seed_responsibility_zones;
+CREATE TEMP TABLE seed_responsibility_zones (LIKE mart_egisz.dim_responsibility_zones INCLUDING DEFAULTS);
+INSERT INTO seed_responsibility_zones (name, description, sort_order)
+VALUES
+    ('Настройки МИС',     'Ошибки, вызванные некорректными настройками МИС.', 1),
+    ('Реквизиты клиники', 'Некорректно указанные реквизиты медицинской организации.', 2),
+    ('ЕГИСЗ',             'Ошибки на стороне ЕГИСЗ, недоступность сервисов Минздрава России.', 3),
+    ('Интеграция',        'Собственные ошибки интеграции: организация не привязана к РМИС, РМИС/МИС не зарегистрирована или не активна в РЭМД, неверный идентификатор репозитория ИЭМК, регистрация медицинской организации в ЕГИСЗ, иная информационная система, ошибки схематронов.', 4),
+    ('Связь',             'Сетевые ошибки доставки сообщений.', 5);
+
+INSERT INTO mart_egisz.dim_responsibility_zones (name, description, sort_order)
+SELECT name, description, sort_order FROM seed_responsibility_zones
+ON CONFLICT (name) DO UPDATE SET
+    description = EXCLUDED.description,
+    sort_order = EXCLUDED.sort_order,
+    updated_at = now()
+WHERE (mart_egisz.dim_responsibility_zones.description, mart_egisz.dim_responsibility_zones.sort_order)
+      IS DISTINCT FROM (EXCLUDED.description, EXCLUDED.sort_order);
+
+-- ============================================================================
+-- Категории ошибок: зона ответственности и признак повтора (устраняется ли ошибка повторной
+-- отправкой без правки данных) по умолчанию для типов категории. У вида «Ошибка связи»
+-- категорий нет, его строка задаёт значения для всех его типов.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_categories (
     error_kind text NOT NULL CHECK (error_kind IN ('Ошибка связи', 'Ошибка асинхронного ответа')),
     error_category text,
-    responsibility text NOT NULL CHECK (responsibility IN ('клиника', 'МИС', 'интегратор', 'РЭМД', 'смешанная')),
+    responsibility text REFERENCES mart_egisz.dim_responsibility_zones (name) ON UPDATE CASCADE,
     is_retryable boolean NOT NULL,
     updated_at timestamptz DEFAULT now(),
     CONSTRAINT uq_dim_error_categories UNIQUE NULLS NOT DISTINCT (error_kind, error_category),
@@ -1109,21 +1097,26 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_categories (
 );
 
 COMMENT ON TABLE mart_egisz.dim_error_categories IS
-'Категории ошибок. Строка — категория вида «Ошибка асинхронного ответа» либо вид «Ошибка связи» целиком (категория пуста): зона ответственности и признак повтора, которые наследуют её типы.';
+'Категории ошибок. Строка — категория вида «Ошибка асинхронного ответа» либо вид «Ошибка связи» целиком (категория пуста): зона ответственности (mart_egisz.dim_responsibility_zones, пусто — без явной классификации) и признак повтора, которые наследуют её типы.';
+
+DROP TABLE IF EXISTS seed_error_categories;
+CREATE TEMP TABLE seed_error_categories (LIKE mart_egisz.dim_error_categories INCLUDING DEFAULTS);
+INSERT INTO seed_error_categories (error_kind, error_category, responsibility, is_retryable)
+VALUES
+    ('Ошибка связи',               NULL,                           'Связь',             true),
+    ('Ошибка асинхронного ответа', 'Технические ошибки ЕГИСЗ',     'ЕГИСЗ',             true),
+    ('Ошибка асинхронного ответа', 'Ошибки получения файла ЭМД',   'Настройки МИС',     true),
+    ('Ошибка асинхронного ответа', 'Ошибки структуры и валидации', 'Настройки МИС',     false),
+    ('Ошибка асинхронного ответа', 'Ошибки справочника НСИ',       'Реквизиты клиники', false),
+    ('Ошибка асинхронного ответа', 'Данные пациента',              'Реквизиты клиники', false),
+    ('Ошибка асинхронного ответа', 'Данные медработника',          'Реквизиты клиники', false),
+    ('Ошибка асинхронного ответа', 'Ошибки ЭП и сертификатов',     'Реквизиты клиники', false),
+    ('Ошибка асинхронного ответа', 'Ошибки организации / ИС',      'Реквизиты клиники', false),
+    ('Ошибка асинхронного ответа', 'Ошибки регистрации',           NULL,                false),
+    ('Ошибка асинхронного ответа', 'Прочие',                       NULL,                false);
 
 INSERT INTO mart_egisz.dim_error_categories (error_kind, error_category, responsibility, is_retryable)
-VALUES
-    ('Ошибка связи',               NULL,                           'интегратор', true),
-    ('Ошибка асинхронного ответа', 'Технические ошибки ЕГИСЗ',     'РЭМД',       true),
-    ('Ошибка асинхронного ответа', 'Ошибки получения файла ЭМД',   'МИС',        true),
-    ('Ошибка асинхронного ответа', 'Ошибки структуры и валидации', 'МИС',        false),
-    ('Ошибка асинхронного ответа', 'Ошибки справочника НСИ',       'клиника',    false),
-    ('Ошибка асинхронного ответа', 'Данные пациента',              'клиника',    false),
-    ('Ошибка асинхронного ответа', 'Данные медработника',          'клиника',    false),
-    ('Ошибка асинхронного ответа', 'Ошибки ЭП и сертификатов',     'клиника',    false),
-    ('Ошибка асинхронного ответа', 'Ошибки организации / ИС',      'клиника',    false),
-    ('Ошибка асинхронного ответа', 'Ошибки регистрации',           'смешанная',  false),
-    ('Ошибка асинхронного ответа', 'Прочие',                       'смешанная',  false)
+SELECT error_kind, error_category, responsibility, is_retryable FROM seed_error_categories
 ON CONFLICT ON CONSTRAINT uq_dim_error_categories DO UPDATE SET
     responsibility = EXCLUDED.responsibility,
     is_retryable = EXCLUDED.is_retryable,
@@ -1133,20 +1126,10 @@ WHERE (mart_egisz.dim_error_categories.responsibility, mart_egisz.dim_error_cate
 
 DELETE FROM mart_egisz.dim_error_categories c
 WHERE NOT EXISTS (
-    SELECT 1 FROM (VALUES
-        ('Ошибка связи', NULL::text),
-        ('Ошибка асинхронного ответа', 'Технические ошибки ЕГИСЗ'),
-        ('Ошибка асинхронного ответа', 'Ошибки получения файла ЭМД'),
-        ('Ошибка асинхронного ответа', 'Ошибки структуры и валидации'),
-        ('Ошибка асинхронного ответа', 'Ошибки справочника НСИ'),
-        ('Ошибка асинхронного ответа', 'Данные пациента'),
-        ('Ошибка асинхронного ответа', 'Данные медработника'),
-        ('Ошибка асинхронного ответа', 'Ошибки ЭП и сертификатов'),
-        ('Ошибка асинхронного ответа', 'Ошибки организации / ИС'),
-        ('Ошибка асинхронного ответа', 'Ошибки регистрации'),
-        ('Ошибка асинхронного ответа', 'Прочие')
-    ) AS v(error_kind, error_category)
-    WHERE v.error_kind = c.error_kind AND v.error_category IS NOT DISTINCT FROM c.error_category);
+    SELECT 1 FROM seed_error_categories s
+    WHERE s.error_kind = c.error_kind AND s.error_category IS NOT DISTINCT FROM c.error_category);
+
+DROP TABLE seed_error_categories;
 
 -- ============================================================================
 -- Типы ошибок — закрытый список: типы правил классификации и по одному типу «Не распознано»
@@ -1158,7 +1141,7 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_types (
     error_category text,
     nsi_error_code text REFERENCES mart_egisz.dim_nsi_error_codes (nsi_error_code),
     rule_code text REFERENCES mart_egisz.dim_error_rules (rule_code) ON DELETE CASCADE,
-    responsibility text NOT NULL,
+    responsibility text REFERENCES mart_egisz.dim_responsibility_zones (name) ON UPDATE CASCADE,
     is_retryable boolean NOT NULL,
     updated_at timestamptz DEFAULT now(),
     -- Внешний ключ по паре (вид, категория) при пустой категории не проверяется
@@ -1169,7 +1152,7 @@ CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_types (
 );
 
 COMMENT ON TABLE mart_egisz.dim_error_types IS
-'Типы ошибок — закрытый список. Строка — тип: вид, категория (у вида «Ошибка связи» пуста), мнемоника НСИ «РЭМД. Классификатор кодов сообщений» у типа, привязанного к коду, зона ответственности и признак повтора. Тип задаёт правило классификации; ошибка без правила получает тип «Не распознано» своего вида.';
+'Типы ошибок — закрытый список. Строка — тип: вид, категория (у вида «Ошибка связи» пуста), мнемоника НСИ «РЭМД. Классификатор кодов сообщений» у типа, привязанного к коду, зона ответственности (mart_egisz.dim_responsibility_zones, пусто — без явной классификации или правила) и признак повтора. Тип задаёт правило классификации; ошибка без правила получает тип «Не распознано» своего вида.';
 COMMENT ON COLUMN mart_egisz.dim_error_types.rule_code IS
 'Правило классификации, задающее тип. Пусто только у типа «Не распознано» (один на вид ошибки).';
 
@@ -1191,8 +1174,6 @@ ON CONFLICT (error_type) DO UPDATE SET
     error_category = EXCLUDED.error_category,
     nsi_error_code = EXCLUDED.nsi_error_code,
     rule_code = EXCLUDED.rule_code,
-    responsibility = EXCLUDED.responsibility,
-    is_retryable = EXCLUDED.is_retryable,
     updated_at = now()
 WHERE (mart_egisz.dim_error_types.error_kind, mart_egisz.dim_error_types.error_category,
        mart_egisz.dim_error_types.nsi_error_code, mart_egisz.dim_error_types.rule_code)
@@ -1200,7 +1181,7 @@ WHERE (mart_egisz.dim_error_types.error_kind, mart_egisz.dim_error_types.error_c
       (EXCLUDED.error_kind, EXCLUDED.error_category, EXCLUDED.nsi_error_code, EXCLUDED.rule_code);
 
 INSERT INTO mart_egisz.dim_error_types (error_type, error_kind, error_category, responsibility, is_retryable)
-SELECT v.error_type, v.error_kind, c.error_category, c.responsibility, c.is_retryable
+SELECT v.error_type, v.error_kind, c.error_category, NULL, c.is_retryable
 FROM (VALUES
     ('Не распознано: ошибка связи', 'Ошибка связи', NULL::text),
     ('Не распознано: ошибка асинхронного ответа', 'Ошибка асинхронного ответа', 'Прочие')
@@ -1227,70 +1208,80 @@ WHERE NOT EXISTS (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_error_types_unrecognized
     ON mart_egisz.dim_error_types (error_kind) WHERE rule_code IS NULL;
 
--- Тип «Не распознано» наследует значения категории.
-UPDATE mart_egisz.dim_error_types t
-SET responsibility = c.responsibility, is_retryable = c.is_retryable, updated_at = now()
-FROM mart_egisz.dim_error_categories c
-WHERE t.rule_code IS NULL
-  AND c.error_kind = t.error_kind
-  AND c.error_category IS NOT DISTINCT FROM t.error_category
-  AND (t.responsibility, t.is_retryable) IS DISTINCT FROM (c.responsibility, c.is_retryable);
+-- Типы, у которых зона ответственности или признак повтора отличаются от категории.
+DROP TABLE IF EXISTS seed_error_type_exceptions;
+CREATE TEMP TABLE seed_error_type_exceptions (
+    error_type text PRIMARY KEY,
+    responsibility text,
+    is_retryable boolean NOT NULL
+);
+INSERT INTO seed_error_type_exceptions (error_type, responsibility, is_retryable)
+VALUES
+    ('Не распознано: ошибка связи',                           NULL, true),
+    ('Не распознано: ошибка асинхронного ответа',             NULL, false),
+    ('Сервис системы, предоставляющей документ, не доступен', 'Интеграция', true),
+    ('РМИС/МИС не зарегистрирована в РЭМД',                   'Интеграция', false),
+    ('РМИС/МИС зарегистрирована в РЭМД но не активна',        'Интеграция', false),
+    ('Регион организации не соответствует региону РМИС/МИС',  'Интеграция', false),
+    ('Организация не привязана к РМИС',                       'Интеграция', false),
+    ('Организация не найдена в ФРМО',                         'Интеграция', false),
+    ('Информационная система не является владельцем сведений о назначении для категории льготы', 'Интеграция', false),
+    ('Не удалось определить информационную систему, сформировавшую СЭМД по справочнику 1.2.643.5.1.13.13.99.2.622', 'Интеграция', false),
+    ('У запрашивающей РМИС/МИС нет разрешения на получение документа', 'Интеграция', false),
+    ('ИЭМК: неверный идентификатор репозитория',              'Интеграция', false),
+    ('Ошибка Schematron-валидации',                           'Интеграция', false),
+    ('Ошибка при трансформации СЭМД для проверки (Schematron)', 'Интеграция', false),
+    ('Адрес OCSP-службы не указан или недоступен, CRL также недоступен', 'ЕГИСЗ', true),
+    ('Внутренняя ошибка ГИП при создании пациента',           'ЕГИСЗ', true),
+    ('Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию', 'Настройки МИС', false),
+    ('Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию', 'Настройки МИС', false),
+    ('СНИЛС пациента в ЭМД не совпадает с запросом на регистрацию', 'Настройки МИС', false),
+    ('ФИО пациента в ЭМД не совпадает с запросом на регистрацию',   'Настройки МИС', false),
+    ('Дата рождения пациента в ЭМД не совпадает с запросом на регистрацию', 'Настройки МИС', false),
+    ('Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию', 'Настройки МИС', false),
+    ('Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию', 'Настройки МИС', false),
+    ('Структурное подразделение (representedCustodianOrganization) в СЭМД не совпадает с запросом на регистрацию', 'Настройки МИС', false),
+    ('Дата подписи МО позже даты поступления запроса на регистрацию', 'Настройки МИС', false),
+    ('Дата подписи медработника позже допустимой',            'Настройки МИС', false),
+    ('Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован', 'Настройки МИС', false),
+    ('Из предоставляющей РМИС/МИС передан документ, метаописание которого не соответствует зарегистрированному', 'Настройки МИС', false),
+    ('Дата создания документа больше даты регистрации',        'Настройки МИС', false),
+    ('Асинхронный запрос файла ЭМД с указанным messageID не найден', 'Настройки МИС', false),
+    ('Ошибка декодирования ЭП',                                'Настройки МИС', false),
+    ('Неподдерживаемый формат ЭП',                             'Настройки МИС', false),
+    ('ИЭМК: ошибка валидации структуры CDA',                   'Настройки МИС', false),
+    ('ИЭМК: документ уже зарегистрирован',                     'Настройки МИС', false),
+    ('ИЭМК: некорректный идентификатор документа',             'Настройки МИС', false),
+    ('ИЭМК: заменяемый документ не найден (замена версии)',    'Настройки МИС', false),
+    ('ИЭМК: замена версии отклонена (документ уже заменён)',   'Настройки МИС', false),
+    ('ИЭМК: состав пакета не согласован (документы/метаданные)', 'Настройки МИС', false),
+    ('ИЭМК: ошибка метаданных документа',                      'Настройки МИС', false),
+    ('ИЭМК: дублирующийся идентификатор в пакете',             'Настройки МИС', false),
+    ('ИЭМК: повторная загрузка с изменённым содержимым',       'Настройки МИС', false);
 
--- Точечные исключения из значений категории.
+-- Зона ответственности и признак повтора типа — исключение типа, иначе значения категории.
 UPDATE mart_egisz.dim_error_types t
 SET responsibility = v.responsibility, is_retryable = v.is_retryable, updated_at = now()
-FROM (VALUES
-    -- Доступность getDocumentFile и регистрационные данные ИС — зона интегратора.
-    ('Сервис системы, предоставляющей документ, не доступен', 'интегратор', true),
-    ('РМИС/МИС не зарегистрирована в РЭМД',                   'интегратор', false),
-    ('РМИС/МИС зарегистрирована в РЭМД но не активна',        'интегратор', false),
-    ('Регион организации не соответствует региону РМИС/МИС',  'интегратор', false),
-    ('Достигнут защитный лимит, просьба повторить через минуту или позже', 'интегратор', true),
-    ('Организация не привязана к РМИС',                       'интегратор', false),
-    -- Доступность УЦ и служб проверки статуса сертификата — не зона клиники.
-    ('Адрес OCSP-службы не указан или недоступен, CRL также недоступен', 'РЭМД', true),
-    ('Удостоверяющий центр сертификата недоступен',           'РЭМД', true),
-    ('Проверяющая подсистема РЭМД недоступна',                'РЭМД', true),
-    -- Внутренняя ошибка ГИП при создании пациента лечится повтором.
-    ('Внутренняя ошибка ГИП при создании пациента',           'РЭМД', true),
-    -- Запрос на регистрацию и его метаописание формирует МИС.
-    ('Идентификатор документа в ЭМД не совпадает с идентификатором в запросе на регистрацию', 'МИС', false),
-    ('Дата создания документа в ЭМД не совпадает с датой в запросе на регистрацию', 'МИС', false),
-    ('СНИЛС пациента в ЭМД не совпадает с запросом на регистрацию', 'МИС', false),
-    ('ФИО пациента в ЭМД не совпадает с запросом на регистрацию',   'МИС', false),
-    ('Дата рождения пациента в ЭМД не совпадает с запросом на регистрацию', 'МИС', false),
-    ('Структурное подразделение (providerOrganization) в СЭМД не совпадает с запросом на регистрацию', 'МИС', false),
-    ('Структурное подразделение (representedOrganization) в СЭМД не совпадает с запросом на регистрацию', 'МИС', false),
-    ('Структурное подразделение (representedCustodianOrganization) в СЭМД не совпадает с запросом на регистрацию', 'МИС', false),
-    ('Дата подписи МО позже даты поступления запроса на регистрацию', 'МИС', false),
-    ('Дата подписи медработника позже допустимой',            'МИС', false),
-    ('Документ с указанным идентификатором (в РМИС/МИС) уже зарегистрирован', 'МИС', false),
-    ('Из предоставляющей РМИС/МИС передан документ, метаописание которого не соответствует зарегистрированному', 'МИС', false),
-    ('Дата создания документа больше даты регистрации',        'МИС', false),
-    ('Асинхронный запрос файла ЭМД с указанным messageID не найден', 'МИС', false),
-    -- Подпись формирует и упаковывает МИС/крипто-прослойка, не клиника.
-    ('Ошибка декодирования ЭП',                                'МИС', false),
-    ('Неподдерживаемый формат ЭП',                             'МИС', false),
-    -- ИЭМК: технические сбои федеральной стороны лечатся повтором.
-    ('ИЭМК: внутренняя ошибка репозитория', 'РЭМД', true),
-    ('ИЭМК: внутренняя ошибка реестра',     'РЭМД', true),
-    ('ИЭМК: сервис временно недоступен',    'РЭМД', true),
-    ('ИЭМК: ошибка обработки CDA',          'РЭМД', true),
-    ('ИЭМК: данные не соответствуют справочнику НСИ', 'клиника', false),
-    ('ИЭМК: пациент не определён',          'клиника', false),
-    ('ИЭМК: ошибка валидации структуры CDA', 'МИС', false),
-    ('ИЭМК: документ уже зарегистрирован',  'МИС', false),
-    ('ИЭМК: некорректный идентификатор документа', 'МИС', false),
-    ('ИЭМК: заменяемый документ не найден (замена версии)', 'МИС', false),
-    ('ИЭМК: замена версии отклонена (документ уже заменён)', 'МИС', false),
-    ('ИЭМК: состав пакета не согласован (документы/метаданные)', 'МИС', false),
-    ('ИЭМК: ошибка метаданных документа',   'МИС', false),
-    ('ИЭМК: дублирующийся идентификатор в пакете', 'МИС', false),
-    ('ИЭМК: повторная загрузка с изменённым содержимым', 'МИС', false),
-    ('ИЭМК: неверный идентификатор репозитория', 'интегратор', false)
-) AS v(error_type, responsibility, is_retryable)
+FROM (
+    SELECT
+        tt.error_type,
+        CASE WHEN e.error_type IS NOT NULL THEN e.responsibility ELSE c.responsibility END AS responsibility,
+        COALESCE(e.is_retryable, c.is_retryable) AS is_retryable
+    FROM mart_egisz.dim_error_types tt
+    JOIN mart_egisz.dim_error_categories c
+      ON c.error_kind = tt.error_kind AND c.error_category IS NOT DISTINCT FROM tt.error_category
+    LEFT JOIN seed_error_type_exceptions e ON e.error_type = tt.error_type
+) v
 WHERE t.error_type = v.error_type
   AND (t.responsibility, t.is_retryable) IS DISTINCT FROM (v.responsibility, v.is_retryable);
+
+DROP TABLE seed_error_type_exceptions;
+
+-- Зоны, снятые из сида, удаляются после перевода категорий и типов.
+DELETE FROM mart_egisz.dim_responsibility_zones z
+WHERE NOT EXISTS (SELECT 1 FROM seed_responsibility_zones s WHERE s.name = z.name);
+
+DROP TABLE seed_responsibility_zones;
 
 -- ---------------------------------------------------------------- section: error_functions
 -- ============================================================================

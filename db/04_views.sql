@@ -13,13 +13,13 @@ DROP VIEW IF EXISTS mart_egisz_admin.health_by_clinic CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_signals CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_message_registry_no_document CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.health_sync CASCADE;
-DROP VIEW IF EXISTS mart_egisz_admin.health_versions CASCADE;
+DROP VIEW IF EXISTS mart_egisz_admin.health_document_requests CASCADE;
 DROP VIEW IF EXISTS serving_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS mart_egisz.exchangelog_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.network_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.remd_errors CASCADE;
 DROP VIEW IF EXISTS stg_egisz.ihe_errors CASCADE;
--- Недельный и месячный слои читают document_versions и текущие ошибки документа —
+-- Недельный и месячный слои читают registration_requests и текущие ошибки документа —
 -- удаляются до них.
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_weekly CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.document_errors_weekly CASCADE;
@@ -38,7 +38,7 @@ DROP MATERIALIZED VIEW IF EXISTS mart_egisz.document_errors CASCADE;
 DROP VIEW IF EXISTS serving_egisz.documents_sent CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_no_response CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS serving_egisz.documents_current CASCADE;
-DROP VIEW IF EXISTS serving_egisz.document_versions CASCADE;
+DROP VIEW IF EXISTS serving_egisz.registration_requests CASCADE;
 DROP VIEW IF EXISTS serving_egisz.document_file_requests CASCADE;
 DROP VIEW IF EXISTS mart_egisz_admin.document_lineage CASCADE;
 DROP MATERIALIZED VIEW IF EXISTS mart_egisz_admin.document_quality CASCADE;
@@ -253,19 +253,20 @@ BEGIN
     refreshed := COALESCE(cardinality(affected_dwh_ids), 0);
     IF refreshed > 0 THEN
         PERFORM mart_egisz.recompute_document_attributes(affected_dwh_ids);
+        PERFORM mart_egisz.link_document_requests(affected_dwh_ids);
     END IF;
 
     RETURN refreshed;
 END;
 $$;
 
--- ---------------------------------------------------------------- section: document_versions
+-- ---------------------------------------------------------------- section: registration_requests
 -- ============================================================================
 -- serving_egisz — представления и агрегаты для потребителей
 -- Loaded by db/dwh_init.sql via \i db/04_views.sql.
 -- ============================================================================
 
-CREATE OR REPLACE VIEW serving_egisz.document_versions AS
+CREATE OR REPLACE VIEW serving_egisz.registration_requests AS
 SELECT
     d.dwh_id,
     -- Дата обработки транспортом IPS (EXCHANGELOG.CREATEDATE): последнее доступное
@@ -336,17 +337,12 @@ SELECT
     d.registered_at,
     d.first_sent_at,
     d.first_callback_at,
-    -- Число подач документа в ЕГИСЗ по реестру шлюза: повторная подача не меняет localUid,
-    -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
     COALESCE(d.attempt_count, 1) AS attempt_count,
     (COALESCE(d.attempt_count, 1) > 1) AS is_resubmitted,
-    -- Слой версий.
-    d.document_group_id,
-    COALESCE(d.is_current_version, true) AS is_current_version,
-    d.semd_version_number,
-    d.document_group_confidence,
-    d.superseded_by_dwh_id,
-    d.supersedes_dwh_id
+    stg_egisz.clean_text_value(d.doc_number) AS semd_document_number,
+    COALESCE(d.document_id, d.dwh_id) AS document_id,
+    COALESCE(d.request_number, 1) AS request_number,
+    COALESCE(d.is_last_request, true) AS is_last_request
 FROM mart_egisz.documents d
 LEFT JOIN mart_egisz.document_attributes a ON a.dwh_id = d.dwh_id
 -- Реестр OID — маленькое соединение (тысячи строк): коррелированный NOT EXISTS на грейне
@@ -373,10 +369,10 @@ LEFT JOIN mart_egisz.dim_organizations o ON o.jid = d.jid
 LEFT JOIN mart_egisz.dim_nsi_semd_types st ON st.oid = stg_egisz.normalize_semd_code(d.semd_code)
 WHERE NULLIF(btrim(d.dwh_id), '') IS NOT NULL;
 
-COMMENT ON VIEW serving_egisz.document_versions IS
-'Все версии документа: одна строка на экземпляр (версию) отправки СЭМД, включая замещённые. Состояние документа к выдаче — serving_egisz.documents_current; это представление читают объекты, которым нужны все версии или состояние на прошлый момент (недели и месяцы, история очереди, активность клиник).';
+COMMENT ON VIEW serving_egisz.registration_requests IS
+'Запросы на регистрацию СЭМД: одна строка на запрос (localUid) со связью с документом — document_id, порядковый номер запроса request_number, признак последнего запроса документа is_last_request. Состояние документа к выдаче — serving_egisz.documents_current; это представление читают объекты, которым нужны все запросы или состояние на прошлый момент (недели и месяцы, история очереди, активность клиник).';
 
--- Состояние документа к выдаче: текущая версия документа, кроме документов, ответ по которым
+-- Состояние документа к выдаче: последний запрос документа, кроме документов, ответ по которым
 -- не получен за срок последней ступени лестницы ожидания (dim_pending_segments): ответ по ним
 -- уже не придёт, и в отчётность они не входят, кроме списка documents_no_response. Ступень и
 -- состояние отправки — на момент обновления витрины. Материализовано с индексами по фильтрам и
@@ -420,12 +416,11 @@ SELECT
     v.first_callback_at,
     v.attempt_count,
     v.is_resubmitted,
-    v.document_group_id,
-    v.semd_version_number,
-    v.document_group_confidence,
-    v.supersedes_dwh_id
-FROM serving_egisz.document_versions v
-WHERE v.is_current_version
+    v.semd_document_number,
+    v.document_id,
+    v.request_number AS requests_count
+FROM serving_egisz.registration_requests v
+WHERE v.is_last_request
   AND v.sent_state IS DISTINCT FROM 'no_response'
 WITH DATA;
 
@@ -442,7 +437,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_current_emdr_id ON serving_egisz.docume
 CREATE INDEX IF NOT EXISTS idx_documents_current_logid ON serving_egisz.documents_current (logid);
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.documents_current IS
-'Состояние документа к выдаче: строка — текущая версия логического документа (ключ dwh_id), столбцы — как в document_versions без признака текущей версии. Документы без ответа дольше последней ступени лестницы ожидания (dim_pending_segments) не входят — их список в serving_egisz.documents_no_response. Ступень и состояние отправки — на момент обновления. Индексы — по дате обработки, клинике, типу СЭМД и ключам поиска (localUid, relatesTo, рег. номер РЭМД, LOGID). Обновляется refresh_report_marts().';
+'Состояние документа к выдаче: строка — документ, представленный последним запросом на регистрацию (ключ dwh_id запроса), столбцы — как в registration_requests; requests_count — число запросов документа. Документы без ответа дольше последней ступени лестницы ожидания (dim_pending_segments) не входят — их список в serving_egisz.documents_no_response. Ступень и состояние отправки — на момент обновления. Индексы — по дате обработки, клинике, типу СЭМД и ключам поиска (localUid, relatesTo, рег. номер РЭМД, LOGID). Обновляется refresh_report_marts().';
 
 -- Документы, ответ по которым не получен за срок последней ступени лестницы ожидания: ответ
 -- уже не придёт. Отдельный список с ключами поиска; обновляется вместе с documents_current
@@ -463,9 +458,11 @@ SELECT
     v.relates_to_msgid,
     v.request_logid,
     v.attempt_count,
-    v.is_resubmitted
-FROM serving_egisz.document_versions v
-WHERE v.is_current_version
+    v.is_resubmitted,
+    v.document_id,
+    v.request_number AS requests_count
+FROM serving_egisz.registration_requests v
+WHERE v.is_last_request
   AND v.sent_state = 'no_response'
 WITH DATA;
 
@@ -477,7 +474,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_no_response_relates_to ON serving_egisz
 CREATE INDEX IF NOT EXISTS idx_documents_no_response_request_logid ON serving_egisz.documents_no_response (request_logid);
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.documents_no_response IS
-'Документы без ответа ЕГИСЗ дольше последней ступени лестницы ожидания (dim_pending_segments) на момент обновления: строка — текущая версия документа (ключ dwh_id), отправка, тип СЭМД, клиника и ключи поиска (localUid, relatesTo, LOGID запроса). В состояние документа к выдаче serving_egisz.documents_current не входят. Обновляется refresh_report_marts() вместе с documents_current.';
+'Документы без ответа ЕГИСЗ дольше последней ступени лестницы ожидания (dim_pending_segments) на момент обновления: строка — документ, представленный последним запросом (ключ dwh_id запроса), отправка, тип СЭМД, клиника и ключи поиска (localUid, relatesTo, LOGID запроса). В состояние документа к выдаче serving_egisz.documents_current не входят. Обновляется refresh_report_marts() вместе с documents_current.';
 
 -- Очередь обработки на текущий момент: документы состояния к выдаче без ответа. Возраст и
 -- ступень считаются от текущего момента; документ, перешагнувший последнюю ступень после
@@ -812,7 +809,7 @@ SELECT
         || ' · ' ||
     COALESCE(NULLIF(btrim(o.name), ''), '—') AS clinic_label,
     m.semd_code,
-    -- Подпись СЭМД та же, что в document_versions: фильтр «Код СЭМД» дашборда передаёт её.
+    -- Подпись СЭМД та же, что в registration_requests: фильтр «Код СЭМД» дашборда передаёт её.
     CASE
         WHEN st.oid IS NOT NULL AND st.name IS NOT NULL
             THEN st.oid || ' · ' || st.name
@@ -999,8 +996,7 @@ SELECT
     f.last_registered_at,
     f.documents_total
 FROM (
-    -- Счётчик на грейне логического документа (состояние к выдаче), иначе
-    -- повторная подача того же документа считалась бы как ещё один документ клиники.
+    -- Счётчик по документам состояния к выдаче.
     SELECT
         r.clinic_jid,
         r.semd_code,
@@ -1103,18 +1099,18 @@ SELECT
     t.error_kind,
     t.error_category,
     t.responsibility,
+    z.description AS responsibility_description,
     t.is_retryable,
     t.nsi_error_code,
     c.nsi_error_description,
-    (t.rule_code IS NOT NULL) AS is_recognized,
-    r.definition,
-    r.definition_source
+    (t.rule_code IS NOT NULL) AS is_recognized
 FROM mart_egisz.dim_error_types t
+LEFT JOIN mart_egisz.dim_responsibility_zones z ON z.name = t.responsibility
 LEFT JOIN mart_egisz.dim_nsi_error_codes c ON c.nsi_error_code = t.nsi_error_code
-LEFT JOIN mart_egisz.dim_error_rules r ON r.rule_code = t.rule_code;
+WHERE t.error_kind = 'Ошибка асинхронного ответа';
 
 COMMENT ON VIEW serving_egisz.error_types IS
-'Типы ошибок — закрытый список: строка — тип (ключ error_type) с видом, категорией, зоной ответственности, признаком повтора и кодом справочника НСИ «РЭМД. Классификатор кодов сообщений» с его описанием. is_recognized — тип задан правилом классификации; ложь только у типа «Не распознано» своего вида. definition и definition_source — общепринятое определение ошибки и его источник (заданы у ошибок связи).';
+'Типы ошибок асинхронного ответа ЕГИСЗ — закрытый список, включая собственные ошибки интеграции (зона «Интеграция»); ошибок связи нет. Строка — тип (ключ error_type) с видом, категорией, зоной ответственности и её описанием из mart_egisz.dim_responsibility_zones (пусто — без явной классификации или правила), признаком повтора и кодом справочника НСИ «РЭМД. Классификатор кодов сообщений» с его описанием. is_recognized — тип задан правилом классификации; ложь только у типа «Не распознано: ошибка асинхронного ответа».';
 
 CREATE VIEW mart_egisz_admin.unrecognized_errors AS
 SELECT
@@ -1227,8 +1223,8 @@ FROM (
             WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
         ) AS has_network_error,
         date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date AS week_start
-    FROM serving_egisz.document_versions r
-    WHERE r.is_current_version
+    FROM serving_egisz.registration_requests r
+    WHERE r.is_last_request
       AND r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
@@ -1271,7 +1267,7 @@ SELECT
     (date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
         < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_week
 FROM mart_egisz.document_errors c
-JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
+JOIN serving_egisz.registration_requests r ON r.dwh_id = c.dwh_id AND r.is_last_request
 LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_weekly p
   ON p.week_start = date_trunc('week', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
@@ -1341,8 +1337,8 @@ FROM (
             WHERE c.dwh_id = r.dwh_id AND c.error_kind = 'Ошибка связи'
         ) AS has_network_error,
         date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date AS month_start
-    FROM serving_egisz.document_versions r
-    WHERE r.is_current_version
+    FROM serving_egisz.registration_requests r
+    WHERE r.is_last_request
       AND r.ips_date IS NOT NULL
 ) d
 CROSS JOIN LATERAL (
@@ -1385,7 +1381,7 @@ SELECT
     (date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
         < date_trunc('month', now() AT TIME ZONE serving_egisz.report_timezone())::date) AS is_complete_month
 FROM mart_egisz.document_errors c
-JOIN serving_egisz.document_versions r ON r.dwh_id = c.dwh_id AND r.is_current_version
+JOIN serving_egisz.registration_requests r ON r.dwh_id = c.dwh_id AND r.is_last_request
 LEFT JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
 JOIN serving_egisz.documents_monthly p
   ON p.month_start = date_trunc('month', r.ips_date AT TIME ZONE serving_egisz.report_timezone())::date
@@ -1445,10 +1441,10 @@ queue_documents AS (
             (COALESCE(r.first_callback_at, now()) AT TIME ZONE c.tz)::date,
             c.today
         ) AS last_day
-    FROM serving_egisz.document_versions r
+    FROM serving_egisz.registration_requests r
     CROSS JOIN ladder l
     CROSS JOIN calendar c
-    WHERE r.is_current_version
+    WHERE r.is_last_request
       AND r.first_sent_at IS NOT NULL
 ),
 queue_labels AS (
@@ -1679,9 +1675,9 @@ activity AS (
         COUNT(*)::bigint AS docs,
         COUNT(*) FILTER (WHERE r.status = 'success')::bigint AS docs_success,
         COUNT(*) FILTER (WHERE r.status IN ('success', 'async_error'))::bigint AS docs_answered
-    FROM serving_egisz.document_versions r
+    FROM serving_egisz.registration_requests r
     CROSS JOIN calendar c
-    WHERE r.is_current_version
+    WHERE r.is_last_request
       AND r.clinic_jid IS NOT NULL
       AND r.ips_date IS NOT NULL
     GROUP BY 1, 2
@@ -1997,7 +1993,7 @@ fee AS MATERIALIZED (
 history AS MATERIALIZED (
     SELECT MIN(d.first_sent_at) AS first_at
     FROM mart_egisz.documents d
-    WHERE COALESCE(d.is_current_version, true)
+    WHERE COALESCE(d.is_last_request, true)
       AND NULLIF(btrim(d.dwh_id), '') IS NOT NULL
 ),
 per_jid AS (
@@ -2011,9 +2007,9 @@ per_jid AS (
         COUNT(*) FILTER (WHERE v.ips_date >= b.from_ts AND v.sent_state = 'no_response') AS docs_no_response,
         COUNT(*) FILTER (WHERE v.ips_date < b.from_ts) AS docs_before,
         MAX(v.ips_date) FILTER (WHERE v.ips_date >= b.from_ts) AS last_document_at
-    FROM serving_egisz.document_versions v
+    FROM serving_egisz.registration_requests v
     CROSS JOIN bounds b
-    WHERE v.is_current_version
+    WHERE v.is_last_request
       AND v.clinic_jid IS NOT NULL
       -- Границы — скалярными подзапросами: так они служат условием индекса по ips_date.
       AND v.ips_date >= (SELECT b2.from_ts - make_interval(days => r.active_days) FROM bounds b2 CROSS JOIN rules r)
@@ -2051,7 +2047,7 @@ LEFT JOIN LATERAL (
     SELECT MIN(d.first_sent_at) AS first_sent_at
     FROM mart_egisz.documents d
     WHERE d.jid = p.clinic_jid
-      AND COALESCE(d.is_current_version, true)
+      AND COALESCE(d.is_last_request, true)
       AND NULLIF(btrim(d.dwh_id), '') IS NOT NULL
 ) fs ON TRUE
 $$;
@@ -2060,8 +2056,8 @@ COMMENT ON FUNCTION serving_egisz.clinic_activity(timestamptz, timestamptz) IS
 'Показатели клиник (JID) за период [p_from; p_to): строка — JID с документами в периоде либо в окне active_days перед ним. docs … docs_no_response — документы периода по исходу и состоянию отправки, docs_before — документы окна перед периодом, first_sent_at — первая отправка JID за всю историю. is_active — есть документы в периоде; is_new — первая отправка в периоде и не раньше active_days от начала истории; is_churned — документы только в окне перед периодом; is_silent — активен, но без документов последние quiet_days суток периода; is_no_success — от no_success_min_docs документов и ни одного успешного. Правила — mart_egisz.dim_jid_activity_rules, monthly_fee — mart_egisz.jid_fee_rates на последний день периода.';
 
 -- ---------------------------------------------------------------- section: filter dimensions
--- Значения фильтров «Клиника» и «Тип СЭМД» дашбордов: пары клиника — тип СЭМД текущих версий
--- документов. Подписи собираются так же, как в document_versions, чтобы значение фильтра
+-- Значения фильтров «Клиника» и «Тип СЭМД» дашбордов: пары клиника — тип СЭМД документов.
+-- Подписи собираются так же, как в registration_requests, чтобы значение фильтра
 -- совпадало со столбцом витрин.
 CREATE MATERIALIZED VIEW serving_egisz.clinic_semd_types AS
 SELECT
@@ -2084,7 +2080,7 @@ FROM (
         stg_egisz.normalize_semd_code(d.semd_code) AS semd_code,
         COUNT(*)::bigint AS documents_total
     FROM mart_egisz.documents d
-    WHERE COALESCE(d.is_current_version, true)
+    WHERE COALESCE(d.is_last_request, true)
       AND NULLIF(btrim(d.dwh_id), '') IS NOT NULL
     GROUP BY 1, 2
 ) f
@@ -2096,7 +2092,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_clinic_semd_types
     ON serving_egisz.clinic_semd_types (clinic_label, semd_code) NULLS NOT DISTINCT;
 
 COMMENT ON MATERIALIZED VIEW serving_egisz.clinic_semd_types IS
-'Пары клиника — тип СЭМД текущих версий документов: грейн (clinic_label, semd_code); подписи clinic_label и semd_label совпадают с document_versions; documents_total — число документов пары. Источник значений фильтров «Клиника» и «Тип СЭМД». Обновляется refresh_report_marts().';
+'Пары клиника — тип СЭМД документов: грейн (clinic_label, semd_code); подписи clinic_label и semd_label совпадают с registration_requests; documents_total — число документов пары. Источник значений фильтров «Клиника» и «Тип СЭМД». Обновляется refresh_report_marts().';
 
 -- Статус документа в разрезе состояния отправки — значения фильтра «Статус»: финальный
 -- статус либо состояние отправки нефинального, как status_detail в documents_current.
@@ -2336,15 +2332,13 @@ no_response_after AS (
 no_response_docs AS (
     SELECT COUNT(*) AS cnt
     FROM mart_egisz.documents d, no_response_after c
-    WHERE d.status = 'sent' AND d.first_sent_at < c.ts
+    WHERE d.status = 'sent' AND d.first_sent_at < c.ts AND d.is_last_request IS NOT FALSE
 ),
 -- Отказы с типом «Не распознано»; их тексты сгруппированы в mart_egisz_admin.unrecognized_errors.
-uncovered_types AS (
+unrecognized_async_errors AS (
     SELECT DISTINCT c.dwh_id
     FROM mart_egisz.document_errors c
-    JOIN mart_egisz.dim_error_types t ON t.error_type = c.error_type
-    WHERE c.error_kind = 'Ошибка асинхронного ответа'
-      AND t.rule_code IS NULL
+    WHERE c.error_type = 'Не распознано: ошибка асинхронного ответа'
 ),
 -- Элемент ошибки без строки в справочнике типов — элементы не приведены к текущим правилам.
 untyped_errors AS (
@@ -2417,10 +2411,10 @@ unknown_clinics AS (
 )
 SELECT * FROM (
     VALUES
-        ('parsed_documents', 'Разложенные документы proxy_egisz', 'green', (SELECT COUNT(*)::numeric FROM mart_egisz.documents), 'документов', 'documents', 'Контроль поступления СЭМД в DWH'),
-        ('sent_24h', 'Отправлено без ответа > 24ч', 'yellow', (SELECT COUNT(*)::numeric FROM mart_egisz.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours'), 'документов', 'documents.status=sent', 'Проверить клиники без ответа ЕГИСЗ и транспортный канал'),
+        ('parsed_documents', 'Запросы на регистрацию в DWH', 'green', (SELECT COUNT(*)::numeric FROM mart_egisz.documents), 'запросов', 'documents', 'Контроль поступления СЭМД в DWH'),
+        ('sent_24h', 'Отправлено без ответа > 24ч', 'yellow', (SELECT COUNT(*)::numeric FROM mart_egisz.documents WHERE status = 'sent' AND first_sent_at < now() - INTERVAL '24 hours' AND is_last_request IS NOT FALSE), 'документов', 'documents.status=sent, последний запрос документа', 'Проверить клиники без ответа ЕГИСЗ и транспортный канал'),
         ('network_errors', 'Ошибки связи', 'yellow', (SELECT COUNT(DISTINCT dwh_id)::numeric FROM mart_egisz.document_errors WHERE error_kind = 'Ошибка связи'), 'документов', 'mart_egisz.document_errors, вид «Ошибка связи»', 'Разобрать типы ошибок связи в serving_egisz.network_errors'),
-        ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM mart_egisz.documents WHERE status = 'async_error'), 'документов', 'documents.status=async_error', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
+        ('error_rows', 'Ошибки асинхронного ответа РЭМД', 'yellow', (SELECT COUNT(*)::numeric FROM mart_egisz.documents WHERE status = 'async_error' AND is_last_request IS NOT FALSE), 'документов', 'documents.status=async_error, последний запрос документа', 'Проверить причины отказов ЕГИСЗ в дашбордах 04 и 05'),
         ('no_response_backlog',
          'Документы без ответа',
          CASE
@@ -2432,16 +2426,16 @@ SELECT * FROM (
          'документов',
          'serving_egisz.documents_no_response',
          'Проверить транспорт клиник по списку документов без ответа: ответ по ним уже не ожидается'),
-        ('uncovered_error_types',
-         'Отказы без правила классификации',
+        ('unrecognized_async_errors',
+         'Документы с нераспознанной ошибкой асинхронного ответа',
          CASE
-             WHEN (SELECT COUNT(*) FROM uncovered_types) >= 1000 THEN 'red'
-             WHEN (SELECT COUNT(*) FROM uncovered_types) >= 100 THEN 'yellow'
+             WHEN (SELECT COUNT(*) FROM unrecognized_async_errors) >= 1000 THEN 'red'
+             WHEN (SELECT COUNT(*) FROM unrecognized_async_errors) >= 100 THEN 'yellow'
              ELSE 'green'
          END,
-         (SELECT COUNT(*)::numeric FROM uncovered_types),
+         (SELECT COUNT(*)::numeric FROM unrecognized_async_errors),
          'документов',
-         'mart_egisz.document_errors: тип «Не распознано»',
+         'mart_egisz.document_errors: тип «Не распознано: ошибка асинхронного ответа»',
          'Разобрать нормализованные тексты в mart_egisz_admin.unrecognized_errors и завести правило в dim_error_rules'),
         ('untyped_errors',
          'Элементы ошибки без типа в справочнике',
@@ -2522,25 +2516,27 @@ SELECT * FROM (
          'Проверить ELT-цикл, Airflow scheduler и доступ к Firebird')
 ) AS v("Код сигнала", "Сигнал", "Уровень", "Значение", "Единица", "База расчёта", "Что делать");
 
--- Наблюдаемость слоя версий.
--- «Макс. размер группы» — детектор перемола: группа по (jid+тип+documentNumber) не должна
--- схлопывать РАЗНЫЕ документы (страховка c_cap=50 в recompute_document_versions; max по
--- базе = 7). «Коллизии localUid» — один dwh_id с разным типом СЭМД в exchange_messages: признак
--- переиспользования localUid под другой документ.
-CREATE OR REPLACE VIEW mart_egisz_admin.health_versions AS
-WITH grp AS (
-    SELECT document_group_id, count(*) AS versions
+-- Контроль связи запросов на регистрацию с документом.
+CREATE OR REPLACE VIEW mart_egisz_admin.health_document_requests AS
+WITH documents AS (
+    SELECT
+        document_id,
+        count(*) AS requests,
+        count(*) FILTER (WHERE status = 'success') AS registrations
     FROM mart_egisz.documents
-    WHERE document_group_id IS NOT NULL
-    GROUP BY document_group_id
+    WHERE document_id IS NOT NULL
+    GROUP BY document_id
 )
 SELECT
-    (SELECT count(*) FROM mart_egisz.documents)::bigint AS "Экземпляров всего",
-    (SELECT count(*) FROM mart_egisz.documents WHERE is_current_version)::bigint AS "Уникальных документов (текущих)",
-    (SELECT count(*) FROM mart_egisz.documents WHERE is_current_version IS FALSE)::bigint AS "Superseded версий",
-    (SELECT count(*) FROM grp WHERE versions > 1)::bigint AS "Групп с >1 версией",
-    (SELECT count(*) FROM mart_egisz.documents WHERE document_group_confidence = 'doc_number')::bigint AS "Экземпляров в группах по documentNumber",
-    (SELECT COALESCE(max(versions), 0) FROM grp)::bigint AS "Макс. размер группы (детектор перемола)",
+    (SELECT count(*) FROM mart_egisz.documents)::bigint AS "Запросов на регистрацию",
+    (SELECT count(*) FROM documents)::bigint AS "Документов",
+    (SELECT count(*) FROM documents WHERE requests > 1)::bigint AS "Документов из нескольких запросов",
+    (SELECT COALESCE(max(requests), 0) FROM documents)::bigint AS "Наибольшее число запросов документа",
+    (SELECT count(*) FROM documents WHERE registrations > 1)::bigint AS "Документов с несколькими регистрациями",
+    (SELECT count(*) FROM mart_egisz.documents WHERE document_id IS NULL)::bigint AS "Запросов без документа",
+    (SELECT count(*) FROM mart_egisz.documents
+     WHERE jid IS NULL OR NULLIF(btrim(semd_code), '') IS NULL OR NULLIF(btrim(doc_number), '') IS NULL)::bigint
+        AS "Запросов без ключа документа",
     (SELECT count(*) FROM (
         SELECT dwh_id
         FROM stg_egisz.exchange_messages
@@ -2549,6 +2545,9 @@ SELECT
         GROUP BY dwh_id
         HAVING count(DISTINCT NULLIF(btrim(semd_code), '')) > 1
      ) c)::bigint AS "Коллизии localUid (30д)";
+
+COMMENT ON VIEW mart_egisz_admin.health_document_requests IS
+'Контроль связи запросов на регистрацию с документом: число запросов и документов, документы из нескольких запросов, наибольшее число запросов документа, документы с несколькими регистрациями (ожидается 0), запросы без документа и без ключа документа (клиника, тип СЭМД, номер документа), localUid с разными типами СЭМД за 30 суток.';
 
 -- Смена владельца требует ACCESS EXCLUSIVE. Объект, занятый работающим конвейером
 -- (egisz_etl_state правится каждым запуском ETL), уводил весь накат в ошибку по lock_timeout —
@@ -2599,16 +2598,16 @@ $$;
 
 -- Первичное наполнение отчётного слоя: выполняется, только когда в схеме уже есть
 -- документы, а атрибуты ещё пусты (развёртывание на существующий архив).
--- Сопровождение архива — пересчёт атрибутов, слоя версий и текстов ошибок — ведёт
--- суточный DAG обслуживания, обновление витрин — задачи refresh_marts обоих DAG. Полные проходы в теле
--- наката пересекались по блокировкам с пятиминутным приёмом и давали взаимоблокировки.
+-- Атрибуты, связь запросов с документом и тексты ошибок дальше поддерживает приём
+-- (transform_raw_to_facts, recompute_document_jids), витрины обновляют задачи refresh_marts обоих
+-- DAG. Полные проходы в теле наката пересекались по блокировкам с пятиминутным приёмом.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM mart_egisz.documents)
        AND NOT EXISTS (SELECT 1 FROM mart_egisz.document_attributes) THEN
         PERFORM mart_egisz.recompute_document_error_texts(NULL::text[]);
         PERFORM mart_egisz.recompute_document_attributes(NULL::text[]);
-        PERFORM mart_egisz.recompute_document_versions(NULL::text[]);
+        PERFORM mart_egisz.link_document_requests(NULL::text[]);
         -- Материализованные представления созданы выше с данными; пересобираем после
         -- сборки атрибутов, чтобы отображаемые колонки (клиника, СЭМД) были финальными.
         PERFORM serving_egisz.refresh_report_marts();

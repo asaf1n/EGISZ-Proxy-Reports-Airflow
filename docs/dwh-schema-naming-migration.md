@@ -68,13 +68,13 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | справочники НСИ | `dim_nsi_organizations`, `dim_nsi_dictionaries`, `dim_nsi_semd_guides`, `dim_nsi_semd_guide_aliases`, `dim_nsi_semd_guide_dictionaries` |
 | справочники состояний и классификаторы | `dim_nsi_semd_types`, `dim_document_statuses`, `dim_pending_segments`, `dim_sent_states`, `dim_control_chart_phases` |
 | представления над справочниками | `dim_clinic_oids`, `dim_clinic_hosts`, `dim_semd_guide_oids` |
-| справочники ошибок (уже в схеме) | `dim_error_rules`, `dim_masking_rules`, `dim_error_categories`, `dim_error_types`, `dim_nsi_error_codes`, `dim_error_code_aliases` |
+| справочники ошибок (уже в схеме) | `dim_error_rules`, `dim_masking_rules`, `dim_responsibility_zones`, `dim_error_categories`, `dim_error_types`, `dim_nsi_error_codes`, `dim_error_code_aliases` |
 
 ### serving_egisz
 
 | Сейчас | Цель | Примечание |
 |---|---|---|
-| `rpt_documents`, `rpt_document_versions` | `document_versions`, `documents_current` | все версии; состояние к выдаче — `documents_current` |
+| `rpt_documents`, `rpt_document_versions` | `registration_requests`, `documents_current` | все запросы на регистрацию; состояние документа к выдаче — `documents_current` |
 | `rpt_documents_sent` | `documents_sent` | |
 | `rpt_documents_weekly` | `documents_weekly` | материализованное |
 | `rpt_documents_monthly` | `documents_monthly` | материализованное |
@@ -95,7 +95,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 | Сейчас | Цель |
 |---|---|
 | `rpt_health_signals` | `health_signals` |
-| `rpt_health_versions` | `health_versions` |
+| `rpt_health_versions` | `health_document_requests` |
 | `rpt_health_sync` | `health_sync` |
 | `rpt_health_by_clinic` | `health_by_clinic` |
 | `rpt_health_message_registry_no_document` | `health_message_registry_no_document` |
@@ -109,7 +109,7 @@ raw_egisz → stg_egisz → mart_egisz → serving_egisz
 |---|---|
 | `etl_meta` | `egisz_ensure_time_partitions` (было `ensure_time_partitions`) |
 | `stg_egisz` | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `normalize_error_text`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
-| `mart_egisz` | `transform_raw_to_facts`, `recompute_document_versions`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
+| `mart_egisz` | `transform_raw_to_facts`, `link_document_requests`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
 | `serving_egisz` | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |
 
 `report_timezone`, `is_pending_at`, `pending_segment_at` и `pending_segment_code_at` вызывают только объекты

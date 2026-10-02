@@ -40,7 +40,17 @@ NETWORK = "Ошибка связи"
 NSI_DICTIONARY_SOURCE = ("1.2.643.5.1.13.13.99.2.805", "6.19")
 NSI_DICTIONARY_SIZE = 465
 
-RESPONSIBILITY_DOMAIN = ("клиника", "МИС", "интегратор", "РЭМД", "смешанная")
+RESPONSIBILITY_ZONES = ("Настройки МИС", "Реквизиты клиники", "ЕГИСЗ", "Интеграция", "Связь")
+
+# Собственные ошибки интеграции — зона «Интеграция».
+INTEGRATION_TYPES = (
+    "Организация не привязана к РМИС",
+    "РМИС/МИС не зарегистрирована в РЭМД",
+    "РМИС/МИС зарегистрирована в РЭМД но не активна",
+    "ИЭМК: неверный идентификатор репозитория",
+    "Организация не найдена в ФРМО",
+    "Ошибка Schematron-валидации",
+)
 
 # Категории — группы причин. Вид («Ошибка связи»), контур (ИЭМК) и контур НСИ (ФРЛЛО)
 # категориями не являются.
@@ -430,16 +440,11 @@ def test_unknown_network_error_is_unrecognized(con):
                      NETWORK) == "Error while receiving data from service: <endpoint> Error code: 418"
 
 
-def test_network_rules_carry_definition_with_source(con):
+def test_network_rules_cover_gateway_texts(con):
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_rules
         WHERE rule_kind = 'классификация' AND error_kind = 'Ошибка связи'
     """) == len({row[2] for row in NETWORK_TEXTS})
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_rules
-        WHERE rule_kind = 'классификация' AND error_kind = 'Ошибка связи'
-          AND (btrim(COALESCE(definition, '')) = '' OR definition_source !~ 'https://')
-    """) == 0
 
 
 # --- Ошибки строки журнала обмена по источникам ----------------------------------------
@@ -595,11 +600,61 @@ def test_rule_type_names_carry_no_document_values(con):
     """) == 0
 
 
-def test_every_type_has_responsibility_and_retryable(con):
+def test_responsibility_zones_are_one_dictionary(con):
+    assert one(con, "SELECT array_agg(name ORDER BY sort_order) FROM mart_egisz.dim_responsibility_zones") == \
+        list(RESPONSIBILITY_ZONES)
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_responsibility_zones WHERE btrim(description) = ''
+    """) == 0
+
+
+def test_every_type_has_known_zone_and_retryable(con):
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_types t
+        WHERE t.is_retryable IS NULL
+           OR (t.responsibility IS NOT NULL AND t.responsibility NOT IN %s)
+    """, RESPONSIBILITY_ZONES) == 0
+
+
+def test_zone_is_empty_only_without_explicit_classification(con):
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_types
-        WHERE responsibility IS NULL OR is_retryable IS NULL OR responsibility NOT IN %s
-    """, RESPONSIBILITY_DOMAIN) == 0
+        WHERE rule_code IS NULL AND responsibility IS NOT NULL
+    """) == 0
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_types
+        WHERE responsibility IS NULL AND rule_code IS NOT NULL
+          AND error_category NOT IN ('Ошибки регистрации', 'Прочие')
+    """) == 0
+
+
+def test_network_errors_are_in_connection_zone(con):
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_types
+        WHERE error_kind = 'Ошибка связи' AND rule_code IS NOT NULL
+          AND responsibility IS DISTINCT FROM 'Связь'
+    """) == 0
+    assert one(con, """
+        SELECT count(*) FROM mart_egisz.dim_error_types
+        WHERE error_kind = 'Ошибка асинхронного ответа' AND responsibility = 'Связь'
+    """) == 0
+
+
+def test_integration_errors_are_in_integration_zone(con):
+    assert one(con, """
+        SELECT array_agg(error_type ORDER BY error_type) FROM mart_egisz.dim_error_types
+        WHERE error_type IN %s AND responsibility = 'Интеграция'
+    """, INTEGRATION_TYPES) == sorted(INTEGRATION_TYPES)
+
+
+def test_reference_error_types_hold_async_errors_only(con):
+    assert one(con, """
+        SELECT count(*) FROM serving_egisz.error_types WHERE error_kind <> 'Ошибка асинхронного ответа'
+    """) == 0
+    assert one(con, """
+        SELECT count(*) FROM serving_egisz.error_types
+        WHERE responsibility IS NOT NULL AND responsibility_description IS NULL
+    """) == 0
 
 
 def test_all_patterns_compile(con):

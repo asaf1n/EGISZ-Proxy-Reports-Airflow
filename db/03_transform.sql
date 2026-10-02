@@ -10,152 +10,116 @@
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- ============================================================================
 
--- recompute_document_attributes — в 70_views_core.sql
-
--- Слой версий/логического документа.
--- Пересобирает document_group_id / version / цепочку / is_current_version для групп,
--- затронутых батчем (p_dwh_ids); p_dwh_ids = NULL — полный пересчёт (обслуживание).
---
--- Ключ логического документа = (jid + semd_code + doc_number), где doc_number = PROTOCOLID
--- (номер протокола/ИБ в МИС). Пара (jid, doc_number) несёт ровно ОДИН semd_code — это ключ
--- ДОКУМЕНТА, а localUid меняется при каждой правке/ре-выгрузке ⇒ несколько localUid на
--- (jid, semd_code, doc_number) = версии одного документа. Провенанс в
--- document_group_confidence: 'doc_number' (сгруппировано) | 'singleton'. Защитный c_cap:
--- группы крупнее порога не считаем версиями (страховка от клиник, переиспользующих счётчик
--- протокола) — остаются singleton и видны в health_versions.
-CREATE OR REPLACE FUNCTION mart_egisz.recompute_document_versions(p_dwh_ids text[] DEFAULT NULL)
+-- Связь запросов на регистрацию с документом для ключей документа, которых касаются запросы
+-- p_dwh_ids; NULL — для всех запросов. Модель документа — README, раздел «Документ и запросы
+-- на регистрацию».
+CREATE OR REPLACE FUNCTION mart_egisz.link_document_requests(p_dwh_ids text[] DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     affected integer := 0;
-    c_cap constant integer := 50;  -- макс. версий в группе
 BEGIN
-    -- Шаг 0: documents.doc_number наполняется из exchange_messages (PROTOCOLID не хранится в
-    -- documents при INSERT). Только затронутые dwh_id (или весь архив при p_dwh_ids=NULL).
+    -- Номер документа — из запроса на регистрацию в журнале: запроса файла или недоставленной подачи.
     UPDATE mart_egisz.documents d
-    SET doc_number = src.docnum
+    SET doc_number = src.doc_number
     FROM (
-        SELECT
-            t.dwh_id,
-            COALESCE(
-                max(NULLIF(btrim(t.doc_number), '')),
-                max(NULLIF(btrim(t.xml_doc_number), ''))
-            ) AS docnum
+        SELECT t.xml_dwh_id AS dwh_id, max(t.xml_doc_number) AS doc_number
         FROM stg_egisz.exchange_messages t
-        WHERE t.dwh_id IS NOT NULL
-          AND (p_dwh_ids IS NULL OR t.dwh_id = ANY (p_dwh_ids))
-        GROUP BY t.dwh_id
+        WHERE t.xml_dwh_id IS NOT NULL
+          AND NULLIF(btrim(t.xml_doc_number), '') IS NOT NULL
+          AND NULLIF(btrim(t.xml_emdr_id), '') IS NULL
+          AND (p_dwh_ids IS NULL OR t.xml_dwh_id = ANY (p_dwh_ids))
+        GROUP BY t.xml_dwh_id
     ) src
     WHERE d.dwh_id = src.dwh_id
-      AND src.docnum IS NOT NULL
-      AND d.doc_number IS DISTINCT FROM src.docnum;
+      AND d.doc_number IS DISTINCT FROM src.doc_number;
 
     WITH seed AS (
-        SELECT
-            d.dwh_id,
-            d.jid,
-            lower(btrim(d.semd_code)) AS semd_norm,
-            lower(btrim(d.doc_number)) AS docnum_norm,
-            d.document_group_id
+        SELECT d.dwh_id, d.document_id
         FROM mart_egisz.documents d
-        WHERE p_dwh_ids IS NULL OR d.dwh_id = ANY (p_dwh_ids)
+        WHERE p_dwh_ids IS NOT NULL
+          AND d.dwh_id = ANY (p_dwh_ids)
     ),
-    -- Пересчёт затрагивает не только переданные экземпляры, но и их соседей по группе:
-    -- по новому ключу (jid + код СЭМД + номер документа) и по ранее сохранённой группе,
-    -- из которой экземпляр мог уйти. При p_dwh_ids = NULL первая ветка уже даёт весь
-    -- архив, поэтому соседние ветки не выполняются.
-    member_ids AS (
+    -- Запросы прежнего документа: после смены клиники или номера запрос уходит из него.
+    previous_members AS (
         SELECT s.dwh_id FROM seed s
-
         UNION
-
         SELECT d.dwh_id
         FROM seed s
-        JOIN mart_egisz.documents d
-          ON d.jid = s.jid
-         AND lower(btrim(d.semd_code)) = s.semd_norm
-         AND lower(btrim(d.doc_number)) = s.docnum_norm
-        WHERE p_dwh_ids IS NOT NULL
-          AND s.jid IS NOT NULL
-          AND s.semd_norm IS NOT NULL
-          AND s.docnum_norm IS NOT NULL
-
-        UNION
-
-        SELECT d.dwh_id
-        FROM seed s
-        JOIN mart_egisz.documents d ON d.document_group_id = s.document_group_id
-        WHERE p_dwh_ids IS NOT NULL
-          AND s.document_group_id IS NOT NULL
+        JOIN mart_egisz.documents d ON d.document_id = s.document_id
     ),
-    keyed AS (
+    document_keys AS (
+        SELECT DISTINCT d.jid, lower(btrim(d.semd_code)) AS semd_code, lower(btrim(d.doc_number)) AS doc_number
+        FROM mart_egisz.documents d
+        JOIN previous_members m ON m.dwh_id = d.dwh_id
+        WHERE d.jid IS NOT NULL
+          AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
+          AND NULLIF(btrim(d.doc_number), '') IS NOT NULL
+    ),
+    members AS (
+        SELECT d.dwh_id FROM mart_egisz.documents d WHERE p_dwh_ids IS NULL
+        UNION
+        SELECT m.dwh_id FROM previous_members m
+        UNION
+        SELECT d.dwh_id
+        FROM document_keys k
+        JOIN mart_egisz.documents d
+          ON d.jid = k.jid
+         AND lower(btrim(d.semd_code)) = k.semd_code
+         AND lower(btrim(d.doc_number)) = k.doc_number
+    ),
+    ordered AS (
         SELECT
             d.dwh_id,
             CASE
                 WHEN d.jid IS NOT NULL
                      AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
                      AND NULLIF(btrim(d.doc_number), '') IS NOT NULL
-                    THEN 'd:' || d.jid || '|' || lower(btrim(d.semd_code)) || '|' || lower(btrim(d.doc_number))
-                ELSE 'one:' || d.dwh_id
-            END AS grp_key,
-            CASE
-                WHEN d.jid IS NOT NULL
-                     AND NULLIF(btrim(d.semd_code), '') IS NOT NULL
-                     AND NULLIF(btrim(d.doc_number), '') IS NOT NULL THEN 'doc_number'
-                ELSE 'singleton'
-            END AS conf,
-            d.status, d.registered_at, d.last_callback_at, d.first_sent_at, d.request_logid
+                    THEN d.jid::text || '|' || lower(btrim(d.semd_code)) || '|' || lower(btrim(d.doc_number))
+                ELSE d.dwh_id
+            END AS document_key,
+            d.status,
+            COALESCE(d.first_sent_at, d.first_callback_at, d.last_callback_at, d.registered_at, '-infinity'::timestamptz) AS first_event_at,
+            d.request_logid
         FROM mart_egisz.documents d
-        JOIN member_ids m ON m.dwh_id = d.dwh_id
+        JOIN members m ON m.dwh_id = d.dwh_id
     ),
-    ranked AS (
+    -- Порядковый номер документа в ключе — число регистраций до запроса.
+    numbered AS (
         SELECT
-            k.*,
-            count(*) OVER (PARTITION BY k.grp_key) AS grp_size,
-            -- Порядок версий: первая отправка = 1.
-            row_number() OVER (
-                PARTITION BY k.grp_key
-                ORDER BY COALESCE(k.first_sent_at, '-infinity'::timestamptz), k.request_logid, k.dwh_id
-            ) AS vnum,
-            -- Текущая версия: success; при его отсутствии последнее событие.
-            row_number() OVER (
-                PARTITION BY k.grp_key
-                ORDER BY
-                    (CASE WHEN k.status = 'success' THEN 1 ELSE 0 END) DESC,
-                    COALESCE(k.last_callback_at, k.registered_at, k.first_sent_at, '-infinity'::timestamptz) DESC,
-                    k.request_logid DESC, k.dwh_id DESC
-            ) AS cur_rank
-        FROM keyed k
+            o.*,
+            COALESCE(count(*) FILTER (WHERE o.status = 'success') OVER (
+                PARTITION BY o.document_key
+                ORDER BY o.first_event_at, o.request_logid, o.dwh_id
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ), 0) AS document_ordinal
+        FROM ordered o
     ),
-    final AS (
+    linked AS (
         SELECT
-            r.*,
-            -- Реальная группа: 2..c_cap версий с doc_number-ключом. Крупнее cap — страховка
-            -- от переиспользованного счётчика протокола: трактуем как singleton.
-            (r.conf = 'doc_number' AND r.grp_size > 1 AND r.grp_size <= c_cap) AS is_real_group,
-            LAG(r.dwh_id)  OVER (PARTITION BY r.grp_key ORDER BY r.vnum) AS prev_dwh,
-            LEAD(r.dwh_id) OVER (PARTITION BY r.grp_key ORDER BY r.vnum) AS next_dwh
-        FROM ranked r
+            n.dwh_id,
+            first_value(n.dwh_id) OVER w AS document_id,
+            (row_number() OVER w)::integer AS request_number,
+            row_number() OVER (
+                PARTITION BY n.document_key, n.document_ordinal
+                ORDER BY n.first_event_at DESC, n.request_logid DESC, n.dwh_id DESC
+            ) = 1 AS is_last_request
+        FROM numbered n
+        WINDOW w AS (
+            PARTITION BY n.document_key, n.document_ordinal
+            ORDER BY n.first_event_at, n.request_logid, n.dwh_id
+        )
     )
-    UPDATE mart_egisz.documents d SET
-        document_group_id         = CASE WHEN f.is_real_group THEN f.grp_key ELSE d.dwh_id END,
-        document_group_confidence = CASE WHEN f.is_real_group THEN f.conf ELSE 'singleton' END,
-        semd_version_number       = CASE WHEN f.is_real_group THEN f.vnum ELSE 1 END,
-        supersedes_dwh_id         = CASE WHEN f.is_real_group THEN f.prev_dwh ELSE NULL END,
-        superseded_by_dwh_id      = CASE WHEN f.is_real_group THEN f.next_dwh ELSE NULL END,
-        is_current_version        = CASE WHEN f.is_real_group THEN (f.cur_rank = 1) ELSE TRUE END
-    FROM final f
-    WHERE d.dwh_id = f.dwh_id
-      AND (
-            d.document_group_id         IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.grp_key ELSE d.dwh_id END)
-         OR d.document_group_confidence IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.conf ELSE 'singleton' END)
-         OR d.semd_version_number       IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.vnum ELSE 1 END)
-         OR d.supersedes_dwh_id         IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.prev_dwh ELSE NULL END)
-         OR d.superseded_by_dwh_id      IS DISTINCT FROM (CASE WHEN f.is_real_group THEN f.next_dwh ELSE NULL END)
-         OR d.is_current_version        IS DISTINCT FROM (CASE WHEN f.is_real_group THEN (f.cur_rank = 1) ELSE TRUE END)
-      );
+    UPDATE mart_egisz.documents d
+    SET document_id = l.document_id,
+        request_number = l.request_number,
+        is_last_request = l.is_last_request
+    FROM linked l
+    WHERE d.dwh_id = l.dwh_id
+      AND (d.document_id, d.request_number, d.is_last_request)
+          IS DISTINCT FROM (l.document_id, l.request_number, l.is_last_request);
     GET DIAGNOSTICS affected = ROW_COUNT;
     RETURN affected;
 END;
@@ -825,8 +789,7 @@ BEGIN
     ) src
     WHERE d.dwh_id = src.dwh_id;
 
-    -- Число подач документа в ЕГИСЗ по реестру: повторная подача не меняет localUid,
-    -- поэтому счётчик показывает, сколько раз документ отправлялся до текущего исхода.
+    -- Число подач запроса в ЕГИСЗ по реестру подач.
     UPDATE mart_egisz.documents d
     SET attempt_count = src.attempts,
         updated_at = now()
@@ -852,8 +815,8 @@ BEGIN
         )
     );
 
-    -- Пересбор слоя версий для групп, затронутых батчем.
-    PERFORM mart_egisz.recompute_document_versions(
+    -- Связь запросов пакета и их соседей по ключу документа с документом.
+    PERFORM mart_egisz.link_document_requests(
         ARRAY(
             SELECT d.dwh_id::text
             FROM mart_egisz.documents d

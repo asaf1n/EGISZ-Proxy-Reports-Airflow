@@ -110,7 +110,7 @@ def test_registry_without_document_is_driven_from_registry_rows() -> None:
 
 def test_health_signals_do_not_rebuild_the_registry_detail_or_sort_the_journal() -> None:
     body = view_body("CREATE OR REPLACE VIEW mart_egisz_admin.health_signals AS",
-                     "-- Наблюдаемость слоя версий.")
+                     "-- Контроль связи запросов на регистрацию с документом.")
     # Счёт «не более 500» не требует сортировки детализации по LOGID.
     assert 'ORDER BY "LOGID"' not in body
     # Размер очереди без ответа считается один раз на все три порога сигнала.
@@ -129,8 +129,8 @@ def test_queue_is_read_from_documents_current_at_the_current_moment() -> None:
     assert "serving_egisz.pending_segment_at(r.first_sent_at, now()) seg" in body
     assert "WHERE r.status = 'sent'\n  AND NOT seg.is_no_response" in body
 
-    versions = view_body("CREATE OR REPLACE VIEW serving_egisz.document_versions AS",
-                         "COMMENT ON VIEW serving_egisz.document_versions IS")
+    versions = view_body("CREATE OR REPLACE VIEW serving_egisz.registration_requests AS",
+                         "COMMENT ON VIEW serving_egisz.registration_requests IS")
     # Ступень подбирается только нефинальным статусам и внутри LATERAL.
     assert "serving_egisz.pending_segment_at(d.first_sent_at, now())" in versions
     assert "WHERE ds.is_final IS NOT TRUE" in versions
@@ -183,14 +183,14 @@ def test_documents_current_is_the_indexed_state_of_the_document() -> None:
     индексированы; список без ответа — отдельный объект, оба обновляются одним вызовом."""
     body = view_body("CREATE MATERIALIZED VIEW serving_egisz.documents_current AS",
                      "COMMENT ON MATERIALIZED VIEW serving_egisz.documents_current IS")
-    assert "FROM serving_egisz.document_versions v\nWHERE v.is_current_version\n  AND v.sent_state IS DISTINCT FROM 'no_response'" in body
+    assert "FROM serving_egisz.registration_requests v\nWHERE v.is_last_request\n  AND v.sent_state IS DISTINCT FROM 'no_response'" in body
     for column in ("ips_date", "clinic_label", "semd_label", "semd_local_uid", "relates_to_msgid", "semd_emdr_id", "logid"):
         assert f"ON serving_egisz.documents_current ({column});" in body
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_current" in body
 
     no_response = view_body("CREATE MATERIALIZED VIEW serving_egisz.documents_no_response AS",
                             "COMMENT ON MATERIALIZED VIEW serving_egisz.documents_no_response IS")
-    assert "WHERE v.is_current_version\n  AND v.sent_state = 'no_response'" in no_response
+    assert "WHERE v.is_last_request\n  AND v.sent_state = 'no_response'" in no_response
     for column in ("semd_local_uid", "relates_to_msgid", "request_logid"):
         assert f"ON serving_egisz.documents_no_response ({column});" in no_response
 

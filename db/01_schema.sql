@@ -129,18 +129,15 @@ CREATE TABLE IF NOT EXISTS mart_egisz.documents (
     jid_resolve_method text,
     attempt_count integer,
     doc_number text,
-    document_group_id text,
-    document_group_confidence text,
-    semd_version_number integer,
-    superseded_by_dwh_id text,
-    supersedes_dwh_id text,
-    is_current_version boolean,
+    document_id text,
+    request_number integer,
+    is_last_request boolean,
     updated_at timestamptz DEFAULT now(),
     error_text text
 );
 
 COMMENT ON TABLE mart_egisz.documents IS
-'Экземпляр (версия) СЭМД и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях stg_egisz.exchange_messages, исходный текст ошибок текущего состояния — в error_text.';
+'Запрос на регистрацию СЭМД (экземпляр, ключ — localUid) и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях stg_egisz.exchange_messages, исходный текст ошибок текущего состояния — в error_text. Запрос относится к документу document_id; документ завершается регистрацией.';
 COMMENT ON COLUMN mart_egisz.documents.error_text IS
 'Исходный текст ошибок текущего состояния: элементы последнего асинхронного ответа и ошибки связи после него в порядке ошибок документа, через « · ». Поддерживает mart_egisz.recompute_document_error_texts; при выдаче персональные данные скрывает mart_egisz.mask_personal_data.';
 COMMENT ON COLUMN mart_egisz.documents.first_callback_at IS
@@ -148,20 +145,16 @@ COMMENT ON COLUMN mart_egisz.documents.first_callback_at IS
 COMMENT ON COLUMN mart_egisz.documents.last_callback_at IS
 'Время последнего асинхронного ответа, определившего статус. Ошибки текущего состояния документа — элементы этого ответа и ошибки связи после него.';
 COMMENT ON COLUMN mart_egisz.documents.attempt_count IS
-'Число подач документа в ЕГИСЗ — строк реестра подач stg_egisz.message_registry на этот localUid: повторная подача localUid не меняет.';
+'Число подач запроса в ЕГИСЗ — строк реестра подач stg_egisz.message_registry на этот localUid: повторная подача localUid не меняет.';
+COMMENT ON COLUMN mart_egisz.documents.doc_number IS
+'Номер документа в МИС из запроса на регистрацию (documentNumber).';
+COMMENT ON COLUMN mart_egisz.documents.document_id IS
+'Документ, к которому относится запрос: dwh_id первого запроса документа. Заполняет mart_egisz.link_document_requests.';
+COMMENT ON COLUMN mart_egisz.documents.request_number IS
+'Порядковый номер запроса в документе, с 1.';
+COMMENT ON COLUMN mart_egisz.documents.is_last_request IS
+'Последний запрос документа: его состояние — состояние документа.';
 
--- Слой версий логического документа.
--- dwh_id (PK) — экземпляр/версия (localUid), меняется при каждой правке или ре-выгрузке.
--- Логический документ собирается по (клиника jid + тип СЭМД + documentNumber = PROTOCOLID):
--- пара (jid, doc_number) всегда несёт один semd_code, не больше 7 версий на группу;
--- CDA setId в журнал не попадает и не используется.
---   doc_number                 — PROTOCOLID (номер протокола/ИБ в МИС), ключ группировки версий
---   document_group_id          — 'd:'||jid||'|'||semd||'|'||docnum (группа) либо dwh_id (singleton)
---   document_group_confidence  — провенанс группы: 'doc_number' | 'singleton'
---   semd_version_number        — порядковый номер версии в группе
---   superseded_by_dwh_id /     — цепочка версий между экземплярами
---     supersedes_dwh_id
---   is_current_version         — текущая (последняя) версия своей группы
 CREATE TABLE IF NOT EXISTS mart_egisz.dim_organizations (
     jid bigint PRIMARY KEY,
     name text,
@@ -1729,7 +1722,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON mart_egisz.document
 CREATE INDEX IF NOT EXISTS idx_documents_first_callback_at ON mart_egisz.documents (first_callback_at);
 -- Инкрементальное сопровождение document_attributes читает документы по updated_at.
 CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON mart_egisz.documents (updated_at);
--- Дата обработки IPS (ips_date в serving_egisz.document_versions) — то же выражение: журналы
+-- Дата обработки IPS (ips_date в serving_egisz.registration_requests) — то же выражение: журналы
 -- «последние N документов» читают индекс с конца вместо сортировки всего периода.
 CREATE INDEX IF NOT EXISTS idx_documents_ips_date
     ON mart_egisz.documents ((COALESCE(last_callback_at, registered_at, first_sent_at)));
@@ -1740,14 +1733,12 @@ CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON mart_egisz.documents (
 CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON mart_egisz.documents (document_created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON mart_egisz.documents (registered_at);
 CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON mart_egisz.documents (result_logid);
--- Слой версий: потребители serving_egisz.document_versions отбирают по is_current_version; transform пересобирает
--- группу по document_group_id для затронутых батчем экземпляров.
-CREATE INDEX IF NOT EXISTS idx_documents_doc_number ON mart_egisz.documents (doc_number);
-CREATE INDEX IF NOT EXISTS idx_documents_group_id ON mart_egisz.documents (document_group_id);
-CREATE INDEX IF NOT EXISTS idx_documents_group_current
-    ON mart_egisz.documents (document_group_id, is_current_version);
-CREATE INDEX IF NOT EXISTS idx_documents_is_current_version
-    ON mart_egisz.documents (is_current_version) WHERE is_current_version;
+-- Связь запросов с документом пересчитывается по ключу документа и по прежнему документу запроса.
+CREATE INDEX IF NOT EXISTS idx_documents_document_key
+    ON mart_egisz.documents (jid, lower(btrim(semd_code)), lower(btrim(doc_number)));
+CREATE INDEX IF NOT EXISTS idx_documents_document_id ON mart_egisz.documents (document_id);
+CREATE INDEX IF NOT EXISTS idx_documents_last_request
+    ON mart_egisz.documents (is_last_request) WHERE is_last_request;
 CREATE INDEX IF NOT EXISTS idx_dim_organizations_fir_oid
     ON mart_egisz.dim_organizations (fir_oid)
     WHERE fir_oid IS NOT NULL;
