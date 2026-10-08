@@ -3,7 +3,7 @@
 Статическая часть проверяет, что определение живёт в одном месте — функциях DWH
 `is_pending_at` / `pending_segment_code_at`, — а отчётный слой и карточки очереди только
 подставляют момент, и что набор документов очереди у всех карточек блока один. Живая часть
-требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi)
+требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_egisz)
 и проверяет свойства, которые статикой не ловятся: неизменность закрытых периодов между
 обновлениями витрин, совпадение размера очереди у всех карточек её распределения,
 сходимость баланса движения очереди и равенство текущей очереди числу отправленных
@@ -84,7 +84,7 @@ def shared_corpus() -> str:
 
 
 def function_body(name: str) -> str:
-    start = FUNCTIONS_SQL.index(f"CREATE OR REPLACE FUNCTION serving_egisz.{name}(")
+    start = FUNCTIONS_SQL.index(f"CREATE OR REPLACE FUNCTION public.{name}(")
     return FUNCTIONS_SQL[start : FUNCTIONS_SQL.index("\n$$;", start)]
 
 
@@ -100,24 +100,24 @@ def test_membership_and_segment_have_one_definition() -> None:
     assert "IMMUTABLE" in membership
     assert "dim_pending_segments" not in membership
     # Одна сигнатура: вторая версия сосуществовала бы с первой как перегрузка.
-    assert FUNCTIONS_SQL.count("FUNCTION serving_egisz.is_pending_at(") == 1
+    assert FUNCTIONS_SQL.count("FUNCTION public.is_pending_at(") == 1
 
     segment = function_body("pending_segment_at")
     # Табличная функция подставляется в запрос; скалярная обёртка не повторяет предикат.
-    assert "RETURNS SETOF mart_egisz.dim_pending_segments" in segment
+    assert "RETURNS SETOF public.dim_pending_segments" in segment
     scalar = function_body("pending_segment_code_at")
-    assert "serving_egisz.pending_segment_at(p_first_sent_at, p_anchor)" in scalar
+    assert "public.pending_segment_at(p_first_sent_at, p_anchor)" in scalar
     assert "max_age_minutes" not in scalar
     # Пороги остаются данными справочника: ужесточение делается UPDATE'ом.
-    assert "FROM mart_egisz.dim_pending_segments s" in segment
+    assert "FROM public.dim_pending_segments s" in segment
     assert "s.max_age_minutes IS NULL" in segment
     assert "ORDER BY s.sort_order" in segment
     assert "STABLE" in segment
     assert not re.search(r"\b\d{3,}\b", segment), "порог ступени захардкожен в функции"
 
     # Представления только подставляют момент.
-    assert "serving_egisz.pending_segment_at(d.first_sent_at, now())" in VIEWS_SQL
-    assert "serving_egisz.pending_segment_code_at(d.first_sent_at, anchor.ts)" in VIEWS_SQL
+    assert "public.pending_segment_at(d.first_sent_at, now())" in VIEWS_SQL
+    assert "public.pending_segment_code_at(d.first_sent_at, anchor.ts)" in VIEWS_SQL
     assert "<= s.max_age_minutes" not in VIEWS_SQL
 
 
@@ -131,7 +131,7 @@ def test_first_response_is_persisted_not_derived_from_last_callback() -> None:
     schema_sql = (ROOT / "db" / "01_schema.sql").read_text(encoding="utf-8")
     transform_sql = (ROOT / "db" / "03_transform.sql").read_text(encoding="utf-8")
 
-    documents_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS mart_egisz.documents ("):]
+    documents_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS documents ("):]
     assert "first_callback_at timestamptz," in documents_ddl[:documents_ddl.index(");")]
     assert "idx_documents_first_callback_at" in schema_sql
     # Отметку ставит только асинхронный ответ и только уменьшает: повторный ответ первого
@@ -176,7 +176,7 @@ def test_queue_cards_are_pinned_to_the_current_moment() -> None:
         assert "period_end" not in tags, name
         bindings = by_name[name]["metabase-field-filters"]
         assert {"semd_type", "jid"} <= set(bindings), name
-        assert bindings["jid"]["table_ref"] == "serving_egisz.documents_current", name
+        assert bindings["jid"]["table_ref"] == "public.rpt_documents", name
         # Оговорка о фильтре периода объявлена в наименовании карточки.
         assert name.endswith(plan.NO_PERIOD_SUFFIX), name
 
@@ -206,18 +206,18 @@ def test_queue_cards_share_one_document_set() -> None:
     by_name = cards_by_name()
     corpus = shared_corpus()
 
-    assert "serving_egisz.pending_segment_code_at(" in corpus
+    assert "public.pending_segment_code_at(" in corpus
     # Справочник ступеней без алиаса: иначе фильтр ступени не развернётся.
-    assert "JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code" in corpus
-    assert "serving_egisz.documents_current.first_callback_at" in corpus
+    assert "JOIN public.dim_pending_segments ON public.dim_pending_segments.code" in corpus
+    assert "public.rpt_documents.first_callback_at" in corpus
     for name in SHARED_CORPUS_CARDS:
         sql = card_sql(by_name[name])
         assert sql.startswith(corpus), name
-        # Field filter разворачивается в "serving_egisz"."documents_current".<колонка> — таблица
+        # Field filter разворачивается в "public"."rpt_documents".<колонка> — таблица
         # обязана остаться в FROM, и без алиаса.
-        assert "FROM serving_egisz.documents_current JOIN mart_egisz.dim_pending_segments" in sql, name
+        assert "FROM public.rpt_documents JOIN public.dim_pending_segments" in sql, name
         assert by_name[name]["metabase-field-filters"]["pending_segment"] == {
-            "table_ref": "mart_egisz.dim_pending_segments",
+            "table_ref": "public.dim_pending_segments",
             "field_name": "label",
         }, name
 
@@ -325,18 +325,18 @@ def con():
 def test_refresh_report_marts_keeps_closed_periods_unchanged(con) -> None:
     """Двойной refresh_report_marts() не двигает строки закрытых недель и месяцев."""
     marts = (
-        ("serving_egisz.documents_weekly", "is_complete_week"),
-        ("serving_egisz.documents_monthly", "is_complete_month"),
+        ("public.rpt_documents_weekly", "is_complete_week"),
+        ("public.rpt_documents_monthly", "is_complete_month"),
     )
     snapshots: dict[str, list[tuple]] = {}
     with con.cursor() as cur:
-        cur.execute("SELECT serving_egisz.refresh_report_marts()")
+        cur.execute("SELECT public.refresh_report_marts()")
         con.commit()
         for mart, flag in marts:
             cur.execute(f"SELECT * FROM {mart} WHERE {flag} ORDER BY 1, 2, 4")
             snapshots[mart] = cur.fetchall()
 
-        cur.execute("SELECT serving_egisz.refresh_report_marts()")
+        cur.execute("SELECT public.refresh_report_marts()")
         con.commit()
         for mart, flag in marts:
             cur.execute(f"SELECT * FROM {mart} WHERE {flag} ORDER BY 1, 2, 4")
@@ -379,16 +379,16 @@ def test_current_queue_equals_documents_awaiting_a_response(con) -> None:
         cur.execute(f"{rendered(shared_corpus())} SELECT COUNT(DISTINCT dwh_id) FROM queue")
         queue_size = cur.fetchone()[0]
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.registration_requests d "
-            "JOIN mart_egisz.dim_pending_segments g "
-            "ON g.code = serving_egisz.pending_segment_code_at(d.first_sent_at, now()) "
-            "WHERE d.is_last_request AND d.status = 'sent' AND NOT g.is_no_response"
+            "SELECT COUNT(*) FROM public.rpt_documents d "
+            "JOIN public.dim_pending_segments g "
+            "ON g.code = public.pending_segment_code_at(d.first_sent_at, now()) "
+            "WHERE d.status = 'sent' AND NOT g.is_no_response"
         )
         awaiting = cur.fetchone()[0]
         # Отметка первого ответа и статус документа обязаны говорить об одном и том же.
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.registration_requests "
-            "WHERE is_last_request AND (status = 'sent') <> serving_egisz.is_pending_at(first_sent_at, first_callback_at, now()) "
+            "SELECT COUNT(*) FROM public.rpt_documents "
+            "WHERE (status = 'sent') <> public.is_pending_at(first_sent_at, first_callback_at, now()) "
             "AND first_sent_at IS NOT NULL"
         )
         disagreements = cur.fetchone()[0]
@@ -406,10 +406,10 @@ def test_queue_flow_balances_to_the_queue(con) -> None:
         cur.execute(rendered(card_sql(by_name[FLOW])))
         moves = {row[1]: row[2] for row in cur.fetchall()}
         cur.execute(
-            "SELECT COUNT(*) FROM serving_egisz.registration_requests d "
-            "JOIN mart_egisz.dim_pending_segments g "
-            "ON g.code = serving_egisz.pending_segment_code_at(d.first_sent_at, now()) "
-            "WHERE d.is_last_request AND serving_egisz.is_pending_at(d.first_sent_at, d.first_callback_at, now()) "
+            "SELECT COUNT(*) FROM public.rpt_documents d "
+            "JOIN public.dim_pending_segments g "
+            "ON g.code = public.pending_segment_code_at(d.first_sent_at, now()) "
+            "WHERE public.is_pending_at(d.first_sent_at, d.first_callback_at, now()) "
             "AND NOT g.is_no_response"
         )
         queue = cur.fetchone()[0]
