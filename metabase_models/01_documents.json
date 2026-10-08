@@ -21,9 +21,7 @@
     "delivery_seconds": { "semantic_type": "type/Quantity", "display_name": "Время доставки, сек" },
     "logid": { "semantic_type": "type/Category", "display_name": "LOGID" },
     "request_logid": { "semantic_type": "type/Category", "display_name": "LOGID запроса" },
-    "result_logid": { "semantic_type": "type/Category", "display_name": "LOGID ответа" },
-    "semd_version_number": { "semantic_type": "type/Quantity", "display_name": "Версия СЭМД" },
-    "document_group_id": { "semantic_type": "type/Category", "display_name": "ID логического документа" }
+    "result_logid": { "semantic_type": "type/Category", "display_name": "LOGID ответа" }
   },
   "hidden_fields": [
     "dwh_id",
@@ -34,17 +32,7 @@
     "clinic_jid",
     "clinic_name",
     "clinic_inn",
-    "clinic_oid",
-    "patient_name_masked",
-    "snils_masked",
-    "doctor_name",
-    "patient_hash",
-    "doctor_hash",
-    "document_group_id",
-    "document_group_confidence",
-    "is_current_version",
-    "superseded_by_dwh_id",
-    "supersedes_dwh_id"
+    "clinic_oid"
   ],
   "metrics": {
     "Документов": {

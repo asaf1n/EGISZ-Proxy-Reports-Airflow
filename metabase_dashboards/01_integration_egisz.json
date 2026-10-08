@@ -84,7 +84,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = latest.dwh_id ) AS \"Тип ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) AS \"Исходный текст ошибки\" FROM latest ORDER BY latest.ips_date DESC",
+          "query": "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, clinic_host, semd_label, semd_local_uid, semd_emdr_id FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{pending_segment}}]] [[AND EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})]] [[AND {{status}}]] ORDER BY ips_date DESC LIMIT 50 ) SELECT latest.ips_date AS \"Дата обработки\", latest.status_detail_label AS \"Статус\", latest.clinic_label AS \"Клиника\", latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", latest.semd_local_uid AS \"localUid СЭМД\", latest.semd_emdr_id AS \"Рег. Номер РЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = latest.dwh_id ) AS \"Тип ошибки\", ( SELECT mart_egisz.mask_personal_data(d.error_text) FROM mart_egisz.documents d WHERE d.dwh_id = latest.dwh_id ) AS \"Исходный текст ошибки\" FROM latest ORDER BY latest.ips_date DESC",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2300,11 +2300,11 @@
     },
     {
       "name": "Последние сбои транспорта",
-      "description": "Последние 50 ошибок связи за период для L2: тип, фрагмент исходного текста шлюза, LOGID и MSGID сообщения. Текст — из слоя разбора (stg_egisz.message_errors).",
+      "description": "Последние 50 ошибок связи за период для L2: тип, фрагмент исходного текста шлюза, LOGID и MSGID сообщения. Текст — из слоя витрин (mart_egisz.exchangelog_errors) с маскированием персональных данных.",
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH latest AS ( SELECT message_at, logid, msgid, clinic_label, error_type FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY message_at DESC LIMIT 50 ) SELECT latest.message_at AS \"Время сообщения\", latest.clinic_label AS \"Клиника\", latest.error_type AS \"Тип\", ( SELECT LEFT(m.error_text, 140) FROM stg_egisz.message_errors m WHERE m.logid = latest.logid AND m.message_at = latest.message_at AND m.error_kind = 'Ошибка связи' ) AS \"Сообщение\", latest.logid::text AS \"LOGID\", latest.msgid AS \"MSGID\" FROM latest ORDER BY latest.message_at DESC",
+          "query": "WITH latest AS ( SELECT message_at, logid, msgid, clinic_label, error_type FROM serving_egisz.network_errors WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ORDER BY message_at DESC LIMIT 50 ) SELECT latest.message_at AS \"Время сообщения\", latest.clinic_label AS \"Клиника\", latest.error_type AS \"Тип\", ( SELECT LEFT(mart_egisz.mask_personal_data(m.error_text), 140) FROM mart_egisz.exchangelog_errors m WHERE m.logid = latest.logid AND m.message_at = latest.message_at AND m.error_source = 'связь' ) AS \"Сообщение\", latest.logid::text AS \"LOGID\", latest.msgid AS \"MSGID\" FROM latest ORDER BY latest.message_at DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2365,12 +2365,12 @@
     },
     {
       "name": "Документы в обработке",
-      "description": "Журнал документов, ожидающих ответа ЕГИСЗ; самые давние сверху, до 200 строк. Реквизиты строки: состояние отправки, срок ожидания, суток с отправки, число подач в ЕГИСЗ, дата отправки, клиника, код и наименование СЭМД, localUid.",
+      "description": "Журнал документов, ожидающих ответа ЕГИСЗ; самые давние сверху, до 200 строк. Реквизиты строки: срок ожидания, суток с отправки, число подач в ЕГИСЗ, дата отправки, клиника, код и наименование СЭМД, localUid.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM serving_egisz.documents_sent WHERE sent_state = 'pending' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", pending_segment_label AS \"Срок ожидания\" FROM serving_egisz.documents_sent WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2418,10 +2418,6 @@
       "visualization_settings": {
         "table.cell_column": "Состояние отправки",
         "table.columns": [
-          {
-            "enabled": true,
-            "name": "Состояние отправки"
-          },
           {
             "enabled": true,
             "name": "Срок ожидания"
@@ -2513,7 +2509,7 @@
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM serving_egisz.documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]]",
+          "query": "SELECT COUNT(DISTINCT semd_local_uid)::bigint AS \"Документов\" FROM serving_egisz.documents_no_response WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2543,14 +2539,6 @@
               "display-name": "localUid СЭМД",
               "id": "f2000099-0099-4099-8099-000000000013",
               "name": "local_uid",
-              "required": false,
-              "type": "dimension"
-            },
-            "pending_segment": {
-              "widget-type": "string/=",
-              "display-name": "Срок ожидания",
-              "id": "f2000099-0099-4099-8099-000000000014",
-              "name": "pending_segment",
               "required": false,
               "type": "dimension"
             }
@@ -2573,35 +2561,31 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "semd_local_uid"
-        },
-        "pending_segment": {
-          "table_ref": "serving_egisz.documents_sent",
-          "field_name": "pending_segment_label"
         }
       }
     },
     {
       "name": "Документы: ответ не получен (утилизирован)",
-      "description": "Журнал документов, по которым ответа уже не ждут (старше 15 суток); самые давние сверху, до 200 строк. Реквизиты строки те же, что и у журнала ожидающих: состояние отправки, срок ожидания, суток с отправки, число подач, дата отправки, клиника, код и наименование СЭМД, localUid.",
+      "description": "Журнал документов, по которым ответа уже не ждут (старше 15 суток); самые давние сверху, до 200 строк. Реквизиты строки: суток с отправки, число подач, дата отправки, клиника, код и наименование СЭМД, localUid; срока ожидания у таких документов нет.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", pending_days AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\", sent_state_label AS \"Состояние отправки\", pending_segment_label AS \"Срок ожидания\" FROM serving_egisz.documents_sent WHERE sent_state = 'no_response' [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{pending_segment}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
+          "query": "SELECT semd_local_uid AS \"localUid СЭМД\", semd_code AS \"Код СЭМД\", semd_name AS \"Наименование СЭМД\", clinic_jid::text AS \"JID Клиники\", clinic_label AS \"Клиника\", first_sent_at AS \"Дата отправки\", ROUND(EXTRACT(EPOCH FROM (now() - first_sent_at)) / 86400.0, 1) AS \"Суток с отправки\", attempt_count AS \"Подач в ЕГИСЗ\" FROM serving_egisz.documents_no_response WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY first_sent_at ASC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2633,14 +2617,6 @@
               "name": "local_uid",
               "required": false,
               "type": "dimension"
-            },
-            "pending_segment": {
-              "widget-type": "string/=",
-              "display-name": "Срок ожидания",
-              "id": "f2000099-0099-4099-8099-000000000014",
-              "name": "pending_segment",
-              "required": false,
-              "type": "dimension"
             }
           }
         }
@@ -2649,14 +2625,6 @@
       "visualization_settings": {
         "table.cell_column": "Состояние отправки",
         "table.columns": [
-          {
-            "enabled": true,
-            "name": "Состояние отправки"
-          },
-          {
-            "enabled": true,
-            "name": "Срок ожидания"
-          },
           {
             "enabled": true,
             "name": "Суток с отправки"
@@ -2716,35 +2684,31 @@
       "tab": "sent",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "first_sent_at"
         },
         "semd_type": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "semd_label"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "clinic_label"
         },
         "local_uid": {
-          "table_ref": "serving_egisz.documents_sent",
+          "table_ref": "serving_egisz.documents_no_response",
           "field_name": "semd_local_uid"
-        },
-        "pending_segment": {
-          "table_ref": "serving_egisz.documents_sent",
-          "field_name": "pending_segment_label"
         }
       }
     },
     {
       "name": "Недоставленные в клинику (ошибка связи шлюз-МО)",
-      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_errors_current).",
+      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя витрин (mart_egisz.exchangelog_errors) с маскированием персональных данных.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT COUNT(DISTINCT serving_egisz.documents_current.dwh_id)::bigint AS \"Документов\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]",
+          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, mart_egisz.mask_personal_data(e.error_text) AS error_text FROM mart_egisz.document_errors c JOIN mart_egisz.exchangelog_errors e ON e.logid = c.logid AND e.message_at = c.message_at AND e.error_source = c.error_source AND e.item_no = c.item_no WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT COUNT(DISTINCT serving_egisz.documents_current.dwh_id)::bigint AS \"Документов\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -2816,12 +2780,12 @@
     },
     {
       "name": "Документы: недоставленные в клинику (ошибка связи шлюз-МО)",
-      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя разбора (stg_egisz.document_errors_current).",
+      "description": "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя витрин (mart_egisz.exchangelog_errors) с маскированием персональных данных.",
       "dataset_query": {
         "type": "native",
         "database": 1,
         "native": {
-          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text FROM stg_egisz.document_errors_current c WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT serving_egisz.documents_current.semd_local_uid AS \"localUid СЭМД\", serving_egisz.documents_current.semd_code AS \"Код СЭМД\", serving_egisz.documents_current.semd_name AS \"Наименование СЭМД\", serving_egisz.documents_current.clinic_jid::text AS \"JID Клиники\", serving_egisz.documents_current.clinic_label AS \"Клиника\", serving_egisz.documents_current.first_sent_at AS \"Дата отправки\", serving_egisz.documents_current.ips_date AS \"Дата ответа ЕГИСЗ\", serving_egisz.documents_current.status_detail_label AS \"Результат ЕГИСЗ\", serving_egisz.documents_current.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки\", latest_errors.error_text AS \"Исходный текст ошибки\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
+          "query": "WITH latest_errors AS ( SELECT DISTINCT ON (c.dwh_id) c.dwh_id, c.message_at AS error_at, c.error_type, mart_egisz.mask_personal_data(e.error_text) AS error_text FROM mart_egisz.document_errors c JOIN mart_egisz.exchangelog_errors e ON e.logid = c.logid AND e.message_at = c.message_at AND e.error_source = c.error_source AND e.item_no = c.item_no WHERE c.error_kind = 'Ошибка связи' ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) SELECT serving_egisz.documents_current.semd_local_uid AS \"localUid СЭМД\", serving_egisz.documents_current.semd_code AS \"Код СЭМД\", serving_egisz.documents_current.semd_name AS \"Наименование СЭМД\", serving_egisz.documents_current.clinic_jid::text AS \"JID Клиники\", serving_egisz.documents_current.clinic_label AS \"Клиника\", serving_egisz.documents_current.first_sent_at AS \"Дата отправки\", serving_egisz.documents_current.ips_date AS \"Дата ответа ЕГИСЗ\", serving_egisz.documents_current.status_detail_label AS \"Результат ЕГИСЗ\", serving_egisz.documents_current.result_logid::text AS \"LOGID ответа ЕГИСЗ\", latest_errors.error_at AS \"Дата ошибки доставки\", latest_errors.error_type AS \"Тип ошибки\", latest_errors.error_text AS \"Исходный текст ошибки\" FROM latest_errors JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id WHERE serving_egisz.documents_current.status IN ('success', 'async_error') [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] ORDER BY latest_errors.error_at DESC NULLS LAST LIMIT 200",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",

@@ -221,7 +221,8 @@ def test_operational_latest_operations_table_matches_documents_view() -> None:
     assert "semd_code" not in query.split("SELECT", 1)[1].split("FROM", 1)[0]
     # Типы — из опубликованных ошибок документа, исходный текст — из слоя разбора.
     assert "FROM serving_egisz.document_errors" in query
-    assert "FROM stg_egisz.document_errors_current" in query
+    assert "FROM mart_egisz.documents d" in query
+    assert "mart_egisz.mask_personal_data(d.error_text)" in query
     assert "error_types" not in query
     assert card["metabase-field-filters"]["ips_date"] == {
         "table_ref": "serving_egisz.documents_current",
@@ -626,7 +627,6 @@ def test_document_metric_cards_count_distinct_dwh_id() -> None:
     allowed_count_star = {
         "01_integration_egisz.json": {"health_signals"},
         "05_executive.json": {"active_jid"},
-        "08_client_bianalytic.json": {"per_patient"},
     }
     violations: list[str] = []
     for path in _dashboard_paths():
@@ -952,9 +952,8 @@ def test_client_service_dashboard_uses_jid_filter_and_client_view() -> None:
     assert all("serving_egisz.documents_current" in query for query in queries)
     assert all("clinic_jid::text = {{client_jid}}" in query for query in queries)
     assert all("clinic_jid = {{client_jid}}" not in query for query in queries)
-    # Уникальный счёт пациентов/врачей идёт через hash-колонки, не через masked-имена.
-    assert any("patient_hash" in q for q in queries)
-    assert any("doctor_hash" in q for q in queries)
+    # Реквизитов людей в журнале нет: карточки по пациентам и врачам сняты.
+    assert not any("patient_hash" in q or "doctor_hash" in q for q in queries)
 
 
 def test_client_service_dashboard_uses_linked_clinic_label_filters() -> None:
@@ -1660,10 +1659,6 @@ def test_executive_mrr_queries_do_not_compare_jid_to_empty_string() -> None:
         viz = by_name[text_scalar]["visualization_settings"]
         assert "column_settings" not in viz, f"{text_scalar} returns pre-formatted text"
 
-    bi = json.loads(Path("metabase_dashboards/08_client_bianalytic.json").read_text(encoding="utf-8"))
-    ratio = next(c for c in bi["cards"] if c.get("name") == "ЭМД на пациента (среднее)")
-    ratio_fmt = ratio["visualization_settings"]["column_settings"]['["name","ЭМД/пациент"]']
-    assert ratio_fmt["decimals"] == 1
 
 
 def test_integration_dashboard_has_tabs_and_card_coverage() -> None:
@@ -1727,7 +1722,8 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
     assert "serving_egisz.documents_current r" not in query
     assert "COUNT(DISTINCT serving_egisz.documents_current.dwh_id)" in query
     assert "serving_egisz.documents_current.status IN ('success', 'async_error')" in query
-    assert "FROM stg_egisz.document_errors_current c" in query
+    assert "FROM mart_egisz.document_errors c" in query
+    assert "JOIN mart_egisz.exchangelog_errors e" in query
     assert "WHERE c.error_kind = 'Ошибка связи'" in query
     assert "raw_egisz.exchangelog" not in query
     assert "stg_egisz.exchange_messages" not in query
@@ -1747,7 +1743,7 @@ def test_sent_undelivered_to_clinic_card_uses_current_link_error() -> None:
     assert (detail["row"], detail["col"], detail["sizeX"], detail["sizeY"]) == (51, 0, 24, 10)
     assert "serving_egisz.documents_current r" not in detail_query
     assert "serving_egisz.documents_current.status IN ('success', 'async_error')" in detail_query
-    assert "FROM stg_egisz.document_errors_current c" in detail_query
+    assert "FROM mart_egisz.document_errors c" in detail_query
     assert "WHERE c.error_kind = 'Ошибка связи'" in detail_query
     assert 'latest_errors.error_type AS "Тип ошибки"' in detail_query
     assert 'latest_errors.error_text AS "Исходный текст ошибки"' in detail_query
@@ -2003,7 +1999,7 @@ def test_metabase_models_catalog_exists() -> None:
     assert no_response["name"] == "Отправленные"
     assert no_response["table_ref"] == "serving_egisz.documents_sent"
     assert "pending_segment_label" in no_response["fields"]
-    assert "sent_state_label" in no_response["fields"]
+    assert "sent_state_label" not in no_response["fields"]
     # Ошибки — модели на опубликованных ошибках: исходного текста в них нет, он
     # остаётся в слое разбора.
     breakdown = json.loads(Path("metabase_models/02_error_breakdown.json").read_text(encoding="utf-8"))
@@ -2125,14 +2121,14 @@ def test_integration_native_sql_uses_real_column_names() -> None:
     sent_sql = by_name["Документы в обработке"]["dataset_query"]["native"]["query"]
     assert 'first_sent_at AS "Дата отправки"' in sent_sql
     assert 'pending_days AS "Суток с отправки"' in sent_sql
-    assert 'sent_state_label AS "Состояние отправки"' in sent_sql
+    assert "sent_state" not in sent_sql
     assert 'pending_segment_label AS "Срок ожидания"' in sent_sql
     assert ', "Дата отправки"' not in sent_sql
 
     network_sql = by_name["Последние сбои транспорта"]["dataset_query"]["native"]["query"]
-    # Исходный текст шлюза — в слое разбора, по сообщению (logid, message_at).
-    assert "FROM stg_egisz.message_errors m" in network_sql
-    assert "LEFT(m.error_text, 140)" in network_sql
+    # Исходный текст шлюза — из слоя витрин, по сообщению (logid, message_at), с маскированием.
+    assert "FROM mart_egisz.exchangelog_errors m" in network_sql
+    assert "LEFT(mart_egisz.mask_personal_data(m.error_text), 140)" in network_sql
     assert "m.logid = latest.logid AND m.message_at = latest.message_at" in network_sql
     assert 'latest.logid::text AS "LOGID"' in network_sql
     assert 'latest.msgid AS "MSGID"' in network_sql
@@ -2162,14 +2158,18 @@ def test_integration_native_sql_uses_real_column_names() -> None:
         assert {"semd_type", "jid"} <= set(filters), card_name
         assert filters["jid"]["table_ref"] == "serving_egisz.documents_current", card_name
 
+    filters = by_name["Документы в обработке"].get("metabase-field-filters") or {}
+    assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label"
+    assert filters.get("ips_date", {}).get("table_ref") == "serving_egisz.documents_sent"
+
+    # Без ответа — отдельное представление без срока ожидания.
     for card_name in (
         "Ответ не получен (утилизирован)",
-        "Документы в обработке",
         "Документы: ответ не получен (утилизирован)",
     ):
         filters = by_name[card_name].get("metabase-field-filters") or {}
-        assert filters.get("pending_segment", {}).get("field_name") == "pending_segment_label", card_name
-        assert filters.get("ips_date", {}).get("table_ref") == "serving_egisz.documents_sent", card_name
+        assert "pending_segment" not in filters, card_name
+        assert filters.get("ips_date", {}).get("table_ref") == "serving_egisz.documents_no_response", card_name
 
     # Воронка процесса живёт на полном корпусе, а не на срезе ожидающих: срок ожидания
     # и localUid к нему неприменимы, поэтому в неё не переносятся.

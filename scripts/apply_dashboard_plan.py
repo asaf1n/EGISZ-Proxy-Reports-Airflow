@@ -552,8 +552,8 @@ SERVICE_REFUSALS_BY_HOUR_QUERY = (
 
 # «Исходный текст ошибки» — текст ошибок документа без изменений (из ns2) рядом с их типами: тип отвечает «что это
 # за ошибка», текст — «что именно ответили по этому документу», и при разборе инцидента
-# нужен именно он. Текст есть только в слое разбора: дашборд читает его оттуда по
-# исключению из стандарта до решения о доступе. Ошибки собираются для уже отобранных
+# нужен именно он. Текст — из строки документа mart_egisz.documents (error_text); персональные данные
+# скрывает mart_egisz.mask_personal_data. Ошибки собираются для уже отобранных
 # 50 документов.
 LATEST_OPERATIONS_QUERY = (
     "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, "
@@ -570,8 +570,8 @@ LATEST_OPERATIONS_QUERY = (
     "ORDER BY document_errors.error_type) "
     f"FROM {DOCUMENT_ERROR} WHERE document_errors.dwh_id = latest.dwh_id ) "
     "AS \"Тип ошибки\", "
-    "( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) "
-    "FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) "
+    "( SELECT mart_egisz.mask_personal_data(d.error_text) "
+    "FROM mart_egisz.documents d WHERE d.dwh_id = latest.dwh_id ) "
     "AS \"Исходный текст ошибки\" "
     "FROM latest ORDER BY latest.ips_date DESC"
 )
@@ -918,7 +918,6 @@ ERROR_TYPE_CLINIC_TEMPLATE_TAGS = {
 }
 
 SENT_TABLE_COLUMNS = [
-    {"enabled": True, "name": "Состояние отправки"},
     {"enabled": True, "name": WAIT_DIMENSION_LABEL},
     {"enabled": True, "name": "Суток с отправки"},
     {"enabled": True, "name": "Подач в ЕГИСЗ"},
@@ -930,6 +929,12 @@ SENT_TABLE_COLUMNS = [
     {"enabled": True, "name": "localUid СЭМД"},
 ]
 
+# Документы без ответа — отдельное представление documents_no_response: срока ожидания у
+# них нет (ответа уже не ждут), поэтому колонки срока в таблице нет.
+SENT_NO_RESPONSE_TABLE_COLUMNS = [
+    column for column in SENT_TABLE_COLUMNS if column["name"] != WAIT_DIMENSION_LABEL
+]
+
 # Число подач берётся из реестра шлюза: повторная отправка не меняет localUid, поэтому
 # счётчик показывает, сколько раз документ уже отправляли до текущего момента.
 # Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "serving_egisz"."documents_sent".<col>.
@@ -939,27 +944,35 @@ SENT_TABLE_COLUMNS = [
 # вытесняют застрявшие, а сортировка одна на обе.
 
 
-def _sent_table_query(state: str, order: str) -> str:
-    return (
-        'SELECT semd_local_uid AS "localUid СЭМД", semd_code AS "Код СЭМД", '
-        'semd_name AS "Наименование СЭМД", clinic_jid::text AS "JID Клиники", '
-        'clinic_label AS "Клиника", first_sent_at AS "Дата отправки", '
-        'pending_days AS "Суток с отправки", attempt_count AS "Подач в ЕГИСЗ", '
-        'sent_state_label AS "Состояние отправки", '
-        f'pending_segment_label AS "{WAIT_DIMENSION_LABEL}" '
-        "FROM serving_egisz.documents_sent "
-        f"WHERE sent_state = '{state}' "
-        "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
-        "[[AND {{local_uid}}]] [[AND {{pending_segment}}]] "
-        f"ORDER BY {order} LIMIT 200"
-    )
+SENT_TABLE_ORDER = "first_sent_at ASC NULLS LAST"
+SENT_TABLE_PENDING_QUERY = (
+    'SELECT semd_local_uid AS "localUid СЭМД", semd_code AS "Код СЭМД", '
+    'semd_name AS "Наименование СЭМД", clinic_jid::text AS "JID Клиники", '
+    'clinic_label AS "Клиника", first_sent_at AS "Дата отправки", '
+    'pending_days AS "Суток с отправки", attempt_count AS "Подач в ЕГИСЗ", '
+    f'pending_segment_label AS "{WAIT_DIMENSION_LABEL}" '
+    "FROM serving_egisz.documents_sent WHERE 1=1 "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
+    "[[AND {{local_uid}}]] [[AND {{pending_segment}}]] "
+    f"ORDER BY {SENT_TABLE_ORDER} LIMIT 200"
+)
+SENT_NO_RESPONSE_FILTERS = (
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]"
+)
+SENT_TABLE_NO_RESPONSE_QUERY = (
+    'SELECT semd_local_uid AS "localUid СЭМД", semd_code AS "Код СЭМД", '
+    'semd_name AS "Наименование СЭМД", clinic_jid::text AS "JID Клиники", '
+    'clinic_label AS "Клиника", first_sent_at AS "Дата отправки", '
+    'ROUND(EXTRACT(EPOCH FROM (now() - first_sent_at)) / 86400.0, 1) AS "Суток с отправки", '
+    'attempt_count AS "Подач в ЕГИСЗ" '
+    f"FROM serving_egisz.documents_no_response WHERE 1=1 {SENT_NO_RESPONSE_FILTERS} "
+    f"ORDER BY {SENT_TABLE_ORDER} LIMIT 200"
+)
 
 
 # Обе таблицы читают от самых старых: наверху списка то, что ждёт дольше всех и требует
 # разбора. Свежие отправки в верхних строках вытесняли застрявшие — ровно тот случай,
 # ради которого таблицы и разделены по состоянию.
-SENT_TABLE_PENDING_QUERY = _sent_table_query("pending", "first_sent_at ASC NULLS LAST")
-SENT_TABLE_NO_RESPONSE_QUERY = _sent_table_query("no_response", "first_sent_at ASC NULLS LAST")
 
 # Формат колонок таблиц разбора: только для колонок, которые запрос действительно отдаёт.
 SENT_TABLE_COLUMN_SETTINGS = {
@@ -1045,9 +1058,15 @@ SENT_FIELD_FILTERS = {
 
 SENT_NO_RESPONSE_QUERY = (
     'SELECT COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
-    "FROM serving_egisz.documents_sent "
-    f"WHERE sent_state = 'no_response' {SENT_FILTERS}"
+    f"FROM serving_egisz.documents_no_response WHERE 1=1 {SENT_NO_RESPONSE_FILTERS}"
 )
+
+SENT_NO_RESPONSE_FIELD_FILTERS = {
+    key: {"table_ref": "serving_egisz.documents_no_response", "field_name": binding["field_name"]}
+    for key, binding in SENT_FIELD_FILTERS.items()
+    if key != "pending_segment"
+}
+SENT_NO_RESPONSE_CARDS = (SENT_STATE_NO_RESPONSE_LABEL, SENT_TABLE_NAME_NO_RESPONSE)
 
 # Очередь — состояние на текущий момент, а не выборка за период: границы периода к ней
 # неприменимы. Документ, отправленный до начала периода и не получивший ответа, в очереди
@@ -1543,14 +1562,14 @@ SENT_TAB_DESCRIPTIONS: dict[str, str] = {
     ),
     SENT_TABLE_NAME_PENDING: (
         "Журнал документов, ожидающих ответа ЕГИСЗ; самые давние сверху, до 200 строк. "
-        "Реквизиты строки: состояние отправки, срок ожидания, суток с отправки, число "
+        "Реквизиты строки: срок ожидания, суток с отправки, число "
         "подач в ЕГИСЗ, дата отправки, клиника, код и наименование СЭМД, localUid."
     ),
     SENT_TABLE_NAME_NO_RESPONSE: (
         "Журнал документов, по которым ответа уже не ждут (старше 15 суток); самые давние "
-        "сверху, до 200 строк. Реквизиты строки те же, что и у журнала ожидающих: "
-        "состояние отправки, срок ожидания, суток с отправки, число подач, дата отправки, "
-        "клиника, код и наименование СЭМД, localUid."
+        "сверху, до 200 строк. Реквизиты строки: суток с отправки, число подач, дата "
+        "отправки, клиника, код и наименование СЭМД, localUid; срока ожидания у таких "
+        "документов нет."
     ),
     SENT_REGISTRATION_FUNNEL_NAME: (
         "Как быстро ЕГИСЗ отвечает по документам, ответ на которые уже получен. Первый "
@@ -1638,12 +1657,15 @@ UNDELIVERED_TO_CLINIC_FIELD_FILTERS = {
 }
 # Недоставленный результат — текущая ошибка связи документа с итоговым статусом: она
 # зафиксирована на последнем асинхронном ответе (ответ не доставлен в МИС) или после
-# него. Текст ошибки — из слоя разбора, в опубликованный слой он не выносится.
+# него. Текст ошибки — из слоя витрин, персональные данные скрывает mart_egisz.mask_personal_data.
 UNDELIVERED_TO_CLINIC_LATEST_ERRORS = (
     "WITH latest_errors AS ( "
     "SELECT DISTINCT ON (c.dwh_id) "
-    "c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text "
-    "FROM stg_egisz.document_errors_current c "
+    "c.dwh_id, c.message_at AS error_at, c.error_type, "
+    "mart_egisz.mask_personal_data(e.error_text) AS error_text "
+    "FROM mart_egisz.document_errors c "
+    "JOIN mart_egisz.exchangelog_errors e ON e.logid = c.logid AND e.message_at = c.message_at "
+    "AND e.error_source = c.error_source AND e.item_no = c.item_no "
     "WHERE c.error_kind = 'Ошибка связи' "
     "ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) "
 )
@@ -1684,7 +1706,7 @@ def apply_undelivered_to_clinic(card: dict) -> None:
     card["description"] = (
         "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка "
         "связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя "
-        "разбора (stg_egisz.document_errors_current)."
+        "витрин (mart_egisz.exchangelog_errors) с маскированием персональных данных."
     )
     card.pop("query_tier", None)
     card.pop("source_model", None)
@@ -2439,7 +2461,12 @@ def apply_sent_tab(dash: dict) -> None:
         }
         card["metabase-field-filters"] = deepcopy(SENT_FIELD_FILTERS)
         viz = card.setdefault("visualization_settings", {})
-        if name in SENT_QUEUE_CARDS:
+        if name in SENT_NO_RESPONSE_CARDS:
+            card["metabase-field-filters"] = deepcopy(SENT_NO_RESPONSE_FIELD_FILTERS)
+            card["dataset_query"]["native"]["template-tags"] = {
+                key: deepcopy(SENT_FILTER_TEMPLATE_TAGS[key]) for key in SENT_NO_RESPONSE_FIELD_FILTERS
+            }
+        elif name in SENT_QUEUE_CARDS:
             # Набор документов очереди — documents_current на текущем моменте; период
             # к состоянию на момент неприменим, поэтому даты в карточке нет вовсе.
             # Перечень тегов равен перечню привязок: тег, которого нет в SQL карточки,
@@ -2594,7 +2621,9 @@ def apply_sent_card_visualization(card: dict, name: str, viz: dict) -> None:
             for metric in QUEUE_TAIL_METRICS
         }
     elif name in (SENT_TABLE_NAME_PENDING, SENT_TABLE_NAME_NO_RESPONSE):
-        viz["table.columns"] = deepcopy(SENT_TABLE_COLUMNS)
+        viz["table.columns"] = deepcopy(
+            SENT_NO_RESPONSE_TABLE_COLUMNS if name == SENT_TABLE_NAME_NO_RESPONSE else SENT_TABLE_COLUMNS
+        )
         viz["table.cell_column"] = "Состояние отправки"
         viz["column_settings"] = deepcopy(SENT_TABLE_COLUMN_SETTINGS)
         # Подсветка строк держалась на снятой колонке «Сегмент ожидания» и порогах
