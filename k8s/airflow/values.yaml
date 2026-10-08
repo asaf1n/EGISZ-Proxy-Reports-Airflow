@@ -48,7 +48,7 @@ postgresql:
     postgresPassword: postgres
     database: airflow_db
 
-# Connections dwh_egisz_pg / proxy_egisz_fb are NOT injected as AIRFLOW_CONN_* env vars:
+# Connections dwh_bi_pg / proxy_egisz_fb are NOT injected as AIRFLOW_CONN_* env vars:
 # up.ps1 stores them in the Airflow metadata database after scheduler startup
 # (see Initialize-AirflowEgiszConnections), so Admin -> Connections is the single source.
 #

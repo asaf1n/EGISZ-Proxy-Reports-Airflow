@@ -36,7 +36,7 @@ REPORT_TIMEZONE="${REPORT_TIMEZONE:-Europe/Moscow}"
 
 APP_DB_HOST="${APP_DB_HOST:-host.docker.internal}"
 APP_DB_PORT="${APP_DB_PORT:-5432}"
-APP_DB_NAME="${APP_DB_NAME:-dwh_egisz}"
+APP_DB_NAME="${APP_DB_NAME:-dwh_bi}"
 APP_DB_USER="${APP_DB_USER:-postgres}"
 APP_DB_PASSWORD="${APP_DB_PASSWORD:-postgres}"
 APP_DB_DISPLAY_NAME="${APP_DB_DISPLAY_NAME:-DWH ЕГИСЗ}"
@@ -339,10 +339,10 @@ ensure_collection() {
   [ -n "${COL_ID}" ] && [ "${COL_ID}" != "null" ] || fail "cannot create or resolve collection '${COLLECTION_NAME}'"
 }
 
-# Схемы хранилища, к объектам которых обращаются дашборды и модели (раскладка по стандарту
-# хранилища: слой разбора, витрины, витрины самообслуживания). Объект адресуется ссылкой
-# «схема.объект» — и в SQL карточек, и в table_ref привязок фильтров и моделей.
-DWH_SCHEMAS_REGEX="public|stg_egisz|mart_egisz_selfservice|mart_egisz"
+# Схемы хранилища, к объектам которых обращаются дашборды и модели (docs/dwh-schema-naming-migration.md:
+# слой разбора, документы и справочники, выдача, эксплуатационные представления). Объект
+# адресуется ссылкой «схема.объект» — и в SQL карточек, и в table_ref привязок фильтров и моделей.
+DWH_SCHEMAS_REGEX="stg_egisz|mart_egisz_admin|mart_egisz|serving_egisz"
 
 ref_schema() { printf '%s\n' "${1%%.*}"; }
 ref_object() { printf '%s\n' "${1#*.}"; }
@@ -477,7 +477,7 @@ collection_table_refs() {
 }
 
 # Метаданные собираются постранично, по одной таблице, а не одним запросом
-# /api/database/:id/metadata: тот отдаёт поля ВСЕХ таблиц базы (в dwh_egisz их 114,
+# /api/database/:id/metadata: тот отдаёт поля ВСЕХ таблиц базы (в dwh_bi их 114,
 # ответ измеряется мегабайтами) и на узком канале не доходит целиком — обрыв в середине,
 # а следом падение jq на обрезанном JSON. Постраничные ответы небольшие и проходят.
 #

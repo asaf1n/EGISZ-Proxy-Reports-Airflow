@@ -1,6 +1,6 @@
 {
   "name": "Сбои транспорта",
-  "table_ref": "mart_egisz_selfservice.network_error",
+  "table_ref": "serving_egisz.network_errors",
   "description": "Ошибки связи: шлюз не доставил сообщение (LOGSTATE = 3). Grain: 1 строка = 1 ошибка связи по времени сообщения, в том числе у сообщения без связи с документом (ID документа пуст). Статус документа ошибка связи не меняет. Исходного текста ошибки в модели нет.",
   "fields": {
     "message_at": { "semantic_type": "type/CreationTimestamp", "display_name": "Время сообщения" },

@@ -1,8 +1,8 @@
 """Тесты месячной сетки партиций против живого PostgreSQL.
 
-Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_egisz);
+Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi);
 без переменной живая часть модуля скипается. Фикстура идемпотентно применяет
-ensure_time_partitions из db/01_schema.sql, поэтому проверяется текущий код функции,
+etl_meta.egisz_ensure_time_partitions из db/01_schema.sql, поэтому проверяется текущий код функции,
 а не состояние базы на момент последнего наката схемы.
 
 Инвариант сетки: границы соседних месяцев совпадают (без разрывов и перекрытий) и
@@ -29,7 +29,7 @@ DSN = os.environ.get("EGISZ_TEST_PG_DSN")
 DB_DIR = Path(__file__).resolve().parents[1] / "db"
 SCHEMA_SQL = (DB_DIR / "01_schema.sql").read_text(encoding="utf-8")
 
-PARTITIONED_TABLES = ("exchangelog_raw", "transactions")
+PARTITIONED_TABLES = ("exchangelog", "exchange_messages")
 
 BOUNDS_SQL = """
 SELECT parent.relname,
@@ -45,8 +45,8 @@ ORDER BY 1, 3
 
 
 def function_source() -> str:
-    """Текст ensure_time_partitions из модуля схемы — без ручного дублирования."""
-    start = SCHEMA_SQL.index("CREATE OR REPLACE FUNCTION public.ensure_time_partitions")
+    """Текст egisz_ensure_time_partitions из модуля схемы — без ручного дублирования."""
+    start = SCHEMA_SQL.index("CREATE OR REPLACE FUNCTION etl_meta.egisz_ensure_time_partitions")
     end = SCHEMA_SQL.index("\n$$;", start) + len("\n$$;")
     return SCHEMA_SQL[start:end]
 
@@ -70,8 +70,8 @@ def test_maintained_tables_come_from_the_catalogue() -> None:
     source = function_source()
 
     assert "pg_partitioned_table" in source
-    assert "'exchangelog_raw'" not in source
-    assert "'transactions'" not in source
+    assert "'exchangelog'" not in source
+    assert "'exchange_messages'" not in source
 
 
 live_pg = pytest.mark.skipif(not DSN, reason="EGISZ_TEST_PG_DSN not set; live-PG tests skipped")
@@ -126,7 +126,7 @@ def test_created_bounds_do_not_follow_session_timezone(con, timezone_pair) -> No
         with con.cursor() as cur:
             cur.execute(f"SET LOCAL TIME ZONE '{zone}'")
             # Горизонт шире рабочего: месяцы за краем текущей сетки создаются заново.
-            cur.execute("SELECT public.ensure_time_partitions(12, 36)")
+            cur.execute("SELECT etl_meta.egisz_ensure_time_partitions(12, 36)")
             grids.append(read_bounds(con))
         con.rollback()
 
@@ -139,10 +139,10 @@ def test_new_partitioned_table_is_picked_up_without_editing_the_function(con) ->
     probe = "partition_probe"
     with con.cursor() as cur:
         cur.execute(
-            f"CREATE TABLE public.{probe} (id bigint, observed_at timestamptz NOT NULL) "
+            f"CREATE TABLE stg_egisz.{probe} (id bigint, observed_at timestamptz NOT NULL) "
             "PARTITION BY RANGE (observed_at)"
         )
-        cur.execute("SELECT public.ensure_time_partitions(1, 1)")
+        cur.execute("SELECT etl_meta.egisz_ensure_time_partitions(1, 1)")
         cur.execute(BOUNDS_SQL, ([probe],))
         bounds = cur.fetchall()
         cur.execute("SET LOCAL TIME ZONE 'UTC'")

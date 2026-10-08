@@ -29,22 +29,20 @@ def test_clinic_nsi_mapping_view_contract() -> None:
     schema_sql = Path("db/01_schema.sql").read_text(encoding="utf-8")
     views_sql = Path("db/04_views.sql").read_text(encoding="utf-8")
 
-    organizations_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS dim_organizations ("):]
+    organizations_ddl = schema_sql[schema_sql.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_organizations ("):]
     assert "nsi_name text" in organizations_ddl[:organizations_ddl.index(");")]
-    assert "CREATE TABLE IF NOT EXISTS dim_nsi_organization" in schema_sql
+    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_organizations" in schema_sql
     assert "source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1461'" in schema_sql
     assert "parent_id text" in schema_sql
-    assert "raw_json jsonb NOT NULL" in schema_sql
-    assert "idx_dim_nsi_organization_active_mo" in schema_sql
-    assert "CREATE OR REPLACE VIEW public.rpt_clinic_nsi_mapping AS" in views_sql
+    assert "CREATE OR REPLACE VIEW serving_egisz.clinic_nsi_mapping AS" in views_sql
     assert "o.name AS cash_name" in views_sql
     assert "o.nsi_name" in views_sql
-    assert "LEFT JOIN public.dim_nsi_organization n ON n.oid = public.clean_text_value(o.fir_oid)" in views_sql
+    assert "LEFT JOIN mart_egisz.dim_nsi_organizations n ON n.oid = stg_egisz.clean_text_value(o.fir_oid)" in views_sql
     assert "NULLIF(btrim(n.name_short), '')" in views_sql
-    assert "public.clean_text_value(o.fir_oid) AS oid" in views_sql
+    assert "stg_egisz.clean_text_value(o.fir_oid) AS oid" in views_sql
     assert "AS is_mapped" in views_sql
     assert "doc.last_success_registered_at" in views_sql
-    assert "WHERE r.clinic_jid = o.jid AND r.status = 'success'" in views_sql
+    assert "FROM serving_egisz.documents_current r\n    WHERE r.clinic_jid = o.jid AND r.status = 'success'" in views_sql
 
 
 def test_load_nsi_organization_1461_maps_source_fields() -> None:
@@ -106,7 +104,7 @@ def test_clinic_nsi_mapping_dashboard_has_two_tables() -> None:
     for card, mapping_predicate in zip(dashboard["cards"], ("WHERE is_mapped", "WHERE NOT is_mapped"), strict=True):
         assert card["display"] == "table"
         query = card["dataset_query"]["native"]["query"]
-        assert "public.rpt_clinic_nsi_mapping" in query
+        assert "serving_egisz.clinic_nsi_mapping" in query
         assert mapping_predicate in query
         assert all(f'AS "{column}"' in query for column in EXPECTED_COLUMNS)
         assert [
@@ -121,6 +119,6 @@ def test_clinic_nsi_mapping_dashboard_has_two_tables() -> None:
             assert f"[[AND {{{{{tag_name}}}}}]]" in query
             assert tags[tag_name]["type"] == "dimension"
             assert filters[tag_name] == {
-                "table_ref": "public.rpt_clinic_nsi_mapping",
+                "table_ref": "serving_egisz.clinic_nsi_mapping",
                 "field_name": field_name,
             }

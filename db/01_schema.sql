@@ -7,19 +7,19 @@
 -- ============================================================================
 -- 00_bootstrap.sql — заголовок, пояс роли, гранты.
 -- Подключается из db/dwh_init.sql через \i db/01_schema.sql.
--- Идемпотентно; выполняется под ролью egisz (владелец dwh_egisz).
+-- Идемпотентно; выполняется под ролью egisz (владелец dwh_bi).
 -- ============================================================================
 
 \encoding UTF8
--- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_egisz;
+-- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_bi;
 -- повторный прогон безопасен. Все части dwh_init выполняются под ролью egisz.
 --
 -- Предусловия на уровне администратора БД:
 --   CREATE ROLE egisz LOGIN PASSWORD '...';
---   CREATE DATABASE dwh_egisz OWNER egisz;   -- egisz как владелец получает public-схему
+--   CREATE DATABASE dwh_bi OWNER egisz;
 --
 -- Usage:
---   psql -U egisz -d dwh_egisz -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+--   psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 -- Пояс отчётности задаётся здесь и только здесь. Наивное Firebird-время
 -- (EXCHANGELOG.CREATEDATE, лицензии) пишется как timestamptz; без фиксированного пояса
@@ -32,31 +32,33 @@
 -- report-timezone. Смена пояса выполняется в этих двух точках, правки SQL не требует.
 ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 
--- egisz — владелец dwh_egisz и public (через pg_database_owner), права уже есть; GRANT
--- идемпотентен и фиксирует контракт для среды, где владение выдано иначе.
-GRANT CONNECT ON DATABASE dwh_egisz TO egisz;
-GRANT USAGE, CREATE ON SCHEMA public TO egisz;
+GRANT CONNECT ON DATABASE dwh_bi TO egisz;
 
--- Схемы слоёв корпоративного стандарта: stg_egisz — данные разбора, mart_egisz —
--- справочники и витрины, mart_egisz_selfservice — опубликованный слой.
+-- Схемы слоёв (docs/dwh-schema-naming-migration.md): raw_egisz — копия источника,
+-- stg_egisz — разбор, mart_egisz — документы и справочники, serving_egisz — выдача
+-- потребителям, mart_egisz_admin — эксплуатационные представления. Служебное состояние
+-- конвейера — в общей схеме etl_meta, объекты ЕГИСЗ в ней начинаются с egisz_.
+CREATE SCHEMA IF NOT EXISTS etl_meta;
+CREATE SCHEMA IF NOT EXISTS raw_egisz;
 CREATE SCHEMA IF NOT EXISTS stg_egisz;
 CREATE SCHEMA IF NOT EXISTS mart_egisz;
-CREATE SCHEMA IF NOT EXISTS mart_egisz_selfservice;
+CREATE SCHEMA IF NOT EXISTS serving_egisz;
+CREATE SCHEMA IF NOT EXISTS mart_egisz_admin;
 
 -- ---------------------------------------------------------------- section: tables
 -- ============================================================================
--- 10_tables.sql — Tables, dim_semd_types seed, fact + indexes
+-- 10_tables.sql — Tables, dim_nsi_semd_types seed, fact + indexes
 -- Loaded by db/dwh_init.sql via \i db/01_schema.sql.
 -- Идемпотентный DDL: CREATE ... IF NOT EXISTS, CREATE OR REPLACE, ALTER ... IF EXISTS.
 -- ============================================================================
 
 -- Конвейер по существу ETL (выгрузка → загрузка → разбор в сообщения и документы), поэтому таблица
--- состояния называется etl_state. Курсор назван по фазе и объекту, по которому считает:
+-- состояния называется egisz_etl_state. Курсор назван по фазе и объекту, по которому считает:
 -- extract_logid_cursor — позиция выгрузки в журнале шлюза (EXCHANGELOG.LOGID),
 -- extract_egmid_cursor — там же по реестру подач (EGISZ_MESSAGES.EGMID),
--- transform_logid_cursor — позиция разбора в exchangelog_raw. Объекты разные, поэтому
+-- transform_logid_cursor — позиция разбора в raw_egisz.exchangelog. Объекты разные, поэтому
 -- отметки самостоятельные. Все курсоры продвигает только egisz_etl_dag, через GREATEST.
-CREATE TABLE IF NOT EXISTS etl_state (
+CREATE TABLE IF NOT EXISTS etl_meta.egisz_etl_state (
     pipeline text PRIMARY KEY,
     extract_logid_cursor bigint DEFAULT 0,
     transform_logid_cursor bigint DEFAULT 0,
@@ -64,47 +66,27 @@ CREATE TABLE IF NOT EXISTS etl_state (
     updated_at timestamptz DEFAULT now()
 );
 
-INSERT INTO etl_state (pipeline)
+INSERT INTO etl_meta.egisz_etl_state (pipeline)
 VALUES ('egisz')
 ON CONFLICT (pipeline) DO NOTHING;
 
--- Реестр подач шлюза (EGISZ_MESSAGES): одна строка источника по EGMID.
--- msgid — ключ подачи; document_uid — localUid РЭМД. Для ИЭМК document_uid не задан.
-CREATE TABLE IF NOT EXISTS dim_message_document (
-    source_egmid bigint,
+-- Реестр подач шлюза (EGISZ_MESSAGES) как в источнике: одна строка по EGMID. Ключ реестра
+-- и правило ИЭМК применяет stg_egisz.message_registry.
+CREATE TABLE IF NOT EXISTS raw_egisz.egisz_messages (
+    egmid bigint,
     msgid text,
-    document_uid text,
-    reply_to text,
-    created_at timestamptz,
-    loaded_at timestamptz NOT NULL DEFAULT now()
+    replyto text,
+    documentid text,
+    createdate timestamptz,
+    _loaded_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_dim_message_document_egmid_unique
-    ON dim_message_document (source_egmid);
-
-CREATE OR REPLACE FUNCTION public.dim_message_document_guard()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF COALESCE(NEW.reply_to, '') ~ ':9921(\D|$)' THEN
-        NEW.document_uid := NULL;
-    ELSE
-        NEW.document_uid := lower(NULLIF(btrim(NEW.document_uid), ''));
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_dim_message_document_guard ON public.dim_message_document;
-CREATE TRIGGER trg_dim_message_document_guard
-BEFORE INSERT OR UPDATE ON public.dim_message_document
-FOR EACH ROW
-EXECUTE FUNCTION public.dim_message_document_guard();
+CREATE UNIQUE INDEX IF NOT EXISTS idx_egisz_messages_egmid
+    ON raw_egisz.egisz_messages (egmid);
 
 -- URI вызова задаёт подсистему ЕГИСЗ: /emdr/callback — РЭМД, /ips/callback — ИЭМК.
 -- Партиции по месяцам createdate; ключ включает ключ партиционирования.
-CREATE TABLE IF NOT EXISTS exchangelog_raw (
+CREATE TABLE IF NOT EXISTS raw_egisz.exchangelog (
     logid bigint NOT NULL,
     logdate timestamptz,
     createdate timestamptz NOT NULL DEFAULT now(),
@@ -113,20 +95,20 @@ CREATE TABLE IF NOT EXISTS exchangelog_raw (
     logtext text,
     msgtext text,
     uri text,
-    loaded_at timestamptz DEFAULT now(),
+    _loaded_at timestamptz DEFAULT now(),
     PRIMARY KEY (logid, createdate)
 ) PARTITION BY RANGE (createdate);
 
 -- Маркер попытки парсинга (по LOGID). parse_targets в transform_raw_to_facts должен
 -- отличать «ещё не парсили» от «парсили, но payload без реквизитов»: строки без
--- msgid/localUid/emdrId/getDocumentFile не проходят фильтр вставки в transactions,
--- и анти-джойн по transactions.xml_parsed_at перепарсивал их каждым полножурнальным
+-- msgid/localUid/emdrId/getDocumentFile не проходят фильтр вставки в exchange_messages,
+-- и анти-джойн по exchange_messages.xml_parsed_at перепарсивал их каждым полножурнальным
 -- lookback'ом reconcile (~65 тыс. строк, ~5,9 мс/строка ≈ 6,4 мин на окно).
-CREATE TABLE IF NOT EXISTS exchangelog_parse_attempts (
+CREATE TABLE IF NOT EXISTS etl_meta.egisz_exchangelog_parse_attempts (
     logid bigint PRIMARY KEY
 );
 
-CREATE TABLE IF NOT EXISTS documents (
+CREATE TABLE IF NOT EXISTS mart_egisz.documents (
     dwh_id text PRIMARY KEY,
     local_uid text,
     emdr_id text,
@@ -137,8 +119,6 @@ CREATE TABLE IF NOT EXISTS documents (
     result_logid bigint,
     document_created_at timestamptz,
     registered_at timestamptz,
-    patient_hash text,
-    doctor_hash text,
     request_logid bigint,
     first_sent_at timestamptz,
     first_callback_at timestamptz,
@@ -149,37 +129,33 @@ CREATE TABLE IF NOT EXISTS documents (
     jid_resolve_method text,
     attempt_count integer,
     doc_number text,
-    document_group_id text,
-    document_group_confidence text,
-    semd_version_number integer,
-    superseded_by_dwh_id text,
-    supersedes_dwh_id text,
-    is_current_version boolean,
-    updated_at timestamptz DEFAULT now()
+    document_id text,
+    request_number integer,
+    is_last_request boolean,
+    updated_at timestamptz DEFAULT now(),
+    error_text text
 );
 
-COMMENT ON TABLE documents IS
-'Экземпляр (версия) СЭМД и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях transactions.';
-COMMENT ON COLUMN documents.first_callback_at IS
+COMMENT ON TABLE mart_egisz.documents IS
+'Запрос на регистрацию СЭМД (экземпляр, ключ — localUid) и состояние его регистрации. Статус определяет асинхронный ответ; элементы ошибки ответа и ошибки связи хранятся в разобранных сообщениях stg_egisz.exchange_messages, исходный текст ошибок текущего состояния — в error_text. Запрос относится к документу document_id; документ завершается регистрацией.';
+COMMENT ON COLUMN mart_egisz.documents.error_text IS
+'Исходный текст ошибок текущего состояния: элементы последнего асинхронного ответа и ошибки связи после него в порядке ошибок документа, через « · ». Поддерживает mart_egisz.recompute_document_error_texts; при выдаче персональные данные скрывает mart_egisz.mask_personal_data.';
+COMMENT ON COLUMN mart_egisz.documents.first_callback_at IS
 'Время первого асинхронного ответа. Выход документа из очереди обработки определяет оно: last_callback_at перезаписывается каждым повторным ответом.';
-COMMENT ON COLUMN documents.last_callback_at IS
+COMMENT ON COLUMN mart_egisz.documents.last_callback_at IS
 'Время последнего асинхронного ответа, определившего статус. Ошибки текущего состояния документа — элементы этого ответа и ошибки связи после него.';
-COMMENT ON COLUMN documents.attempt_count IS
-'Число подач документа в ЕГИСЗ — строк реестра dim_message_document на этот localUid: повторная подача localUid не меняет.';
+COMMENT ON COLUMN mart_egisz.documents.attempt_count IS
+'Число подач запроса в ЕГИСЗ — строк реестра подач stg_egisz.message_registry на этот localUid: повторная подача localUid не меняет.';
+COMMENT ON COLUMN mart_egisz.documents.doc_number IS
+'Номер документа в МИС из запроса на регистрацию (documentNumber).';
+COMMENT ON COLUMN mart_egisz.documents.document_id IS
+'Документ, к которому относится запрос: dwh_id первого запроса документа. Заполняет mart_egisz.link_document_requests.';
+COMMENT ON COLUMN mart_egisz.documents.request_number IS
+'Порядковый номер запроса в документе, с 1.';
+COMMENT ON COLUMN mart_egisz.documents.is_last_request IS
+'Последний запрос документа: его состояние — состояние документа.';
 
--- Слой версий логического документа.
--- dwh_id (PK) — экземпляр/версия (localUid), меняется при каждой правке или ре-выгрузке.
--- Логический документ собирается по (клиника jid + тип СЭМД + documentNumber = PROTOCOLID):
--- пара (jid, doc_number) всегда несёт один semd_code, не больше 7 версий на группу;
--- CDA setId в журнал не попадает и не используется.
---   doc_number                 — PROTOCOLID (номер протокола/ИБ в МИС), ключ группировки версий
---   document_group_id          — 'd:'||jid||'|'||semd||'|'||docnum (группа) либо dwh_id (singleton)
---   document_group_confidence  — провенанс группы: 'doc_number' | 'singleton'
---   semd_version_number        — порядковый номер версии в группе
---   superseded_by_dwh_id /     — цепочка версий между экземплярами
---     supersedes_dwh_id
---   is_current_version         — текущая (последняя) версия своей группы
-CREATE TABLE IF NOT EXISTS dim_organizations (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_organizations (
     jid bigint PRIMARY KEY,
     name text,
     inn text,
@@ -189,14 +165,14 @@ CREATE TABLE IF NOT EXISTS dim_organizations (
     nsi_name text
 );
 
-COMMENT ON COLUMN dim_organizations.name IS
+COMMENT ON COLUMN mart_egisz.dim_organizations.name IS
 'Наименование организации из CASH/JPERSONS.';
-COMMENT ON COLUMN dim_organizations.fir_oid IS
+COMMENT ON COLUMN mart_egisz.dim_organizations.fir_oid IS
 'OID медицинской организации. Ведущий источник — справочник ФРМО (НСИ 1461); синхронизация справочников добирает значение из JPERSONS.FIR_OID только там, где OID ещё не известен, и никогда не затирает его пустым.';
-COMMENT ON COLUMN dim_organizations.nsi_name IS
+COMMENT ON COLUMN mart_egisz.dim_organizations.nsi_name IS
 'Наименование медицинской организации из НСИ для аудита сопоставления с CASH.';
 
-CREATE TABLE IF NOT EXISTS dim_nsi_organization (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_organizations (
     nsi_id bigint PRIMARY KEY,
     oid text UNIQUE,
     source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1461',
@@ -241,23 +217,22 @@ CREATE TABLE IF NOT EXISTS dim_nsi_organization (
     cadastral_number text,
     old_oid text,
     parent_id text,
-    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     loaded_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE dim_nsi_organization IS
-'НСИ 1.2.643.5.1.13.13.11.1461 «ФРМО. Справочник медицинских организаций»; полный снимок версии источника.';
-COMMENT ON COLUMN dim_nsi_organization.parent_id IS
+COMMENT ON TABLE mart_egisz.dim_nsi_organizations IS
+'Справочник НСИ 1.2.643.5.1.13.13.11.1461 «Реестр медицинских и фармацевтических организаций Российской Федерации» (ФРМО): все записи версии справочника source_version. Загружается вручную scripts/load_nsi_organization_1461.py.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_organizations.parent_id IS
 'parentId из НСИ: OID родительской записи, а не внутренний nsi_id.';
 
-CREATE TABLE IF NOT EXISTS dim_document_status (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_document_statuses (
     code text PRIMARY KEY,
     label text NOT NULL,
     sort_order smallint NOT NULL,
     is_final boolean NOT NULL
 );
 
-INSERT INTO dim_document_status (code, label, sort_order, is_final)
+INSERT INTO mart_egisz.dim_document_statuses (code, label, sort_order, is_final)
 VALUES
     ('success', 'Успешно зарегистрирован', 1, true),
     ('async_error', 'Ошибка асинхронного ответа РЭМД', 2, true),
@@ -266,17 +241,17 @@ ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order,
     is_final = EXCLUDED.is_final
-WHERE (dim_document_status.label, dim_document_status.sort_order, dim_document_status.is_final)
+WHERE (dim_document_statuses.label, dim_document_statuses.sort_order, dim_document_statuses.is_final)
       IS DISTINCT FROM (EXCLUDED.label, EXCLUDED.sort_order, EXCLUDED.is_final);
 
-DELETE FROM dim_document_status
+DELETE FROM mart_egisz.dim_document_statuses
 WHERE code NOT IN ('success', 'async_error', 'sent');
 
 -- Ступени возраста обработки для нефинального статуса 'sent'. Ступень ищется как первая
 -- по sort_order с max_age_minutes >= возраста; терминальная ступень (max_age_minutes IS NULL)
 -- замыкает лестницу. Точка перехода в состояние «Без ответа» задаётся is_no_response —
 -- ужесточение порога выполняется UPDATE по справочнику, без правки представлений.
-CREATE TABLE IF NOT EXISTS dim_pending_segments (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_pending_segments (
     code text PRIMARY KEY,
     label text NOT NULL,
     max_age_minutes integer,
@@ -284,7 +259,7 @@ CREATE TABLE IF NOT EXISTS dim_pending_segments (
     is_no_response boolean NOT NULL
 );
 
-INSERT INTO dim_pending_segments (code, label, max_age_minutes, sort_order, is_no_response)
+INSERT INTO mart_egisz.dim_pending_segments (code, label, max_age_minutes, sort_order, is_no_response)
 VALUES
     ('p_5m', 'до 5 минут', 5, 1, false),
     ('p_1h', 'до 1 часа', 60, 2, false),
@@ -310,10 +285,10 @@ WHERE (dim_pending_segments.label, dim_pending_segments.max_age_minutes,
       IS DISTINCT FROM
       (EXCLUDED.label, EXCLUDED.max_age_minutes, EXCLUDED.sort_order, EXCLUDED.is_no_response);
 
-DELETE FROM dim_pending_segments
+DELETE FROM mart_egisz.dim_pending_segments
 WHERE code NOT IN ('p_5m', 'p_1h', 'p_6h', 'p_12h', 'p_24h', 'p_72h', 'p_7d', 'p_15d', 'p_over');
 
-CREATE TABLE IF NOT EXISTS dim_sent_state (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_sent_states (
     code text PRIMARY KEY,
     label text NOT NULL,
     sort_order smallint NOT NULL
@@ -322,24 +297,71 @@ CREATE TABLE IF NOT EXISTS dim_sent_state (
 -- Код состояния остаётся no_response — это таксономия модели состояний отправки.
 -- Наименование говорит и об исходе, и о судьбе документа: ответа не будет, запись
 -- выводится из аналитики и подлежит очистке.
-INSERT INTO dim_sent_state (code, label, sort_order)
+INSERT INTO mart_egisz.dim_sent_states (code, label, sort_order)
 VALUES
     ('pending', 'В обработке', 1),
     ('no_response', 'Ответ не получен (утилизирован)', 2)
 ON CONFLICT (code) DO UPDATE SET
     label = EXCLUDED.label,
     sort_order = EXCLUDED.sort_order
-WHERE (dim_sent_state.label, dim_sent_state.sort_order)
+WHERE (dim_sent_states.label, dim_sent_states.sort_order)
       IS DISTINCT FROM (EXCLUDED.label, EXCLUDED.sort_order);
 
-DELETE FROM dim_sent_state WHERE code NOT IN ('pending', 'no_response');
+DELETE FROM mart_egisz.dim_sent_states WHERE code NOT IN ('pending', 'no_response');
+
+-- Ставка за JID в месяц для ориентировочных денежных показателей. Тарифицируется
+-- юридическое лицо, а JID — точка подключения, договорная сетка сложнее плоской ставки,
+-- поэтому показатели — порядок величины, а не биллинг. Строка действует с valid_from до
+-- следующей строки; смена ставки — новая строка.
+CREATE TABLE IF NOT EXISTS mart_egisz.jid_fee_rates (
+    valid_from date PRIMARY KEY,
+    jid_monthly_fee numeric(12, 2) NOT NULL CHECK (jid_monthly_fee >= 0)
+);
+
+COMMENT ON TABLE mart_egisz.jid_fee_rates IS
+'Ставка для ориентировочных денежных показателей: jid_monthly_fee — абонентская плата за JID в месяц, ₽. Строка действует с valid_from до следующей строки.';
+
+INSERT INTO mart_egisz.jid_fee_rates (valid_from, jid_monthly_fee)
+VALUES ('-infinity', 10000)
+ON CONFLICT (valid_from) DO UPDATE SET
+    jid_monthly_fee = EXCLUDED.jid_monthly_fee
+WHERE jid_fee_rates.jid_monthly_fee IS DISTINCT FROM EXCLUDED.jid_monthly_fee;
+
+DELETE FROM mart_egisz.jid_fee_rates WHERE valid_from <> '-infinity';
+
+-- Правила активности JID: окна и пороги, по которым денежные показатели и показатели
+-- клиник за период определяют активную базу, замолчавшие клиники и клиники без успехов.
+-- Одни правила на все показатели; строка действует с valid_from до следующей строки.
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_jid_activity_rules (
+    valid_from date PRIMARY KEY,
+    active_days integer NOT NULL CHECK (active_days > 0),
+    quiet_days integer NOT NULL CHECK (quiet_days > 0),
+    no_success_min_docs integer NOT NULL CHECK (no_success_min_docs > 0),
+    CHECK (quiet_days < active_days)
+);
+
+COMMENT ON TABLE mart_egisz.dim_jid_activity_rules IS
+'Правила активности JID: active_days — окно активной базы (JID с документами за active_days суток); quiet_days — JID замолчал, если без документов последние quiet_days суток окна; no_success_min_docs — JID без успехов, если за окно от стольких документов и ни одного успешного. Строка действует с valid_from до следующей строки.';
+
+INSERT INTO mart_egisz.dim_jid_activity_rules
+    (valid_from, active_days, quiet_days, no_success_min_docs)
+VALUES ('-infinity', 30, 7, 10)
+ON CONFLICT (valid_from) DO UPDATE SET
+    active_days = EXCLUDED.active_days,
+    quiet_days = EXCLUDED.quiet_days,
+    no_success_min_docs = EXCLUDED.no_success_min_docs
+WHERE (dim_jid_activity_rules.active_days, dim_jid_activity_rules.quiet_days, dim_jid_activity_rules.no_success_min_docs)
+      IS DISTINCT FROM
+      (EXCLUDED.active_days, EXCLUDED.quiet_days, EXCLUDED.no_success_min_docs);
+
+DELETE FROM mart_egisz.dim_jid_activity_rules WHERE valid_from <> '-infinity';
 
 -- Фазы контрольных карт: отрезки с неизменными условиями работы сервиса. Центр и границы
 -- фазы считаются по её опорному периоду и продлеваются вперёд до следующей фазы. Опорный
 -- период задан датами, а не «последними N периодами»: границы закрытых периодов не должны
 -- зависеть от момента расчёта. Новая фаза заводится строкой здесь при смене условий
 -- работы, а не по наблюдаемому сдвигу — иначе сдвиг объявлялся бы нормой задним числом.
-CREATE TABLE IF NOT EXISTS dim_control_chart_phases (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_control_chart_phases (
     period_grain text NOT NULL CHECK (period_grain IN ('week', 'month')),
     phase_start date NOT NULL,
     baseline_start date NOT NULL,
@@ -350,10 +372,10 @@ CREATE TABLE IF NOT EXISTS dim_control_chart_phases (
     CHECK (baseline_start >= phase_start AND baseline_end >= baseline_start)
 );
 
-COMMENT ON TABLE dim_control_chart_phases IS
+COMMENT ON TABLE mart_egisz.dim_control_chart_phases IS
 'Фазы контрольных карт управленческого дашборда: грейн периода (week/month), начало фазы и опорный период (baseline_start..baseline_end — начала первого и последнего периода, включительно; понедельник или первое число по отчётному календарю). Центр и границы XmR считаются по опорному периоду фазы и действуют до начала следующей фазы. Состав фаз задаёт только этот файл схемы.';
 
-INSERT INTO dim_control_chart_phases (
+INSERT INTO mart_egisz.dim_control_chart_phases (
     period_grain, phase_start, baseline_start, baseline_end, label, condition
 )
 VALUES
@@ -371,10 +393,10 @@ WHERE (dim_control_chart_phases.baseline_start, dim_control_chart_phases.baselin
       IS DISTINCT FROM
       (EXCLUDED.baseline_start, EXCLUDED.baseline_end, EXCLUDED.label, EXCLUDED.condition);
 
-DELETE FROM dim_control_chart_phases
+DELETE FROM mart_egisz.dim_control_chart_phases
 WHERE (period_grain, phase_start) NOT IN (('week', DATE '2026-07-13'));
 
-CREATE TABLE IF NOT EXISTS dim_licenses (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_licenses (
     id bigint PRIMARY KEY,
     service_type integer,
     jid bigint,
@@ -387,14 +409,13 @@ CREATE TABLE IF NOT EXISTS dim_licenses (
     updated_at timestamptz DEFAULT now()
 );
 
--- Parsed MSGTEXT и метаданные строки журнала хранятся в transactions (xml_* / source_*).
+-- Parsed MSGTEXT и метаданные строки журнала хранятся в stg_egisz.exchange_messages (xml_* / source_*).
 -- grain transaction: PK (logid, log_date).
 
 -- ФНСИ выгружает НСИ 1520 с переставленными полями: GIT_LINK несёт OID руководства по реализации,
 -- а IMPLEMENTATION_GUIDE — ссылку на портал ЕГИСЗ. Колонка названа по содержанию, иначе соединение
 -- с реестром руководств выглядит соединением по ссылке и «исправляется» обратно первым же читателем.
-CREATE TABLE IF NOT EXISTS dim_semd_types (
-    code text PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_types (
     type_code text,
     name text NOT NULL,
     level text,
@@ -403,12 +424,18 @@ CREATE TABLE IF NOT EXISTS dim_semd_types (
     end_date date,
     implementation_guide text,
     ig_oid text,
-    oid text,
-    version text,
-    updated_at timestamptz DEFAULT now()
+    oid text PRIMARY KEY,
+    updated_at timestamptz DEFAULT now(),
+    source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1520',
+    source_version text NOT NULL DEFAULT '12.95'
 );
 
-INSERT INTO dim_semd_types (code, type_code, name, level, format_code, start_date, end_date, implementation_guide, ig_oid)
+COMMENT ON TABLE mart_egisz.dim_nsi_semd_types IS
+    'Справочник НСИ 1.2.643.5.1.13.13.11.1520 «Электронные медицинские документы»: вид медицинской документации (СЭМД) по OID записи справочника. Сид в db/01_schema.sql по версии справочника source_version; обновляется правкой сида и применением схемы.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_types.oid IS
+    'OID записи справочника — код вида медицинской документации, которым СЭМД называет свой вид (поле OID; в версии 12.95 совпадает с ID).';
+
+INSERT INTO mart_egisz.dim_nsi_semd_types (oid, type_code, name, level, format_code, start_date, end_date, implementation_guide, ig_oid)
 VALUES
     ('4', '8', 'Медицинская справка о допуске к управлению транспортными средствами (CDA) Редакция 1', '3', '2', DATE '2018-10-16', NULL, 'https://portal.egisz.rosminzdrav.ru/materials/2927', '1.2.643.5.1.13.13.15.43.1'),
     ('5', '6', 'Протокол инструментального исследования (PDF/A-1)', '0', '1', DATE '2018-07-04', DATE '2024-01-01', NULL, NULL),
@@ -711,7 +738,7 @@ VALUES
     ('342', '578', 'Сообщение о выявлении у иностранного гражданина инфекционного заболевания, представляющего опасность для окружающих, или заболевания, вызываемого вирусом иммунодефицита человека (ВИЧ-инфекции) (CDA) Редакция 1', '3', '2', DATE '2026-09-01', NULL, 'https://portal.egisz.rosminzdrav.ru/materials/5286', '1.2.643.5.1.13.13.15.168.1'),
     ('343', '579', 'Сообщение о наличии факта употребления иностранным гражданином наркотических средств или психотропных веществ без назначения врача либо новых потенциально опасных психоактивных веществ (CDA) Редакция 1', '3', '2', DATE '2026-09-01', NULL, 'https://portal.egisz.rosminzdrav.ru/materials/5285', '1.2.643.5.1.13.13.15.169.1'),
     ('344', '394', 'Медицинское заключение о наличии (отсутствии) факта употребления иностранным гражданином наркотических средств или психотропных веществ без назначения врача либо новых потенциально опасных психоактивных веществ (CDA) Редакция 1', '3', '2', DATE '2026-09-01', NULL, 'https://portal.egisz.rosminzdrav.ru/materials/5282', '1.2.643.5.1.13.13.15.170.1')
-ON CONFLICT (code) DO UPDATE SET
+ON CONFLICT (oid) DO UPDATE SET
     type_code = EXCLUDED.type_code,
     name = EXCLUDED.name,
     level = EXCLUDED.level,
@@ -720,30 +747,27 @@ ON CONFLICT (code) DO UPDATE SET
     end_date = EXCLUDED.end_date,
     implementation_guide = EXCLUDED.implementation_guide,
     ig_oid = EXCLUDED.ig_oid,
-    oid = EXCLUDED.code,
+    source_oid = EXCLUDED.source_oid,
+    source_version = EXCLUDED.source_version,
     updated_at = now()
-WHERE (dim_semd_types.type_code, dim_semd_types.name, dim_semd_types.level,
-       dim_semd_types.format_code, dim_semd_types.start_date, dim_semd_types.end_date,
-       dim_semd_types.implementation_guide, dim_semd_types.ig_oid, dim_semd_types.oid)
+WHERE (dim_nsi_semd_types.type_code, dim_nsi_semd_types.name, dim_nsi_semd_types.level,
+       dim_nsi_semd_types.format_code, dim_nsi_semd_types.start_date, dim_nsi_semd_types.end_date,
+       dim_nsi_semd_types.implementation_guide, dim_nsi_semd_types.ig_oid,
+       dim_nsi_semd_types.source_oid, dim_nsi_semd_types.source_version)
       IS DISTINCT FROM
       (EXCLUDED.type_code, EXCLUDED.name, EXCLUDED.level,
        EXCLUDED.format_code, EXCLUDED.start_date, EXCLUDED.end_date,
-       EXCLUDED.implementation_guide, EXCLUDED.ig_oid, EXCLUDED.code);
+       EXCLUDED.implementation_guide, EXCLUDED.ig_oid,
+       EXCLUDED.source_oid, EXCLUDED.source_version);
 
-UPDATE dim_semd_types
-SET oid = code
-WHERE oid IS DISTINCT FROM code;
-
-CREATE INDEX IF NOT EXISTS idx_dim_semd_types_oid ON dim_semd_types (oid) WHERE oid IS NOT NULL;
-
-COMMENT ON COLUMN dim_semd_types.ig_oid IS
-    'OID руководства по реализации СЭМД: ключ соединения с dim_nsi_semd_guide. В выгрузке ФНСИ лежит в поле GIT_LINK.';
-COMMENT ON COLUMN dim_semd_types.implementation_guide IS
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_types.ig_oid IS
+    'OID руководства по реализации СЭМД: ключ соединения с dim_nsi_semd_guides. В выгрузке ФНСИ лежит в поле GIT_LINK.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_types.implementation_guide IS
     'Ссылка на материалы портала ЕГИСЗ. В выгрузке ФНСИ поля GIT_LINK и IMPLEMENTATION_GUIDE переставлены относительно содержания.';
 
--- Схемой не наполняется: снимок кладёт scripts/load_nsi_semd_guides.py, поэтому на свежем
+-- Схемой не наполняется: версию справочника загружает scripts/load_nsi_semd_guides.py, поэтому на свежем
 -- контуре таблица пуста до первого запуска загрузчика.
-CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guides (
     oid text PRIMARY KEY,
     semd_id integer,
     full_name text NOT NULL,
@@ -753,39 +777,38 @@ CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide (
     git_link text,
     source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.638',
     source_version text NOT NULL,
-    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     loaded_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE dim_nsi_semd_guide IS
-    'НСИ 1.2.643.5.1.13.13.99.2.638 «Реестр руководств по реализации структурированных электронных медицинских документов и протоколов информационного взаимодействия»; полный снимок версии источника.';
-COMMENT ON COLUMN dim_nsi_semd_guide.semd_id IS
+COMMENT ON TABLE mart_egisz.dim_nsi_semd_guides IS
+    'НСИ 1.2.643.5.1.13.13.99.2.638 «Реестр руководств по реализации структурированных электронных медицинских документов и протоколов информационного взаимодействия»: все записи версии справочника source_version. Загружается вручную scripts/load_nsi_semd_guides.py.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guides.semd_id IS
     'SEMD_ID источника — номер ветви в собственном OID руководства, а не код вида медицинской документации из НСИ 1520. Ключом соединения не является.';
-COMMENT ON COLUMN dim_nsi_semd_guide.git_link IS
-    'Ссылка на git.minzdrav.gov.ru. Здесь поле источника названо по содержанию — в отличие от одноимённого поля НСИ 1520, где лежит OID (см. dim_semd_types.ig_oid).';
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guides.git_link IS
+    'Ссылка на git.minzdrav.gov.ru. Здесь поле источника названо по содержанию — в отличие от одноимённого поля НСИ 1520, где лежит OID (см. dim_nsi_semd_types.ig_oid).';
 
 -- Поле OID_SYNONYM из НСИ 638: дополнительные OID, под которыми выгрузка публикует то же
 -- руководство. Ни порядка их появления, ни признака, что синоним больше не принимается РЭМД,
 -- выгрузка не несёт, поэтому реестр синонимы только разрешает и ничего о них не утверждает.
--- Соединение с dim_semd_types закрывается основными OID; синонимы нужны на случай, когда
+-- Соединение с dim_nsi_semd_types закрывается основными OID; синонимы нужны на случай, когда
 -- очередной выпуск НСИ 1520 сошлётся на синоним: без них вид документации потерял бы набор
--- справочников молча. Так же устроен dim_nsi_error_code_alias.
-CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_alias (
+-- справочников молча. Так же устроен dim_error_code_aliases.
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guide_aliases (
     alias_oid text PRIMARY KEY,
-    guide_oid text NOT NULL REFERENCES dim_nsi_semd_guide (oid) ON DELETE CASCADE,
+    guide_oid text NOT NULL REFERENCES mart_egisz.dim_nsi_semd_guides (oid) ON DELETE CASCADE,
     loaded_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE dim_nsi_semd_guide_alias IS
-    'OID_SYNONYM из НСИ 638: дополнительные OID того же руководства. Разрешаются в основной OID представлением dim_semd_guide_oid.';
+COMMENT ON TABLE mart_egisz.dim_nsi_semd_guide_aliases IS
+    'OID_SYNONYM из НСИ 638: дополнительные OID того же руководства. Разрешаются в основной OID представлением dim_semd_guide_oids.';
 
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_alias_guide
-    ON dim_nsi_semd_guide_alias (guide_oid);
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_aliases_guide
+    ON mart_egisz.dim_nsi_semd_guide_aliases (guide_oid);
 
 -- Наименование, редакция и синонимы OID руководства здесь не повторяются: в источнике они
 -- выводятся из OID руководства и дословно совпадают с реестром руководств.
-CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_dictionary (
-    guide_oid text NOT NULL REFERENCES dim_nsi_semd_guide (oid) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_semd_guide_dictionaries (
+    guide_oid text NOT NULL REFERENCES mart_egisz.dim_nsi_semd_guides (oid) ON DELETE CASCADE,
     dict_oid text NOT NULL,
     source_id text NOT NULL,
     dict_name text NOT NULL,
@@ -793,45 +816,45 @@ CREATE TABLE IF NOT EXISTS dim_nsi_semd_guide_dictionary (
     dict_ids_systemname text,
     source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.805',
     source_version text NOT NULL,
-    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     loaded_at timestamptz DEFAULT now(),
+    allowed_record_ids text[],
     PRIMARY KEY (guide_oid, dict_oid)
 );
 
-COMMENT ON TABLE dim_nsi_semd_guide_dictionary IS
+COMMENT ON TABLE mart_egisz.dim_nsi_semd_guide_dictionaries IS
     'НСИ 1.2.643.5.1.13.13.99.2.805 «Реестр справочников, использующихся в руководствах по реализации структурированных электронных медицинских документов»; грейн — пара (руководство, справочник).';
-COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.dict_version IS
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guide_dictionaries.dict_version IS
     'Версия справочника из источника. Значение «*» означает «любая версия», а не «версия неизвестна», и сохраняется дословно.';
-COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.dict_ids_systemname IS
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guide_dictionaries.dict_ids_systemname IS
     'Имя поля-идентификатора внутри справочника (ID, CODE, MKB_CODE, oid): им СЭМД ссылается на запись справочника.';
-COMMENT ON COLUMN dim_nsi_semd_guide_dictionary.raw_json IS
-    'Запись источника целиком. Разрешённые подмножества значений (COLLECTION) отдельной таблицей не разворачиваются и доступны только здесь.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_semd_guide_dictionaries.allowed_record_ids IS
+    'Допустимые записи справочника для руководства (COLLECTION, значения DICT_IDS в порядке источника). NULL — допустимы все записи справочника.';
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_nsi_semd_guide_dictionary_source_id
-    ON dim_nsi_semd_guide_dictionary (source_id);
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_dictionary_dict_oid
-    ON dim_nsi_semd_guide_dictionary (dict_oid);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_nsi_semd_guide_dictionaries_source_id
+    ON mart_egisz.dim_nsi_semd_guide_dictionaries (source_id);
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_semd_guide_dictionaries_dict_oid
+    ON mart_egisz.dim_nsi_semd_guide_dictionaries (dict_oid);
 
 -- Справочник «РЭМД. Классификатор кодов сообщений» — источник истины для кодов и
 -- наименований ошибок регистрационного пути. Наполнение — выгрузка ФНСИ, описания
 -- приводятся дословно (включая опечатки справочника): расхождение с оригиналом
 -- сделало бы сверку с ответом РЭМД неоднозначной.
-CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_error_code (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_error_codes (
     nsi_error_code text PRIMARY KEY,
     nsi_error_id integer NOT NULL,
     nsi_error_description text NOT NULL,
     contour text NOT NULL,
-    oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.305',
-    version text NOT NULL DEFAULT '3.18',
+    source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.99.2.305',
+    source_version text NOT NULL DEFAULT '3.18',
     updated_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE mart_egisz.dim_nsi_error_code IS
+COMMENT ON TABLE mart_egisz.dim_nsi_error_codes IS
     'НСИ 1.2.643.5.1.13.13.99.2.305 «РЭМД. Классификатор кодов сообщений», версия 3.18';
 
 -- FRLLO_RELISE_POSITION_ERROR в справочнике задвоена (ID 85 и 88 с разными описаниями);
 -- берётся запись с меньшим ID.
-INSERT INTO mart_egisz.dim_nsi_error_code (nsi_error_code, nsi_error_id, nsi_error_description, contour)
+INSERT INTO mart_egisz.dim_nsi_error_codes (nsi_error_code, nsi_error_id, nsi_error_description, contour)
 VALUES
     ('ACCESS_DENIED', 1, 'У запрашивающей РМИС/МИС нет разрешения на получение документа', 'регистрация СЭМД'),
     ('ADDITIONAL_INFO_REQUIRED', 64, 'Для формирования запрошенного в рамках услуги "заказ справки он-лайн" документа недостаточно сведений, гражданину необходимо обратиться с личным визитом для прохождения дополнительных исследований', 'заказ справок онлайн'),
@@ -964,27 +987,27 @@ ON CONFLICT (nsi_error_code) DO UPDATE SET
     nsi_error_id = EXCLUDED.nsi_error_id,
     nsi_error_description = EXCLUDED.nsi_error_description,
     contour = EXCLUDED.contour,
-    oid = EXCLUDED.oid,
-    version = EXCLUDED.version,
+    source_oid = EXCLUDED.source_oid,
+    source_version = EXCLUDED.source_version,
     updated_at = now()
-WHERE (mart_egisz.dim_nsi_error_code.nsi_error_id, mart_egisz.dim_nsi_error_code.nsi_error_description,
-       mart_egisz.dim_nsi_error_code.contour, mart_egisz.dim_nsi_error_code.oid,
-       mart_egisz.dim_nsi_error_code.version)
+WHERE (mart_egisz.dim_nsi_error_codes.nsi_error_id, mart_egisz.dim_nsi_error_codes.nsi_error_description,
+       mart_egisz.dim_nsi_error_codes.contour, mart_egisz.dim_nsi_error_codes.source_oid,
+       mart_egisz.dim_nsi_error_codes.source_version)
       IS DISTINCT FROM
-      (EXCLUDED.nsi_error_id, EXCLUDED.nsi_error_description, EXCLUDED.contour, EXCLUDED.oid, EXCLUDED.version);
+      (EXCLUDED.nsi_error_id, EXCLUDED.nsi_error_description, EXCLUDED.contour, EXCLUDED.source_oid, EXCLUDED.source_version);
 
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_error_code_contour ON mart_egisz.dim_nsi_error_code (contour);
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_error_codes_contour ON mart_egisz.dim_nsi_error_codes (contour);
 
 -- РЭМД отдаёт RECIPIENT_*, тогда как в справочнике закреплено написание RECEPIENT_*.
 -- Синоним разрешается до сопоставления с правилами, поэтому правило заводится
 -- на каноничную мнемонику справочника.
-CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_error_code_alias (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_error_code_aliases (
     alias text PRIMARY KEY,
-    nsi_error_code text NOT NULL REFERENCES mart_egisz.dim_nsi_error_code (nsi_error_code),
+    nsi_error_code text NOT NULL REFERENCES mart_egisz.dim_nsi_error_codes (nsi_error_code),
     updated_at timestamptz DEFAULT now()
 );
 
-INSERT INTO mart_egisz.dim_nsi_error_code_alias (alias, nsi_error_code)
+INSERT INTO mart_egisz.dim_error_code_aliases (alias, nsi_error_code)
 VALUES
     ('RECIPIENT_INFO_MISMATCH', 'RECEPIENT_INFO_MISMATCH'),
     ('RECIPIENT_SNILS_MISMATCH', 'RECEPIENT_SNILS_MISMATCH'),
@@ -994,16 +1017,16 @@ VALUES
 ON CONFLICT (alias) DO UPDATE SET
     nsi_error_code = EXCLUDED.nsi_error_code,
     updated_at = now()
-WHERE mart_egisz.dim_nsi_error_code_alias.nsi_error_code IS DISTINCT FROM EXCLUDED.nsi_error_code;
+WHERE mart_egisz.dim_error_code_aliases.nsi_error_code IS DISTINCT FROM EXCLUDED.nsi_error_code;
 
 -- Наименования справочников ФНСИ по OID. Нужен только для подписи предмета отказа
--- (mart_egisz_selfservice.document_error): РЭМД называет справочник одним OID, и без расшифровки
+-- (serving_egisz.document_errors): РЭМД называет справочник одним OID, и без расшифровки
 -- разбивка нечитаема.
 --
--- Наполнение — снимок НСИ 1.2.643.5.1.13.13.99.2.805 «Реестр справочников, использующихся
+-- Наполнение — справочник НСИ 1.2.643.5.1.13.13.99.2.805 «Реестр справочников, использующихся
 -- в руководствах по реализации СЭМД»: наименования опубликованы Минздравом и приводятся
 -- дословно, поэтому принадлежность справочника больше не выводится из содержания отказов.
--- Записи вписаны литералами, а не выбраны из dim_nsi_semd_guide_dictionary: тот снимок
+-- Записи вписаны литералами, а не выбраны из dim_nsi_semd_guide_dictionaries: тот справочник
 -- наполняется скриптом уже после наката схемы и на чистой базе пуст.
 --
 -- Реестр покрывает не все OID отказов: РЭМД ссылается и на справочники вне 805
@@ -1011,7 +1034,7 @@ WHERE mart_egisz.dim_nsi_error_code_alias.nsi_error_code IS DISTINCT FROM EXCLUD
 -- наименования показывается как есть, а не прячется из разбивки.
 -- Редакцию источника объявляет сид, а не умолчание колонки: умолчание существующей таблицы
 -- повторное применение схемы не меняет, и оно застыло бы на прежней редакции.
-CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
+CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionaries (
     oid text PRIMARY KEY,
     name text NOT NULL,
     short_name text,
@@ -1020,14 +1043,14 @@ CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (
     updated_at timestamptz DEFAULT now()
 );
 
-COMMENT ON TABLE dim_nsi_dictionary IS
-    'Наименования справочников ФНСИ по OID: атрибут nsi_dictionary_name ошибок документа (mart_egisz_selfservice.document_error). Снимок НСИ 1.2.643.5.1.13.13.99.2.805: наименования дословны. Реестр не покрывает справочники вне 805 — недостающий OID показывается без расшифровки.';
-COMMENT ON COLUMN dim_nsi_dictionary.name IS
-    'Наименование из НСИ 805 дословно. Расхождение с источником сделало бы сверку неоднозначной.';
-COMMENT ON COLUMN dim_nsi_dictionary.short_name IS
+COMMENT ON TABLE mart_egisz.dim_nsi_dictionaries IS
+    'Общий перечень справочников НСИ: OID справочника → наименование; даёт nsi_dictionary_name ошибок документа (serving_egisz.document_errors) и наименования в serving_egisz.nsi_dictionary_versions. Перечень неполный: сейчас это справочники из «Реестра справочников, использующихся в руководствах по реализации СЭМД» (1.2.643.5.1.13.13.99.2.805, версия source_version); справочник вне него показывается своим OID без наименования. Полный источник — выгрузка реестра справочников ФНСИ.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_dictionaries.name IS
+    'Наименование справочника дословно по источнику source_oid. Расхождение с источником сделало бы сверку неоднозначной.';
+COMMENT ON COLUMN mart_egisz.dim_nsi_dictionaries.short_name IS
     'Краткая подпись для витрины. Заводится только там, где в отрасли устоялось короткое написание: официальные наименования доходят до 181 символа и в подписи типа нечитаемы.';
 
-INSERT INTO dim_nsi_dictionary (oid, name, source_version)
+INSERT INTO mart_egisz.dim_nsi_dictionaries (oid, name, source_version)
 SELECT v.oid, v.name, '6.19'
 FROM (VALUES
     ('1.2.643.5.1.13.2.1.1.384', 'Классификатор форм туберкулеза по локализации'),
@@ -1501,29 +1524,29 @@ ON CONFLICT (oid) DO UPDATE SET
     source_oid = EXCLUDED.source_oid,
     source_version = EXCLUDED.source_version,
     updated_at = now()
-WHERE (dim_nsi_dictionary.name, dim_nsi_dictionary.source_oid, dim_nsi_dictionary.source_version)
+WHERE (dim_nsi_dictionaries.name, dim_nsi_dictionaries.source_oid, dim_nsi_dictionaries.source_version)
       IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.source_oid, EXCLUDED.source_version);
 
 -- Справочник, выведенный из обращения новой редакцией 805, обязан уйти из реестра: иначе
 -- подпись показывала бы наименование, которого в источнике уже нет. Редакция повторена
 -- здесь намеренно — сид объявляет её сам, без опоры на умолчание колонки.
-DELETE FROM dim_nsi_dictionary WHERE source_version <> '6.19';
+DELETE FROM mart_egisz.dim_nsi_dictionaries WHERE source_version <> '6.19';
 
 -- Краткая подпись задаётся списком целиком: снятая из списка запись возвращается к
 -- официальному наименованию, а не остаётся с прежним сокращением.
-UPDATE dim_nsi_dictionary d
+UPDATE mart_egisz.dim_nsi_dictionaries d
 SET short_name = c.short_name,
     updated_at = now()
 FROM (
     SELECT r.oid, c.short_name
-    FROM dim_nsi_dictionary r
+    FROM mart_egisz.dim_nsi_dictionaries r
     LEFT JOIN (VALUES
         ('1.2.643.5.1.13.13.11.1005', 'МКБ-10')
     ) AS c(oid, short_name) ON c.oid = r.oid
 ) c
 WHERE d.oid = c.oid AND d.short_name IS DISTINCT FROM c.short_name;
 
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE IF NOT EXISTS stg_egisz.exchange_messages (
     logid bigint NOT NULL,
     log_date timestamptz NOT NULL,
     dwh_id text,
@@ -1540,12 +1563,12 @@ CREATE TABLE IF NOT EXISTS transactions (
     semd_code text,
     creation_date timestamptz,
     link_method text,
-    error_details jsonb,
-    patient_name_masked text,
-    snils_masked text,
-    doctor_name text,
-    patient_hash text,
-    doctor_hash text,
+    network_error_code text,
+    network_error_text text,
+    network_error_type text,
+    network_error_normalized_text text,
+    remd_errors jsonb,
+    ihe_errors jsonb,
     source_action text,
     egisz_subsystem text,
     xml_dwh_id text,
@@ -1559,27 +1582,34 @@ CREATE TABLE IF NOT EXISTS transactions (
     xml_raw_status text,
     xml_document_status text,
     xml_creation_date timestamptz,
-    xml_patient_name text,
-    xml_snils text,
-    xml_doctor_name text,
     xml_has_fault_marker boolean,
-    xml_has_error_ilike boolean,
+    xml_mentions_error boolean,
     xml_parsed_at timestamptz,
     loaded_at timestamptz DEFAULT now(),
     PRIMARY KEY (logid, log_date)
 ) PARTITION BY RANGE (log_date);
 
-COMMENT ON TABLE transactions IS
+COMMENT ON TABLE stg_egisz.exchange_messages IS
 'Разобранное сообщение журнала шлюза: реквизиты payload (xml_*), связь с документом, исход асинхронного ответа и элементы ошибки. Строка — одна строка журнала (LOGID).';
-COMMENT ON COLUMN transactions.status IS
+COMMENT ON COLUMN stg_egisz.exchange_messages.status IS
 'Исход асинхронного ответа: success либо error. Пусто у сообщения, которое асинхронным ответом не является, и у ответа с нераспознанным исходом.';
-COMMENT ON COLUMN transactions.message IS
+COMMENT ON COLUMN stg_egisz.exchange_messages.message IS
 'Текст сообщения: при LOGSTATE = 3 — исходный текст шлюза, иначе текст из payload.';
-COMMENT ON COLUMN transactions.error_details IS
-'Элементы ошибки сообщения: item_no, error_kind (вид), error_code, error_text (исходный текст), error_type (тип из mart_egisz.dim_error_type), nsi_dictionary_oid. Пусто, если элементов нет.';
-COMMENT ON COLUMN transactions.egisz_subsystem IS
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_code IS
+'Ошибка связи (LOGSTATE = 3): код из текста шлюза — код сокета Windows либо код ответа HTTP.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_text IS
+'Ошибка связи (LOGSTATE = 3): исходный текст шлюза (LOGTEXT). Пусто, если сообщение доставлено.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_type IS
+'Тип ошибки связи из mart_egisz.dim_error_types: тип правила классификации либо «Не распознано: ошибка связи».';
+COMMENT ON COLUMN stg_egisz.exchange_messages.network_error_normalized_text IS
+'Нормализованный текст нераспознанной ошибки связи (stg_egisz.normalize_error_text): персональные данные скрыты, значения конкретного сообщения заменены обозначениями. Группирует нераспознанные ошибки для заведения правил; у распознанной ошибки пуст.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.remd_errors IS
+'Элементы ответа РЭМД (<item>): item_no, section (раздел ответа: errors либо registrationWarnings — предупреждения при успешной регистрации), code, message (исходный текст), error_type, nsi_dictionary_oid, normalized_text (нормализованный текст нераспознанного элемента). Пусто, если элементов нет.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.ihe_errors IS
+'Элементы ответа ИЭМК (IHE RegistryError): item_no, error_code (errorCode), code_context (codeContext, исходный текст), severity, location, error_type, nsi_dictionary_oid, normalized_text (нормализованный текст нераспознанного элемента). Пусто, если элементов нет.';
+COMMENT ON COLUMN stg_egisz.exchange_messages.egisz_subsystem IS
 'Контур обмена (РЭМД или ИЭМК), см. egisz_subsystem().';
-COMMENT ON COLUMN transactions.link_method IS
+COMMENT ON COLUMN stg_egisz.exchange_messages.link_method IS
 'Правило связки ответа с документом.';
 
 -- Обслуживание месячных партиций. Партиции создаются на окно назад и вперёд от текущего
@@ -1594,15 +1624,16 @@ COMMENT ON COLUMN transactions.link_method IS
 -- разную границу в зависимости от того, кто и откуда вызвал функцию, — соседние месяцы
 -- перестают стыковаться (перекрытие ломает CREATE, зазор ломает вставку).
 --
--- Перечень обслуживаемых таблиц берётся из системного каталога, а не задаётся списком:
--- каталог уже знает, что партиционировано по диапазону времени, и второй перечень
--- расходился бы с ним молча.
-CREATE OR REPLACE FUNCTION public.ensure_time_partitions(
+-- Перечень обслуживаемых таблиц берётся из системного каталога схем слоёв ЕГИСЗ, а не
+-- задаётся списком: каталог уже знает, что партиционировано по диапазону времени, и второй
+-- перечень расходился бы с ним молча. Раздел создаётся в схеме своей таблицы.
+CREATE OR REPLACE FUNCTION etl_meta.egisz_ensure_time_partitions(
     p_grid_months_back integer DEFAULT 12,
     p_grid_months_ahead integer DEFAULT 24
 )
 RETURNS integer
 LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     spec record;
@@ -1616,16 +1647,16 @@ DECLARE
     created integer := 0;
 BEGIN
     FOR spec IN
-        SELECT c.relname AS table_name, a.attname AS key_column
+        SELECT n.nspname AS schema_name, c.relname AS table_name, a.attname AS key_column
         FROM pg_partitioned_table p
         JOIN pg_class c ON c.oid = p.partrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
         JOIN pg_attribute a ON a.attrelid = p.partrelid AND a.attnum = p.partattrs[0]
-        WHERE n.nspname = 'public'
+        WHERE n.nspname IN ('raw_egisz', 'stg_egisz', 'mart_egisz', 'serving_egisz', 'mart_egisz_admin')
           AND p.partstrat = 'r'
           AND p.partnatts = 1
           AND a.atttypid IN ('timestamptz'::regtype, 'timestamp'::regtype)
-        ORDER BY c.relname
+        ORDER BY n.nspname, c.relname
     LOOP
         window_start := date_trunc('month', timezone('UTC', now())) - (p_grid_months_back || ' months')::interval;
         window_end := date_trunc('month', timezone('UTC', now())) + (p_grid_months_ahead || ' months')::interval;
@@ -1634,8 +1665,8 @@ BEGIN
         -- не вставится вовсе, поэтому окно расширяется до фактического диапазона.
         EXECUTE format(
             'SELECT date_trunc(''month'', timezone(''UTC'', min(%I))),'
-            ' date_trunc(''month'', timezone(''UTC'', max(%I))) FROM public.%I',
-            spec.key_column, spec.key_column, spec.table_name
+            ' date_trunc(''month'', timezone(''UTC'', max(%I))) FROM %I.%I',
+            spec.key_column, spec.key_column, spec.schema_name, spec.table_name
         ) INTO data_start, data_end;
 
         window_start := LEAST(window_start, COALESCE(data_start, window_start));
@@ -1649,11 +1680,11 @@ BEGIN
             IF NOT EXISTS (
                 SELECT 1 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public' AND c.relname = part_name
+                WHERE n.nspname = spec.schema_name AND c.relname = part_name
             ) THEN
                 EXECUTE format(
-                    'CREATE TABLE public.%I PARTITION OF public.%I FOR VALUES FROM (%L) TO (%L)',
-                    part_name, spec.table_name,
+                    'CREATE TABLE %I.%I PARTITION OF %I.%I FOR VALUES FROM (%L) TO (%L)',
+                    spec.schema_name, part_name, spec.schema_name, spec.table_name,
                     part_start AT TIME ZONE 'UTC', part_end AT TIME ZONE 'UTC'
                 );
                 created := created + 1;
@@ -1666,92 +1697,75 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.ensure_time_partitions(integer, integer) IS
-'Достраивает месячную сетку партиций всех таблиц public, партиционированных по диапазону '
+COMMENT ON FUNCTION etl_meta.egisz_ensure_time_partitions(integer, integer) IS
+'Достраивает месячную сетку партиций всех таблиц схем слоёв ЕГИСЗ, партиционированных по диапазону '
 'одного временного столбца. Границы месяцев считаются в наивном UTC: якорь сетки не должен '
 'зависеть от часового пояса сессии. Параметры задают глубину подготовленной сетки назад и '
 'вперёд от текущего месяца; функция только создаёт партиции — хранение не ограничивает '
 'и ничего не удаляет.';
 
-SELECT public.ensure_time_partitions(12, 24);
+SELECT etl_meta.egisz_ensure_time_partitions(12, 24);
 
 -- createdate — ключ партиционирования; logid — ключ watermark/transform (батч и lookback
 -- идут по LOGID, без индекса на logid Postgres обходит все партиции на каждом JOIN).
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_createdate ON exchangelog_raw (createdate);
-CREATE INDEX IF NOT EXISTS idx_exchangelog_raw_logid ON exchangelog_raw (logid);
-CREATE INDEX IF NOT EXISTS idx_documents_semd_code ON documents (semd_code);
-CREATE INDEX IF NOT EXISTS idx_documents_local_uid ON documents (local_uid);
-CREATE INDEX IF NOT EXISTS idx_documents_emdr_id ON documents (emdr_id);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_createdate ON raw_egisz.exchangelog (createdate);
+CREATE INDEX IF NOT EXISTS idx_exchangelog_logid ON raw_egisz.exchangelog (logid);
+CREATE INDEX IF NOT EXISTS idx_documents_semd_code ON mart_egisz.documents (semd_code);
+CREATE INDEX IF NOT EXISTS idx_documents_local_uid ON mart_egisz.documents (local_uid);
+CREATE INDEX IF NOT EXISTS idx_documents_emdr_id ON mart_egisz.documents (emdr_id);
 -- Резолвинг callback→документ использует нормализованный emdr_id.
 CREATE INDEX IF NOT EXISTS idx_documents_emdr_id_norm
-    ON documents (lower(NULLIF(btrim(emdr_id), '')))
+    ON mart_egisz.documents (lower(NULLIF(btrim(emdr_id), '')))
     WHERE NULLIF(btrim(emdr_id), '') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON documents (last_callback_at);
+CREATE INDEX IF NOT EXISTS idx_documents_last_callback_at ON mart_egisz.documents (last_callback_at);
 -- Членство в очереди обработки читает отметку первого ответа на любом моменте времени.
-CREATE INDEX IF NOT EXISTS idx_documents_first_callback_at ON documents (first_callback_at);
+CREATE INDEX IF NOT EXISTS idx_documents_first_callback_at ON mart_egisz.documents (first_callback_at);
 -- Инкрементальное сопровождение document_attributes читает документы по updated_at.
-CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON documents (updated_at);
-CREATE INDEX IF NOT EXISTS idx_documents_status ON documents (status);
-CREATE INDEX IF NOT EXISTS idx_documents_jid ON documents (jid);
-CREATE INDEX IF NOT EXISTS idx_documents_org_oid ON documents (org_oid) WHERE org_oid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON documents (first_sent_at);
-CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON documents (document_created_at);
-CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON documents (registered_at);
-CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON documents (result_logid);
--- Слой версий: rpt по умолчанию фильтрует по is_current_version; transform пересобирает
--- группу по document_group_id для затронутых батчем экземпляров.
-CREATE INDEX IF NOT EXISTS idx_documents_doc_number ON documents (doc_number);
-CREATE INDEX IF NOT EXISTS idx_documents_group_id ON documents (document_group_id);
-CREATE INDEX IF NOT EXISTS idx_documents_group_current
-    ON documents (document_group_id, is_current_version);
-CREATE INDEX IF NOT EXISTS idx_documents_is_current_version
-    ON documents (is_current_version) WHERE is_current_version;
+CREATE INDEX IF NOT EXISTS idx_documents_updated_at ON mart_egisz.documents (updated_at);
+-- Дата обработки IPS (ips_date в serving_egisz.registration_requests) — то же выражение: журналы
+-- «последние N документов» читают индекс с конца вместо сортировки всего периода.
+CREATE INDEX IF NOT EXISTS idx_documents_ips_date
+    ON mart_egisz.documents ((COALESCE(last_callback_at, registered_at, first_sent_at)));
+CREATE INDEX IF NOT EXISTS idx_documents_status ON mart_egisz.documents (status);
+CREATE INDEX IF NOT EXISTS idx_documents_jid ON mart_egisz.documents (jid);
+CREATE INDEX IF NOT EXISTS idx_documents_org_oid ON mart_egisz.documents (org_oid) WHERE org_oid IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_documents_first_sent_at ON mart_egisz.documents (first_sent_at);
+CREATE INDEX IF NOT EXISTS idx_documents_document_created_at ON mart_egisz.documents (document_created_at);
+CREATE INDEX IF NOT EXISTS idx_documents_registered_at ON mart_egisz.documents (registered_at);
+CREATE INDEX IF NOT EXISTS idx_documents_result_logid ON mart_egisz.documents (result_logid);
+-- Связь запросов с документом пересчитывается по ключу документа и по прежнему документу запроса.
+CREATE INDEX IF NOT EXISTS idx_documents_document_key
+    ON mart_egisz.documents (jid, lower(btrim(semd_code)), lower(btrim(doc_number)));
+CREATE INDEX IF NOT EXISTS idx_documents_document_id ON mart_egisz.documents (document_id);
+CREATE INDEX IF NOT EXISTS idx_documents_last_request
+    ON mart_egisz.documents (is_last_request) WHERE is_last_request;
 CREATE INDEX IF NOT EXISTS idx_dim_organizations_fir_oid
-    ON dim_organizations (fir_oid)
+    ON mart_egisz.dim_organizations (fir_oid)
     WHERE fir_oid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_inn
-    ON dim_nsi_organization (inn)
-    WHERE inn IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_ogrn
-    ON dim_nsi_organization (ogrn)
-    WHERE ogrn IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_active_mo
-    ON dim_nsi_organization (inn, oid)
-    WHERE delete_date IS NULL
-      AND parent_id IS NULL
-      AND oid LIKE '1.2.643.5.1.13.13.12.2.%';
 
-CREATE INDEX IF NOT EXISTS idx_transactions_log_date ON transactions (log_date);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_log_date ON stg_egisz.exchange_messages (log_date);
 -- Составной ключ покрывает «последняя транзакция документа» (recompute_document_attributes
 -- берёт её дважды на документ) и выбор ошибок текущего состояния документа по времени.
-CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_recent
-    ON transactions (dwh_id, log_date DESC, logid DESC);
-CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions (status);
-CREATE INDEX IF NOT EXISTS idx_transactions_jid ON transactions (jid);
--- Ошибки связи за период читаются по времени сообщения среди сообщений с элементами ошибки.
-CREATE INDEX IF NOT EXISTS idx_transactions_error_log_date
-    ON transactions (log_date) WHERE error_details IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_transactions_patient_hash ON transactions (patient_hash);
-CREATE INDEX IF NOT EXISTS idx_transactions_doctor_hash ON transactions (doctor_hash);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_dwh_id_recent
+    ON stg_egisz.exchange_messages (dwh_id, log_date DESC, logid DESC);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_status ON stg_egisz.exchange_messages (status);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_jid ON stg_egisz.exchange_messages (jid);
+-- Ошибки связи и элементы ответа за период читаются по времени сообщения.
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_network_error_log_date
+    ON stg_egisz.exchange_messages (log_date) WHERE network_error_text IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_response_error_log_date
+    ON stg_egisz.exchange_messages (log_date) WHERE remd_errors IS NOT NULL OR ihe_errors IS NOT NULL;
 -- Scoped semd backfill: DISTINCT ON (dwh_id) по последней транзакции с semd_code.
-CREATE INDEX IF NOT EXISTS idx_transactions_dwh_id_semd
-    ON transactions (dwh_id, log_date DESC, logid DESC)
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_dwh_id_semd
+    ON stg_egisz.exchange_messages (dwh_id, log_date DESC, logid DESC)
     WHERE NULLIF(btrim(semd_code), '') IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON dim_licenses (jid);
-CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON dim_licenses (mo_uid);
-CREATE INDEX IF NOT EXISTS idx_transactions_xml_dwh_id ON transactions (xml_dwh_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_xml_parsed_at ON transactions (xml_parsed_at);
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_jid ON mart_egisz.dim_licenses (jid);
+CREATE INDEX IF NOT EXISTS idx_dim_licenses_mo_uid ON mart_egisz.dim_licenses (mo_uid);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_xml_dwh_id ON stg_egisz.exchange_messages (xml_dwh_id);
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_xml_parsed_at ON stg_egisz.exchange_messages (xml_parsed_at);
 -- Сигнал здоровья читает последние размеченные ответы по LOGID: упорядоченный по LOGID
 -- индекс даёт остановку после 500 строк, составной с link_method впереди сортировал бы все.
-CREATE INDEX IF NOT EXISTS idx_transactions_logid_linked
-    ON transactions (logid DESC)
+CREATE INDEX IF NOT EXISTS idx_exchange_messages_logid_linked
+    ON stg_egisz.exchange_messages (logid DESC)
     WHERE link_method IS NOT NULL AND relates_to_msgid IS NOT NULL;
-DROP INDEX IF EXISTS idx_transactions_link_method_logid;
 
--- Реестр подач: связь msgid→document_uid и подсчёт попыток подачи документа.
-CREATE INDEX IF NOT EXISTS idx_dim_message_document_msgid
-    ON dim_message_document (msgid, source_egmid DESC)
-    WHERE msgid IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_dim_message_document_uid
-    ON dim_message_document (document_uid)
-    WHERE document_uid IS NOT NULL;

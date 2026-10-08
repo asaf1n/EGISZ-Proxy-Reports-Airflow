@@ -1,7 +1,7 @@
 {
   "name": "Список клиник",
   "width": "full",
-  "description": "Аудит сопоставления клиник из CASH/JPERSONS со справочником НСИ организаций. Источник — `rpt_clinic_nsi_mapping`.",
+  "description": "Аудит сопоставления клиник из CASH/JPERSONS со справочником НСИ организаций. Источник — `clinic_nsi_mapping`.",
   "parameters": [
     {
       "id": "09c00000-0000-4000-8000-000000000001",
@@ -46,7 +46,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM public.rpt_clinic_nsi_mapping WHERE is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM serving_egisz.clinic_nsi_mapping WHERE is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
           "template-tags": {
             "clinic_jid": {
               "widget-type": "string/=",
@@ -89,23 +89,23 @@
       },
       "metabase-field-filters": {
         "clinic_jid": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "jid"
         },
         "cash_name": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "cash_name"
         },
         "nsi_name": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "nsi_name"
         },
         "inn": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "inn"
         },
         "oid": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "oid"
         }
       },
@@ -169,7 +169,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM public.rpt_clinic_nsi_mapping WHERE NOT is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
+          "query": "SELECT jid AS \"JID\", COALESCE(NULLIF(btrim(cash_name), ''), '—') AS \"Наименование CASH\", COALESCE(NULLIF(btrim(nsi_name), ''), '—') AS \"Наименование НСИ\", COALESCE(NULLIF(btrim(inn), ''), '—') AS \"ИНН\", COALESCE(NULLIF(btrim(oid), ''), '—') AS \"OID\", last_success_registered_at AS \"Дата последней успешной регистрации ЭМД\" FROM serving_egisz.clinic_nsi_mapping WHERE NOT is_mapped [[AND {{clinic_jid}}]] [[AND {{cash_name}}]] [[AND {{nsi_name}}]] [[AND {{inn}}]] [[AND {{oid}}]] ORDER BY jid",
           "template-tags": {
             "clinic_jid": {
               "widget-type": "string/=",
@@ -212,23 +212,23 @@
       },
       "metabase-field-filters": {
         "clinic_jid": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "jid"
         },
         "cash_name": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "cash_name"
         },
         "nsi_name": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "nsi_name"
         },
         "inn": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "inn"
         },
         "oid": {
-          "table_ref": "public.rpt_clinic_nsi_mapping",
+          "table_ref": "serving_egisz.clinic_nsi_mapping",
           "field_name": "oid"
         }
       },
