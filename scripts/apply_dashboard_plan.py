@@ -17,7 +17,7 @@ with suppress(Exception):  # pragma: no cover
 ROOT = Path(__file__).resolve().parents[1]
 DASH_01 = ROOT / "metabase_dashboards" / "01_integration_egisz.json"
 
-# Единая палитра по категориям ошибок (mart_egisz.dim_error_categories) и виду «Ошибка
+# Единая палитра по категориям ошибок (mart_egisz.dim_error_category) и виду «Ошибка
 # связи»: категорий у него нет, в разрезах по категории вид занимает её место. Каждый тип
 # наследует цвет своей категории → сунберст и стэк-бар «парных» карточек согласованы.
 CATEGORY_COLORS: dict[str, str] = {
@@ -56,7 +56,7 @@ def error_type_color_map() -> dict[str, str]:
     colors = {"Категория ошибки": "#BAB0AC"}
     colors.update(CATEGORY_COLORS)  # сами категории (внутреннее кольцо сунберста)
 
-    # ('CODE', <id>, '<описание>', '<контур>') — сид dim_nsi_error_codes.
+    # ('CODE', <id>, '<описание>', '<контур>') — сид dim_nsi_error_code.
     nsi = {
         code: descr.replace("''", "'")
         for code, descr in re.findall(r"\('([A-Z0-9_.]+)',\s*\d+,\s*'((?:[^']|'')+)',\s*'", schema_sql)
@@ -83,7 +83,7 @@ def pending_segments() -> tuple[tuple[str, str, int | None, bool], ...]:
     пересборкой и не требует правки SQL.
     """
     schema_sql = (ROOT / "db" / "01_schema.sql").read_text(encoding="utf-8")
-    start = schema_sql.index("INSERT INTO mart_egisz.dim_pending_segments")
+    start = schema_sql.index("INSERT INTO dim_pending_segments")
     block = schema_sql[start : schema_sql.index("ON CONFLICT", start)]
     rows = re.findall(
         r"\('(\w+)',\s*'((?:[^']|'')+)',\s*(\d+|NULL),\s*(\d+),\s*(true|false)\)", block
@@ -330,29 +330,29 @@ DOCUMENTS_MODEL_REF = "Документы"
 ERROR_BREAKDOWN_MODEL_REF = "Разбивка ошибок"
 SENT_MODEL_REF = "Отправленные"
 
-# Ошибки документа — строки serving_egisz.document_errors (ошибки текущего
+# Ошибки документа — строки mart_egisz_selfservice.document_error (ошибки текущего
 # состояния). Разбор ошибок берёт элементы отказа регистрации и ошибки связи — тот же
 # отбор, что у агрегатов mart_egisz.agg_document_error_*: элементы в подтверждении
 # регистрации отказом не являются. Таблицу не алиасить: фильтр по полю разворачивается в
-# полное имя "serving_egisz"."document_errors"."<поле>".
-DOCUMENT_ERROR = "serving_egisz.document_errors"
+# полное имя "mart_egisz_selfservice"."document_error"."<поле>".
+DOCUMENT_ERROR = "mart_egisz_selfservice.document_error"
 ERROR_ANALYSIS_SCOPE = (
-    "(document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи')"
+    "(document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи')"
 )
 # У ошибки связи категории нет: в разрезах по категории вид занимает её место.
-ERROR_GROUP = "COALESCE(document_errors.error_category, document_errors.error_kind)"
+ERROR_GROUP = "COALESCE(document_error.error_category, document_error.error_kind)"
 # Отбор документа по типу ошибки — наличие такой ошибки в текущем состоянии документа.
 ERROR_TYPE_EXISTS = (
     f"EXISTS (SELECT 1 FROM {DOCUMENT_ERROR} "
-    "WHERE document_errors.dwh_id = documents_current.dwh_id AND {{error_type}})"
+    "WHERE document_error.dwh_id = rpt_documents.dwh_id AND {{error_type}})"
 )
 ERROR_TYPE_FIELD_FILTER = {"table_ref": DOCUMENT_ERROR, "field_name": "error_type"}
 # Ошибка связи документа — текущая ошибка вида «Ошибка связи» (после последнего
 # асинхронного ответа либо, без ответа, любая).
 NETWORK_ERROR_EXISTS = (
     f"EXISTS (SELECT 1 FROM {DOCUMENT_ERROR} "
-    "WHERE document_errors.dwh_id = documents_current.dwh_id "
-    "AND document_errors.error_kind = 'Ошибка связи')"
+    "WHERE document_error.dwh_id = rpt_documents.dwh_id "
+    "AND document_error.error_kind = 'Ошибка связи')"
 )
 
 # Карточки без дрилла (агрегаты-рейтинги без естественного грейна для строки).
@@ -451,7 +451,7 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "Наименование клиники"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
     {"enabled": True, "name": "localUid СЭМД"},
-    {"enabled": True, "name": "Тип ошибки"},
+    {"enabled": True, "name": "Типы ошибки"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Связанное сообщение"},
     {"enabled": True, "name": "LOGID"},
@@ -462,15 +462,15 @@ ARCHIVE_TABLE_COLUMNS = [
     {"enabled": False, "name": "День"},
 ]
 
-# Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Тип ошибки» подняты
+# Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Типы ошибки» подняты
 # к идентификаторам документа, «Host Клиники» уведён в конец.
 LATEST_OPERATIONS_TABLE_COLUMNS = [
     {"enabled": True, "name": "Дата обработки"},
     {"enabled": True, "name": "Статус"},
     {"enabled": True, "name": "Клиника"},
     {"enabled": True, "name": "СЭМД"},
-    {"enabled": True, "name": "Тип ошибки"},
-    {"enabled": True, "name": "Исходный текст ошибки"},
+    {"enabled": True, "name": "Типы ошибки"},
+    {"enabled": True, "name": "ns2_error"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
@@ -486,8 +486,8 @@ LATEST_OPERATIONS_COLUMN_SETTINGS = {
     '["name","СЭМД"]': {"column_title": "СЭМД", "text_style": "wrap"},
     '["name","Клиника"]': {"column_title": "Клиника"},
     '["name","localUid СЭМД"]': {"column_title": "localUid"},
-    '["name","Тип ошибки"]': {"column_title": "Тип ошибки", "text_style": "wrap"},
-    '["name","Исходный текст ошибки"]': {"column_title": "Исходный текст ошибки", "text_style": "wrap"},
+    '["name","Типы ошибки"]': {"column_title": "Типы ошибки", "text_style": "wrap"},
+    '["name","ns2_error"]': {"column_title": "ns2_error", "text_style": "wrap"},
     '["name","Host Клиники (ГОСТ VPN)"]': {"column_title": "Host"},
 }
 
@@ -500,7 +500,7 @@ DOCUMENT_FILTERS = (
 DOCUMENT_VOLUME_BY_DAY_QUERY = (
     "SELECT first_sent_at::date AS \"Дата\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE first_sent_at::date IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "[[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] "
@@ -514,7 +514,7 @@ DOCUMENT_VOLUME_BY_DAY_QUERY = (
 STATUS_BY_DAY_QUERY = (
     "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM serving_egisz.documents_current WHERE status_detail <> 'no_response' "
+    "FROM public.rpt_documents WHERE status_detail <> 'no_response' "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY ips_date::date, status_detail_label, status_detail_sort "
     "ORDER BY ips_date::date, status_detail_sort"
@@ -526,7 +526,7 @@ STATUS_BY_DAY_QUERY = (
 CLIENT_STATUS_BY_DAY_QUERY = (
     "SELECT ips_date::date AS \"Дата\", status_detail_label AS \"Статус\", "
     "COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE 1=1 [[AND {{clinic_label}}]] [[AND clinic_jid::text = {{client_jid}}]] "
     "AND status_detail <> 'no_response' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] "
     "GROUP BY ips_date::date, status_detail_label, status_detail_sort "
@@ -545,12 +545,12 @@ SERVICE_REFUSALS_BY_HOUR_QUERY = (
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') "
     "/ NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent'), 0), 1) "
     "AS \"Ошибка асинхронного ответа РЭМД, %\" "
-    "FROM serving_egisz.documents_current WHERE ips_date IS NOT NULL "
+    "FROM public.rpt_documents WHERE ips_date IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY 1 ORDER BY 1"
 )
 
-# «Исходный текст ошибки» — текст ошибок документа без изменений (из ns2) рядом с их типами: тип отвечает «что это
+# «ns2_error» — исходный текст ошибок документа рядом с их типами: тип отвечает «что это
 # за ошибка», текст — «что именно ответили по этому документу», и при разборе инцидента
 # нужен именно он. Текст есть только в слое разбора: дашборд читает его оттуда по
 # исключению из стандарта до решения о доступе. Ошибки собираются для уже отобранных
@@ -558,7 +558,7 @@ SERVICE_REFUSALS_BY_HOUR_QUERY = (
 LATEST_OPERATIONS_QUERY = (
     "WITH latest AS ( SELECT dwh_id, ips_date, status_detail_label, clinic_label, "
     "clinic_host, semd_label, semd_local_uid, semd_emdr_id "
-    "FROM serving_egisz.documents_current WHERE 1=1 "
+    "FROM public.rpt_documents WHERE 1=1 "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{status}}]] "
     "ORDER BY ips_date DESC LIMIT 50 ) "
     "SELECT latest.ips_date AS \"Дата обработки\", "
@@ -566,19 +566,19 @@ LATEST_OPERATIONS_QUERY = (
     "latest.clinic_host AS \"Host Клиники (ГОСТ VPN)\", latest.semd_label AS \"СЭМД\", "
     "latest.semd_local_uid AS \"localUid СЭМД\", "
     "latest.semd_emdr_id AS \"Рег. Номер РЭМД\", "
-    "( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' "
-    "ORDER BY document_errors.error_type) "
-    f"FROM {DOCUMENT_ERROR} WHERE document_errors.dwh_id = latest.dwh_id ) "
-    "AS \"Тип ошибки\", "
+    "( SELECT string_agg(DISTINCT document_error.error_type, ' · ' "
+    "ORDER BY document_error.error_type) "
+    f"FROM {DOCUMENT_ERROR} WHERE document_error.dwh_id = latest.dwh_id ) "
+    "AS \"Типы ошибки\", "
     "( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) "
-    "FROM stg_egisz.document_errors_current c WHERE c.dwh_id = latest.dwh_id ) "
-    "AS \"Исходный текст ошибки\" "
+    "FROM stg_egisz.document_error_current c WHERE c.dwh_id = latest.dwh_id ) "
+    "AS \"ns2_error\" "
     "FROM latest ORDER BY latest.ips_date DESC"
 )
 
 STATUS_PERIOD_QUERY = (
     "SELECT status_detail_label AS \"Статус\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" "
-    "FROM serving_egisz.documents_current WHERE status_detail <> 'no_response' "
+    "FROM public.rpt_documents WHERE status_detail <> 'no_response' "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY status_detail_label, status_detail_sort ORDER BY status_detail_sort"
 )
@@ -618,10 +618,10 @@ DOCUMENTS_FILTER_TEMPLATE_TAGS = {
 }
 
 DOCUMENTS_FILTER_FIELD_FILTERS = {
-    "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
-    "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-    "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
-    "status": {"table_ref": "serving_egisz.documents_current", "field_name": "status_detail_label"},
+    "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "status": {"table_ref": "public.rpt_documents", "field_name": "status_detail_label"},
 }
 
 CLIENT_JID_PARAM_ID = "07c00000-0000-4000-8000-000000000003"
@@ -629,7 +629,7 @@ CLIENT_CLINIC_PARAM_ID = "07c00000-0000-4000-8000-000000000005"
 
 CLINIC_VOLUME_QUERY = (
     "WITH filtered AS ( SELECT clinic_jid, clinic_label, dwh_id "
-    "FROM serving_egisz.documents_current WHERE 1=1 "
+    "FROM public.rpt_documents WHERE 1=1 "
     f"{DOCUMENT_FILTERS} ), "
     "totals AS ( SELECT COUNT(DISTINCT dwh_id)::numeric AS total FROM filtered ), "
     "per_clinic AS ( SELECT clinic_jid::text AS \"JID Клиники\", "
@@ -654,7 +654,7 @@ CLINIC_ERROR_VOLUME_LABEL_CHARS = 35
 
 CLINIC_ERROR_VOLUME_QUERY = (
     "WITH filtered AS ( SELECT clinic_jid, clinic_label, clinic_name, dwh_id, status "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE status IN ('success','async_error') "
     "AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     f"{DOCUMENT_FILTERS} ), "
@@ -690,16 +690,16 @@ CLINIC_ERROR_VOLUME_QUERY = (
 # одного типа по разным справочникам остаются раздельными.
 ERROR_TYPE_CLINIC_QUERY = (
     "WITH period_docs AS ( SELECT dwh_id, clinic_jid::text AS clinic_jid "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE status IN ('success', 'async_error') "
     "AND NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
-    "base AS ( SELECT document_errors.error_type, document_errors.nsi_dictionary_oid, "
-    "COALESCE(document_errors.nsi_error_code, document_errors.error_code, '—') AS error_code, "
-    "document_errors.clinic_label, document_errors.clinic_jid::text AS clinic_jid, "
-    "document_errors.dwh_id "
+    "base AS ( SELECT document_error.error_type, document_error.nsi_dictionary_oid, "
+    "COALESCE(document_error.nsi_error_code, document_error.error_code, '—') AS error_code, "
+    "document_error.clinic_label, document_error.clinic_jid::text AS clinic_jid, "
+    "document_error.dwh_id "
     f"FROM {DOCUMENT_ERROR} "
-    "INNER JOIN period_docs pd ON pd.dwh_id = document_errors.dwh_id "
+    "INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id "
     f"WHERE {ERROR_ANALYSIS_SCOPE} "
     "[[AND {{error_type}}]] ), "
     "error_clinic AS ( SELECT error_type, nsi_dictionary_oid, error_code, "
@@ -723,7 +723,7 @@ HEATMAP_QUERY = (
     "COALESCE(NULLIF(BTRIM(clinic_label), ''), 'JID ' || clinic_jid::text) AS clinic, "
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS cnt, "
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS err "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE NULLIF(TRIM(clinic_jid::text), '') IS NOT NULL "
     "[[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] "
     "GROUP BY 1, 2 ) "
@@ -761,19 +761,19 @@ HEATMAP_VIZ = {
 # «%» — доля документов с этим типом от всех документов с ошибками в срезе. Документ с
 # несколькими типами учитывается в каждой строке, поэтому сумма долей может быть >100%.
 # Два знаменателя на разных грейнах: «% ошибок» — доля среди документов с ошибкой
-# (грейн document_errors), «% обработанных» — доля среди всех документов с ответом РЭМД
-# (успех+ошибка, грейн documents_current). Поэтому база — period_docs из documents_current, к
-# которой джойнится document_errors. Фильтры среза — на грейне документа.
+# (грейн document_error), «% обработанных» — доля среди всех документов с ответом РЭМД
+# (успех+ошибка, грейн rpt_documents). Поэтому база — period_docs из rpt_documents, к
+# которой джойнится document_error. Фильтры среза — на грейне документа.
 TOP_ERROR_TYPE_QUERY = (
     "WITH period_docs AS ( "
-    "SELECT dwh_id FROM serving_egisz.documents_current "
+    "SELECT dwh_id FROM public.rpt_documents "
     "WHERE status IN ('success', 'async_error') "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] ), "
-    f"eb AS ( SELECT {ERROR_GROUP} AS cat, document_errors.error_type AS typ, "
-    "document_errors.responsibility AS resp, document_errors.is_retryable AS retryable, "
-    "document_errors.dwh_id AS dwh_id "
+    f"eb AS ( SELECT {ERROR_GROUP} AS cat, document_error.error_type AS typ, "
+    "document_error.responsibility AS resp, document_error.is_retryable AS retryable, "
+    "document_error.dwh_id AS dwh_id "
     f"FROM {DOCUMENT_ERROR} "
-    "INNER JOIN period_docs pd ON pd.dwh_id = document_errors.dwh_id "
+    "INNER JOIN period_docs pd ON pd.dwh_id = document_error.dwh_id "
     f"WHERE {ERROR_ANALYSIS_SCOPE} ), "
     "totals AS ( SELECT "
     "(SELECT COUNT(DISTINCT dwh_id) FROM eb)::numeric AS total_err, "
@@ -791,11 +791,11 @@ TOP_ERROR_TYPE_QUERY = (
 
 TOP_SEMD_BY_ERROR_KIND_QUERY = (
     "WITH base AS ( "
-    "SELECT document_errors.semd_code AS t, "
-    "document_errors.error_type AS k, document_errors.dwh_id AS doc "
+    "SELECT document_error.semd_code AS t, "
+    "document_error.error_type AS k, document_error.dwh_id AS doc "
     f"FROM {DOCUMENT_ERROR} "
     f"WHERE {ERROR_ANALYSIS_SCOPE} "
-    "AND NULLIF(TRIM(document_errors.semd_code), '') IS NOT NULL "
+    "AND NULLIF(TRIM(document_error.semd_code), '') IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] ), "
     "totals AS ( SELECT t, COUNT(DISTINCT doc) AS total FROM base GROUP BY t ), "
     "ranked_semd AS ( SELECT t, total, ROW_NUMBER() OVER (ORDER BY total DESC, t) AS rn FROM totals ), "
@@ -816,7 +816,7 @@ TOP_SEMD_BY_ERRORS_QUERY = (
     "SELECT semd_label AS label, "
     "COUNT(DISTINCT dwh_id)::bigint AS total, "
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error')::bigint AS errs "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE status IN ('success','async_error') "
     "AND NULLIF(TRIM(semd_label), '') IS NOT NULL "
     f"{DOCUMENT_FILTERS} GROUP BY 1 ), "
@@ -829,9 +829,9 @@ TOP_SEMD_BY_ERRORS_QUERY = (
 )
 
 ERROR_TYPE_CLINIC_FIELD_FILTERS = {
-    "dwh_date": {"table_ref": "serving_egisz.documents_current", "field_name": "processed_at"},
-    "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_jid"},
-    "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_code"},
+    "dwh_date": {"table_ref": "public.rpt_documents", "field_name": "processed_at"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_jid"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_code"},
     "error_type": ERROR_TYPE_FIELD_FILTER,
 }
 
@@ -932,7 +932,7 @@ SENT_TABLE_COLUMNS = [
 
 # Число подач берётся из реестра шлюза: повторная отправка не меняет localUid, поэтому
 # счётчик показывает, сколько раз документ уже отправляли до текущего момента.
-# Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "serving_egisz"."documents_sent".<col>.
+# Без алиаса таблицы: фильтры-поля Metabase разворачиваются в "public"."rpt_documents_sent".<col>.
 # Разбор идёт двумя таблицами по состоянию отправки: «В обработке» — рабочая очередь,
 # по ней ответ ещё ждут; «Без ответа» — терминальное состояние, там уже разбор инцидента.
 # Смешивать их в одном списке значит прятать вторую под первой: свежие отправки
@@ -947,7 +947,7 @@ def _sent_table_query(state: str, order: str) -> str:
         'pending_days AS "Суток с отправки", attempt_count AS "Подач в ЕГИСЗ", '
         'sent_state_label AS "Состояние отправки", '
         f'pending_segment_label AS "{WAIT_DIMENSION_LABEL}" '
-        "FROM serving_egisz.documents_sent "
+        "FROM public.rpt_documents_sent "
         f"WHERE sent_state = '{state}' "
         "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
         "[[AND {{local_uid}}]] [[AND {{pending_segment}}]] "
@@ -981,8 +981,8 @@ SENT_TABLE_COLUMN_SETTINGS = {
     },
 }
 
-# Вкладка «Отправленные» целиком строится на documents_sent: состояние отправки и
-# ступень обработки приходят из справочников (dim_sent_states, dim_pending_segments),
+# Вкладка «Отправленные» целиком строится на rpt_documents_sent: состояние отправки и
+# ступень обработки приходят из справочников (dim_sent_state, dim_pending_segments),
 # поэтому карточки не содержат ни порогов, ни подписей — только отбор по состоянию.
 SENT_FILTERS = (
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
@@ -1032,12 +1032,12 @@ SENT_FILTER_TEMPLATE_TAGS = {
 }
 
 SENT_FIELD_FILTERS = {
-    "ips_date": {"table_ref": "serving_egisz.documents_sent", "field_name": "first_sent_at"},
-    "semd_type": {"table_ref": "serving_egisz.documents_sent", "field_name": "semd_label"},
-    "jid": {"table_ref": "serving_egisz.documents_sent", "field_name": "clinic_label"},
-    "local_uid": {"table_ref": "serving_egisz.documents_sent", "field_name": "semd_local_uid"},
+    "ips_date": {"table_ref": "public.rpt_documents_sent", "field_name": "first_sent_at"},
+    "semd_type": {"table_ref": "public.rpt_documents_sent", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents_sent", "field_name": "clinic_label"},
+    "local_uid": {"table_ref": "public.rpt_documents_sent", "field_name": "semd_local_uid"},
     "pending_segment": {
-        "table_ref": "serving_egisz.documents_sent",
+        "table_ref": "public.rpt_documents_sent",
         "field_name": "pending_segment_label",
     },
 }
@@ -1045,7 +1045,7 @@ SENT_FIELD_FILTERS = {
 
 SENT_NO_RESPONSE_QUERY = (
     'SELECT COUNT(DISTINCT semd_local_uid)::bigint AS "Документов" '
-    "FROM serving_egisz.documents_sent "
+    "FROM public.rpt_documents_sent "
     f"WHERE sent_state = 'no_response' {SENT_FILTERS}"
 )
 
@@ -1053,11 +1053,11 @@ SENT_NO_RESPONSE_QUERY = (
 # неприменимы. Документ, отправленный до начала периода и не получивший ответа, в очереди
 # стоит — отбор по дате отправки выбрасывал бы его и занижал очередь. Остальные срезы
 # очередь по времени не режут и остаются. Ступень биндится к справочнику: колонка ступени
-# в documents_current посчитана от того же момента.
+# в rpt_documents посчитана от того же момента.
 SENT_QUEUE_FIELD_FILTERS = {
-    "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-    "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
-    "pending_segment": {"table_ref": "mart_egisz.dim_pending_segments", "field_name": "label"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "pending_segment": {"table_ref": "public.dim_pending_segments", "field_name": "label"},
 }
 
 # Набор фильтров у карточек очереди один и тот же; ось-лестница у распределений — не
@@ -1074,23 +1074,23 @@ SENT_QUEUE_SLICE_FILTERS = "[[AND {{semd_type}}]] [[AND {{jid}}]]"
 # Таблицы остаются в FROM без алиасов: field filters Metabase разворачиваются
 # в "public"."<таблица>"."<колонка>".
 QUEUE_MEMBERSHIP = (
-    "serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at, now())"
+    "public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, now())"
 )
 
 SENT_QUEUE_CORPUS = (
-    "WITH queue AS ( SELECT serving_egisz.documents_current.dwh_id, "
-    "serving_egisz.documents_current.clinic_label, "
-    "COALESCE(NULLIF(TRIM(serving_egisz.documents_current.semd_code), ''), '(неизвестно)') AS semd_code, "
-    "mart_egisz.dim_pending_segments.code AS segment_code, "
-    "mart_egisz.dim_pending_segments.sort_order AS segment_sort, "
-    "mart_egisz.dim_pending_segments.label AS segment_label, "
-    "EXTRACT(EPOCH FROM (now() - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes "
-    "FROM serving_egisz.documents_current "
-    "JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = "
-    "serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, now()) "
+    "WITH queue AS ( SELECT public.rpt_documents.dwh_id, "
+    "public.rpt_documents.clinic_label, "
+    "COALESCE(NULLIF(TRIM(public.rpt_documents.semd_code), ''), '(неизвестно)') AS semd_code, "
+    "public.dim_pending_segments.code AS segment_code, "
+    "public.dim_pending_segments.sort_order AS segment_sort, "
+    "public.dim_pending_segments.label AS segment_label, "
+    "EXTRACT(EPOCH FROM (now() - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM public.rpt_documents "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(public.rpt_documents.first_sent_at, now()) "
     f"WHERE {QUEUE_MEMBERSHIP} "
-    "AND NOT mart_egisz.dim_pending_segments.is_no_response "
+    "AND NOT public.dim_pending_segments.is_no_response "
     f"{SENT_QUEUE_FILTERS} )"
 )
 
@@ -1141,7 +1141,7 @@ def _column_key(name: str) -> str:
 # Пороговая ступень «окна спасения» — последняя рабочая: дальше только терминальная.
 # Значение порога берётся из справочника, в карточке его нет.
 QUEUE_LAST_WORKING_SEGMENT = (
-    "(SELECT MAX(sort_order) FROM mart_egisz.dim_pending_segments WHERE NOT is_no_response)"
+    "(SELECT MAX(sort_order) FROM public.dim_pending_segments WHERE NOT is_no_response)"
 )
 
 # Ряд 1 — состояние очереди. Тренд-плитки читают ряд по дням: Metabase сравнивает
@@ -1155,13 +1155,13 @@ QUEUE_TREND_CORPUS = (
     "FROM win w CROSS JOIN generate_series(w.start_ts, date_trunc('day', w.end_ts), INTERVAL '1 day') gs ), "
     # Кандидат — документ, который мог стоять в очереди хотя бы в одной точке окна:
     # либо он в ней уже стоял на левой границе, либо отправлен внутри окна.
-    "candidates AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at "
-    "FROM serving_egisz.documents_current CROSS JOIN win w "
-    "WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts "
-    "AND (serving_egisz.documents_current.first_sent_at >= w.start_ts "
-    "OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at, w.start_ts)) "
+    "candidates AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at "
+    "FROM public.rpt_documents CROSS JOIN win w "
+    "WHERE public.rpt_documents.first_sent_at <= w.end_ts "
+    "AND (public.rpt_documents.first_sent_at >= w.start_ts "
+    "OR public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts)) "
     f"{SENT_QUEUE_SLICE_FILTERS} )"
 )
 
@@ -1172,10 +1172,10 @@ QUEUE_TREND_POINT_QUEUE = (
     "LEFT JOIN LATERAL ( SELECT c.dwh_id, "
     "EXTRACT(EPOCH FROM (p.ts - c.first_sent_at)) / 60.0 AS age_minutes "
     "FROM candidates c "
-    "JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = "
-    "serving_egisz.pending_segment_code_at(c.first_sent_at, p.ts) "
-    "WHERE serving_egisz.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) "
-    "AND NOT mart_egisz.dim_pending_segments.is_no_response "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(c.first_sent_at, p.ts) "
+    "WHERE public.is_pending_at(c.first_sent_at, c.first_callback_at, p.ts) "
+    "AND NOT public.dim_pending_segments.is_no_response "
     "[[AND {{pending_segment}}]] ) q ON TRUE"
 )
 
@@ -1192,7 +1192,7 @@ QUEUE_SIZE_QUERY = (
 QUEUE_OVER_24H_QUERY = (
     QUEUE_TREND_CORPUS
     + ", threshold AS ( SELECT max_age_minutes AS minutes "
-    "FROM mart_egisz.dim_pending_segments WHERE code = 'p_24h' ) "
+    "FROM public.dim_pending_segments WHERE code = 'p_24h' ) "
     'SELECT p.day_start::date AS "Дата", '
     "COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.minutes)"
     f'::bigint AS "{QUEUE_OVER_24H_FIELD}" '
@@ -1206,7 +1206,7 @@ QUEUE_OVER_24H_QUERY = (
 # сообщения без связи с документом.
 TRANSPORT_TREND_DAYS = 14
 TRANSPORT_24H_FIELD = "Ошибок связи"
-NETWORK_ERROR = "serving_egisz.network_errors"
+NETWORK_ERROR = "mart_egisz_selfservice.network_error"
 NETWORK_ERROR_FIELD_FILTERS = {
     "ips_date": {"table_ref": NETWORK_ERROR, "field_name": "message_at"},
     "semd_type": {"table_ref": NETWORK_ERROR, "field_name": "semd_label"},
@@ -1276,21 +1276,21 @@ QUEUE_SURVIVAL_SLICE_WEEK_AGO = "Неделю назад"
 QUEUE_SURVIVAL_QUERY = (
     f"WITH slices AS ( SELECT '{QUEUE_SURVIVAL_SLICE_NOW}' AS slice, 1 AS slice_sort, now() AS ts "
     f"UNION ALL SELECT '{QUEUE_SURVIVAL_SLICE_WEEK_AGO}', 2, now() - INTERVAL '7 days' ), "
-    "queue AS ( SELECT s.slice, s.slice_sort, serving_egisz.documents_current.dwh_id, "
-    "EXTRACT(EPOCH FROM (s.ts - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes "
-    "FROM serving_egisz.documents_current CROSS JOIN slices s "
-    "JOIN mart_egisz.dim_pending_segments ON mart_egisz.dim_pending_segments.code = "
-    "serving_egisz.pending_segment_code_at(serving_egisz.documents_current.first_sent_at, s.ts) "
-    "WHERE serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at, s.ts) "
-    "AND NOT mart_egisz.dim_pending_segments.is_no_response "
+    "queue AS ( SELECT s.slice, s.slice_sort, public.rpt_documents.dwh_id, "
+    "EXTRACT(EPOCH FROM (s.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM public.rpt_documents CROSS JOIN slices s "
+    "JOIN public.dim_pending_segments ON public.dim_pending_segments.code = "
+    "public.pending_segment_code_at(public.rpt_documents.first_sent_at, s.ts) "
+    "WHERE public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, s.ts) "
+    "AND NOT public.dim_pending_segments.is_no_response "
     f"{SENT_QUEUE_SLICE_FILTERS} ), "
     "totals AS ( SELECT slice, COUNT(DISTINCT dwh_id) AS total FROM queue GROUP BY 1 ) "
     "SELECT regexp_replace(g.label, '^до ', 'дольше ') AS \"Срок ожидания\", "
     'q.slice AS "Срез", '
     "ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > g.max_age_minutes) "
     '/ NULLIF(MAX(t.total), 0), 1) AS "Ещё ждут, %" '
-    "FROM mart_egisz.dim_pending_segments g CROSS JOIN queue q JOIN totals t ON t.slice = q.slice "
+    "FROM public.dim_pending_segments g CROSS JOIN queue q JOIN totals t ON t.slice = q.slice "
     "WHERE NOT g.is_no_response "
     "GROUP BY g.sort_order, g.label, q.slice, q.slice_sort "
     "ORDER BY q.slice_sort, g.sort_order"
@@ -1333,24 +1333,24 @@ QUEUE_PIVOT_SEMD_QUERY = _queue_matrix_query("semd_code", "Код СЭМД")
 QUEUE_FLOW_QUERY = (
     f"WITH win AS ( SELECT now() - INTERVAL '{QUEUE_FLOW_DAYS} days' AS start_ts, "
     "now() AS end_ts ), "
-    "scope AS ( SELECT serving_egisz.documents_current.dwh_id, serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at, w.start_ts, w.end_ts "
-    "FROM serving_egisz.documents_current CROSS JOIN win w "
-    "WHERE serving_egisz.documents_current.first_sent_at <= w.end_ts "
-    "AND (serving_egisz.documents_current.first_sent_at > w.start_ts "
-    "OR serving_egisz.is_pending_at(serving_egisz.documents_current.first_sent_at, "
-    "serving_egisz.documents_current.first_callback_at, w.start_ts)) "
+    "scope AS ( SELECT public.rpt_documents.dwh_id, public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts, w.end_ts "
+    "FROM public.rpt_documents CROSS JOIN win w "
+    "WHERE public.rpt_documents.first_sent_at <= w.end_ts "
+    "AND (public.rpt_documents.first_sent_at > w.start_ts "
+    "OR public.is_pending_at(public.rpt_documents.first_sent_at, "
+    "public.rpt_documents.first_callback_at, w.start_ts)) "
     f"{SENT_QUEUE_SLICE_FILTERS} ), "
     "flags AS ( SELECT s.dwh_id, "
-    "serving_egisz.is_pending_at(s.first_sent_at, s.first_callback_at, s.start_ts) AS in_start, "
-    "serving_egisz.is_pending_at(s.first_sent_at, s.first_callback_at, s.end_ts) AS in_end, "
+    "public.is_pending_at(s.first_sent_at, s.first_callback_at, s.start_ts) AS in_start, "
+    "public.is_pending_at(s.first_sent_at, s.first_callback_at, s.end_ts) AS in_end, "
     "(s.first_sent_at > s.start_ts) AS arrived, "
     "g_start.is_no_response AS terminal_start, g_end.is_no_response AS terminal_end "
     "FROM scope s "
-    "JOIN mart_egisz.dim_pending_segments g_start "
-    "ON g_start.code = serving_egisz.pending_segment_code_at(s.first_sent_at, s.start_ts) "
-    "JOIN mart_egisz.dim_pending_segments g_end "
-    "ON g_end.code = serving_egisz.pending_segment_code_at(s.first_sent_at, s.end_ts) ), "
+    "JOIN public.dim_pending_segments g_start "
+    "ON g_start.code = public.pending_segment_code_at(s.first_sent_at, s.start_ts) "
+    "JOIN public.dim_pending_segments g_end "
+    "ON g_end.code = public.pending_segment_code_at(s.first_sent_at, s.end_ts) ), "
     "moves AS ( SELECT "
     "COUNT(DISTINCT dwh_id) FILTER (WHERE in_start AND NOT terminal_start AND NOT arrived) AS opening, "
     "COUNT(DISTINCT dwh_id) FILTER (WHERE arrived) AS arrived, "
@@ -1378,18 +1378,18 @@ QUEUE_TAIL_WEEKS = 12
 # отбирается диапазоном по first_sent_at и берёт индекс. Порог по-прежнему читается из
 # dim_pending_segments, а не зашит в текст.
 QUEUE_TAIL_QUERY = (
-    "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone()) "
+    "WITH win AS ( SELECT date_trunc('week', now() AT TIME ZONE public.report_timezone()) "
     f"- INTERVAL '{QUEUE_TAIL_WEEKS - 1} weeks' AS start_wall, "
-    "date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone()) AS last_wall, now() AS end_ts ), "
+    "date_trunc('week', now() AT TIME ZONE public.report_timezone()) AS last_wall, now() AS end_ts ), "
     "points AS ( SELECT gs::date AS week_start, "
-    "LEAST((gs + INTERVAL '7 days') AT TIME ZONE serving_egisz.report_timezone(), w.end_ts) AS ts "
+    "LEAST((gs + INTERVAL '7 days') AT TIME ZONE public.report_timezone(), w.end_ts) AS ts "
     "FROM win w CROSS JOIN generate_series(w.start_wall, w.last_wall, INTERVAL '1 week') gs ), "
     "thresholds AS ( SELECT "
     "MAX(max_age_minutes) FILTER (WHERE code = 'p_24h') AS m_24h, "
     "MAX(max_age_minutes) FILTER (WHERE code = 'p_72h') AS m_72h, "
     "MAX(max_age_minutes) FILTER (WHERE code = 'p_7d') AS m_7d, "
     "MAX(max_age_minutes) FILTER (WHERE NOT is_no_response) AS m_open "
-    "FROM mart_egisz.dim_pending_segments ) "
+    "FROM public.dim_pending_segments ) "
     'SELECT p.week_start AS "Неделя", '
     "ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_24h) "
     '/ NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS "> 24 часов, %", '
@@ -1398,26 +1398,26 @@ QUEUE_TAIL_QUERY = (
     "ROUND(100.0 * COUNT(DISTINCT q.dwh_id) FILTER (WHERE q.age_minutes > t.m_7d) "
     '/ NULLIF(COUNT(DISTINCT q.dwh_id), 0), 1) AS "> 7 суток, %" '
     "FROM points p CROSS JOIN thresholds t "
-    "LEFT JOIN LATERAL ( SELECT serving_egisz.documents_current.dwh_id, EXTRACT(EPOCH FROM "
-    "(p.ts - serving_egisz.documents_current.first_sent_at)) / 60.0 AS age_minutes "
-    "FROM serving_egisz.documents_current "
-    "WHERE serving_egisz.documents_current.first_sent_at <= p.ts "
-    "AND serving_egisz.documents_current.first_sent_at >= p.ts - (t.m_open * INTERVAL '1 minute') "
-    "AND (serving_egisz.documents_current.first_callback_at IS NULL "
-    "OR serving_egisz.documents_current.first_callback_at > p.ts) "
+    "LEFT JOIN LATERAL ( SELECT public.rpt_documents.dwh_id, EXTRACT(EPOCH FROM "
+    "(p.ts - public.rpt_documents.first_sent_at)) / 60.0 AS age_minutes "
+    "FROM public.rpt_documents "
+    "WHERE public.rpt_documents.first_sent_at <= p.ts "
+    "AND public.rpt_documents.first_sent_at >= p.ts - (t.m_open * INTERVAL '1 minute') "
+    "AND (public.rpt_documents.first_callback_at IS NULL "
+    "OR public.rpt_documents.first_callback_at > p.ts) "
     f"{SENT_QUEUE_SLICE_FILTERS} ) q ON TRUE "
     "GROUP BY p.week_start ORDER BY p.week_start"
 )
 
-# Воронка процесса живёт на полном корпусе (documents_current), поэтому фильтры вкладки
+# Воронка процесса живёт на полном корпусе (rpt_documents), поэтому фильтры вкладки
 # переносятся только те, что есть на этом грейне: ступень ожидания и localUid относятся
 # к срезу ожидающих и к процессу регистрации неприменимы.
 DOCUMENTS_FUNNEL_FILTERS = "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]]"
 
 SENT_REGISTRATION_FIELD_FILTERS = {
-    "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
-    "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-    "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
+    "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
 }
 
 SENT_REGISTRATION_FUNNEL_NAME = "Скорость регистрации в РЭМД"
@@ -1486,7 +1486,7 @@ SENT_REGISTRATION_FUNNEL_QUERY = (
     # запроса файла — рассинхрон отметок журнала, а не срок: такие строки в корпус не идут.
     "WITH sent AS ( SELECT dwh_id, "
     "EXTRACT(EPOCH FROM (first_callback_at - first_sent_at)) AS answer_seconds "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE first_sent_at IS NOT NULL AND first_callback_at IS NOT NULL "
     "AND first_callback_at >= first_sent_at "
     f"{DOCUMENTS_FUNNEL_FILTERS} ) "
@@ -1503,7 +1503,7 @@ SENT_REGISTRATION_FUNNEL_QUERY = (
     "COUNT(DISTINCT s.dwh_id) FILTER ("
     "WHERE s.answer_seconds <= g.max_age_minutes * 60"
     ")::bigint "
-    "FROM mart_egisz.dim_pending_segments g CROSS JOIN sent s "
+    "FROM public.dim_pending_segments g CROSS JOIN sent s "
     "WHERE NOT g.is_no_response "
     "GROUP BY g.sort_order, g.label "
     "ORDER BY 1"
@@ -1631,10 +1631,10 @@ UNDELIVERED_TO_CLINIC_FILTER_TAGS = {
     for key in ("ips_date", "semd_type", "jid", "local_uid")
 }
 UNDELIVERED_TO_CLINIC_FIELD_FILTERS = {
-    "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
-    "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-    "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
-    "local_uid": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_local_uid"},
+    "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+    "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+    "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+    "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
 }
 # Недоставленный результат — текущая ошибка связи документа с итоговым статусом: она
 # зафиксирована на последнем асинхронном ответе (ответ не доставлен в МИС) или после
@@ -1643,35 +1643,35 @@ UNDELIVERED_TO_CLINIC_LATEST_ERRORS = (
     "WITH latest_errors AS ( "
     "SELECT DISTINCT ON (c.dwh_id) "
     "c.dwh_id, c.message_at AS error_at, c.error_type, c.error_text "
-    "FROM stg_egisz.document_errors_current c "
+    "FROM stg_egisz.document_error_current c "
     "WHERE c.error_kind = 'Ошибка связи' "
     "ORDER BY c.dwh_id, c.message_at DESC, c.error_no DESC ) "
 )
 UNDELIVERED_TO_CLINIC_QUERY = (
     UNDELIVERED_TO_CLINIC_LATEST_ERRORS
-    + 'SELECT COUNT(DISTINCT serving_egisz.documents_current.dwh_id)::bigint AS "Документов" '
+    + 'SELECT COUNT(DISTINCT public.rpt_documents.dwh_id)::bigint AS "Документов" '
     "FROM latest_errors "
-    "JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id "
-    "WHERE serving_egisz.documents_current.status IN ('success', 'async_error') "
+    "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
+    "WHERE public.rpt_documents.status IN ('success', 'async_error') "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]]"
 )
 UNDELIVERED_TO_CLINIC_DETAIL_QUERY = (
     UNDELIVERED_TO_CLINIC_LATEST_ERRORS
-    + 'SELECT serving_egisz.documents_current.semd_local_uid AS "localUid СЭМД", '
-    'serving_egisz.documents_current.semd_code AS "Код СЭМД", '
-    'serving_egisz.documents_current.semd_name AS "Наименование СЭМД", '
-    'serving_egisz.documents_current.clinic_jid::text AS "JID Клиники", '
-    'serving_egisz.documents_current.clinic_label AS "Клиника", '
-    'serving_egisz.documents_current.first_sent_at AS "Дата отправки", '
-    'serving_egisz.documents_current.ips_date AS "Дата ответа ЕГИСЗ", '
-    'serving_egisz.documents_current.status_detail_label AS "Результат ЕГИСЗ", '
-    'serving_egisz.documents_current.result_logid::text AS "LOGID ответа ЕГИСЗ", '
+    + 'SELECT public.rpt_documents.semd_local_uid AS "localUid СЭМД", '
+    'public.rpt_documents.semd_code AS "Код СЭМД", '
+    'public.rpt_documents.semd_name AS "Наименование СЭМД", '
+    'public.rpt_documents.clinic_jid::text AS "JID Клиники", '
+    'public.rpt_documents.clinic_label AS "Клиника", '
+    'public.rpt_documents.first_sent_at AS "Дата отправки", '
+    'public.rpt_documents.ips_date AS "Дата ответа ЕГИСЗ", '
+    'public.rpt_documents.status_detail_label AS "Результат ЕГИСЗ", '
+    'public.rpt_documents.result_logid::text AS "LOGID ответа ЕГИСЗ", '
     'latest_errors.error_at AS "Дата ошибки доставки", '
-    'latest_errors.error_type AS "Тип ошибки", '
-    'latest_errors.error_text AS "Исходный текст ошибки" '
+    'latest_errors.error_type AS "Тип ошибки доставки", '
+    'LEFT(COALESCE(latest_errors.error_text, \'\'), 180) AS "Текст ошибки доставки" '
     "FROM latest_errors "
-    "JOIN serving_egisz.documents_current ON serving_egisz.documents_current.dwh_id = latest_errors.dwh_id "
-    "WHERE serving_egisz.documents_current.status IN ('success', 'async_error') "
+    "JOIN public.rpt_documents ON public.rpt_documents.dwh_id = latest_errors.dwh_id "
+    "WHERE public.rpt_documents.status IN ('success', 'async_error') "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] "
     "ORDER BY latest_errors.error_at DESC NULLS LAST "
     "LIMIT 200"
@@ -1684,7 +1684,7 @@ def apply_undelivered_to_clinic(card: dict) -> None:
     card["description"] = (
         "Итоговый ответ ЕГИСЗ не доставлен в клинику: у документа есть текущая ошибка "
         "связи — на последнем асинхронном ответе или после него. Текст ошибки — из слоя "
-        "разбора (stg_egisz.document_errors_current)."
+        "разбора (stg_egisz.document_error_current)."
     )
     card.pop("query_tier", None)
     card.pop("source_model", None)
@@ -1710,8 +1710,8 @@ def apply_undelivered_to_clinic(card: dict) -> None:
             {"enabled": True, "name": "Результат ЕГИСЗ"},
             {"enabled": True, "name": "LOGID ответа ЕГИСЗ"},
             {"enabled": True, "name": "Дата ошибки доставки"},
-            {"enabled": True, "name": "Тип ошибки"},
-            {"enabled": True, "name": "Исходный текст ошибки"},
+            {"enabled": True, "name": "Тип ошибки доставки"},
+            {"enabled": True, "name": "Текст ошибки доставки"},
         ]
 
 # «Всего» — весь срез клиники, включая отправленные без ответа; «% успеха» считается
@@ -1728,7 +1728,7 @@ CLINIC_SUCCESS_QUERY = (
     "ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status='success') "
     "/ NULLIF(COUNT(DISTINCT dwh_id) FILTER "
     "(WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\" "
-    "FROM serving_egisz.documents_current "
+    "FROM public.rpt_documents "
     "WHERE COALESCE(NULLIF(TRIM(clinic_jid::text), ''), '') <> '' "
     "[[AND {{ips_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]] [[AND {{status}}]] "
     "GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC"
@@ -1840,37 +1840,37 @@ def fix_sql(query: str) -> str:
 
 
 def fix_detail_quality_sql() -> str:
-    # No table alias on documents_current: Metabase field filters expand to
-    # "documents_current".<col>. Mismatch markers (↯) drive per-cell highlighting.
+    # No table alias on rpt_documents: Metabase field filters expand to
+    # "rpt_documents".<col>. Mismatch markers (↯) drive per-cell highlighting.
     return (
         "WITH base AS (\n"
         "  SELECT\n"
-        "    documents_current.processed_at AS \"Дата обработки\",\n"
-        "    documents_current.status_detail_label AS \"Статус\",\n"
-        "    documents_current.clinic_label AS \"Клиника\",\n"
-        "    documents_current.semd_code AS \"Код СЭМД\",\n"
-        "    documents_current.semd_name AS \"Наименование СЭМД\",\n"
-        "    documents_current.semd_local_uid AS \"localUid СЭМД\",\n"
-        "    document_lineage.clinic_jid::text AS \"JID Клиники\",\n"
+        "    rpt_documents.processed_at AS \"Дата обработки\",\n"
+        "    rpt_documents.status_detail_label AS \"Статус\",\n"
+        "    rpt_documents.clinic_label AS \"Клиника\",\n"
+        "    rpt_documents.semd_code AS \"Код СЭМД\",\n"
+        "    rpt_documents.semd_name AS \"Наименование СЭМД\",\n"
+        "    rpt_documents.semd_local_uid AS \"localUid СЭМД\",\n"
+        "    rpt_document_lineage.clinic_jid::text AS \"JID Клиники\",\n"
         "    CASE\n"
-        "      WHEN documents_current.clinic_oid_unknown\n"
-        "      THEN '↯ ' || document_lineage.clinic_oid_xml\n"
-        "      ELSE COALESCE(NULLIF(btrim(document_lineage.clinic_oid_xml), ''), '—')\n"
+        "      WHEN rpt_documents.clinic_oid_unknown\n"
+        "      THEN '↯ ' || rpt_document_lineage.clinic_oid_xml\n"
+        "      ELSE COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_oid_xml), ''), '—')\n"
         "    END AS \"OID из обмена\",\n"
-        "    COALESCE(NULLIF(BTRIM(document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n"
-        "    COALESCE(NULLIF(btrim(document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n"
-        "    COALESCE(NULLIF(btrim(document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n"
+        "    COALESCE(NULLIF(BTRIM(rpt_document_lineage.clinic_jid_by_oid::text), ''), '—') AS \"ЮЛ по реестру OID\",\n"
+        "    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_host), ''), '—') AS \"Host Клиники (ГОСТ VPN)\",\n"
+        "    COALESCE(NULLIF(btrim(rpt_document_lineage.clinic_jid_resolve_method), ''), '—') AS \"Метод резолва JID\",\n"
         "    TRIM(BOTH ' · ' FROM CONCAT_WS(' · ',\n"
-        "      CASE WHEN NULLIF(BTRIM(documents_current.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n"
-        "      CASE WHEN documents_current.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n"
-        "      CASE WHEN NULLIF(BTRIM(documents_current.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n"
-        "      CASE WHEN NULLIF(BTRIM(documents_current.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n"
-        "      CASE WHEN documents_current.status = 'success' AND documents_current.processed_at IS NULL THEN 'успех без даты' END\n"
+        "      CASE WHEN NULLIF(BTRIM(rpt_documents.clinic_jid::text), '') IS NULL THEN 'без JID' END,\n"
+        "      CASE WHEN rpt_documents.clinic_oid_unknown = true THEN 'OID вне реестра' END,\n"
+        "      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_local_uid::text), '') IS NULL THEN 'без localUid' END,\n"
+        "      CASE WHEN NULLIF(BTRIM(rpt_documents.semd_code::text), '') IS NULL THEN 'без кода СЭМД' END,\n"
+        "      CASE WHEN rpt_documents.status = 'success' AND rpt_documents.processed_at IS NULL THEN 'успех без даты' END\n"
         "    )) AS \"Нарушения\"\n"
-        "  FROM serving_egisz.documents_current\n"
-        "  INNER JOIN mart_egisz_admin.document_lineage\n"
-        "    ON document_lineage.dwh_id = documents_current.dwh_id\n"
-        "  WHERE documents_current.status IN ('success', 'async_error')\n"
+        "  FROM public.rpt_documents\n"
+        "  INNER JOIN public.rpt_document_lineage\n"
+        "    ON rpt_document_lineage.dwh_id = rpt_documents.dwh_id\n"
+        "  WHERE rpt_documents.status IN ('success', 'async_error')\n"
         "    [[AND {{dwh_date}}]] [[AND {{jid}}]] [[AND {{semd_type}}]]\n"
         ")\n"
         "SELECT *\n"
@@ -1904,14 +1904,14 @@ def apply_document_volume_by_day(card: dict) -> None:
     if "ips_date" in tags:
         tags["ips_date"]["display-name"] = "По дате поступления"
     card["metabase-field-filters"] = {
-        "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "first_sent_at"},
-        "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-        "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
-        "local_uid": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_local_uid"},
-        "relates_to": {"table_ref": "serving_egisz.documents_current", "field_name": "relates_to_msgid"},
-        "emdr_id": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_emdr_id"},
-        "status": {"table_ref": "serving_egisz.documents_current", "field_name": "status_detail_label"},
-        "log_id": {"table_ref": "serving_egisz.documents_current", "field_name": "logid"},
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "first_sent_at"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+        "local_uid": {"table_ref": "public.rpt_documents", "field_name": "semd_local_uid"},
+        "relates_to": {"table_ref": "public.rpt_documents", "field_name": "relates_to_msgid"},
+        "emdr_id": {"table_ref": "public.rpt_documents", "field_name": "semd_emdr_id"},
+        "status": {"table_ref": "public.rpt_documents", "field_name": "status_detail_label"},
+        "log_id": {"table_ref": "public.rpt_documents", "field_name": "logid"},
     }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["Дата"]
@@ -2028,9 +2028,9 @@ def apply_status_by_day(card: dict) -> None:
     dq = card.setdefault("dataset_query", {})
     dq["native"]["query"] = STATUS_BY_DAY_QUERY
     card["metabase-field-filters"] = {
-        "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
-        "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
-        "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
     }
     viz = card.setdefault("visualization_settings", {})
     viz["graph.dimensions"] = ["Дата", "Статус"]
@@ -2074,7 +2074,7 @@ def apply_refusals_hourly(card: dict) -> None:
         "(%). Ошибка асинхронного ответа — исход: её доля от документов с ответом РЭМД за "
         "час, отправленные без ответа в знаменатель не входят. Ошибка связи статус не "
         "меняет: её доля от всех документов часа, включая документы без ответа. "
-        "Ось — «Дата обработки» (`documents_current`), период — фильтр «Обработано IPS»."
+        "Ось — «Дата обработки» (`rpt_documents`), период — фильтр «Обработано IPS»."
     )
     card["dataset_query"]["native"]["query"] = SERVICE_REFUSALS_BY_HOUR_QUERY
     viz = card.setdefault("visualization_settings", {})
@@ -2243,11 +2243,11 @@ def apply_top_error_type_table(card: dict) -> None:
     )
     card["dataset_query"]["native"]["query"] = TOP_ERROR_TYPE_QUERY
     # Знаменатель «обработанных» живёт на грейне документа → фильтры среза привязаны к
-    # documents_current (не к document_errors), иначе предикат в period_docs не развернётся.
+    # rpt_documents (не к document_error), иначе предикат в period_docs не развернётся.
     card["metabase-field-filters"] = {
-        "ips_date": {"table_ref": "serving_egisz.documents_current", "field_name": "ips_date"},
-        "jid": {"table_ref": "serving_egisz.documents_current", "field_name": "clinic_label"},
-        "semd_type": {"table_ref": "serving_egisz.documents_current", "field_name": "semd_label"},
+        "ips_date": {"table_ref": "public.rpt_documents", "field_name": "ips_date"},
+        "jid": {"table_ref": "public.rpt_documents", "field_name": "clinic_label"},
+        "semd_type": {"table_ref": "public.rpt_documents", "field_name": "semd_label"},
     }
     viz = card.setdefault("visualization_settings", {})
     for key in list(viz.keys()):
@@ -2440,7 +2440,7 @@ def apply_sent_tab(dash: dict) -> None:
         card["metabase-field-filters"] = deepcopy(SENT_FIELD_FILTERS)
         viz = card.setdefault("visualization_settings", {})
         if name in SENT_QUEUE_CARDS:
-            # Набор документов очереди — documents_current на текущем моменте; период
+            # Набор документов очереди — rpt_documents на текущем моменте; период
             # к состоянию на момент неприменим, поэтому даты в карточке нет вовсе.
             # Перечень тегов равен перечню привязок: тег, которого нет в SQL карточки,
             # не объявляется — иначе фильтр «двигает» одни карточки и молчит на других.
@@ -2833,7 +2833,7 @@ def convert_archive_card(card: dict) -> None:
     viz["table.columns"] = deepcopy(ARCHIVE_TABLE_COLUMNS)
     cs = viz.setdefault("column_settings", {})
     cs.pop('["name","Сводка ошибки"]', None)
-    cs['["name","Тип ошибки"]'] = {"column_title": "Тип ошибки", "text_style": "wrap"}
+    cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
     cs['["name","dwh_id"]'] = {"column_title": "dwh_id"}
 
 
@@ -2915,6 +2915,7 @@ STATUS_TOKEN_MIGRATION = [
     ("status != 'waiting'", "status_detail <> 'no_response'"),
     ("status = 'waiting'", "status = 'sent'"),
     ("status IN ('waiting')", "status = 'sent'"),
+    ("rpt_documents_waiting", "rpt_documents_sent"),
     ("waiting_days", "pending_days"),
     ("waiting_hours", "pending_hours"),
     ("wait_segment", "pending_segment"),
@@ -3139,7 +3140,7 @@ OPERATIONAL_EXTRA_FILTERS = {
 
 OPERATIONAL_EXTRA_FIELD_FILTERS = {
     "status": DOCUMENTS_FILTER_FIELD_FILTERS["status"],
-    "pending_segment": {"table_ref": "serving_egisz.documents_current", "field_name": "pending_segment_label"},
+    "pending_segment": {"table_ref": "public.rpt_documents", "field_name": "pending_segment_label"},
     "error_type": ERROR_TYPE_FIELD_FILTER,
 }
 
@@ -3147,7 +3148,7 @@ OPERATIONAL_EXTRA_FIELD_FILTERS = {
 def apply_operational_filters(dash: dict) -> None:
     """Все фильтры вкладки «Оперативный мониторинг» действуют на каждую её карточку.
 
-    Условие встаёт в отбор документов (первый блок фильтров по documents_current), поэтому
+    Условие встаёт в отбор документов (первый блок фильтров по rpt_documents), поэтому
     знаменатели долей считаются от того же отобранного набора, что и числители. Очередь
     (карточка без периода) не трогается: это текущее состояние документов без исхода,
     и её набор общий с карточками очереди вкладки «Отправленные». Одноимённые карточки
@@ -3165,13 +3166,13 @@ def apply_operational_filters(dash: dict) -> None:
             continue
         query = native["query"]
         anchor = "[[AND {{jid}}]]"
-        if ("FROM serving_egisz.documents_current" not in query or anchor not in query
+        if ("FROM public.rpt_documents" not in query or anchor not in query
                 or "{{ips_date}}" not in query):
             continue
         missing = [key for key in OPERATIONAL_EXTRA_FILTERS if "{{" + key + "}}" not in query]
         if not missing:
             continue
-        pos = query.index(anchor, query.index("FROM serving_egisz.documents_current")) + len(anchor)
+        pos = query.index(anchor, query.index("FROM public.rpt_documents")) + len(anchor)
         query = query[:pos] + "".join(" " + OPERATIONAL_EXTRA_FILTERS[k] for k in missing) + query[pos:]
         native["query"] = query
         tags = native.setdefault("template-tags", {})
@@ -3238,7 +3239,7 @@ CONTRIBUTION_UP_BG = "#FEE2E2"
 CONTRIBUTION_DOWN_BG = "#DCFCE7"
 
 # Знаменатель — документы с ответом РЭМД, числитель — отказы асинхронного ответа: тот же
-# корпус, что у XmR-карты и витрины documents_weekly. Отбор по типу ошибки apply_error_type_filters
+# корпус, что у XmR-карты и витрины rpt_documents_weekly. Отбор по типу ошибки apply_error_type_filters
 # добавляет к числителю обоих периодов, знаменатели не меняются.
 _CONTRIBUTION_COUNTS = (
     "COUNT(DISTINCT dwh_id) FILTER (WHERE status <> 'sent') AS docs, "
@@ -3247,9 +3248,9 @@ _CONTRIBUTION_COUNTS = (
 
 CONTRIBUTION_QUERY = (
     # Пояс отчётного календаря вычисляется один раз: вызов на каждой строке растягивает запрос.
-    "WITH calendar AS MATERIALIZED ( SELECT serving_egisz.report_timezone() AS tz ), "
+    "WITH calendar AS MATERIALIZED ( SELECT public.report_timezone() AS tz ), "
     f"period AS ( SELECT clinic_label, {_CONTRIBUTION_COUNTS}, MAX(ips_date) AS last_at "
-    "FROM serving_egisz.documents_current WHERE ips_date IS NOT NULL "
+    "FROM public.rpt_documents WHERE ips_date IS NOT NULL "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), "
     # Опорный период — у фазы, в которой лежит последняя неделя периода: это центр XmR-карты
     # для той же недели. Незакрытый опорный период не сравнивается, как и у карты.
@@ -3257,12 +3258,12 @@ CONTRIBUTION_QUERY = (
     "ph.baseline_start::timestamp AT TIME ZONE c.tz AS from_ts, "
     "(ph.baseline_end + 7)::timestamp AT TIME ZONE c.tz AS to_ts "
     "FROM calendar c CROSS JOIN LATERAL ( SELECT baseline_start, baseline_end "
-    "FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week' "
+    "FROM public.dim_control_chart_phases WHERE period_grain = 'week' "
     "AND phase_start <= ( SELECT date_trunc('week', MAX(last_at) AT TIME ZONE c.tz)::date "
     "FROM period ) ORDER BY phase_start DESC LIMIT 1 ) ph "
     "WHERE ph.baseline_end < date_trunc('week', now() AT TIME ZONE c.tz)::date ), "
     f"baseline AS ( SELECT clinic_label, {_CONTRIBUTION_COUNTS} "
-    "FROM serving_egisz.documents_current CROSS JOIN phase "
+    "FROM public.rpt_documents CROSS JOIN phase "
     "WHERE ips_date >= phase.from_ts AND ips_date < phase.to_ts "
     "[[AND {{semd_type}}]] [[AND {{jid}}]] GROUP BY clinic_label ), "
     "clinics AS ( SELECT COALESCE(p.clinic_label, b.clinic_label) AS clinic_label, "
@@ -3286,13 +3287,13 @@ CONTRIBUTION_QUERY = (
     # Самый частый тип отказа по документам клиники с ошибкой за период — тот же отбор,
     # что у числителя доли; ничья — по алфавиту.
     "top_error AS ( SELECT clinic_label, top_type FROM ( "
-    "SELECT serving_egisz.documents_current.clinic_label, document_errors.error_type AS top_type, "
-    "ROW_NUMBER() OVER (PARTITION BY serving_egisz.documents_current.clinic_label "
-    "ORDER BY COUNT(DISTINCT document_errors.dwh_id) DESC, document_errors.error_type) AS rn "
-    f"FROM serving_egisz.documents_current JOIN {DOCUMENT_ERROR} "
-    "ON document_errors.dwh_id = serving_egisz.documents_current.dwh_id "
-    "WHERE document_errors.status = 'async_error' "
-    "AND document_errors.error_kind = 'Ошибка асинхронного ответа' "
+    "SELECT public.rpt_documents.clinic_label, document_error.error_type AS top_type, "
+    "ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_label "
+    "ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn "
+    f"FROM public.rpt_documents JOIN {DOCUMENT_ERROR} "
+    "ON document_error.dwh_id = public.rpt_documents.dwh_id "
+    "WHERE document_error.status = 'async_error' "
+    "AND document_error.error_kind = 'Ошибка асинхронного ответа' "
     "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] "
     "GROUP BY 1, 2 ) ranked WHERE rn = 1 ) "
     f'SELECT "Клиника", "{CONTRIBUTION_DOCS_BASE}", "{CONTRIBUTION_DOCS_PERIOD}", '
@@ -3578,7 +3579,7 @@ EXECUTIVE_PULSE_SHELL = (
     "WITH days AS (SELECT generate_series(CURRENT_DATE - @span@, CURRENT_DATE@end@, "
     "'@step@ day'::interval)::date AS day), "
     "doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid "
-    "FROM serving_egisz.documents_current WHERE ips_date >= CURRENT_DATE - @lookback@ [[AND {{jid}}]]) "
+    "FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - @lookback@ [[AND {{jid}}]]) "
     'SELECT days.day AS "Дата", @metric@ FROM days '
     "LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day "
     "GROUP BY days.day ORDER BY days.day"
@@ -3649,7 +3650,7 @@ def _executive_card(
     layout: tuple[int, int, int, int],
     seq: int,
     *,
-    table_ref: str = "serving_egisz.documents_current",
+    table_ref: str = "public.rpt_documents",
 ) -> dict:
     kinds = [kind for kind in ("ips_date", "jid") if "{{" + kind + "}}" in query]
     row, col, size_x, size_y = layout
@@ -3697,7 +3698,7 @@ def _executive_text(text: str, layout: tuple[int, int, int, int]) -> dict:
 
 def _executive_scalar(expression: str, alias: str) -> str:
     return (
-        f'SELECT {expression} AS "{alias}" FROM serving_egisz.documents_current WHERE 1=1 '
+        f'SELECT {expression} AS "{alias}" FROM public.rpt_documents WHERE 1=1 '
         "[[AND {{ips_date}}]] [[AND {{jid}}]]"
     )
 
@@ -3714,7 +3715,7 @@ def _executive_active_base(tail: str) -> str:
     """Денежные карточки: активная база за trailing-30d. Календарный месяц не берём —
     иначе 1-го числа счётчик активных JID обнуляется вместе с MRR."""
     return (
-        "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM serving_egisz.documents_current "
+        "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents "
         "WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] "
         f"AND ips_date >= CURRENT_DATE - INTERVAL '30 days') {tail}"
     )
@@ -3727,7 +3728,7 @@ def _executive_daily_base(metric: str, alias: str) -> str:
     и подъём читался бы как рост базы, а не как накопление данных."""
     return (
         "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS "
-        "activity_day FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL "
+        "activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL "
         "[[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), "
         "CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), "
         "CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series("
@@ -3769,7 +3770,7 @@ def _executive_per_jid(*aggregates: str) -> str:
     return (
         "WITH per_jid AS (SELECT clinic_jid AS jid, "
         + ", ".join(aggregates)
-        + " FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL "
+        + " FROM public.rpt_documents WHERE clinic_jid IS NOT NULL "
         "[[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) "
     )
 
@@ -3783,12 +3784,12 @@ def _executive_churn_top_error() -> str:
     связи; ничья решается алфавитом. Считается только по JID очереди."""
     return (
         ", top_error AS (SELECT jid, error_type FROM ("
-        "SELECT serving_egisz.documents_current.clinic_jid AS jid, document_errors.error_type, "
-        "ROW_NUMBER() OVER (PARTITION BY serving_egisz.documents_current.clinic_jid "
-        "ORDER BY COUNT(DISTINCT document_errors.dwh_id) DESC, document_errors.error_type) AS rn "
-        f"FROM serving_egisz.documents_current JOIN {DOCUMENT_ERROR} "
-        "ON document_errors.dwh_id = serving_egisz.documents_current.dwh_id "
-        f"WHERE {ERROR_ANALYSIS_SCOPE} AND serving_egisz.documents_current.clinic_jid IN "
+        "SELECT public.rpt_documents.clinic_jid AS jid, document_error.error_type, "
+        "ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_jid "
+        "ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn "
+        f"FROM public.rpt_documents JOIN {DOCUMENT_ERROR} "
+        "ON document_error.dwh_id = public.rpt_documents.dwh_id "
+        f"WHERE {ERROR_ANALYSIS_SCOPE} AND public.rpt_documents.clinic_jid IN "
         f"(SELECT jid FROM per_jid WHERE {_EXECUTIVE_CHURN_PREDICATE}) "
         "[[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t WHERE rn = 1) "
     )
@@ -3803,7 +3804,7 @@ def _executive_silent_base(tail: str) -> str:
         "MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, "
         f"{_EXECUTIVE_DOCS}, {_EXECUTIVE_OK}, "
         f"COUNT(DISTINCT dwh_id) FILTER (WHERE {EXECUTIVE_FINAL_CORPUS}) AS answered "
-        "FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] "
+        "FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] "
         f"AND ips_date >= CURRENT_DATE - INTERVAL '{EXECUTIVE_SILENT_ACTIVE_DAYS} days' "
         "GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - "
         f"INTERVAL '{EXECUTIVE_SILENT_QUIET_DAYS} days') {tail}"
@@ -3815,8 +3816,8 @@ def _executive_silent_base(tail: str) -> str:
 EXECUTIVE_PERIODS: dict[str, dict[str, str]] = {
     "week": {
         "tab": "weekly",
-        "mart": "serving_egisz.documents_weekly",
-        "breakdown": "serving_egisz.document_errors_weekly",
+        "mart": "public.rpt_documents_weekly",
+        "breakdown": "mart_egisz.agg_document_error_weekly",
         "column": "week_start",
         "complete": "is_complete_week",
         "label": "Неделя",
@@ -3830,8 +3831,8 @@ EXECUTIVE_PERIODS: dict[str, dict[str, str]] = {
     },
     "month": {
         "tab": "monthly",
-        "mart": "serving_egisz.documents_monthly",
-        "breakdown": "serving_egisz.document_errors_monthly",
+        "mart": "public.rpt_documents_monthly",
+        "breakdown": "mart_egisz.agg_document_error_monthly",
         "column": "month_start",
         "complete": "is_complete_month",
         "label": "Месяц",
@@ -3868,14 +3869,14 @@ def _xmr_query(grain: str, tail: str) -> str:
         "phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, "
         "ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start "
         "ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, "
-        "baseline_start, baseline_end FROM mart_egisz.dim_control_chart_phases "
+        "baseline_start, baseline_end FROM public.dim_control_chart_phases "
         f"WHERE period_grain = '{grain}' AND phase_start <= s.period_start "
         "ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), "
         "baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER "
         "(WHERE period_start > baseline_start) AS mr_bar FROM phased "
         "WHERE period_start BETWEEN baseline_start AND baseline_end "
         f"AND baseline_end < date_trunc('{grain}', now() AT TIME ZONE "
-        "serving_egisz.report_timezone())::date GROUP BY phase_start "
+        "public.report_timezone())::date GROUP BY phase_start "
         # Без пары соседних периодов размаха нет — нет и границ.
         "HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), "
         "limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, "
@@ -3915,7 +3916,7 @@ def _executive_risk_trend() -> str:
         "WITH daily AS (SELECT clinic_jid AS jid, ips_date::date AS day, "
         "COUNT(DISTINCT dwh_id) AS docs, "
         "COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok "
-        "FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1, 2), "
+        "FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1, 2), "
         "bounds AS (SELECT (date_trunc('week', MIN(day) + "
         f"{active - EXECUTIVE_SILENT_QUIET_DAYS + 6}))::date AS first_week, "
         "(date_trunc('week', CURRENT_DATE) - INTERVAL '7 days')::date AS last_week "
@@ -4191,7 +4192,7 @@ def executive_overview_cards() -> list[dict]:
             "MRR за последние 30 дней / успешные СЭМД за те же 30 дней. Рост означает, что "
             "абонплата собирается, а ценность за неё не выдаётся.",
             _executive_active_base(
-                ", success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM serving_egisz.documents_current "
+                ", success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM public.rpt_documents "
                 "WHERE status = 'success' [[AND {{jid}}]] "
                 "AND ips_date >= CURRENT_DATE - INTERVAL '30 days') "
                 f"SELECT ROUND((SELECT COUNT(*) FROM active_jid) * {tariff}.0 "
@@ -4518,15 +4519,15 @@ def _executive_latency_query(grain: str) -> str:
     вызов функции на каждой строке документа растягивал запрос с 3 до 30 секунд."""
     label = EXECUTIVE_PERIODS[grain]["label"]
     return (
-        "WITH calendar AS MATERIALIZED (SELECT serving_egisz.report_timezone() AS tz) "
-        f"SELECT date_trunc('{grain}', documents_current.ips_date AT TIME ZONE calendar.tz)::date "
+        "WITH calendar AS MATERIALIZED (SELECT public.report_timezone() AS tz) "
+        f"SELECT date_trunc('{grain}', rpt_documents.ips_date AT TIME ZONE calendar.tz)::date "
         f'AS "{label}", '
         "percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 "
         'AS "Медиана, мин", '
         "percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 "
-        'AS "95-й перцентиль, мин" FROM serving_egisz.documents_current CROSS JOIN calendar '
+        'AS "95-й перцентиль, мин" FROM public.rpt_documents CROSS JOIN calendar '
         "WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL "
-        f"AND documents_current.ips_date < (date_trunc('{grain}', now() AT TIME ZONE calendar.tz) "
+        f"AND rpt_documents.ips_date < (date_trunc('{grain}', now() AT TIME ZONE calendar.tz) "
         "AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1"
     )
 
@@ -4570,21 +4571,21 @@ def _executive_cohort_query(grain: str) -> str:
     входят. Доля успеха за первые 30 дней появляется, когда окно закрыто у всей когорты."""
     p = EXECUTIVE_PERIODS[grain]
     return (
-        "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM serving_egisz.documents_current), "
+        "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM public.rpt_documents), "
         "first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at "
-        "FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), "
+        "FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), "
         "cohort AS (SELECT first_doc.jid, first_doc.first_at, "
-        f"date_trunc('{grain}', first_doc.first_at AT TIME ZONE serving_egisz.report_timezone())::date "
+        f"date_trunc('{grain}', first_doc.first_at AT TIME ZONE public.report_timezone())::date "
         "AS cohort_start FROM first_doc, history "
         "WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), "
         "per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, "
-        "MIN(documents_current.registered_at) FILTER (WHERE documents_current.status = 'success') "
-        "AS first_ok, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE "
-        "documents_current.status = 'success' AND documents_current.first_sent_at < cohort.first_at "
-        "+ INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE "
-        f"documents_current.{EXECUTIVE_FINAL_CORPUS} AND documents_current.first_sent_at "
+        "MIN(rpt_documents.registered_at) FILTER (WHERE rpt_documents.status = 'success') "
+        "AS first_ok, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE "
+        "rpt_documents.status = 'success' AND rpt_documents.first_sent_at < cohort.first_at "
+        "+ INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE "
+        f"rpt_documents.{EXECUTIVE_FINAL_CORPUS} AND rpt_documents.first_sent_at "
         "< cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort "
-        "JOIN serving_egisz.documents_current ON documents_current.clinic_jid = cohort.jid "
+        "JOIN public.rpt_documents ON rpt_documents.clinic_jid = cohort.jid "
         "GROUP BY 1, 2, 3) "
         f'SELECT cohort_start AS "{p["cohort_label"]}", COUNT(jid)::bigint AS "Новых JID", '
         'COUNT(first_ok)::bigint AS "С первым успехом", '
@@ -4773,7 +4774,7 @@ def executive_periodic_cards(grain: str) -> list[dict]:
             "line",
             (6 + shift, 12, 12, 6),
             0x72,
-            table_ref="serving_egisz.documents_current",
+            table_ref="public.rpt_documents",
         ),
         _executive_period_card(
             grain,
@@ -4829,7 +4830,7 @@ def executive_periodic_cards(grain: str) -> list[dict]:
             "table",
             (18 + shift, 0, 24, 5),
             0x82,
-            table_ref="serving_egisz.documents_current",
+            table_ref="public.rpt_documents",
         ),
         _executive_period_card(
             grain,
@@ -4892,7 +4893,7 @@ EXECUTIVE_DESCRIPTION = (
     "(центр и границы по опорному периоду фазы из dim_control_chart_phases, правила серий). "
     "Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД) — "
     "тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин "
-    "documents_weekly / documents_monthly; ошибка связи статус не меняет, её доля — "
+    "rpt_documents_weekly / rpt_documents_monthly; ошибка связи статус не меняет, её доля — "
     "от всех документов периода. Рублёвые карточки помечены "
     "«ориентир»: расчёт по плоской ставке 10 000 ₽/JID/мес читается как порядок величины — "
     "договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка "
@@ -4937,7 +4938,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         return
     query = (
         "WITH base AS ( SELECT semd_label, COUNT(DISTINCT dwh_id)::bigint AS cnt "
-        "FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] "
+        "FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] "
         "[[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] "
         "[[AND {{status}}]] [[AND {{log_id}}]] GROUP BY 1 ), "
         "totals AS (SELECT COALESCE(SUM(cnt), 0)::numeric AS total FROM base) "
@@ -4946,7 +4947,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         "FROM base ORDER BY cnt DESC"
     )
     ff = {
-        k: {"table_ref": "serving_egisz.documents_current", "field_name": v}
+        k: {"table_ref": "public.rpt_documents", "field_name": v}
         for k, v in {
             "jid": "clinic_label", "ips_date": "ips_date", "semd_type": "semd_label",
             "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
@@ -5083,14 +5084,14 @@ def ensure_client_service_linked_clinic_filters(dash: dict) -> None:
             }
         # Фильтр клиники — на грейне источника карточки: витрина типов СЭМД в обмене несёт
         # собственный clinic_label; если запрос смешивает обе документные таблицы
-        # (period_docs из documents_current + join document_errors), привязываем к
-        # documents_current, иначе предикат {{clinic_label}} в period_docs не развернётся.
-        if "serving_egisz.clinic_semd_activity" in native["query"]:
-            source = "serving_egisz.clinic_semd_activity"
-        elif "serving_egisz.documents_sent" in native["query"]:
-            source = "serving_egisz.documents_sent"
-        elif "serving_egisz.documents_current" in native["query"]:
-            source = "serving_egisz.documents_current"
+        # (period_docs из rpt_documents + join document_error), привязываем к
+        # rpt_documents, иначе предикат {{clinic_label}} в period_docs не развернётся.
+        if "public.rpt_clinic_semd_activity" in native["query"]:
+            source = "public.rpt_clinic_semd_activity"
+        elif "public.rpt_documents_sent" in native["query"]:
+            source = "public.rpt_documents_sent"
+        elif "public.rpt_documents" in native["query"]:
+            source = "public.rpt_documents"
         else:
             source = DOCUMENT_ERROR
         ff = dict(card.get("metabase-field-filters") or {})
@@ -5128,7 +5129,7 @@ def apply_client_status_by_day(card: dict) -> None:
     )
     ff = dict(card.get("metabase-field-filters") or {})
     ff["client_document_type"] = {
-        "table_ref": "serving_egisz.documents_current",
+        "table_ref": "public.rpt_documents",
         "field_name": "semd_label",
     }
     card["metabase-field-filters"] = ff

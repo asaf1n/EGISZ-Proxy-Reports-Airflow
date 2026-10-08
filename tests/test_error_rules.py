@@ -1,6 +1,6 @@
 """Регрессионные тесты обработки ошибок против живого PostgreSQL.
 
-Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi);
+Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_egisz);
 без переменной модуль целиком скипается — как и остальной suite, не зависящий от внешних
 сервисов. Фикстура идемпотентно применяет db/02_functions.sql из working tree поверх схемы
 db/01_schema.sql, поэтому тесты проверяют текущий код правил, а не состояние базы на момент
@@ -14,7 +14,6 @@ db/01_schema.sql, поэтому тесты проверяют текущий к
 from __future__ import annotations
 
 import json
-import re
 import os
 import uuid
 from pathlib import Path
@@ -40,17 +39,7 @@ NETWORK = "Ошибка связи"
 NSI_DICTIONARY_SOURCE = ("1.2.643.5.1.13.13.99.2.805", "6.19")
 NSI_DICTIONARY_SIZE = 465
 
-RESPONSIBILITY_ZONES = ("Настройки МИС", "Реквизиты клиники", "ЕГИСЗ", "Интеграция", "Связь")
-
-# Собственные ошибки интеграции — зона «Интеграция».
-INTEGRATION_TYPES = (
-    "Организация не привязана к РМИС",
-    "РМИС/МИС не зарегистрирована в РЭМД",
-    "РМИС/МИС зарегистрирована в РЭМД но не активна",
-    "ИЭМК: неверный идентификатор репозитория",
-    "Организация не найдена в ФРМО",
-    "Ошибка Schematron-валидации",
-)
+RESPONSIBILITY_DOMAIN = ("клиника", "МИС", "интегратор", "РЭМД", "смешанная")
 
 # Категории — группы причин. Вид («Ошибка связи»), контур (ИЭМК) и контур НСИ (ФРЛЛО)
 # категориями не являются.
@@ -90,12 +79,6 @@ def one(con, sql: str, *params):
         return cur.fetchone()[0]
 
 
-UNRECOGNIZED = {
-    ASYNC: "Не распознано: ошибка асинхронного ответа",
-    NETWORK: "Не распознано: ошибка связи",
-}
-
-
 def classify(con, code: str | None, text: str | None, kind: str = ASYNC) -> tuple[str | None, str | None]:
     with con.cursor() as cur:
         cur.execute("SELECT error_type, nsi_dictionary_oid FROM stg_egisz.classify_error(%s, %s, %s)",
@@ -103,40 +86,27 @@ def classify(con, code: str | None, text: str | None, kind: str = ASYNC) -> tupl
         return cur.fetchone()
 
 
-def recognized(con, code: str | None, text: str | None, kind: str = ASYNC) -> bool:
-    return one(con, "SELECT is_recognized FROM stg_egisz.classify_error(%s, %s, %s)", kind, code, text)
-
-
-def normalize(con, text: str | None, kind: str = ASYNC) -> str | None:
-    return one(con, "SELECT stg_egisz.normalize_error_text(%s, %s)", kind, text)
-
-
 def category(con, error_type: str | None) -> str | None:
     with con.cursor() as cur:
-        cur.execute("SELECT error_category FROM mart_egisz.dim_error_types WHERE error_type = %s", (error_type,))
+        cur.execute("SELECT error_category FROM mart_egisz.dim_error_type WHERE error_type = %s", (error_type,))
         row = cur.fetchone()
         return row[0] if row else None
 
 
-def network_code(con, logtext: str | None) -> str | None:
-    return one(con, "SELECT stg_egisz.network_error_code(%s)", logtext)
-
-
-def remd_items(con, msgtext: str | None):
+def items(con, logstate: int | None, logtext: str | None, msgtext: str | None,
+          outcome: str | None, error_code: str | None = None, error_message: str | None = None):
     with con.cursor() as cur:
-        cur.execute("SELECT item_no, section, code, message FROM stg_egisz.remd_error_items(%s)", (msgtext,))
-        return cur.fetchall()
-
-
-def ihe_items(con, msgtext: str | None):
-    with con.cursor() as cur:
-        cur.execute("SELECT item_no, error_code, code_context, severity, location "
-                    "FROM stg_egisz.ihe_error_items(%s)", (msgtext,))
+        cur.execute(
+            "SELECT item_no, error_kind, error_code, error_text "
+            "FROM stg_egisz.error_items(%s, %s, %s, %s, %s, %s)",
+            (logstate, logtext, msgtext, outcome, error_code, error_message),
+        )
         return cur.fetchall()
 
 
 # --- Корпус: (code, message, ожидаемый тип, ожидаемая категория) ------------------------
-# Сообщения — обезличенные образцы из архива ответов (значения заменены на […]).
+# Сообщения — обезличенные образцы из архива ответов (значения заменены на […]). Категория
+# None — тип без правила: его заводит в справочнике разбор журнала при первом появлении.
 CORPUS = [
     # --- Ярус 2: код закрывает разбор, тип — наименование из ФНСИ ------------------------
     ("PATIENT_MPI_MISMATCH",
@@ -272,12 +242,14 @@ CORPUS = [
     ("", "[CRE-122]: PAT-001; Пациент не определен: [СНИЛС [111] не валидно контрольное число]",
      "ИЭМК: пациент не определён", "Данные пациента"),
 
-    # --- Без правила: тип «Не распознано» -------------------------------------------------
-    ("", "совершенно нераспознаваемый текст", UNRECOGNIZED[ASYNC], "Прочие"),
+    # --- Без правила: тип — текст с замаскированными значениями -------------------------
+    ("", "совершенно нераспознаваемый текст", "совершенно нераспознаваемый текст", None),
     ("VALIDATION_ERROR",
      "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x",
-     UNRECOGNIZED[ASYNC], "Прочие"),
-    ("SOME_UNSEEN_CODE", "", UNRECOGNIZED[ASYNC], "Прочие"),
+     "Неизвестная проверка со СНИЛС […] и OID […].", None),
+    # Код вне классификатора и без текста типа не получает: элемент виден в контроле
+    # качества, а не скрыт подставленным наименованием.
+    ("SOME_UNSEEN_CODE", "", None, None),
 ]
 
 
@@ -327,37 +299,15 @@ def test_rule_type_replaces_readable_message(con):
         "Наличие СНИЛС пациента не соответствует требованиям вида документов"
 
 
-# --- Нераспознанные ошибки: тип «Не распознано», нормализованный текст — отдельно ------
-
-def test_unrecognized_error_gets_closed_type_and_keeps_normalized_text(con):
-    message = "Неизвестная проверка со СНИЛС [11122233344] и OID [1.2.643.5.1.13]. Путь: /ClinicalDocument[1]/x"
-    assert classify(con, "VALIDATION_ERROR", message) == (UNRECOGNIZED[ASYNC], None)
-    assert recognized(con, "VALIDATION_ERROR", message) is False
-    assert normalize(con, message) == "Неизвестная проверка со СНИЛС <snils> и OID […]."
-    assert recognized(con, "NO_SNILS", "любой текст") is True
-
-
-def test_type_list_is_closed(con):
-    """Набор типов задают правила: новый текст ошибки новый тип не заводит."""
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types t
-        WHERE t.rule_code IS NULL
-    """) == len(UNRECOGNIZED)
-    assert set(one(con, "SELECT array_agg(error_type) FROM mart_egisz.dim_error_types WHERE rule_code IS NULL")) == \
-        set(UNRECOGNIZED.values())
-    for kind, error_type in UNRECOGNIZED.items():
-        assert one(con, "SELECT error_kind FROM mart_egisz.dim_error_types WHERE error_type = %s", error_type) == kind
-
-
-# --- Нормализация текста нераспознанной ошибки ------------------------------------------
+# --- Маскирование текста без правила -----------------------------------------------------
 
 @pytest.mark.parametrize("message,expected", [
     ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678901] не валидно контрольное число 92];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.12345], patientId: [B1234567-B123-4C12-8A1B-1234E12DDFFA])",
-     "Пациент не определен: СНИЛС <snils> не валидно контрольное число"),
+     "Пациент не определен: СНИЛС […] не валидно контрольное число"),
     ("[CRE-013]: XYZ-001; Пациент не определен: [СНИЛС [12345678] не соответствует формату \\d{11}];"
      " Patient(moId: [1.2.643.5.1.13.13.12.2.77.1234], patientId: [DFD1F2A3-4EEF-5B6A-A7E8-9CC01C23BC45])",
-     "Пациент не определен: СНИЛС <snils> не соответствует формату (11 цифр)"),
+     "Пациент не определен: СНИЛС […] не соответствует формату (11 цифр)"),
     ("Ошибки валидации в ФРМСС: [code: DUPLICATE, description: Свидетельство с номером 123456789 и серией 12"
      " уже зарегистрировано в РЭМД. Исправьте номер и/или серию документа.].",
      "Ошибки валидации в ФРМСС (DUPLICATE): Свидетельство с номером […] и серией […]"
@@ -367,13 +317,13 @@ def test_type_list_is_closed(con):
      "Ошибки валидации в ФРМСС (MSSCERT): Внутренняя ошибка сервиса ФРМСС"),
 ])
 def test_wrapped_responses_are_unwrapped(con, message, expected):
-    assert normalize(con, message) == expected
+    assert classify(con, "", message)[0] == expected
 
 
 def test_attribute_name_survives_bracket_masking(con):
     """«Указанное значение [Имя пациента] …» называет, что именно не совпало: реквизит
     остаётся, значения скрываются."""
-    assert normalize(con, "Указанное значение [Имя пациента] [Петрова Анна] отличается от сведений [Петрова А.]") == \
+    assert classify(con, "", "Указанное значение [Имя пациента] [Петрова Анна] отличается от сведений [Петрова А.]")[0] == \
         "Указанное значение [Имя пациента] […] отличается от сведений […]"
 
 
@@ -385,107 +335,82 @@ def test_attribute_name_survives_bracket_masking(con):
     ("", "Неверный формат e-mail 'Ivanov.I.I@example.ru '", "Ivanov"),
     ("", "Адрес ivanov@example.ru недоступен", "ivanov@"),
 ])
-def test_normalized_text_carries_no_instance_values(con, code, message, leak):
-    """Нормализованный текст группирует нераспознанные ошибки и читается в контроле качества."""
-    normalized = normalize(con, message)
-    assert normalized and leak not in normalized
+def test_error_type_carries_no_instance_values(con, code, message, leak):
+    """Тип уходит в фильтры и сводки дашбордов, в том числе клиентских."""
+    error_type, _ = classify(con, code, message)
+    assert error_type and leak not in error_type
 
 
-def test_normalization_strips_document_values(con):
-    normalized = normalize(con, "Проверка без правила: элемент [x] со СНИЛС 11122233344"
-                                " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
-    assert "11122233344" not in normalized
-    assert "1.2.643.5.1.13.13" not in normalized
-    assert "Путь:" not in normalized
+def test_masking_strips_document_values(con):
+    error_type, _ = classify(con, "VALIDATION_ERROR",
+                             "Проверка без правила: элемент [x] со СНИЛС 11122233344"
+                             " и OID 1.2.643.5.1.13.13. Путь: /ClinicalDocument[1]/recordTarget[1]")
+    assert "11122233344" not in error_type
+    assert "1.2.643.5.1.13.13" not in error_type
+    assert "Путь:" not in error_type
 
 
-def test_normalization_masks_personal_data_first(con):
-    """Нормализация начинается со скрытия персональных данных: СНИЛС получает псевдоним
-    <snils>, а не общее обозначение значения в скобках."""
-    assert normalize(con, "Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД") == \
-        "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД"
+def test_network_error_type_is_masked_gateway_text(con):
+    assert classify(con, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out", NETWORK)[0] == \
+        "Synapse TCP/IP Socket error 10060: Connection timed out"
+    assert classify(con, "500", "Error while receiving data from service: https://gost-123.example.ru:9945/api"
+                    " Error code: 500", NETWORK)[0] == \
+        "Error while receiving data from service: <endpoint> Error code: 500"
 
 
-# --- Ошибки связи: правила по общепринятым определениям ---------------------------------
+# --- Элементы ошибки сообщения ------------------------------------------------------------
 
-NETWORK_TEXTS = [
-    ("10054", "Synapse TCP/IP Socket error 10054: Connection reset by peer", "Соединение сброшено удалённой стороной"),
-    ("10060", "Synapse TCP/IP Socket error 10060: Connection timed out", "Истекло время ожидания соединения"),
-    ("10061", "Synapse TCP/IP Socket error 10061: Connection refused", "В соединении отказано"),
-    ("10065", "Synapse TCP/IP Socket error 10065: No route to host", "Нет маршрута до узла"),
-    ("10091", "Synapse TCP/IP Socket error 10091: ", "Сетевая подсистема недоступна"),
-    ("10091", "Synapse TCP/IP Socket error 10091: Network subsystem is unusable", "Сетевая подсистема недоступна"),
-    ("11001", "Synapse TCP/IP Socket error 11001: Host not found", "DNS: узел не найден"),
-    ("11002", "Synapse TCP/IP Socket error 11002: Non authoritative - host not found",
-     "DNS: узел не найден, ответ не окончательный"),
-    ("408", "Error while receiving data from service: https://gost-123.example.ru:9945/api Error code: 408",
-     "HTTP 408: истекло время ожидания запроса"),
-    ("500", "Error while receiving data from service: http://gost-1234.infoclinica.lan:9945\nError code: 500",
-     "HTTP 500: внутренняя ошибка сервера"),
-    ("503", "Error while receiving data from service: https://10.0.0.1:443/ws Error code: 503",
-     "HTTP 503: сервис недоступен"),
-]
+def test_delivery_failure_is_a_network_error_item(con):
+    assert items(con, 3, "Synapse TCP/IP Socket error 11001: Host not found", None, None) == [
+        (0, NETWORK, "11001", "Synapse TCP/IP Socket error 11001: Host not found")]
+    assert items(con, 3, "Error while receiving data from service: https://x Error code: 503", None, None)[0][2] == "503"
 
 
-@pytest.mark.parametrize("code,text,expected", NETWORK_TEXTS)
-def test_network_errors_are_recognized_by_rules(con, code, text, expected):
-    assert network_code(con, text) == code
-    assert classify(con, code, text, NETWORK)[0] == expected
-
-
-def test_unknown_network_error_is_unrecognized(con):
-    text = "Synapse TCP/IP Socket error 10013: Permission denied"
-    assert classify(con, network_code(con, text), text, NETWORK)[0] == UNRECOGNIZED[NETWORK]
-    assert normalize(con, "Error while receiving data from service: https://gost-1.example.ru:9945 Error code: 418",
-                     NETWORK) == "Error while receiving data from service: <endpoint> Error code: 418"
-
-
-def test_network_rules_cover_gateway_texts(con):
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_rules
-        WHERE rule_kind = 'классификация' AND error_kind = 'Ошибка связи'
-    """) == len({row[2] for row in NETWORK_TEXTS})
-
-
-# --- Ошибки строки журнала обмена по источникам ----------------------------------------
-
-def test_network_error_code_comes_from_gateway_text(con):
-    assert network_code(con, "Synapse TCP/IP Socket error 11001: Host not found") == "11001"
-    assert network_code(con, "Error while receiving data from service: https://x Error code: 503") == "503"
-
-
-def test_remd_items_keep_response_section(con):
-    """Предупреждения успешной регистрации отделены от ошибок разделом ответа."""
-    payload = ("<ns2:registerDocumentResult><ns2:status>success</ns2:status><ns2:registryItem>"
-               "<ns2:registrationWarnings><ns2:item><ns2:code>VALIDATION_ERROR</ns2:code>"
-               "<ns2:message>м1</ns2:message></ns2:item><ns2:item><ns2:code>VALIDATION_ERROR</ns2:code>"
-               "<ns2:message>м2</ns2:message></ns2:item></ns2:registrationWarnings></ns2:registryItem>"
-               "</ns2:registerDocumentResult>")
-    assert remd_items(con, payload) == [
-        (1, "registrationWarnings", "VALIDATION_ERROR", "м1"),
-        (2, "registrationWarnings", "VALIDATION_ERROR", "м2"),
+def test_undelivered_response_keeps_both_kinds(con):
+    """Сбой доставки ответа не отменяет отказа в этом же ответе."""
+    payload = "<registerDocumentResult><status>error</status><item><code>NO_SNILS</code><message>м</message></item></registerDocumentResult>"
+    assert items(con, 3, "Synapse TCP/IP Socket error 10060: Connection timed out", payload, "error") == [
+        (0, NETWORK, "10060", "Synapse TCP/IP Socket error 10060: Connection timed out"),
+        (1, ASYNC, "NO_SNILS", "м"),
     ]
 
 
-def test_remd_items_support_namespaced_items_with_attributes(con):
+def test_success_response_items_are_kept(con):
+    payload = ("<registerDocumentResult><status>success</status><emdrId>1</emdrId>"
+               "<item><code>VALIDATION_ERROR</code><message>м</message></item></registerDocumentResult>")
+    assert items(con, 0, None, payload, "success") == [(1, ASYNC, "VALIDATION_ERROR", "м")]
+
+
+def test_request_message_has_no_response_items(con):
+    assert items(con, 0, None, "<item><code>X</code></item>", None) == []
+
+
+def test_error_items_support_namespaced_items_with_attributes(con):
     payload = ('<ns2:errors><ns2:item attr="x"><ns2:code>NO_SNILS</ns2:code>'
                "<ns2:message>СНИЛС отсутствует</ns2:message></ns2:item></ns2:errors>")
-    assert remd_items(con, payload) == [(1, "errors", "NO_SNILS", "СНИЛС отсутствует")]
+    assert items(con, 0, None, payload, "error") == [(1, ASYNC, "NO_SNILS", "СНИЛС отсутствует")]
 
 
-def test_ihe_items_keep_all_registry_error_attributes(con):
+def test_error_items_read_registry_errors_in_any_attribute_order(con):
     payload = (
         "<rs:RegistryResponse><rs:RegistryErrorList>"
-        '<rs:RegistryError severity="urn:oasis:names:tc:ebxml-regrep:ErrorSeverityType:Error"'
-        ' errorCode="XDSDictionaryValidationError" codeContext="Значение &quot;X&quot; не найдено" location="doc/1"/>'
+        '<rs:RegistryError severity="urn:e" errorCode="XDSDictionaryValidationError"'
+        ' codeContext="Значение &quot;X&quot; не найдено" location=""/>'
         '<rs:RegistryError codeContext="Internal error in repository" errorCode="XDSRepositoryError"/>'
         "</rs:RegistryErrorList></rs:RegistryResponse>"
     )
-    assert ihe_items(con, payload) == [
-        (1, "XDSDictionaryValidationError", 'Значение "X" не найдено',
-         "urn:oasis:names:tc:ebxml-regrep:ErrorSeverityType:Error", "doc/1"),
-        (2, "XDSRepositoryError", "Internal error in repository", None, None),
+    assert items(con, 0, None, payload, "error") == [
+        (1, ASYNC, "XDSDictionaryValidationError", 'Значение "X" не найдено'),
+        (2, ASYNC, "XDSRepositoryError", "Internal error in repository"),
     ]
+
+
+def test_items_take_priority_over_registry_errors_and_fallback(con):
+    both = ("<x><item><code>NO_SNILS</code><message>m</message></item>"
+            '<rs:RegistryError errorCode="XDSRepositoryError" codeContext="c"/></x>')
+    assert items(con, 0, None, both, "error") == [(1, ASYNC, "NO_SNILS", "m")]
+    # Ответ об ошибке без элементов: код и текст ответа.
+    assert items(con, 0, None, "<soap:Fault/>", "error", "SERVER", "текст") == [(1, ASYNC, "SERVER", "текст")]
 
 
 # --- Исход асинхронного ответа ------------------------------------------------------------
@@ -503,16 +428,16 @@ def test_ihe_items_keep_all_registry_error_attributes(con):
     ("sendRegisterDocumentResult", "processing", None, False, False, None, None),
 ])
 def test_async_outcome(con, action, raw_status, document_status, fault, error_ilike, registry_status, expected):
-    assert one(con, "SELECT stg_egisz.classify_async_status(%s, %s, %s, %s, %s, %s)",
+    assert one(con, "SELECT public.classify_async_status(%s, %s, %s, %s, %s, %s)",
                action, raw_status, document_status, fault, error_ilike, registry_status) == expected
 
 
 def test_parse_exchangelog_row_extracts_faultcode_last(con):
-    row = one(con, "SELECT (stg_egisz.parse_exchangelog_row(%s, NULL, NULL)).error_code",
+    row = one(con, "SELECT (public.parse_exchangelog_row(%s, NULL, NULL)).error_code",
               "<soap:Fault><faultcode>soap:Server</faultcode><faultstring>x</faultstring></soap:Fault>")
     assert row == "SERVER"
     # <code>/<errorCode> имеют приоритет над faultcode
-    row = one(con, "SELECT (stg_egisz.parse_exchangelog_row(%s, NULL, NULL)).error_code",
+    row = one(con, "SELECT (public.parse_exchangelog_row(%s, NULL, NULL)).error_code",
               "<r><code>VALIDATION_ERROR</code><faultcode>soap:Server</faultcode></r>")
     assert row == "VALIDATION_ERROR"
 
@@ -523,7 +448,7 @@ def test_every_nsi_code_is_covered_by_a_rule(con):
     """Каждая мнемоника ФНСИ, кроме зонтичных кодов, закрыта правилом яруса 2."""
     uncovered = one(con, """
         SELECT array_agg(c.nsi_error_code ORDER BY c.nsi_error_code)
-        FROM mart_egisz.dim_nsi_error_codes c
+        FROM mart_egisz.dim_nsi_error_code c
         WHERE NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
                           WHERE r.rule_kind = 'классификация' AND r.nsi_error_code = c.nsi_error_code)
     """)
@@ -544,17 +469,17 @@ def test_code_rules_reference_the_dictionary(con):
 
 
 def test_nsi_dictionary_matches_published_revision(con):
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_codes") == 127
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code") == 127
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_error_codes
-        WHERE source_oid <> '1.2.643.5.1.13.13.99.2.305' OR source_version <> '3.18'
+        SELECT count(*) FROM mart_egisz.dim_nsi_error_code
+        WHERE oid <> '1.2.643.5.1.13.13.99.2.305' OR version <> '3.18'
     """) == 0
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_code_aliases WHERE alias = nsi_error_code") == 0
+    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_error_code_alias WHERE alias = nsi_error_code") == 0
 
 
 def test_types_carry_nsi_code_when_rule_is_code_gated(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types t
+        SELECT count(*) FROM mart_egisz.dim_error_type t
         JOIN mart_egisz.dim_error_rules r ON r.rule_code = t.rule_code
         WHERE r.nsi_error_code IS NOT NULL AND t.nsi_error_code IS DISTINCT FROM r.nsi_error_code
     """) == 0
@@ -564,12 +489,12 @@ def test_types_carry_nsi_code_when_rule_is_code_gated(con):
 
 def test_categories_are_cause_groups(con):
     assert set(one(con, """
-        SELECT array_agg(error_category) FROM mart_egisz.dim_error_categories
+        SELECT array_agg(error_category) FROM mart_egisz.dim_error_category
         WHERE error_kind = 'Ошибка асинхронного ответа'
     """)) == set(CATEGORIES)
     # У вида «Ошибка связи» категорий нет.
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_categories
+        SELECT count(*) FROM mart_egisz.dim_error_category
         WHERE error_kind = 'Ошибка связи' AND error_category IS NOT NULL
     """) == 0
 
@@ -578,15 +503,14 @@ def test_every_rule_interpretation_is_a_type_with_its_category(con):
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_rules r
         WHERE r.rule_kind = 'классификация' AND NOT EXISTS (
-            SELECT 1 FROM mart_egisz.dim_error_types t
-            WHERE t.error_type = r.interpretation
-              AND t.error_category IS NOT DISTINCT FROM r.error_category)
+            SELECT 1 FROM mart_egisz.dim_error_type t
+            WHERE t.error_type = r.interpretation AND t.error_category = r.error_category)
     """) == 0
 
 
 def test_dictionary_has_no_orphan_rule_types(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types t
+        SELECT count(*) FROM mart_egisz.dim_error_type t
         WHERE t.rule_code IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM mart_egisz.dim_error_rules r
                           WHERE r.rule_kind = 'классификация' AND r.interpretation = t.error_type)
@@ -595,66 +519,16 @@ def test_dictionary_has_no_orphan_rule_types(con):
 
 def test_rule_type_names_carry_no_document_values(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types
+        SELECT count(*) FROM mart_egisz.dim_error_type
         WHERE rule_code IS NOT NULL AND (error_type LIKE '%%[%%' OR error_type LIKE '%%]%%')
     """) == 0
 
 
-def test_responsibility_zones_are_one_dictionary(con):
-    assert one(con, "SELECT array_agg(name ORDER BY sort_order) FROM mart_egisz.dim_responsibility_zones") == \
-        list(RESPONSIBILITY_ZONES)
+def test_every_type_has_responsibility_and_retryable(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_responsibility_zones WHERE btrim(description) = ''
-    """) == 0
-
-
-def test_every_type_has_known_zone_and_retryable(con):
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types t
-        WHERE t.is_retryable IS NULL
-           OR (t.responsibility IS NOT NULL AND t.responsibility NOT IN %s)
-    """, RESPONSIBILITY_ZONES) == 0
-
-
-def test_zone_is_empty_only_without_explicit_classification(con):
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types
-        WHERE rule_code IS NULL AND responsibility IS NOT NULL
-    """) == 0
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types
-        WHERE responsibility IS NULL AND rule_code IS NOT NULL
-          AND error_category NOT IN ('Ошибки регистрации', 'Прочие')
-    """) == 0
-
-
-def test_network_errors_are_in_connection_zone(con):
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types
-        WHERE error_kind = 'Ошибка связи' AND rule_code IS NOT NULL
-          AND responsibility IS DISTINCT FROM 'Связь'
-    """) == 0
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_error_types
-        WHERE error_kind = 'Ошибка асинхронного ответа' AND responsibility = 'Связь'
-    """) == 0
-
-
-def test_integration_errors_are_in_integration_zone(con):
-    assert one(con, """
-        SELECT array_agg(error_type ORDER BY error_type) FROM mart_egisz.dim_error_types
-        WHERE error_type IN %s AND responsibility = 'Интеграция'
-    """, INTEGRATION_TYPES) == sorted(INTEGRATION_TYPES)
-
-
-def test_reference_error_types_hold_async_errors_only(con):
-    assert one(con, """
-        SELECT count(*) FROM serving_egisz.error_types WHERE error_kind <> 'Ошибка асинхронного ответа'
-    """) == 0
-    assert one(con, """
-        SELECT count(*) FROM serving_egisz.error_types
-        WHERE responsibility IS NOT NULL AND responsibility_description IS NULL
-    """) == 0
+        SELECT count(*) FROM mart_egisz.dim_error_type
+        WHERE responsibility IS NULL OR is_retryable IS NULL OR responsibility NOT IN %s
+    """, RESPONSIBILITY_DOMAIN) == 0
 
 
 def test_all_patterns_compile(con):
@@ -662,16 +536,16 @@ def test_all_patterns_compile(con):
     assert one(con, "SELECT count(*) FROM mart_egisz.dim_error_rules r WHERE ('' ~* r.match_pattern) IS NULL") == 0
     assert one(con, """
         SELECT count(*) FROM mart_egisz.dim_error_rules r
-        WHERE r.rule_kind = 'нормализация'
+        WHERE r.rule_kind = 'маскирование'
           AND regexp_replace('x', r.match_pattern, r.replacement, r.match_flags) IS NULL
     """) == 0
 
 
-def test_normalization_steps_have_distinct_order(con):
+def test_masking_steps_have_distinct_order(con):
     assert one(con, """
         SELECT count(*) FROM (
             SELECT apply_order FROM mart_egisz.dim_error_rules
-            WHERE rule_kind = 'нормализация' GROUP BY apply_order HAVING count(*) > 1) d
+            WHERE rule_kind = 'маскирование' GROUP BY apply_order HAVING count(*) > 1) d
     """) == 0
 
 
@@ -803,134 +677,36 @@ def test_dictionary_pattern_declared_for_dictionary_class(con):
     """) == 0
 
 
-# --- Маскирование текста для выдачи -----------------------------------------------------
-
-def mask(con, text: str) -> str | None:
-    return one(con, "SELECT mart_egisz.mask_personal_data(%s)", text)
-
-
-@pytest.mark.parametrize("message,expected", [
-    ("Указанное значение [Имя пациента] [Иванова Анна Петровна] не соответствует данным ГИП [Петрова Анна Петровна]."
-     " Пациент найден по локальному идентификатору",
-     "Указанное значение [Имя пациента] […] не соответствует данным ГИП […]. Пациент найден по локальному идентификатору"),
-    ("ФИО сотрудника со СНИЛС [12345678901] не соответствуют данным ФРМР [Сидоров Иван Иванович].",
-     "ФИО сотрудника со СНИЛС <snils> не соответствуют данным ФРМР […]."),
-    ("Дата рождения сотрудника со СНИЛС [12345678901] ([01.02.1980]) не соответствует данным ФРМР [02.01.1980]",
-     "Дата рождения сотрудника со СНИЛС <snils> ([…]) не соответствует данным ФРМР […]"),
-    ("Фамилия пациента в ЭМД [Иванова] отличается от фамилии пациента в запросе на регистрацию сведений [Петрова]",
-     "Фамилия пациента в ЭМД […] отличается от фамилии пациента в запросе на регистрацию сведений […]"),
-    ("Несоответствие данных подписанта в запросе и в сертификате. GIVEN_NAME [АннаПетровна] в метаданных и [Анна] в сертификате",
-     "Несоответствие данных подписанта в запросе и в сертификате. GIVEN_NAME […] в метаданных и […] в сертификате"),
-    ("В ФРМР не найдена карточка МР c данными из сертификата подписи МО: Иванов Иван Иванович (СНИЛС: 12345678901)",
-     "В ФРМР не найдена карточка МР c данными из сертификата подписи МО: […] (СНИЛС: <snils>)"),
-    ("Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД",
-     "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД"),
-    ("Получатель [12345678901] из запроса на регистрацию сведений не найден в СЭМД · "
-     "Указанное значение [СНИЛС] [12345678901] не соответствует данным ГИП [10987654321]. Пациент найден по локальному идентификатору",
-     "Получатель <snils> из запроса на регистрацию сведений не найден в СЭМД · "
-     "Указанное значение [СНИЛС] <snils> не соответствует данным ГИП <snils>. Пациент найден по локальному идентификатору"),
-    ("Удостоверяющий центр сертификата недоступен: 12345678901",
-     "Удостоверяющий центр сертификата недоступен: <snils>"),
-    ("Удостоверяющий центр сертификата недоступен: Validation failed for the target: serial: 1a2b subject: "
-     "EMAILADDRESS=user@example.ru, CN=Иванов Иван, SURNAME=Иванов issuer: CN=УЦ",
-     "Удостоверяющий центр сертификата недоступен: Validation failed for the target: serial: 1a2b subject: […] issuer: CN=УЦ"),
-])
-def test_masking_hides_personal_data(con, message, expected):
-    assert mask(con, message) == expected
-
-
-SNILS_CANDIDATE = re.compile(r"(?:^|[^0-9A-Za-z.:#_-])(\d{3}-\d{3}-\d{3}[ -]\d{2}|\d{11})(?![0-9A-Za-z.])")
-
-
-def is_snils(value: str) -> bool:
-    """СНИЛС по формату, запрету трёх одинаковых цифр подряд и контрольному числу; номера до
-    001-001-998 контрольным числом не проверяются."""
-    digits = re.sub(r"[^0-9]", "", value)
-    if len(digits) != 11 or re.search(r"(\d)\1\1", digits[:9]):
-        return False
-    if int(digits[:9]) <= 1001998:
-        return True
-    total = sum(int(d) * (9 - i) for i, d in enumerate(digits[:9]))
-    check = total if total < 100 else 0 if total in (100, 101) else (total % 101) % 100
-    return check == int(digits[9:])
-
-
-def test_masking_leaves_no_snils_in_rule_described_texts(con):
-    """Тексты ответов, где СНИЛС стоит при реквизите из правил, после маскирования СНИЛС не
-    содержат: проверка контрольным числом, а не по числу цифр."""
-    with con.cursor() as cur:
-        cur.execute(r"""
-            SELECT DISTINCT t FROM (
-                SELECT message AS t FROM stg_egisz.remd_errors
-                UNION ALL SELECT code_context FROM stg_egisz.ihe_errors) s
-            WHERE t ~ '\d{3}-?\d{3}-?\d{3}[ -]?\d{2}'
-        """)
-        texts = [row[0] for row in cur.fetchall()]
-    with_snils = [t for t in texts if any(is_snils(v) for v in SNILS_CANDIDATE.findall(t))]
-    if not with_snils:
-        pytest.skip("в разобранных ответах нет СНИЛС; проверять нечего")
-    leaked = [m for m in (mask(con, t) for t in with_snils) if any(is_snils(v) for v in SNILS_CANDIDATE.findall(m))]
-    assert leaked == []
-
-
-def test_masking_keeps_text_length_and_document_values(con):
-    """Маскирование для выдачи не обрезает текст и не заменяет реквизиты документа:
-    идентификатор документа, OID и путь в документе нужны поддержке."""
-    tail = " Путь: /ClinicalDocument[1]/recordTarget[1]/patientRole[1]/addr[1]/@code" * 5
-    message = ("Уникальный идентификатор документа в ЭМД [7F622F826A194F74AAC3F37BD5DEFD1D] отличается от"
-               " уникального идентификатора документа в запросе на регистрацию сведений"
-               " [D6C1851F-1C6F-43B4-8609-5CE7175F7127]" + tail)
-    assert len(message) > 240
-    assert mask(con, message) == message
-
-
-def test_masking_keeps_clinic_service_address(con):
-    message = "Error while receiving data from service: http://gost-1234.infoclinica.lan:9945\nError code: 500"
-    assert mask(con, message) == message
-
-
-def test_masking_rules_are_a_separate_dictionary(con):
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_masking_rules") > 0
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_masking_rules m
-        JOIN mart_egisz.dim_error_rules r ON r.rule_code = m.rule_code
-    """) == 0
-    assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_masking_rules r
-        WHERE regexp_replace('x', r.match_pattern, r.replacement, r.match_flags) IS NULL
-    """) == 0
-
-
 # --- Текущие ошибки документа ------------------------------------------------------------
 
 def test_current_errors_follow_last_async_response(con):
     """Ошибки текущего состояния — элементы последнего асинхронного ответа и ошибки связи
     после него; сбой доставки до ответа к текущему состоянию не относится."""
-    if one(con, "SELECT to_regclass('mart_egisz.document_errors')") is None:
+    if one(con, "SELECT to_regclass('stg_egisz.document_error_current')") is None:
         pytest.skip("витрина текущих ошибок не построена; проверять нечего")
     doc = str(uuid.uuid4())
-    remd = [{"item_no": 1, "section": "errors", "code": "NO_SNILS", "message": "отказ",
-             "error_type": "отказ", "nsi_dictionary_oid": None}]
+
+    def element(kind: str, code: str, text: str, item_no: int) -> dict[str, object]:
+        return {"item_no": item_no, "error_kind": kind, "error_code": code, "error_text": text,
+                "error_type": text, "nsi_dictionary_oid": None}
+
     rows = [
-        (-9_000_000_001, "3 hours", None, "до ответа", None),
-        (-9_000_000_002, "2 hours", "error", None, remd),
-        (-9_000_000_003, "1 hour", None, "после ответа", None),
+        (-9_000_000_001, "3 hours", None, [element(NETWORK, "10060", "до ответа", 0)]),
+        (-9_000_000_002, "2 hours", "error", [element(ASYNC, "NO_SNILS", "отказ", 1)]),
+        (-9_000_000_003, "1 hour", None, [element(NETWORK, "11001", "после ответа", 0)]),
     ]
     with con.cursor() as cur:
         cur.execute("SAVEPOINT current_errors")
         try:
-            for logid, age, status, network_text, remd_errors in rows:
+            for logid, age, status, details in rows:
                 cur.execute(
-                    "INSERT INTO stg_egisz.exchange_messages "
-                    "(logid, log_date, dwh_id, status, network_error_code, network_error_text, remd_errors) "
-                    "VALUES (%s, now() - %s::interval, %s, %s, %s, %s, %s::jsonb)",
-                    (logid, age, doc, status, network_text, network_text,
-                     json.dumps(remd_errors) if remd_errors else None))
-            cur.execute("SELECT pg_get_viewdef('mart_egisz.document_errors'::regclass, true)")
+                    "INSERT INTO transactions (logid, log_date, dwh_id, status, error_details) "
+                    "VALUES (%s, now() - %s::interval, %s, %s, %s::jsonb)",
+                    (logid, age, doc, status, json.dumps(details)))
+            cur.execute("SELECT pg_get_viewdef('stg_egisz.document_error_current'::regclass, true)")
             view_sql = cur.fetchone()[0].rstrip().rstrip(";")
-            cur.execute("SELECT error_source, error_code FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no",
-                        (doc,))
-            assert cur.fetchall() == [("РЭМД", "NO_SNILS"), ("связь", "после ответа")]
+            cur.execute("SELECT error_text FROM (" + view_sql + ") c WHERE dwh_id = %s ORDER BY error_no", (doc,))
+            assert [r[0] for r in cur.fetchall()] == ["отказ", "после ответа"]
         finally:
             cur.execute("ROLLBACK TO SAVEPOINT current_errors")
             cur.execute("RELEASE SAVEPOINT current_errors")
@@ -939,20 +715,20 @@ def test_current_errors_follow_last_async_response(con):
 # --- Реестр наименований справочников ФНСИ ---------------------------------------------
 
 def test_nsi_dictionary_matches_published_805_revision(con):
-    assert one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries") == NSI_DICTIONARY_SIZE
+    assert one(con, "SELECT count(*) FROM dim_nsi_dictionary") == NSI_DICTIONARY_SIZE
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries
+        SELECT count(*) FROM dim_nsi_dictionary
         WHERE source_oid <> %s OR source_version <> %s
            OR name IS NULL OR btrim(name) = ''
     """, *NSI_DICTIONARY_SOURCE) == 0
 
 
-def test_nsi_dictionary_agrees_with_805_dictionary(con):
-    if one(con, "SELECT count(*) FROM mart_egisz.dim_nsi_semd_guide_dictionaries") == 0:
-        pytest.skip("справочник НСИ 805 не загружен; сверять нечего")
+def test_nsi_dictionary_agrees_with_805_snapshot(con):
+    if one(con, "SELECT count(*) FROM dim_nsi_semd_guide_dictionary") == 0:
+        pytest.skip("снимок НСИ 805 не загружен; сверять нечего")
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries d
-        JOIN (SELECT DISTINCT dict_oid, dict_name FROM mart_egisz.dim_nsi_semd_guide_dictionaries) g
+        SELECT count(*) FROM dim_nsi_dictionary d
+        JOIN (SELECT DISTINCT dict_oid, dict_name FROM dim_nsi_semd_guide_dictionary) g
           ON g.dict_oid = d.oid
         WHERE g.dict_name <> d.name
     """) == 0
@@ -960,35 +736,35 @@ def test_nsi_dictionary_agrees_with_805_dictionary(con):
 
 def test_nsi_dictionary_short_name_only_shortens(con):
     assert one(con, """
-        SELECT count(*) FROM mart_egisz.dim_nsi_dictionaries
+        SELECT count(*) FROM dim_nsi_dictionary
         WHERE short_name IS NOT NULL
           AND (btrim(short_name) = '' OR length(short_name) >= length(name))
     """) == 0
-    assert one(con, "SELECT short_name FROM mart_egisz.dim_nsi_dictionaries WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
+    assert one(con, "SELECT short_name FROM dim_nsi_dictionary WHERE oid = '1.2.643.5.1.13.13.11.1005'") == "МКБ-10"
 
 
 def test_document_error_names_every_registered_dictionary(con):
     """Наименование справочника пусто только у OID вне 805."""
-    if one(con, "SELECT to_regclass('serving_egisz.document_errors')") is None:
+    if one(con, "SELECT to_regclass('mart_egisz_selfservice.document_error')") is None:
         pytest.skip("витрина ошибок документа не построена; проверять нечего")
     assert one(con, """
-        SELECT count(*) FROM serving_egisz.document_errors e
+        SELECT count(*) FROM mart_egisz_selfservice.document_error e
         WHERE e.nsi_dictionary_oid IS NOT NULL
           AND e.nsi_dictionary_name IS NULL
-          AND EXISTS (SELECT 1 FROM mart_egisz.dim_nsi_dictionaries d WHERE d.oid = e.nsi_dictionary_oid)
+          AND EXISTS (SELECT 1 FROM dim_nsi_dictionary d WHERE d.oid = e.nsi_dictionary_oid)
     """) == 0
 
 
 def test_nsi_dictionary_schema_contract() -> None:
     """Комментарий к таблице — единственное место, где записано назначение реестра и его
     потребитель."""
-    assert "CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionaries (" in SCHEMA_SQL
-    assert "COMMENT ON TABLE mart_egisz.dim_nsi_dictionaries IS" in SCHEMA_SQL
-    assert "COMMENT ON COLUMN mart_egisz.dim_nsi_dictionaries.short_name IS" in SCHEMA_SQL
+    assert "CREATE TABLE IF NOT EXISTS dim_nsi_dictionary (" in SCHEMA_SQL
+    assert "COMMENT ON TABLE dim_nsi_dictionary IS" in SCHEMA_SQL
+    assert "COMMENT ON COLUMN dim_nsi_dictionary.short_name IS" in SCHEMA_SQL
     assert "rpt_error_messages" not in SCHEMA_SQL
     assert "rpt_error_breakdown" not in SCHEMA_SQL
-    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS mart_egisz.dim_nsi_dictionaries ("):]
+    dictionary_ddl = SCHEMA_SQL[SCHEMA_SQL.index("CREATE TABLE IF NOT EXISTS dim_nsi_dictionary ("):]
     assert "short_name text," in dictionary_ddl[:dictionary_ddl.index(");")]
     # редакция объявляется сидом, а не умолчанием колонки
     assert "SELECT v.oid, v.name, '%s'" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
-    assert "DELETE FROM mart_egisz.dim_nsi_dictionaries WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL
+    assert "DELETE FROM dim_nsi_dictionary WHERE source_version <> '%s';" % NSI_DICTIONARY_SOURCE[1] in SCHEMA_SQL

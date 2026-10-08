@@ -1,7 +1,7 @@
 {
   "name": "Клиентский дашборд. BI-аналитика ЭМД",
   "width": "full",
-  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. JID резолвится через справочник лицензий (mo_uid / gost-endpoint). Верхний блок — операционные показатели на реальных данных DWH (объём, first-pass acceptance, доставка, структура типов СЭМД). Медицинские показатели (уникальные пациенты/врачи) считаются по `patient_hash` / `doctor_hash`, но **тело СЭМД сейчас не захватывается в журнал ЕГИСЗ**, поэтому эти карты пусты до доработки upstream-захвата. Источник — `documents_current` (PII маскируется).",
+  "description": "Расширенная BI-аналитика клиники на основе ЭМД, **без подключения к её базе**. JID резолвится через справочник лицензий (mo_uid / gost-endpoint). Верхний блок — операционные показатели на реальных данных DWH (объём, first-pass acceptance, доставка, структура типов СЭМД). Медицинские показатели (уникальные пациенты/врачи) считаются по `patient_hash` / `doctor_hash`, но **тело СЭМД сейчас не захватывается в журнал ЕГИСЗ**, поэтому эти карты пусты до доработки upstream-захвата. Источник — `rpt_documents` (PII маскируется).",
   "parameters": [
     {
       "id": "08b00000-0000-4000-8000-000000000001",
@@ -41,7 +41,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"СЭМД за период\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"СЭМД за период\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -85,11 +85,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -100,7 +100,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха с первой попытки (клиент), %\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -150,11 +150,11 @@
       "col": 6,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -165,7 +165,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds::double precision))::numeric / 60.0, 1) AS \"Медиана доставки, мин\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds::double precision))::numeric / 60.0, 1) AS \"Медиана доставки, мин\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -209,11 +209,11 @@
       "col": 12,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -224,7 +224,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT ips_date::date), 0), 1) AS \"ЭМД/сутки\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT ips_date::date), 0), 1) AS \"ЭМД/сутки\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -268,11 +268,11 @@
       "col": 18,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -283,7 +283,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH base AS (SELECT date_trunc('month', ips_date)::date AS month_, COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS semd_label_, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT semd_label_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.semd_label_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (semd_label_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
+          "query": "WITH base AS (SELECT date_trunc('month', ips_date)::date AS month_, COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS semd_label_, COUNT(DISTINCT dwh_id)::bigint AS cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND ips_date IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1, 2), ranked AS (SELECT semd_label_, SUM(cnt) AS total_cnt, ROW_NUMBER() OVER (ORDER BY SUM(cnt) DESC) AS rn FROM base GROUP BY 1) SELECT b.month_ AS \"Месяц\", CASE WHEN r.rn <= 6 THEN b.semd_label_ ELSE 'Остальные' END AS \"Тип СЭМД\", SUM(b.cnt)::bigint AS \"Документов\" FROM base b JOIN ranked r USING (semd_label_) GROUP BY 1, 2 ORDER BY 1, 3 DESC",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -334,11 +334,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -357,7 +357,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) > 0 ORDER BY 3 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -412,11 +412,11 @@
       "col": 12,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -427,7 +427,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
+          "query": "SELECT COALESCE(NULLIF(semd_label, ''), '(тип СЭМД не определен)') AS \"Тип СЭМД\", ROUND(AVG(delivery_seconds) / 60.0, 1) AS \"Доставка, мин\", COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL)::bigint AS \"Документов с метрикой\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND delivery_seconds IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY 1 HAVING COUNT(DISTINCT dwh_id) FILTER (WHERE delivery_seconds IS NOT NULL) >= 3 ORDER BY 2 DESC LIMIT 12",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -481,11 +481,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -496,7 +496,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH rejected AS ( SELECT dwh_id, ips_date, patient_name_masked, snils_masked, doctor_name, semd_label FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND status = 'async_error' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50 ) SELECT rejected.ips_date AS \"Дата\", rejected.patient_name_masked AS \"Пациент\", rejected.snils_masked AS \"СНИЛС\", rejected.doctor_name AS \"Врач\", rejected.semd_label AS \"Тип СЭМД\", ( SELECT string_agg(DISTINCT document_errors.error_type, ' · ' ORDER BY document_errors.error_type) FROM serving_egisz.document_errors WHERE document_errors.dwh_id = rejected.dwh_id AND document_errors.error_kind = 'Ошибка асинхронного ответа' ) AS \"Тип ошибки\" FROM rejected ORDER BY rejected.ips_date DESC NULLS LAST",
+          "query": "WITH rejected AS ( SELECT dwh_id, ips_date, patient_name_masked, snils_masked, doctor_name, semd_label FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND status = 'async_error' [[AND {{ips_date}}]] [[AND {{client_document_type}}]] ORDER BY ips_date DESC NULLS LAST LIMIT 50 ) SELECT rejected.ips_date AS \"Дата\", rejected.patient_name_masked AS \"Пациент\", rejected.snils_masked AS \"СНИЛС\", rejected.doctor_name AS \"Врач\", rejected.semd_label AS \"Тип СЭМД\", ( SELECT string_agg(DISTINCT document_error.error_type, ' · ' ORDER BY document_error.error_type) FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rejected.dwh_id AND document_error.error_kind = 'Ошибка асинхронного ответа' ) AS \"Типы ошибки\" FROM rejected ORDER BY rejected.ips_date DESC NULLS LAST",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -527,8 +527,8 @@
       "display": "table",
       "visualization_settings": {
         "column_settings": {
-          "[\"name\",\"Тип ошибки\"]": {
-            "column_title": "Тип ошибки",
+          "[\"name\",\"Типы ошибки\"]": {
+            "column_title": "Типы ошибки",
             "text_style": "wrap"
           }
         }
@@ -539,11 +539,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -562,7 +562,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT patient_hash)::bigint AS \"Пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -600,11 +600,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -615,7 +615,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT COUNT(DISTINCT doctor_hash)::bigint AS \"Врачей\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -653,11 +653,11 @@
       "col": 8,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -668,7 +668,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 1) AS \"ЭМД/пациент\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
+          "query": "SELECT ROUND(COUNT(DISTINCT dwh_id)::numeric / NULLIF(COUNT(DISTINCT patient_hash), 0), 1) AS \"ЭМД/пациент\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]]",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -712,11 +712,11 @@
       "col": 16,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -727,7 +727,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT dwh_id)::int AS doc_cnt FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
+          "query": "WITH per_patient AS (SELECT patient_hash, COUNT(DISTINCT dwh_id)::int AS doc_cnt FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND patient_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY patient_hash) SELECT CASE WHEN doc_cnt = 1 THEN '1 документ' WHEN doc_cnt BETWEEN 2 AND 3 THEN '2-3' WHEN doc_cnt BETWEEN 4 AND 10 THEN '4-10' ELSE '11+' END AS \"Документов на пациента\", COUNT(*)::bigint AS \"Пациентов\" FROM per_patient GROUP BY 1 ORDER BY MIN(doc_cnt)",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -777,11 +777,11 @@
       "col": 0,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }
@@ -792,7 +792,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM serving_egisz.documents_current WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
+          "query": "SELECT doctor_name AS \"Врач\", COUNT(DISTINCT dwh_id)::bigint AS \"Документов\", ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"% успеха\", COUNT(DISTINCT patient_hash) FILTER (WHERE patient_hash IS NOT NULL)::bigint AS \"Уникальных пациентов\" FROM public.rpt_documents WHERE clinic_jid::text = {{client_jid}} AND doctor_hash IS NOT NULL [[AND {{ips_date}}]] [[AND {{client_document_type}}]] GROUP BY doctor_name, doctor_hash ORDER BY 2 DESC LIMIT 10",
           "template-tags": {
             "client_jid": {
               "type": "text",
@@ -844,11 +844,11 @@
       "col": 12,
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "client_document_type": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         }
       }

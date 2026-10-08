@@ -1,6 +1,6 @@
 {
   "name": "История запроса документов",
-  "table_ref": "serving_egisz.document_file_requests",
+  "table_ref": "public.rpt_document_file_request",
   "description": "Запросы getDocumentFile по уже зарегистрированным ЭМД (payload содержит emdrId). Grain: одно сообщение getDocumentFile.",
   "fields": {
     "request_logid": { "semantic_type": "type/PK", "display_name": "LOGID запроса" },

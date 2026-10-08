@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Load NSI 1461 medical organization dictionary into DWH.
 
-The loader replaces the permanent NSI snapshot in mart_egisz.dim_nsi_organizations and
-refreshes mart_egisz.dim_organizations.nsi_name for already matched OIDs. OID backfill for
+The loader replaces the permanent NSI snapshot in dim_nsi_organization and
+refreshes dim_organizations.nsi_name for already matched OIDs. OID backfill for
 CASH/JPERSONS rows is optional and uses only active parent .12.2. records with a
-single OID per INN. Tables, indexes and views are declared in db/ only.
+single OID per INN.
 """
 from __future__ import annotations
 
@@ -24,8 +24,109 @@ import psycopg2
 SOURCE_OID = "1.2.643.5.1.13.13.11.1461"
 DEFAULT_PAGE_SIZE = 1000
 
+TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS public.dim_nsi_organization (
+    nsi_id bigint PRIMARY KEY,
+    oid text UNIQUE,
+    source_oid text NOT NULL DEFAULT '1.2.643.5.1.13.13.11.1461',
+    source_version text NOT NULL,
+    name_full text,
+    name_short text,
+    medical_subject_id integer,
+    medical_subject_name text,
+    inn text,
+    kpp text,
+    ogrn text,
+    region_id integer,
+    region_name text,
+    organization_type integer,
+    mo_dept_id integer,
+    mo_dept_name text,
+    delete_date date,
+    delete_reason text,
+    create_date date,
+    modify_date date,
+    mo_level text,
+    mo_agency_kind_id integer,
+    mo_agency_kind text,
+    post_index text,
+    aoid_area text,
+    aoid_street text,
+    houseid text,
+    addr_region_id integer,
+    addr_region_name text,
+    area_name text,
+    prefix_area text,
+    street_name text,
+    prefix_street text,
+    house text,
+    building text,
+    struct text,
+    latitude numeric,
+    longitude numeric,
+    founder text,
+    profile_agency_kind_id integer,
+    profile_agency_kind text,
+    cadastral_number text,
+    old_oid text,
+    parent_id text,
+    raw_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    loaded_at timestamptz DEFAULT now()
+);
+ALTER TABLE public.dim_organizations ADD COLUMN IF NOT EXISTS nsi_name text;
+"""
+
+INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_inn
+    ON public.dim_nsi_organization (inn)
+    WHERE inn IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_ogrn
+    ON public.dim_nsi_organization (ogrn)
+    WHERE ogrn IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_dim_nsi_organization_active_mo
+    ON public.dim_nsi_organization (inn, oid)
+    WHERE delete_date IS NULL
+      AND parent_id IS NULL
+      AND oid LIKE '1.2.643.5.1.13.13.12.2.%';
+"""
+
+COMMENT_DDL = """
+COMMENT ON TABLE public.dim_nsi_organization IS
+'НСИ 1.2.643.5.1.13.13.11.1461 «ФРМО. Справочник медицинских организаций»; полный снимок версии источника.';
+COMMENT ON COLUMN public.dim_nsi_organization.parent_id IS
+'parentId из НСИ: OID родительской записи, а не внутренний nsi_id.';
+COMMENT ON COLUMN public.dim_organizations.name IS
+'Наименование организации из CASH/JPERSONS.';
+COMMENT ON COLUMN public.dim_organizations.fir_oid IS
+'OID медицинской организации. Ведущий источник — справочник ФРМО (НСИ 1461); синхронизация справочников добирает значение из JPERSONS.FIR_OID только там, где OID ещё не известен, и никогда не затирает его пустым.';
+COMMENT ON COLUMN public.dim_organizations.nsi_name IS
+'Наименование медицинской организации из НСИ для аудита сопоставления с CASH.';
+COMMENT ON VIEW public.rpt_clinic_nsi_mapping IS
+'Аудит сопоставления клиник CASH/JPERSONS с НСИ 1461: JID, наименование CASH, наименование НСИ, ИНН, OID, признак сопоставления и дата последней успешной регистрации ЭМД.';
+"""
+
+VIEW_SQL = """
+CREATE OR REPLACE VIEW public.rpt_clinic_nsi_mapping AS
+SELECT
+    o.jid,
+    o.name AS cash_name,
+    COALESCE(NULLIF(btrim(o.nsi_name), ''), NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), '')) AS nsi_name,
+    o.inn,
+    public.clean_text_value(o.fir_oid) AS oid,
+    (NULLIF(btrim(o.fir_oid), '') IS NOT NULL) AS is_mapped,
+    doc.last_success_registered_at
+FROM public.dim_organizations o
+LEFT JOIN public.dim_nsi_organization n ON n.oid = public.clean_text_value(o.fir_oid)
+LEFT JOIN LATERAL (
+    SELECT MAX(r.registered_at) AS last_success_registered_at
+    FROM public.rpt_documents r
+    WHERE r.clinic_jid = o.jid AND r.status = 'success'
+) doc ON true
+WHERE o.jid IS NOT NULL;
+"""
+
 COPY_SQL = """
-COPY mart_egisz.dim_nsi_organizations (
+COPY public.dim_nsi_organization (
     nsi_id, oid, source_oid, source_version, name_full, name_short,
     medical_subject_id, medical_subject_name, inn, kpp, ogrn, region_id,
     region_name, organization_type, mo_dept_id, mo_dept_name, delete_date,
@@ -34,17 +135,17 @@ COPY mart_egisz.dim_nsi_organizations (
     addr_region_id, addr_region_name, area_name, prefix_area, street_name,
     prefix_street, house, building, struct, latitude, longitude, founder,
     profile_agency_kind_id, profile_agency_kind, cadastral_number, old_oid,
-    parent_id
+    parent_id, raw_json
 ) FROM STDIN WITH (FORMAT csv)
 """
 
 REFRESH_ORG_NAMES_SQL = """
-UPDATE mart_egisz.dim_organizations o
+UPDATE public.dim_organizations o
 SET
     nsi_name = COALESCE(NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), '')),
     updated_at = now()
-FROM mart_egisz.dim_nsi_organizations n
-WHERE n.oid = stg_egisz.clean_text_value(o.fir_oid)
+FROM public.dim_nsi_organization n
+WHERE n.oid = public.clean_text_value(o.fir_oid)
   AND o.nsi_name IS DISTINCT FROM COALESCE(NULLIF(btrim(n.name_short), ''), NULLIF(btrim(n.name_full), ''));
 """
 
@@ -54,7 +155,7 @@ WITH active_mo AS (
         NULLIF(btrim(inn), '') AS inn,
         oid,
         COALESCE(NULLIF(btrim(name_short), ''), NULLIF(btrim(name_full), '')) AS nsi_name
-    FROM mart_egisz.dim_nsi_organizations
+    FROM public.dim_nsi_organization
     WHERE delete_date IS NULL
       AND parent_id IS NULL
       AND oid LIKE '1.2.643.5.1.13.13.12.2.%'
@@ -69,7 +170,7 @@ unique_by_inn AS (
     GROUP BY inn
     HAVING COUNT(DISTINCT oid) = 1
 )
-UPDATE mart_egisz.dim_organizations o
+UPDATE public.dim_organizations o
 SET
     fir_oid = u.oid,
     nsi_name = u.nsi_name,
@@ -77,7 +178,7 @@ SET
 FROM unique_by_inn u
 WHERE NULLIF(btrim(o.inn), '') = u.inn
   AND (
-      stg_egisz.clean_text_value(o.fir_oid) IS DISTINCT FROM u.oid
+      public.clean_text_value(o.fir_oid) IS DISTINCT FROM u.oid
    OR o.nsi_name IS DISTINCT FROM u.nsi_name
   );
 """
@@ -174,6 +275,7 @@ def record_to_row(record: dict[str, Any], source_version: str) -> tuple[Any, ...
         clean_text(record.get("cadastralNumber")),
         clean_text(record.get("oldOid")),
         clean_text(record.get("parentId")),
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")),
     )
 
 
@@ -194,7 +296,7 @@ def write_copy_file(records: list[dict[str, Any]], source_version: str) -> Path:
         "w",
         encoding="utf-8",
         newline="",
-        prefix="dim_nsi_organizations_",
+        prefix="dim_nsi_organization_",
         suffix=".csv",
         delete=False,
     )
@@ -216,7 +318,7 @@ def main() -> None:
     parser.add_argument("--dsn")
     parser.add_argument("--host", default=os.environ.get("PGHOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PGPORT", "5432")))
-    parser.add_argument("--database", default=os.environ.get("PGDATABASE", "dwh_bi"))
+    parser.add_argument("--database", default=os.environ.get("PGDATABASE", "dwh_egisz"))
     parser.add_argument("--user", default=os.environ.get("PGUSER", "egisz"))
     parser.add_argument("--password", default=None)
     parser.add_argument("--source-version", default=None)
@@ -233,17 +335,21 @@ def main() -> None:
             with con.cursor() as cur:
                 cur.execute("SET LOCAL lock_timeout = %s", ("15s",))
                 cur.execute("SET LOCAL statement_timeout = %s", ("30min",))
-                cur.execute("TRUNCATE mart_egisz.dim_nsi_organizations")
+                cur.execute(TABLE_DDL)
+                cur.execute("TRUNCATE public.dim_nsi_organization")
                 with copy_path.open("r", encoding="utf-8", newline="") as fh:
                     cur.copy_expert(COPY_SQL, fh)
+                cur.execute(INDEX_DDL)
                 cur.execute(REFRESH_ORG_NAMES_SQL)
                 refreshed_names = cur.rowcount
                 backfilled_oids = 0
                 if args.backfill_fir_oid:
                     cur.execute(BACKFILL_ORG_OIDS_SQL)
                     backfilled_oids = cur.rowcount
-                cur.execute("ANALYZE mart_egisz.dim_nsi_organizations")
-                cur.execute("ANALYZE mart_egisz.dim_organizations")
+                cur.execute(VIEW_SQL)
+                cur.execute(COMMENT_DDL)
+                cur.execute("ANALYZE public.dim_nsi_organization")
+                cur.execute("ANALYZE public.dim_organizations")
     finally:
         with contextlib.suppress(OSError):
             copy_path.unlink()
