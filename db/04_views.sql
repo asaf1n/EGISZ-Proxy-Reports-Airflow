@@ -2638,4 +2638,4 @@ ANALYZE serving_egisz.clinic_activity_daily;
 ANALYZE serving_egisz.clinic_semd_types;
 ANALYZE mart_egisz_admin.document_quality;
 
-\echo 'DWH init complete: egisz owns all objects of the EGISZ layer schemas in dwh_bi'
+\echo 'DWH init complete: egisz owns all objects of the EGISZ layer schemas in dwh_bi_old'

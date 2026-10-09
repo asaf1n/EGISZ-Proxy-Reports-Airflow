@@ -1,6 +1,6 @@
 """Регрессионные тесты обработки ошибок против живого PostgreSQL.
 
-Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi);
+Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi_old);
 без переменной модуль целиком скипается — как и остальной suite, не зависящий от внешних
 сервисов. Фикстура идемпотентно применяет db/02_functions.sql из working tree поверх схемы
 db/01_schema.sql, поэтому тесты проверяют текущий код правил, а не состояние базы на момент

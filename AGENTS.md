@@ -25,6 +25,6 @@
 
 ## Проверка
 
-- Схема: `psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql`, два прогона.
+- Схема: `psql -U egisz -d dwh_bi_old -v ON_ERROR_STOP=1 -f db/dwh_init.sql`, два прогона.
 - Тесты: `python -m pytest tests -q`.
 - `.\up.ps1` и сценарии `deploy/` запускаются только по запросу пользователя. Контуры с `prod` в имени — внешние, работа с ними требует отдельного подтверждения.

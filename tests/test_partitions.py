@@ -1,6 +1,6 @@
 """Тесты месячной сетки партиций против живого PostgreSQL.
 
-Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi);
+Запуск требует EGISZ_TEST_PG_DSN (например postgresql://egisz:egisz@localhost:5432/dwh_bi_old);
 без переменной живая часть модуля скипается. Фикстура идемпотентно применяет
 etl_meta.egisz_ensure_time_partitions из db/01_schema.sql, поэтому проверяется текущий код функции,
 а не состояние базы на момент последнего наката схемы.

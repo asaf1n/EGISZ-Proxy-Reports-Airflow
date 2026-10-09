@@ -216,7 +216,7 @@ def main() -> None:
     parser.add_argument("--dsn")
     parser.add_argument("--host", default=os.environ.get("PGHOST", "localhost"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PGPORT", "5432")))
-    parser.add_argument("--database", default=os.environ.get("PGDATABASE", "dwh_bi"))
+    parser.add_argument("--database", default=os.environ.get("PGDATABASE", "dwh_bi_old"))
     parser.add_argument("--user", default=os.environ.get("PGUSER", "egisz"))
     parser.add_argument("--password", default=None)
     parser.add_argument("--source-version", default=None)

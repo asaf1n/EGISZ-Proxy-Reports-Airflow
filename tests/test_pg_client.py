@@ -67,7 +67,7 @@ def test_connect_pg_recovers_cp1251_server_error_text(monkeypatch: pytest.Monkey
     monkeypatch.setattr("egisz_etl_dag.psycopg2.connect", failing_connect)
 
     with pytest.raises(psycopg2.OperationalError, match="проверку подлинности") as excinfo:
-        connect_pg("postgresql://egisz:wrong@localhost:5432/dwh_bi")
+        connect_pg("postgresql://egisz:wrong@localhost:5432/dwh_bi_old")
 
     assert isinstance(excinfo.value.__cause__, UnicodeDecodeError)
 

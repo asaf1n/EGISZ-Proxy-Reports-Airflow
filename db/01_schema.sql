@@ -7,19 +7,19 @@
 -- ============================================================================
 -- 00_bootstrap.sql — заголовок, пояс роли, гранты.
 -- Подключается из db/dwh_init.sql через \i db/01_schema.sql.
--- Идемпотентно; выполняется под ролью egisz (владелец dwh_bi).
+-- Идемпотентно; выполняется под ролью egisz (владелец dwh_bi_old).
 -- ============================================================================
 
 \encoding UTF8
--- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_bi;
+-- Инициализация DWH для отчётности EGISZ. Запускать под ролью egisz против dwh_bi_old;
 -- повторный прогон безопасен. Все части dwh_init выполняются под ролью egisz.
 --
 -- Предусловия на уровне администратора БД:
 --   CREATE ROLE egisz LOGIN PASSWORD '...';
---   CREATE DATABASE dwh_bi OWNER egisz;
+--   CREATE DATABASE dwh_bi_old OWNER egisz;
 --
 -- Usage:
---   psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql
+--   psql -U egisz -d dwh_bi_old -v ON_ERROR_STOP=1 -f db/dwh_init.sql
 
 -- Пояс отчётности задаётся здесь и только здесь. Наивное Firebird-время
 -- (EXCHANGELOG.CREATEDATE, лицензии) пишется как timestamptz; без фиксированного пояса
@@ -32,7 +32,7 @@
 -- report-timezone. Смена пояса выполняется в этих двух точках, правки SQL не требует.
 ALTER ROLE egisz SET timezone TO 'Europe/Moscow';
 
-GRANT CONNECT ON DATABASE dwh_bi TO egisz;
+GRANT CONNECT ON DATABASE dwh_bi_old TO egisz;
 
 -- Схемы слоёв (docs/dwh-schema-naming-migration.md): raw_egisz — копия источника,
 -- stg_egisz — разбор, mart_egisz — документы и справочники, serving_egisz — выдача

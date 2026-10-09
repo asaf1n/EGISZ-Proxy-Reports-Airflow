@@ -22,7 +22,7 @@
 | Компонент | Адрес | База / ресурс | Учётка |
 | --------- | ----- | ------------- | ------ |
 | Firebird proxy | `localhost:3050` | `proxy_egisz` | `sysdba` / `masterkey` |
-| PostgreSQL DWH | `localhost:5432` | `dwh_bi` | `egisz` / `egisz` |
+| PostgreSQL DWH | `localhost:5432` | `dwh_bi_old` | `egisz` / `egisz` |
 | Airflow UI/API | `http://localhost:8080` | namespace `egisz-bi` | задаётся контуром Airflow |
 | Metabase | `http://localhost:3000` | коллекция `Интеграция с ЕГИСЗ` | `admin@egisz.local` / `egisz` |
 
@@ -108,7 +108,7 @@ flowchart LR
         T5[refresh_marts]
     end
 
-    subgraph DWH["dwh_bi (PostgreSQL) — преобразование"]
+    subgraph DWH["dwh_bi_old (PostgreSQL) — преобразование"]
         RAW[(raw_egisz — журнал<br/>и реестр подач)]
         TX[(stg_egisz — разобранные<br/>сообщения и ошибки)]
         DOC[(mart_egisz — документы)]
@@ -137,10 +137,10 @@ flowchart LR
 | --------- | ---- |
 | `proxy_egisz` (Firebird) | Журнал обмена, реестр подач и справочники — источник, доступ только на чтение |
 | Airflow | Два DAG: приём и разбор журнала, суточное обслуживание |
-| `dwh_bi` (PostgreSQL) | Слои `raw_egisz` → `stg_egisz` → `mart_egisz` → `serving_egisz`, эксплуатационные представления `mart_egisz_admin`, состояние конвейера в `etl_meta` |
+| `dwh_bi_old` (PostgreSQL) | Слои `raw_egisz` → `stg_egisz` → `mart_egisz` → `serving_egisz`, эксплуатационные представления `mart_egisz_admin`, состояние конвейера в `etl_meta` |
 | Metabase | Шесть дашбордов и пять моделей поверх отчётного слоя |
 
-Служебные базы Airflow и Metabase отделены от `dwh_bi`.
+Служебные базы Airflow и Metabase отделены от `dwh_bi_old`.
 
 ---
 
@@ -613,7 +613,7 @@ flowchart TD
 
 ## DWH-модель
 
-БД `dwh_bi` — общая BI-база, в ней же работает контур Redmine BI. Схема — идемпотентный прогон `db/dwh_init.sql` (модули `db/`). Объекты ЕГИСЗ разложены по слоям, правила имён — в [раскладке схем](docs/dwh-schema-naming-migration.md). В `public` объектов ЕГИСЗ нет, все имена в SQL указываются со схемой.
+БД `dwh_bi_old` — общая BI-база, в ней же работает контур Redmine BI. Схема — идемпотентный прогон `db/dwh_init.sql` (модули `db/`). Объекты ЕГИСЗ разложены по слоям, правила имён — в [раскладке схем](docs/dwh-schema-naming-migration.md). В `public` объектов ЕГИСЗ нет, все имена в SQL указываются со схемой.
 
 | Схема | Содержимое |
 | ----- | ---------- |
@@ -952,8 +952,8 @@ Metabase Models → витрины DWH:
 | Компонент | Требование |
 | --------- | ---------- |
 | Kubernetes | Кластер с `kubectl` и `helm` (локально — Docker Desktop, Kubernetes включён) |
-| PostgreSQL | БД `dwh_bi`, роль `egisz` |
-| Схема DWH | Идемпотентный прогон: `psql -U egisz -d dwh_bi -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
+| PostgreSQL | БД `dwh_bi_old`, роль `egisz` |
+| Схема DWH | Идемпотентный прогон: `psql -U egisz -d dwh_bi_old -v ON_ERROR_STOP=1 -f db/dwh_init.sql` |
 | Секреты k8s | `up.ps1` копирует `k8s/**/*.example.yaml` → `*secret*.yaml` при отсутствии целевых файлов |
 | Подключения Airflow | `k8s/airflow/egisz-connections.json` (создаётся из `*.example.json`) — начальное наполнение пустой метабазы. `up.ps1` заводит Connections `dwh_bi_pg` / `proxy_egisz_fb` при отсутствии подключений; реквизиты существующих подключений правят в Admin → Connections |
 
@@ -1019,7 +1019,7 @@ Airflow UI — `http://localhost:8080`, Metabase — `http://localhost:3000`, na
 | ITI-41                    | Транзакция IHE «Provide and Register Document Set-b» — подача СЭМД в ИЭМК     |
 | ITI-44                    | Транзакция IHE «Patient Identity Feed» — загрузка локального идентификатора пациента в ИЭМК |
 | ассоциация ЭМД            | Связь регистрируемого документа с ранее зарегистрированным (секция `associations`, тип по НСИ `1.2.643.5.1.13.13.99.2.122`) |
-| DWH                       | Аналитическое хранилище (`dwh_bi`)                                         |
+| DWH                       | Аналитическое хранилище (`dwh_bi_old`)                                         |
 
 ---
 
