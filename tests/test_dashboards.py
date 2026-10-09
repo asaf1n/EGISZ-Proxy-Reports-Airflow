@@ -2092,17 +2092,25 @@ def test_dashboard_emdr_filter_uses_canonical_column_name() -> None:
             assert filters["emdr_id"]["field_name"] == "semd_emdr_id"
 
 
-def test_archive_detail_uses_documents_model() -> None:
+def test_archive_detail_is_document_journal_with_source_error_text() -> None:
+    """Журнал архива — native-запрос по документам: исходный текст ошибки берётся из слоя
+    разбора, поисковые фильтры документа (localUid, relatesTo, РЭМД, LOGID) сохранены."""
     dashboard = _integration_dashboard()
     card = next(c for c in dashboard["cards"] if c.get("name") == "Архив СЭМД" and c.get("tab") == "archive")
-    assert card.get("query_tier") == "query_builder"
-    assert card.get("source_model") == "Документы"
-    assert card["dataset_query"]["query"]["source-table"] == "model:Документы"
+    assert card["dataset_query"]["type"] == "native"
+    query = card["dataset_query"]["native"]["query"]
+    assert "stg_egisz.document_error_current" in query
+    assert 'AS "Исходный текст ошибки"' in query
+    assert "LIMIT 1000" in query
+    tags = card["dataset_query"]["native"]["template-tags"]
+    assert {"ips_date", "semd_type", "jid", "local_uid", "relates_to", "emdr_id", "status", "log_id"} <= set(tags)
+    for key in tags:
+        assert "{{%s}}" % key in query
     columns = {col["name"]: col.get("enabled", True) for col in card["visualization_settings"]["table.columns"]}
     assert columns.get("dwh_id") is False
     assert columns.get("localUid СЭМД") is True
     assert columns.get("Клиника") is True
-    assert columns.get("JID Клиники") is False
+    assert columns.get("Исходный текст ошибки") is True
     column_settings = card["visualization_settings"].get("column_settings") or {}
     assert not any("(emdrid)" in str(v) for v in column_settings.values())
 

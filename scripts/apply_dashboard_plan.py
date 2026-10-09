@@ -442,24 +442,50 @@ DOCUMENTS_PARAM_TARGETS = {
     "log_id": {"model_ref": "Документы", "field_name": "logid"},
 }
 
+ARCHIVE_ERROR_TEXT_COLUMN = "Исходный текст ошибки"
+
+# Вкладка «Архив СЭМД» несёт полный набор поисковых фильтров документа; идентификаторы
+# переменных общие у всех её native-карточек.
+ARCHIVE_FILTER_FIELDS = {
+    "jid": "clinic_label", "ips_date": "ips_date", "semd_type": "semd_label",
+    "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
+    "emdr_id": "semd_emdr_id", "status": "status_detail_label", "log_id": "logid",
+}
+ARCHIVE_FILTER_NAMES = {
+    "ips_date": "По дате обработки", "jid": "JID Клиники", "semd_type": "Код СЭМД",
+    "local_uid": "localUid СЭМД", "relates_to": "Связанное сообщение",
+    "emdr_id": "Рег. Номер РЭМД", "status": "Статус", "log_id": "LOGID",
+}
+ARCHIVE_FILTER_TEMPLATE_TAGS = {
+    key: {
+        "widget-type": "date/all-options" if key == "ips_date" else "string/=",
+        "display-name": ARCHIVE_FILTER_NAMES[key],
+        "id": f"f6a00003-0003-4003-8003-00000000000{index}",
+        "name": key,
+        "type": "dimension",
+    }
+    for index, key in enumerate(
+        ("ips_date", "jid", "semd_type", "local_uid", "relates_to", "emdr_id", "status", "log_id"), start=1
+    )
+}
+ARCHIVE_FIELD_FILTERS = {
+    key: {"table_ref": "public.rpt_documents", "field_name": field}
+    for key, field in ARCHIVE_FILTER_FIELDS.items()
+}
+
 ARCHIVE_TABLE_COLUMNS = [
     {"enabled": True, "name": "Дата обработки"},
     {"enabled": True, "name": "Статус"},
     {"enabled": True, "name": "СЭМД"},
     {"enabled": True, "name": "Клиника"},
-    {"enabled": False, "name": "JID Клиники"},
-    {"enabled": False, "name": "Наименование клиники"},
     {"enabled": True, "name": "Host Клиники (ГОСТ VPN)"},
     {"enabled": True, "name": "localUid СЭМД"},
     {"enabled": True, "name": "Типы ошибки"},
+    {"enabled": True, "name": ARCHIVE_ERROR_TEXT_COLUMN},
     {"enabled": True, "name": "Рег. Номер РЭМД"},
     {"enabled": True, "name": "Связанное сообщение"},
     {"enabled": True, "name": "LOGID"},
     {"enabled": False, "name": "dwh_id"},
-    {"enabled": False, "name": "OID Клиники"},
-    {"enabled": False, "name": "СЭМД CreateDate"},
-    {"enabled": False, "name": "MSGID"},
-    {"enabled": False, "name": "День"},
 ]
 
 # Порядок колонок и ширины сведены с живого прода (bi.sdsys.ru): «Типы ошибки» подняты
@@ -574,6 +600,27 @@ LATEST_OPERATIONS_QUERY = (
     "FROM stg_egisz.document_error_current c WHERE c.dwh_id = latest.dwh_id ) "
     "AS \"ns2_error\" "
     "FROM latest ORDER BY latest.ips_date DESC"
+)
+
+# Журнал вкладки «Архив СЭМД»: строка — документ. Исходный текст — из слоя разбора по
+# исключению из стандарта (как в «Последних операциях»), тексты ошибок документа склеены.
+ARCHIVE_QUERY = (
+    "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", "
+    "semd_label AS \"СЭМД\", clinic_label AS \"Клиника\", "
+    "clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_local_uid AS \"localUid СЭМД\", "
+    "( SELECT string_agg(DISTINCT document_error.error_type, ' · ' "
+    "ORDER BY document_error.error_type) "
+    f"FROM {DOCUMENT_ERROR} WHERE document_error.dwh_id = rpt_documents.dwh_id ) "
+    "AS \"Типы ошибки\", "
+    "( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) "
+    "FROM stg_egisz.document_error_current c WHERE c.dwh_id = rpt_documents.dwh_id ) "
+    f"AS \"{ARCHIVE_ERROR_TEXT_COLUMN}\", "
+    "semd_emdr_id AS \"Рег. Номер РЭМД\", relates_to_msgid AS \"Связанное сообщение\", "
+    "logid AS \"LOGID\", dwh_id AS \"dwh_id\" "
+    "FROM public.rpt_documents WHERE 1=1 "
+    "[[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] "
+    "[[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] "
+    "ORDER BY ips_date DESC LIMIT 1000"
 )
 
 STATUS_PERIOD_QUERY = (
@@ -2814,26 +2861,29 @@ def build_model_drill(
 def convert_archive_card(card: dict) -> None:
     card["description"] = (
         "Список документов за выбранный период и фильтры. "
-        "Одна строка — один документ (dwh_id). До 1000 последних по дате обработки."
+        "Одна строка — один документ (dwh_id). До 1000 последних по дате обработки. "
+        "Если у документа несколько ошибок, их тексты склеены в одном поле."
     )
-    card["query_tier"] = "query_builder"
-    card["source_model"] = "Документы"
+    card.pop("query_tier", None)
+    card.pop("source_model", None)
+    card.pop("metabase-parameter-targets", None)
     card["dataset_query"] = {
-        "type": "query",
+        "type": "native",
         "database": 1,
-        "query": {
-            "source-table": "model:Документы",
-            "limit": 1000,
-            "order-by": [["desc", ["field", "Документы:ips_date", None]]],
+        "native": {
+            "query": ARCHIVE_QUERY,
+            "template-tags": deepcopy(ARCHIVE_FILTER_TEMPLATE_TAGS),
         },
     }
-    card["metabase-parameter-targets"] = deepcopy(DOCUMENTS_PARAM_TARGETS)
-    card.pop("metabase-field-filters", None)
+    card["metabase-field-filters"] = deepcopy(ARCHIVE_FIELD_FILTERS)
     viz = card.setdefault("visualization_settings", {})
     viz["table.columns"] = deepcopy(ARCHIVE_TABLE_COLUMNS)
     cs = viz.setdefault("column_settings", {})
     cs.pop('["name","Сводка ошибки"]', None)
     cs['["name","Типы ошибки"]'] = {"column_title": "Типы ошибки", "text_style": "wrap"}
+    cs[f'["name","{ARCHIVE_ERROR_TEXT_COLUMN}"]'] = {
+        "column_title": ARCHIVE_ERROR_TEXT_COLUMN, "text_style": "wrap",
+    }
     cs['["name","dwh_id"]'] = {"column_title": "dwh_id"}
 
 
@@ -4946,14 +4996,7 @@ def restore_archive_top_semd(dash: dict) -> None:
         'ROUND(100.0 * cnt / NULLIF((SELECT total FROM totals), 0), 1) AS "%" '
         "FROM base ORDER BY cnt DESC"
     )
-    ff = {
-        k: {"table_ref": "public.rpt_documents", "field_name": v}
-        for k, v in {
-            "jid": "clinic_label", "ips_date": "ips_date", "semd_type": "semd_label",
-            "local_uid": "semd_local_uid", "relates_to": "relates_to_msgid",
-            "emdr_id": "semd_emdr_id", "status": "status_detail_label", "log_id": "logid",
-        }.items()
-    }
+    ff = deepcopy(ARCHIVE_FIELD_FILTERS)
     card = {
         "name": "Топ типов СЭМД по документам",
         "description": "Топ кодов СЭМД по числу документов в срезе. Колонка «%» — доля от общего числа документов.",
@@ -4961,24 +5004,7 @@ def restore_archive_top_semd(dash: dict) -> None:
             "type": "native",
             "native": {
                 "query": query,
-                "template-tags": {
-                    "jid": {"widget-type": "string/=", "display-name": "JID Клиники",
-                            "id": "f6a00003-0003-4003-8003-000000000002", "name": "jid", "type": "dimension"},
-                    "ips_date": {"widget-type": "date/all-options", "display-name": "По дате обработки",
-                                 "id": "f6a00003-0003-4003-8003-000000000001", "name": "ips_date", "type": "dimension"},
-                    "semd_type": {"widget-type": "string/=", "display-name": "Код СЭМД",
-                                  "id": "f6a00003-0003-4003-8003-000000000003", "name": "semd_type", "type": "dimension"},
-                    "local_uid": {"widget-type": "string/=", "display-name": "localUid СЭМД",
-                                  "id": "f6a00003-0003-4003-8003-000000000004", "name": "local_uid", "type": "dimension"},
-                    "relates_to": {"widget-type": "string/=", "display-name": "Связанное сообщение",
-                                   "id": "f6a00003-0003-4003-8003-000000000005", "name": "relates_to", "type": "dimension"},
-                    "emdr_id": {"widget-type": "string/=", "display-name": "Рег. Номер РЭМД",
-                                "id": "f6a00003-0003-4003-8003-000000000006", "name": "emdr_id", "type": "dimension"},
-                    "status": {"widget-type": "string/=", "display-name": "Статус",
-                               "id": "f6a00003-0003-4003-8003-000000000007", "name": "status", "type": "dimension"},
-                    "log_id": {"widget-type": "string/=", "display-name": "LOGID",
-                               "id": "f6a00003-0003-4003-8003-000000000008", "name": "log_id", "type": "dimension"},
-                },
+                "template-tags": deepcopy(ARCHIVE_FILTER_TEMPLATE_TAGS),
             },
             "database": 1,
         },

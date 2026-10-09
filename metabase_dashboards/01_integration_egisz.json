@@ -5220,24 +5220,70 @@
     },
     {
       "name": "Архив СЭМД",
-      "description": "Список документов за выбранный период и фильтры. Одна строка — один документ (dwh_id). До 1000 последних по дате обработки.",
-      "query_tier": "query_builder",
+      "description": "Список документов за выбранный период и фильтры. Одна строка — один документ (dwh_id). До 1000 последних по дате обработки. Если у документа несколько ошибок, их тексты склеены в одном поле.",
       "dataset_query": {
-        "type": "query",
+        "type": "native",
         "database": 1,
-        "query": {
-          "source-table": "model:Документы",
-          "limit": 1000,
-          "order-by": [
-            [
-              "desc",
-              [
-                "field",
-                "Документы:ips_date",
-                null
-              ]
-            ]
-          ]
+        "native": {
+          "query": "SELECT ips_date AS \"Дата обработки\", status_detail_label AS \"Статус\", semd_label AS \"СЭМД\", clinic_label AS \"Клиника\", clinic_host AS \"Host Клиники (ГОСТ VPN)\", semd_local_uid AS \"localUid СЭМД\", ( SELECT string_agg(DISTINCT document_error.error_type, ' · ' ORDER BY document_error.error_type) FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id ) AS \"Типы ошибки\", ( SELECT string_agg(c.error_text, ' · ' ORDER BY c.error_no) FROM stg_egisz.document_error_current c WHERE c.dwh_id = rpt_documents.dwh_id ) AS \"Исходный текст ошибки\", semd_emdr_id AS \"Рег. Номер РЭМД\", relates_to_msgid AS \"Связанное сообщение\", logid AS \"LOGID\", dwh_id AS \"dwh_id\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{semd_type}}]] [[AND {{jid}}]] [[AND {{local_uid}}]] [[AND {{relates_to}}]] [[AND {{emdr_id}}]] [[AND {{status}}]] [[AND {{log_id}}]] ORDER BY ips_date DESC LIMIT 1000",
+          "template-tags": {
+            "ips_date": {
+              "widget-type": "date/all-options",
+              "display-name": "По дате обработки",
+              "id": "f6a00003-0003-4003-8003-000000000001",
+              "name": "ips_date",
+              "type": "dimension"
+            },
+            "jid": {
+              "widget-type": "string/=",
+              "display-name": "JID Клиники",
+              "id": "f6a00003-0003-4003-8003-000000000002",
+              "name": "jid",
+              "type": "dimension"
+            },
+            "semd_type": {
+              "widget-type": "string/=",
+              "display-name": "Код СЭМД",
+              "id": "f6a00003-0003-4003-8003-000000000003",
+              "name": "semd_type",
+              "type": "dimension"
+            },
+            "local_uid": {
+              "widget-type": "string/=",
+              "display-name": "localUid СЭМД",
+              "id": "f6a00003-0003-4003-8003-000000000004",
+              "name": "local_uid",
+              "type": "dimension"
+            },
+            "relates_to": {
+              "widget-type": "string/=",
+              "display-name": "Связанное сообщение",
+              "id": "f6a00003-0003-4003-8003-000000000005",
+              "name": "relates_to",
+              "type": "dimension"
+            },
+            "emdr_id": {
+              "widget-type": "string/=",
+              "display-name": "Рег. Номер РЭМД",
+              "id": "f6a00003-0003-4003-8003-000000000006",
+              "name": "emdr_id",
+              "type": "dimension"
+            },
+            "status": {
+              "widget-type": "string/=",
+              "display-name": "Статус",
+              "id": "f6a00003-0003-4003-8003-000000000007",
+              "name": "status",
+              "type": "dimension"
+            },
+            "log_id": {
+              "widget-type": "string/=",
+              "display-name": "LOGID",
+              "id": "f6a00003-0003-4003-8003-000000000008",
+              "name": "log_id",
+              "type": "dimension"
+            }
+          }
         }
       },
       "display": "table",
@@ -5261,14 +5307,6 @@
             "name": "Клиника"
           },
           {
-            "enabled": false,
-            "name": "JID Клиники"
-          },
-          {
-            "enabled": false,
-            "name": "Наименование клиники"
-          },
-          {
             "enabled": true,
             "name": "Host Клиники (ГОСТ VPN)"
           },
@@ -5279,6 +5317,10 @@
           {
             "enabled": true,
             "name": "Типы ошибки"
+          },
+          {
+            "enabled": true,
+            "name": "Исходный текст ошибки"
           },
           {
             "enabled": true,
@@ -5295,22 +5337,6 @@
           {
             "enabled": false,
             "name": "dwh_id"
-          },
-          {
-            "enabled": false,
-            "name": "OID Клиники"
-          },
-          {
-            "enabled": false,
-            "name": "СЭМД CreateDate"
-          },
-          {
-            "enabled": false,
-            "name": "MSGID"
-          },
-          {
-            "enabled": false,
-            "name": "День"
           }
         ],
         "column_settings": {
@@ -5353,6 +5379,10 @@
           },
           "[\"name\",\"Связанное сообщение\"]": {
             "column_title": "Связанное сообщение"
+          },
+          "[\"name\",\"Исходный текст ошибки\"]": {
+            "column_title": "Исходный текст ошибки",
+            "text_style": "wrap"
           }
         }
       },
@@ -5361,38 +5391,37 @@
       "row": 12,
       "col": 0,
       "tab": "archive",
-      "source_model": "Документы",
-      "metabase-parameter-targets": {
-        "ips_date": {
-          "model_ref": "Документы",
-          "field_name": "ips_date"
-        },
+      "metabase-field-filters": {
         "jid": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         },
+        "ips_date": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "ips_date"
+        },
         "semd_type": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_label"
         },
-        "status": {
-          "model_ref": "Документы",
-          "field_name": "status_detail_label"
-        },
         "local_uid": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_local_uid"
         },
         "relates_to": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "relates_to_msgid"
         },
         "emdr_id": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "semd_emdr_id"
         },
+        "status": {
+          "table_ref": "public.rpt_documents",
+          "field_name": "status_detail_label"
+        },
         "log_id": {
-          "model_ref": "Документы",
+          "table_ref": "public.rpt_documents",
           "field_name": "logid"
         }
       }
