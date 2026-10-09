@@ -1034,7 +1034,14 @@ function Install-Metabase {
 
     Write-Host "Applying Metabase connection secrets..."
     Invoke-Checked "Apply Metabase connection secrets" {
-        kubectl apply -n $Namespace -f k8s/metabase/metabase-connections-secret.yaml
+        # Kubernetes не раскрывает переменные: значения вида ${VAR} подставляются здесь из окружения.
+        $secretYaml = (Get-Content -Raw -Encoding UTF8 k8s/metabase/metabase-connections-secret.yaml)
+        foreach ($m in [regex]::Matches($secretYaml, '\$\{(\w+)\}') | Select-Object -Unique) {
+            $value = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
+            if ([string]::IsNullOrEmpty($value)) { throw "Переменная окружения $($m.Groups[1].Value) не задана" }
+            $secretYaml = $secretYaml.Replace($m.Value, $value)
+        }
+        $secretYaml | kubectl apply -n $Namespace -f -
     }
 
     Write-Host "Building Metabase image ${MetabaseImage} (manifest ${dashboardsHash})..."
