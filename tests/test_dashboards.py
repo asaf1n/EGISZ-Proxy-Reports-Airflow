@@ -2009,8 +2009,8 @@ def test_metabase_models_catalog_exists() -> None:
     assert no_response["table_ref"] == "public.rpt_documents_sent"
     assert "pending_segment_label" in no_response["fields"]
     assert "sent_state_label" in no_response["fields"]
-    # Ошибки — модели на опубликованных ошибках: исходного текста в них нет, он
-    # остаётся в слое разбора.
+    # Ошибки — модели на опубликованных ошибках: исходный текст есть только в «Разбивке
+    # ошибок», в остальных он остаётся в слое разбора.
     breakdown = json.loads(Path("metabase_models/02_error_breakdown.json").read_text(encoding="utf-8"))
     assert breakdown["name"] == "Разбивка ошибок"
     assert breakdown["table_ref"] == "mart_egisz_selfservice.document_error"
@@ -2019,9 +2019,12 @@ def test_metabase_models_catalog_exists() -> None:
     assert network_errors["name"] == "Сбои транспорта"
     assert network_errors["table_ref"] == "mart_egisz_selfservice.network_error"
     assert {"message_at", "logid", "msgid", "error_type"} <= set(network_errors["fields"])
+    assert "error_text" in breakdown["fields"]
     for model in (documents, breakdown, network_errors):
         names = set(model["fields"]) | set(model.get("hidden_fields") or [])
-        assert "error_text" not in names and "error_types" not in names, model["name"]
+        assert "error_types" not in names, model["name"]
+    for model in (documents, network_errors):
+        assert "error_text" not in set(model["fields"]) | set(model.get("hidden_fields") or []), model["name"]
     file_requests = json.loads(Path("metabase_models/05_document_file_request.json").read_text(encoding="utf-8"))
     assert file_requests["name"] == "История запроса документов"
     assert file_requests["table_ref"] == "public.rpt_document_file_request"

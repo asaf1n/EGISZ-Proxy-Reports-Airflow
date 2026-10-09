@@ -538,7 +538,8 @@ COMMENT ON VIEW stg_egisz.message_error IS
 
 -- Опубликованные ошибки текущего состояния документа: тип, вид, категория, код и атрибуты
 -- справочников вместе с реквизитами документа. Исходный текст остаётся в слое разбора
--- (stg_egisz.document_error_current, тот же ключ). Материализовано: анализ ошибок читает
+-- (stg_egisz.document_error_current, тот же ключ); в представление он вынесен только для
+-- модели «Разбивка ошибок» по решению владельца отчётности. Материализовано: анализ ошибок читает
 -- его на каждом фильтре. Коллация типа задана явно: база развёрнута с lc_ctype = C, где
 -- ILIKE складывает регистр только для латиницы, и отбор «содержит» по кириллице молча
 -- терял строки. Корневая коллация выбрана вместо русской: текст смешанный.
@@ -561,6 +562,7 @@ SELECT
     t.error_category,
     c.error_type COLLATE "und-x-icu" AS error_type,
     c.error_code,
+    c.error_text COLLATE "und-x-icu" AS error_text,
     n.nsi_error_code,
     n.nsi_error_description,
     c.nsi_dictionary_oid,
@@ -593,7 +595,7 @@ CREATE INDEX IF NOT EXISTS idx_document_error_responsibility ON mart_egisz_selfs
 CREATE INDEX IF NOT EXISTS idx_document_error_corpus ON mart_egisz_selfservice.document_error (ips_date) WHERE is_error_corpus;
 
 COMMENT ON MATERIALIZED VIEW mart_egisz_selfservice.document_error IS
-'Ошибки текущего состояния документа (текущие версии). Строка — одна ошибка документа: error_type — тип с замаскированными значениями; вид, категория, код и атрибуты справочников. Исходный текст — в stg_egisz.document_error_current по тому же ключу (dwh_id, error_no). Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly, типы ошибок документа — в document_error_types.';
+'Ошибки текущего состояния документа (текущие версии). Строка — одна ошибка документа: error_type — тип с замаскированными значениями; вид, категория, код и атрибуты справочников. error_text — исходный текст ошибки (из stg_egisz.document_error_current по тому же ключу dwh_id, error_no) для просмотра в модели «Разбивка ошибок». Статус документа — отдельная колонка: элементы ошибки в подтверждении регистрации статус не меняют. is_error_corpus — элемент входит в корпус ошибок (отказ асинхронного ответа или ошибка связи): отбор для долей и сводок; знаменатели периода — в document_errors_weekly / document_errors_monthly, типы ошибок документа — в document_error_types.';
 
 -- Ошибки на уровне документа: строка — один документ с ошибками текущего состояния, списки
 -- типов, категорий и видов — по всем его элементам. Нужна потребителям, которым удобнее

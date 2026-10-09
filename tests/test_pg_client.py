@@ -270,7 +270,8 @@ def test_source_error_text_stays_in_parsing_layer() -> None:
 
     assert 'e.error_text COLLATE "und-x-icu" AS error_text' in current
     assert 'e.error_text COLLATE "und-x-icu" AS error_text' in message
-    assert "error_text" not in document
+    # Исключение: модель «Разбивка ошибок» показывает исходный текст ошибки документа.
+    assert 'c.error_text COLLATE "und-x-icu" AS error_text' in document
     assert "error_text" not in network
     assert "FROM stg_egisz.message_error m" in network
 
