@@ -1,6 +1,6 @@
 {
   "name": "Отправленные",
-  "table_ref": "serving_egisz.documents_sent",
+  "table_ref": "public.rpt_documents_sent",
   "description": "Документы, отправленные в ЕГИСЗ без ответа (grain: semd_local_uid). Состояние отправки и ступень обработки — из справочников dim_sent_state и dim_pending_segments.",
   "fields": {
     "semd_local_uid": { "semantic_type": "type/PK", "display_name": "localUid СЭМД" },
@@ -11,6 +11,7 @@
     "semd_code": { "semantic_type": "type/Category", "display_name": "Код СЭМД" },
     "semd_name": { "semantic_type": "type/Name", "display_name": "Наименование СЭМД" },
     "semd_label": { "semantic_type": "type/Title", "display_name": "СЭМД" },
+    "sent_state_label": { "semantic_type": "type/Category", "display_name": "Состояние отправки" },
     "pending_segment_label": { "semantic_type": "type/Category", "display_name": "Срок ожидания" },
     "pending_days": { "semantic_type": "type/Quantity", "display_name": "Суток с отправки" }
   },

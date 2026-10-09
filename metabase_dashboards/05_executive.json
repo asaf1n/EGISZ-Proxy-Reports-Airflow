@@ -1,7 +1,7 @@
 {
   "name": "Управленческий дашборд",
   "width": "full",
-  "description": "Управленческий взгляд на сервис интеграции с ЕГИСЗ (грейн: JID / документ / состояние; без тела СЭМД). «Обзор» открывается тремя статусами: растём ли (успешные СЭМД за последние 7 дней к предыдущим 7), в норме ли качество (сигнал контрольной карты XmR за последнюю закрытую неделю) и сколько выручки под риском. Ниже — ряды от ценности к риску: успешные СЭМД и качество регистрации → отказы, ошибки связи и «ответ не получен» → пульс за последние 7 дней → ориентировочные деньги → выручка под риском (тренд по неделям, списки клиник без успехов и замолчавших). Знаменатель и окно названы в имени карточки, подробности — в её описании. «Динамика по неделям» и «Динамика по месяцам» — вся история: состав исходов, отказы РЭМД и ошибки связи раздельно (у причин разные ответственные), время до ответа РЭМД, новые подключения, структура ошибок и сводка; на недельной вкладке — контрольная карта XmR с фазами (центр и границы по опорному периоду фазы из dim_control_chart_phases, правила серий). Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин documents_weekly / documents_monthly; ошибка связи статус не меняет, её доля — от всех документов периода. Рублёвые карточки помечены «ориентир»: расчёт по плоской ставке 10 000 ₽/JID/мес читается как порядок величины — договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка подключения. Карточки за последние 7 и 30 дней, рублёвые карточки, тренд риска, список замолчавших и вкладки динамики на фильтр «Период» не реагируют, срез по клинике действует на все карточки дашборда.",
+  "description": "Управленческий взгляд на сервис интеграции с ЕГИСЗ (грейн: JID / документ / состояние; без тела СЭМД). «Обзор» открывается тремя статусами: растём ли (успешные СЭМД за последние 7 дней к предыдущим 7), в норме ли качество (сигнал контрольной карты XmR за последнюю закрытую неделю) и сколько выручки под риском. Ниже — ряды от ценности к риску: успешные СЭМД и качество регистрации → отказы, ошибки связи и «ответ не получен» → пульс за последние 7 дней → ориентировочные деньги → выручка под риском (тренд по неделям, списки клиник без успехов и замолчавших). Знаменатель и окно названы в имени карточки, подробности — в её описании. «Динамика по неделям» и «Динамика по месяцам» — вся история: состав исходов, отказы РЭМД и ошибки связи раздельно (у причин разные ответственные), время до ответа РЭМД, новые подключения, структура ошибок и сводка; на недельной вкладке — контрольная карта XmR с фазами (центр и границы по опорному периоду фазы из dim_control_chart_phases, правила серий). Доли качества везде считаются от документов с ответом РЭМД (успех + отказ РЭМД) — тот же корпус, что у дашбордов «Интеграция с ЕГИСЗ» и «Клиентский» и у витрин rpt_documents_weekly / rpt_documents_monthly; ошибка связи статус не меняет, её доля — от всех документов периода. Рублёвые карточки помечены «ориентир»: расчёт по плоской ставке 10 000 ₽/JID/мес читается как порядок величины — договорная сетка сложнее, а тарифицируется юридическое лицо, тогда как JID — точка подключения. Карточки за последние 7 и 30 дней, рублёвые карточки, тренд риска, список замолчавших и вкладки динамики на фильтр «Период» не реагируют, срез по клинике действует на все карточки дашборда.",
   "parameters": [
     {
       "id": "05e00000-0000-4000-8000-000000000001",
@@ -26,7 +26,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 50, CURRENT_DATE - 1, '7 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM serving_egisz.documents_current WHERE ips_date >= CURRENT_DATE - 57 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')::bigint AS \"Успешных СЭМД\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
+          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 50, CURRENT_DATE - 1, '7 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - 57 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success')::bigint AS \"Успешных СЭМД\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -56,7 +56,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -67,7 +67,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM serving_egisz.documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT CASE WHEN cl IS NULL THEN 'Нет опорного периода' WHEN signal_rules IS NULL THEN 'Нет' ELSE 'Да: ' || signal_rules END AS \"Сигнал XmR\" FROM signals ORDER BY period_start DESC LIMIT 1",
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT CASE WHEN cl IS NULL THEN 'Нет опорного периода' WHEN signal_rules IS NULL THEN 'Нет' ELSE 'Да: ' || signal_rules END AS \"Сигнал XmR\" FROM signals ORDER BY period_start DESC LIMIT 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -91,7 +91,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -102,7 +102,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT (COUNT(DISTINCT jid) FILTER (WHERE jid IN (SELECT jid FROM silent) OR (ok = 0 AND docs >= 10)) * 10000)::numeric AS \"MRR под риском, ₽\" FROM recent",
+          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT (COUNT(DISTINCT jid) FILTER (WHERE jid IN (SELECT jid FROM silent) OR (ok = 0 AND docs >= 10)) * 10000)::numeric AS \"MRR под риском, ₽\" FROM recent",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -133,7 +133,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -144,7 +144,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::bigint AS \"Успешных СЭМД\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success')::bigint AS \"Успешных СЭМД\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -181,11 +181,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -196,7 +196,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT COUNT(DISTINCT dwh_id)::bigint AS \"Документов\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -233,11 +233,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -248,7 +248,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха, %\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -286,11 +286,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -301,7 +301,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success' AND attempt_count <= 1) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"С первой подачи, % от ответов\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success' AND attempt_count <= 1) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"С первой подачи, % от ответов\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -339,11 +339,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -354,7 +354,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success' AND attempt_count <= 1) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success'), 0), 1) AS \"С первой подачи, % от успешных\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success' AND attempt_count <= 1) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success'), 0), 1) AS \"С первой подачи, % от успешных\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -392,11 +392,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -407,7 +407,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Отказов РЭМД, %\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')), 0), 1) AS \"Отказов РЭМД, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -445,11 +445,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -460,7 +460,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM serving_egisz.document_errors WHERE document_errors.dwh_id = documents_current.dwh_id AND document_errors.error_kind = 'Ошибка связи')) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE TRUE), 0), 1) AS \"Ошибок связи, %\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE EXISTS (SELECT 1 FROM mart_egisz_selfservice.document_error WHERE document_error.dwh_id = rpt_documents.dwh_id AND document_error.error_kind = 'Ошибка связи')) / NULLIF(COUNT(DISTINCT dwh_id) FILTER (WHERE TRUE), 0), 1) AS \"Ошибок связи, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -498,11 +498,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -513,7 +513,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ответ не получен, %\" FROM serving_egisz.documents_current WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
+          "query": "SELECT ROUND(100.0 * COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') / NULLIF(COUNT(DISTINCT dwh_id), 0), 1) AS \"Ответ не получен, %\" FROM public.rpt_documents WHERE 1=1 [[AND {{ips_date}}]] [[AND {{jid}}]]",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -551,11 +551,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -566,7 +566,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, '1 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM serving_egisz.documents_current WHERE ips_date >= CURRENT_DATE - 20 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success') / NULLIF(COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха, %\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
+          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, '1 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - 20 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", ROUND(100.0 * COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status = 'success') / NULLIF(COUNT(DISTINCT doc.dwh_id) FILTER (WHERE doc.status IN ('success', 'async_error')), 0), 1) AS \"Доля успеха, %\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -597,7 +597,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -608,7 +608,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, '1 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM serving_egisz.documents_current WHERE ips_date >= CURRENT_DATE - 20 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.clinic_jid)::bigint AS \"Активных клиник\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
+          "query": "WITH days AS (SELECT generate_series(CURRENT_DATE - 13, CURRENT_DATE, '1 day'::interval)::date AS day), doc AS (SELECT ips_date::date AS doc_day, dwh_id, status, clinic_jid FROM public.rpt_documents WHERE ips_date >= CURRENT_DATE - 20 [[AND {{jid}}]]) SELECT days.day AS \"Дата\", COUNT(DISTINCT doc.clinic_jid)::bigint AS \"Активных клиник\" FROM days LEFT JOIN doc ON doc.doc_day > days.day - 7 AND doc.doc_day <= days.day GROUP BY days.day ORDER BY days.day",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -638,7 +638,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -659,7 +659,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM active_jid",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -690,7 +690,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -701,7 +701,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT (COUNT(*) * 10000 * 12)::numeric(14,2) AS \"ARR, ₽\" FROM active_jid",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -732,7 +732,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -743,7 +743,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT COUNT(*)::bigint AS \"Активных JID\" FROM active_jid",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT COUNT(*)::bigint AS \"Активных JID\" FROM active_jid",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -773,7 +773,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -784,7 +784,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') , success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM serving_egisz.documents_current WHERE status = 'success' [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT ROUND((SELECT COUNT(*) FROM active_jid) * 10000.0 / NULLIF(success.ok, 0), 1) AS \"₽ за успешный СЭМД\" FROM success",
+          "query": "WITH active_jid AS (SELECT DISTINCT clinic_jid AS jid FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') , success AS (SELECT COUNT(DISTINCT dwh_id) AS ok FROM public.rpt_documents WHERE status = 'success' [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days') SELECT ROUND((SELECT COUNT(*) FROM active_jid) * 10000.0 / NULLIF(success.ok, 0), 1) AS \"₽ за успешный СЭМД\" FROM success",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -815,7 +815,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -826,7 +826,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS activity_day FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", (COUNT(DISTINCT ja.jid) * 10000)::numeric(14,2) AS \"MRR, ₽\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -877,7 +877,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -888,7 +888,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS activity_day FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", COUNT(DISTINCT ja.jid)::bigint AS \"Активных JID\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
+          "query": "WITH jid_activity AS (SELECT DISTINCT clinic_jid AS jid, ips_date::date AS activity_day FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]]), bounds AS (SELECT GREATEST(COALESCE(MIN(activity_day), CURRENT_DATE) + 30, CURRENT_DATE - 90) AS start_day, COALESCE(MAX(activity_day), CURRENT_DATE) AS end_day FROM jid_activity), days AS (SELECT generate_series((SELECT start_day FROM bounds), (SELECT end_day FROM bounds), '1 day'::interval)::date AS day) SELECT d.day AS \"Дата\", COUNT(DISTINCT ja.jid)::bigint AS \"Активных JID\" FROM days d LEFT JOIN jid_activity ja ON ja.activity_day >= d.day - INTERVAL '30 days' AND ja.activity_day <= d.day GROUP BY d.day ORDER BY d.day",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -938,7 +938,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -949,7 +949,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT CASE WHEN docs >= 1000 THEN 'Тяжёлые (от 1000 док.)' WHEN docs >= 50 THEN 'Средние (50–999)' ELSE 'Спящие (менее 50)' END AS \"Сегмент\", COUNT(DISTINCT jid)::bigint AS \"Клиник\", SUM(docs)::bigint AS \"Документов\", SUM(ok)::bigint AS \"Успешных СЭМД\", ROUND(100.0 * SUM(ok) / NULLIF(SUM(answered), 0), 1) AS \"Доля успеха, %\", (COUNT(DISTINCT jid) * 10000)::bigint AS \"MRR, ₽\", ROUND(COUNT(DISTINCT jid) * 10000.0 / NULLIF(SUM(ok), 0), 0) AS \"₽ за успешный СЭМД\" FROM per_jid GROUP BY 1 ORDER BY MIN(CASE WHEN docs >= 1000 THEN 1 WHEN docs >= 50 THEN 2 ELSE 3 END)",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT CASE WHEN docs >= 1000 THEN 'Тяжёлые (от 1000 док.)' WHEN docs >= 50 THEN 'Средние (50–999)' ELSE 'Спящие (менее 50)' END AS \"Сегмент\", COUNT(DISTINCT jid)::bigint AS \"Клиник\", SUM(docs)::bigint AS \"Документов\", SUM(ok)::bigint AS \"Успешных СЭМД\", ROUND(100.0 * SUM(ok) / NULLIF(SUM(answered), 0), 1) AS \"Доля успеха, %\", (COUNT(DISTINCT jid) * 10000)::bigint AS \"MRR, ₽\", ROUND(COUNT(DISTINCT jid) * 10000.0 / NULLIF(SUM(ok), 0), 0) AS \"₽ за успешный СЭМД\" FROM per_jid GROUP BY 1 ORDER BY MIN(CASE WHEN docs >= 1000 THEN 1 WHEN docs >= 50 THEN 2 ELSE 3 END)",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1008,11 +1008,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1023,7 +1023,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH daily AS (SELECT clinic_jid AS jid, ips_date::date AS day, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1, 2), bounds AS (SELECT (date_trunc('week', MIN(day) + 29))::date AS first_week, (date_trunc('week', CURRENT_DATE) - INTERVAL '7 days')::date AS last_week FROM daily), weeks AS (SELECT generate_series(bounds.first_week, bounds.last_week, INTERVAL '7 days')::date AS week_start FROM bounds), per_jid AS (SELECT weeks.week_start, daily.jid, SUM(daily.docs) AS docs, SUM(daily.ok) AS ok, MAX(daily.day) AS last_day FROM weeks JOIN daily ON daily.day >= weeks.week_start + 7 - 30 AND daily.day < weeks.week_start + 7 GROUP BY 1, 2) SELECT week_start AS \"Неделя\", (COUNT(jid) FILTER (WHERE last_day < week_start) * 10000)::bigint AS \"Замолчавшие, ₽\", (COUNT(jid) FILTER (WHERE last_day >= week_start AND ok = 0 AND docs >= 10) * 10000)::bigint AS \"Без успехов, ₽\" FROM per_jid GROUP BY week_start ORDER BY week_start",
+          "query": "WITH daily AS (SELECT clinic_jid AS jid, ips_date::date AS day, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1, 2), bounds AS (SELECT (date_trunc('week', MIN(day) + 29))::date AS first_week, (date_trunc('week', CURRENT_DATE) - INTERVAL '7 days')::date AS last_week FROM daily), weeks AS (SELECT generate_series(bounds.first_week, bounds.last_week, INTERVAL '7 days')::date AS week_start FROM bounds), per_jid AS (SELECT weeks.week_start, daily.jid, SUM(daily.docs) AS docs, SUM(daily.ok) AS ok, MAX(daily.day) AS last_day FROM weeks JOIN daily ON daily.day >= weeks.week_start + 7 - 30 AND daily.day < weeks.week_start + 7 GROUP BY 1, 2) SELECT week_start AS \"Неделя\", (COUNT(jid) FILTER (WHERE last_day < week_start) * 10000)::bigint AS \"Замолчавшие, ₽\", (COUNT(jid) FILTER (WHERE last_day >= week_start AND ok = 0 AND docs >= 10) * 10000)::bigint AS \"Без успехов, ₽\" FROM per_jid GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1078,7 +1078,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1089,7 +1089,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs >= 10)::bigint AS \"Клиник без успеха\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs >= 10)::bigint AS \"Клиник без успеха\" FROM per_jid",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1126,11 +1126,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1141,7 +1141,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT (COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs >= 10) * 10000)::numeric AS \"₽ под риском\" FROM per_jid",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) SELECT (COUNT(DISTINCT jid) FILTER (WHERE ok = 0 AND docs >= 10) * 10000)::numeric AS \"₽ под риском\" FROM per_jid",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1179,11 +1179,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1194,7 +1194,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS errs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'sent' AND sent_state <> 'no_response') AS in_progress, COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') AS no_answer FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) , top_error AS (SELECT jid, error_type FROM (SELECT serving_egisz.documents_current.clinic_jid AS jid, document_errors.error_type, ROW_NUMBER() OVER (PARTITION BY serving_egisz.documents_current.clinic_jid ORDER BY COUNT(DISTINCT document_errors.dwh_id) DESC, document_errors.error_type) AS rn FROM serving_egisz.documents_current JOIN serving_egisz.document_errors ON document_errors.dwh_id = serving_egisz.documents_current.dwh_id WHERE (document_errors.status = 'async_error' OR document_errors.error_kind = 'Ошибка связи') AND serving_egisz.documents_current.clinic_jid IN (SELECT jid FROM per_jid WHERE ok = 0 AND docs >= 10) [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t WHERE rn = 1) SELECT p.jid::text AS \"JID Клиники\", p.clinic AS \"Клиника\", p.inn AS \"ИНН\", p.docs AS \"Попыток\", p.errs AS \"С ошибкой\", p.in_progress AS \"В обработке\", p.no_answer AS \"Ответ не получен\", e.error_type AS \"Основной тип ошибки\", 10000 AS \"MRR, ₽\" FROM per_jid p LEFT JOIN top_error e ON e.jid = p.jid WHERE p.ok = 0 AND p.docs >= 10 ORDER BY p.docs DESC LIMIT 15",
+          "query": "WITH per_jid AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'async_error') AS errs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'sent' AND sent_state <> 'no_response') AS in_progress, COUNT(DISTINCT dwh_id) FILTER (WHERE sent_state = 'no_response') AS no_answer FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1) , top_error AS (SELECT jid, error_type FROM (SELECT public.rpt_documents.clinic_jid AS jid, document_error.error_type, ROW_NUMBER() OVER (PARTITION BY public.rpt_documents.clinic_jid ORDER BY COUNT(DISTINCT document_error.dwh_id) DESC, document_error.error_type) AS rn FROM public.rpt_documents JOIN mart_egisz_selfservice.document_error ON document_error.dwh_id = public.rpt_documents.dwh_id WHERE (document_error.status = 'async_error' OR document_error.error_kind = 'Ошибка связи') AND public.rpt_documents.clinic_jid IN (SELECT jid FROM per_jid WHERE ok = 0 AND docs >= 10) [[AND {{ips_date}}]] [[AND {{jid}}]] GROUP BY 1, 2) t WHERE rn = 1) SELECT p.jid::text AS \"JID Клиники\", p.clinic AS \"Клиника\", p.inn AS \"ИНН\", p.docs AS \"Попыток\", p.errs AS \"С ошибкой\", p.in_progress AS \"В обработке\", p.no_answer AS \"Ответ не получен\", e.error_type AS \"Основной тип ошибки\", 10000 AS \"MRR, ₽\" FROM per_jid p LEFT JOIN top_error e ON e.jid = p.jid WHERE p.ok = 0 AND p.docs >= 10 ORDER BY p.docs DESC LIMIT 15",
           "template-tags": {
             "ips_date": {
               "widget-type": "date/all-options",
@@ -1256,11 +1256,11 @@
       "tab": "overview",
       "metabase-field-filters": {
         "ips_date": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "ips_date"
         },
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1271,7 +1271,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT COUNT(DISTINCT jid)::bigint AS \"Замолчавших клиник\" FROM silent",
+          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT COUNT(DISTINCT jid)::bigint AS \"Замолчавших клиник\" FROM silent",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1301,7 +1301,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1312,7 +1312,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT (COUNT(DISTINCT jid) * 10000)::numeric AS \"MRR замолчавших, ₽\" FROM silent",
+          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT (COUNT(DISTINCT jid) * 10000)::numeric AS \"MRR замолчавших, ₽\" FROM silent",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1343,7 +1343,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1354,7 +1354,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT jid::text AS \"JID Клиники\", clinic AS \"Клиника\", inn AS \"ИНН\", last_doc_at::date AS \"Последний документ\", docs AS \"Документов за 30 дней\", ROUND(100.0 * ok / NULLIF(answered, 0), 1) AS \"Доля успеха за 30 дней, %\" FROM silent ORDER BY docs DESC LIMIT 15",
+          "query": "WITH recent AS (SELECT clinic_jid AS jid, COALESCE(MAX(NULLIF(TRIM(clinic_name), '')), 'Неизвестно') AS clinic, MAX(clinic_inn) AS inn, MAX(ips_date) AS last_doc_at, COUNT(DISTINCT dwh_id) AS docs, COUNT(DISTINCT dwh_id) FILTER (WHERE status = 'success') AS ok, COUNT(DISTINCT dwh_id) FILTER (WHERE status IN ('success', 'async_error')) AS answered FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] AND ips_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY 1), silent AS (SELECT * FROM recent WHERE last_doc_at < CURRENT_DATE - INTERVAL '7 days') SELECT jid::text AS \"JID Клиники\", clinic AS \"Клиника\", inn AS \"ИНН\", last_doc_at::date AS \"Последний документ\", docs AS \"Документов за 30 дней\", ROUND(100.0 * ok / NULLIF(answered, 0), 1) AS \"Доля успеха за 30 дней, %\" FROM silent ORDER BY docs DESC LIMIT 15",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1397,7 +1397,7 @@
       "tab": "overview",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1408,7 +1408,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\" FROM serving_egisz.documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1463,7 +1463,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -1474,7 +1474,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"Отказ РЭМД\", SUM(docs_pending)::bigint AS \"В обработке\" FROM serving_egisz.documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"Отказ РЭМД\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1535,7 +1535,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -1546,7 +1546,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM serving_egisz.documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT period_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(cl, 1) AS \"Центр, %\", ROUND(ucl, 1) AS \"Верхняя граница (UCL), %\", ROUND(lcl, 1) AS \"Нижняя граница (LCL), %\", CASE WHEN signal_rules IS NOT NULL THEN ROUND(x, 1) END AS \"Сигнал, %\", to_char(period_start, 'YYYY-MM-DD') || '~' || to_char(period_start + 6, 'YYYY-MM-DD') AS \"Период\" FROM signals ORDER BY period_start",
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules) SELECT period_start AS \"Неделя\", ROUND(x, 1) AS \"Доля ошибок, %\", ROUND(cl, 1) AS \"Центр, %\", ROUND(ucl, 1) AS \"Верхняя граница (UCL), %\", ROUND(lcl, 1) AS \"Нижняя граница (LCL), %\", CASE WHEN signal_rules IS NOT NULL THEN ROUND(x, 1) END AS \"Сигнал, %\", to_char(period_start, 'YYYY-MM-DD') || '~' || to_char(period_start + 6, 'YYYY-MM-DD') AS \"Период\" FROM signals ORDER BY period_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1636,7 +1636,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       },
@@ -1677,7 +1677,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total + docs_sent), 0) AS \"Ошибок связи, %\" FROM serving_egisz.documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
+          "query": "SELECT week_start AS \"Неделя\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total + docs_sent), 0) AS \"Ошибок связи, %\" FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start ORDER BY week_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1725,7 +1725,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -1736,7 +1736,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH calendar AS MATERIALIZED (SELECT serving_egisz.report_timezone() AS tz) SELECT date_trunc('week', documents_current.ips_date AT TIME ZONE calendar.tz)::date AS \"Неделя\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM serving_egisz.documents_current CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND documents_current.ips_date < (date_trunc('week', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH calendar AS MATERIALIZED (SELECT public.report_timezone() AS tz) SELECT date_trunc('week', rpt_documents.ips_date AT TIME ZONE calendar.tz)::date AS \"Неделя\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM public.rpt_documents CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND rpt_documents.ips_date < (date_trunc('week', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1793,7 +1793,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1804,7 +1804,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT week_start AS \"Неделя\", COALESCE(error_category, error_kind) AS \"Категория ошибки\", SUM(docs_with_category)::bigint AS \"Документов с ошибкой\" FROM serving_egisz.document_errors_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY 1, 2 ORDER BY 1",
+          "query": "SELECT week_start AS \"Неделя\", COALESCE(error_category, error_kind) AS \"Категория ошибки\", SUM(docs_with_category)::bigint AS \"Документов с ошибкой\" FROM mart_egisz.agg_document_error_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY 1, 2 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1879,7 +1879,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.document_errors_weekly",
+          "table_ref": "mart_egisz.agg_document_error_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -1890,7 +1890,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM serving_egisz.documents_current), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('week', first_doc.first_at AT TIME ZONE serving_egisz.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(documents_current.registered_at) FILTER (WHERE documents_current.status = 'success') AS first_ok, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE documents_current.status = 'success' AND documents_current.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE documents_current.status IN ('success', 'async_error') AND documents_current.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN serving_egisz.documents_current ON documents_current.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Неделя подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
+          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM public.rpt_documents), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('week', first_doc.first_at AT TIME ZONE public.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(rpt_documents.registered_at) FILTER (WHERE rpt_documents.status = 'success') AS first_ok, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status = 'success' AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status IN ('success', 'async_error') AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN public.rpt_documents ON rpt_documents.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Неделя подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1932,7 +1932,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -1943,7 +1943,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM serving_egisz.documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM mart_egisz.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE serving_egisz.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules), periods AS (SELECT week_start AS period_start, BOOL_AND(is_complete_week) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_sent)::bigint AS docs_sent, SUM(docs_error)::bigint AS docs_error FROM serving_egisz.documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Неделя\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_network_error / NULLIF(docs_total + docs_sent, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./нед.\", signals.signal_rules AS \"Сигнал XmR\", CASE WHEN is_complete THEN 'закрыта' ELSE 'идёт' END AS \"Неделя закрыта\" FROM shares LEFT JOIN signals ON signals.period_start = shares.period_start ORDER BY shares.period_start DESC",
+          "query": "WITH series AS (SELECT week_start AS period_start, 100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0) AS x FROM public.rpt_documents_weekly WHERE is_complete_week [[AND {{jid}}]] GROUP BY week_start), phased AS (SELECT s.period_start, s.x, ph.phase_start, ph.baseline_start, ph.baseline_end, ABS(s.x - LAG(s.x) OVER (PARTITION BY ph.phase_start ORDER BY s.period_start)) AS mr FROM series s JOIN LATERAL (SELECT phase_start, baseline_start, baseline_end FROM public.dim_control_chart_phases WHERE period_grain = 'week' AND phase_start <= s.period_start ORDER BY phase_start DESC LIMIT 1) ph ON TRUE WHERE s.x IS NOT NULL), baseline AS (SELECT phase_start, AVG(x) AS cl, AVG(mr) FILTER (WHERE period_start > baseline_start) AS mr_bar FROM phased WHERE period_start BETWEEN baseline_start AND baseline_end AND baseline_end < date_trunc('week', now() AT TIME ZONE public.report_timezone())::date GROUP BY phase_start HAVING AVG(mr) FILTER (WHERE period_start > baseline_start) IS NOT NULL), limits AS (SELECT phased.period_start, phased.phase_start, phased.x, baseline.cl, CASE WHEN baseline.cl IS NOT NULL THEN LEAST(100.0, baseline.cl + 2.66 * baseline.mr_bar) END AS ucl, CASE WHEN baseline.cl IS NOT NULL THEN GREATEST(0.0, baseline.cl - 2.66 * baseline.mr_bar) END AS lcl, baseline.cl + 1.773 * baseline.mr_bar AS hi2, baseline.cl - 1.773 * baseline.mr_bar AS lo2 FROM phased LEFT JOIN baseline USING (phase_start)), rules AS (SELECT period_start, x, cl, ucl, lcl, (x > ucl OR x < lcl) AS r_beyond, (COUNT(period_start) FILTER (WHERE x > cl) OVER w8 = 8 OR COUNT(period_start) FILTER (WHERE x < cl) OVER w8 = 8) AS r_run, ((x > hi2 AND COUNT(period_start) FILTER (WHERE x > hi2) OVER w3 >= 2) OR (x < lo2 AND COUNT(period_start) FILTER (WHERE x < lo2) OVER w3 >= 2)) AS r_zone FROM limits WINDOW w8 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 7 PRECEDING AND CURRENT ROW), w3 AS (PARTITION BY phase_start ORDER BY period_start ROWS BETWEEN 2 PRECEDING AND CURRENT ROW)), signals AS (SELECT period_start, x, cl, ucl, lcl, NULLIF(concat_ws('; ', CASE WHEN r_beyond THEN 'выход за границу' END, CASE WHEN r_run THEN '8 подряд по одну сторону' END, CASE WHEN r_zone THEN '2 из 3 за 2σ' END), '') AS signal_rules FROM rules), periods AS (SELECT week_start AS period_start, BOOL_AND(is_complete_week) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_sent)::bigint AS docs_sent, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_weekly WHERE 1=1 [[AND {{jid}}]] GROUP BY week_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Неделя\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_network_error / NULLIF(docs_total + docs_sent, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./нед.\", signals.signal_rules AS \"Сигнал XmR\", CASE WHEN is_complete THEN 'закрыта' ELSE 'идёт' END AS \"Неделя закрыта\" FROM shares LEFT JOIN signals ON signals.period_start = shares.period_start ORDER BY shares.period_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -1999,7 +1999,7 @@
       "tab": "weekly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_weekly",
+          "table_ref": "public.rpt_documents_weekly",
           "field_name": "clinic_label"
         }
       }
@@ -2010,7 +2010,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\" FROM serving_egisz.documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", ROUND(100.0 * SUM(docs_success) / NULLIF(SUM(docs_total), 0), 1) AS \"Успешно\", ROUND(100.0 * SUM(docs_error) / NULLIF(SUM(docs_total), 0), 1) AS \"Отказ РЭМД\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2065,7 +2065,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_monthly",
+          "table_ref": "public.rpt_documents_monthly",
           "field_name": "clinic_label"
         }
       }
@@ -2076,7 +2076,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"Отказ РЭМД\", SUM(docs_pending)::bigint AS \"В обработке\" FROM serving_egisz.documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", SUM(docs_success)::bigint AS \"Успешно\", SUM(docs_error)::bigint AS \"Отказ РЭМД\", SUM(docs_pending)::bigint AS \"В обработке\" FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2137,7 +2137,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_monthly",
+          "table_ref": "public.rpt_documents_monthly",
           "field_name": "clinic_label"
         }
       }
@@ -2148,7 +2148,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total + docs_sent), 0) AS \"Ошибок связи, %\" FROM serving_egisz.documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
+          "query": "SELECT month_start AS \"Месяц\", 100.0 * SUM(docs_network_error) / NULLIF(SUM(docs_total + docs_sent), 0) AS \"Ошибок связи, %\" FROM public.rpt_documents_monthly WHERE is_complete_month [[AND {{jid}}]] GROUP BY month_start ORDER BY month_start",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2196,7 +2196,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_monthly",
+          "table_ref": "public.rpt_documents_monthly",
           "field_name": "clinic_label"
         }
       }
@@ -2207,7 +2207,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH calendar AS MATERIALIZED (SELECT serving_egisz.report_timezone() AS tz) SELECT date_trunc('month', documents_current.ips_date AT TIME ZONE calendar.tz)::date AS \"Месяц\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM serving_egisz.documents_current CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND documents_current.ips_date < (date_trunc('month', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
+          "query": "WITH calendar AS MATERIALIZED (SELECT public.report_timezone() AS tz) SELECT date_trunc('month', rpt_documents.ips_date AT TIME ZONE calendar.tz)::date AS \"Месяц\", percentile_cont(0.5) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"Медиана, мин\", percentile_cont(0.95) WITHIN GROUP (ORDER BY delivery_seconds) / 60.0 AS \"95-й перцентиль, мин\" FROM public.rpt_documents CROSS JOIN calendar WHERE status IN ('success', 'async_error') AND delivery_seconds IS NOT NULL AND rpt_documents.ips_date < (date_trunc('month', now() AT TIME ZONE calendar.tz) AT TIME ZONE calendar.tz) [[AND {{jid}}]] GROUP BY 1 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2264,7 +2264,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -2275,7 +2275,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "SELECT month_start AS \"Месяц\", COALESCE(error_category, error_kind) AS \"Категория ошибки\", SUM(docs_with_category)::bigint AS \"Документов с ошибкой\" FROM serving_egisz.document_errors_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY 1, 2 ORDER BY 1",
+          "query": "SELECT month_start AS \"Месяц\", COALESCE(error_category, error_kind) AS \"Категория ошибки\", SUM(docs_with_category)::bigint AS \"Документов с ошибкой\" FROM mart_egisz.agg_document_error_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY 1, 2 ORDER BY 1",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2350,7 +2350,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.document_errors_monthly",
+          "table_ref": "mart_egisz.agg_document_error_monthly",
           "field_name": "clinic_label"
         }
       }
@@ -2361,7 +2361,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM serving_egisz.documents_current), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM serving_egisz.documents_current WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('month', first_doc.first_at AT TIME ZONE serving_egisz.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(documents_current.registered_at) FILTER (WHERE documents_current.status = 'success') AS first_ok, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE documents_current.status = 'success' AND documents_current.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT documents_current.dwh_id) FILTER (WHERE documents_current.status IN ('success', 'async_error') AND documents_current.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN serving_egisz.documents_current ON documents_current.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Месяц подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
+          "query": "WITH history AS (SELECT MIN(first_sent_at) AS history_start FROM public.rpt_documents), first_doc AS (SELECT clinic_jid AS jid, MIN(first_sent_at) AS first_at FROM public.rpt_documents WHERE clinic_jid IS NOT NULL [[AND {{jid}}]] GROUP BY 1), cohort AS (SELECT first_doc.jid, first_doc.first_at, date_trunc('month', first_doc.first_at AT TIME ZONE public.report_timezone())::date AS cohort_start FROM first_doc, history WHERE first_doc.first_at >= history.history_start + INTERVAL '30 days'), per_jid AS (SELECT cohort.jid, cohort.cohort_start, cohort.first_at, MIN(rpt_documents.registered_at) FILTER (WHERE rpt_documents.status = 'success') AS first_ok, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status = 'success' AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS ok_30d, COUNT(DISTINCT rpt_documents.dwh_id) FILTER (WHERE rpt_documents.status IN ('success', 'async_error') AND rpt_documents.first_sent_at < cohort.first_at + INTERVAL '30 days') AS answered_30d FROM cohort JOIN public.rpt_documents ON rpt_documents.clinic_jid = cohort.jid GROUP BY 1, 2, 3) SELECT cohort_start AS \"Месяц подключения\", COUNT(jid)::bigint AS \"Новых JID\", COUNT(first_ok)::bigint AS \"С первым успехом\", ROUND((percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM first_ok - first_at) / 86400.0))::numeric, 1) AS \"До первого успеха (медиана), дн.\", CASE WHEN MAX(first_at) + INTERVAL '30 days' <= now() THEN ROUND(100.0 * SUM(ok_30d) / NULLIF(SUM(answered_30d), 0), 1) END AS \"Доля успеха за первые 30 дней, %\" FROM per_jid GROUP BY cohort_start ORDER BY cohort_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2403,7 +2403,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_current",
+          "table_ref": "public.rpt_documents",
           "field_name": "clinic_label"
         }
       }
@@ -2414,7 +2414,7 @@
       "dataset_query": {
         "type": "native",
         "native": {
-          "query": "WITH periods AS (SELECT month_start AS period_start, BOOL_AND(is_complete_month) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_sent)::bigint AS docs_sent, SUM(docs_error)::bigint AS docs_error FROM serving_egisz.documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Месяц\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_network_error / NULLIF(docs_total + docs_sent, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./мес.\", CASE WHEN is_complete THEN 'закрыт' ELSE 'идёт' END AS \"Месяц закрыт\" FROM shares ORDER BY shares.period_start DESC",
+          "query": "WITH periods AS (SELECT month_start AS period_start, BOOL_AND(is_complete_month) AS is_complete, SUM(docs_total)::bigint AS docs_total, SUM(docs_success)::bigint AS docs_success, SUM(docs_network_error)::bigint AS docs_network_error, SUM(docs_sent)::bigint AS docs_sent, SUM(docs_error)::bigint AS docs_error FROM public.rpt_documents_monthly WHERE 1=1 [[AND {{jid}}]] GROUP BY month_start), shares AS (SELECT periods.*, ROUND(100.0 * docs_error / NULLIF(docs_total, 0), 1) AS error_pct FROM periods) SELECT shares.period_start AS \"Месяц\", docs_total AS \"Документов\", docs_success AS \"Успешно\", docs_error AS \"Отказов РЭМД\", docs_network_error AS \"Ошибок связи\", ROUND(100.0 * docs_network_error / NULLIF(docs_total + docs_sent, 0), 1) AS \"Ошибок связи, %\", error_pct AS \"Доля ошибок, %\", ROUND(error_pct - LAG(error_pct) OVER (ORDER BY shares.period_start), 1) AS \"Δ доли ошибок, п.п./мес.\", CASE WHEN is_complete THEN 'закрыт' ELSE 'идёт' END AS \"Месяц закрыт\" FROM shares ORDER BY shares.period_start DESC",
           "template-tags": {
             "jid": {
               "widget-type": "string/=",
@@ -2470,7 +2470,7 @@
       "tab": "monthly",
       "metabase-field-filters": {
         "jid": {
-          "table_ref": "serving_egisz.documents_monthly",
+          "table_ref": "public.rpt_documents_monthly",
           "field_name": "clinic_label"
         }
       }

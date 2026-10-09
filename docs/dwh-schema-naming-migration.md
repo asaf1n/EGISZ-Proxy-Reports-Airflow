@@ -1,177 +1,282 @@
-# Раскладка объектов ЕГИСЗ-DWH по схемам
+# Раскладка объектов ЕГИСЗ-DWH по схемам общей базы
 
-Документ задаёт целевую структуру хранения ЕГИСЗ-DWH в общей BI-базе: какие объекты в какую
-схему переходят и под какими именами. Сейчас большинство объектов лежит в `public`, объекты
-обработки ошибок — в `stg_egisz`, `mart_egisz` и `mart_egisz_selfservice`.
+Документ отвечает на запрос Александра Курова от 07.09.2026: какие таблицы к какой
+схеме отнести по стандарту `bi_schema_naming_standard.md`. Содержит инвентаризацию
+текущего состояния, предлагаемую целевую раскладку, порядок перехода и замечания
+к самому стандарту.
 
-На этом этапе меняется только структура хранения. Права доступа и перевод потребителей на
-чтение только `serving_egisz` — отдельные задачи. До них Metabase читает любой слой.
+Оценка предварительная: снята с локальной копии `dwh_egisz` (состояние на 07.09.2026).
+Объектный состав совпадает с промышленным, поскольку схема накатывается одними и теми же
+модулями `db/01_schema.sql`…`db/04_views.sql`; объёмы промышленной базы нужно
+перепроверить отдельно.
 
-## Слои и правила имён
+## 1. Что есть сейчас
 
-```text
-raw_egisz → stg_egisz → mart_egisz → serving_egisz
-                            └──────→ mart_egisz_admin
-служебное состояние конвейера: etl_meta (объекты egisz_*)
-```
+Все объекты живут в схеме `public` одной базы с BI по Redmine. Это прямое нарушение
+пункта 7 обязательных правил стандарта, и оно уже приводило к инциденту: 31.08.2026 на
+базе был выставлен `ALTER DATABASE dwh_egisz SET search_path = raw_redmine, …`, из-за
+чего накат схемы создал двойники таблиц в чужой схеме, а конвейер сутки писал в пустые
+копии. Устранено 03.09.2026 фиксацией `search_path = public` в подключениях ЕГИСЗ.
+Разнесение по именованным схемам закрывает этот класс отказов по существу, а не заплаткой.
 
-| Схема | Содержимое | Правило имён |
-|---|---|---|
-| `etl_meta` (общая) | служебное состояние конвейера | префикс `egisz_` |
-| `raw_egisz` | копия Firebird | имена источника; служебные поля — `_loaded_at` |
-| `stg_egisz` | разбор журнала и реестра подач | сущность во множественном числе |
-| `mart_egisz` | документы и справочники | `dim_` — справочники |
-| `serving_egisz` | представления и агрегаты для потребителей | без префиксов; уточнение — суффиксом (`_current`, `_sent`, `_weekly`, `_monthly`) |
-| `mart_egisz_admin` | эксплуатационные представления | `health_*`, диагностика |
+Объём: база 9,8 ГБ, из них журнал шлюза `exchangelog_raw` — 6,4 ГБ (65 %),
+`transactions` — 1,2 ГБ, `documents` — 769 МБ, `dim_nsi_organization` — 292 МБ,
+`document_attributes` — 218 МБ.
 
-В `serving_egisz` переносится то, что однозначно служит выдаче. Базовые таблицы и справочники
-остаются в `mart_egisz`, пока их выдача не проанализирована. Объекты нижних слоёв на
-`serving_egisz` не ссылаются.
+Состав: 19 таблиц (две из них партиционированы), 5 материализованных представлений,
+16 представлений, 40 функций.
 
-## Раскладка объектов
+Отдельно: 11 таблиц `reclass_*` (669 МБ) — рабочие остатки точечной переклассификации
+ошибок. Это не часть контракта, в целевую раскладку они не переносятся; в промышленной
+базе их наличие нужно проверить и удалить до переезда.
 
-### etl_meta
+## 2. Предлагаемая целевая раскладка
 
-| Сейчас | Цель |
+### 2.1 Схемы
+
+| Схема | Назначение в контуре ЕГИСЗ |
 |---|---|
-| `etl_state` | `egisz_etl_state` |
-| `exchangelog_parse_attempts` | `egisz_exchangelog_parse_attempts` |
+| `etl_meta` | отметки конвейера, состояние разбора |
+| `raw_egisz` | копия журнала и реестров шлюза (Firebird `proxy_egisz`) |
+| `raw_nsi` | копии федеральных справочников НСИ (1461) |
+| `stg_egisz` | разбор журнала, текущие ошибки документа, соответствия клиник |
+| `stg_common` | межсистемные соответствия |
+| `mart_common` | согласованные измерения (организация) |
+| `mart_egisz` | документы, сообщения обмена, справочники и агрегаты домена |
+| `mart_egisz_selfservice` | опубликованный слой для Metabase и ИИ |
+| `mart_egisz_admin` | контроль качества и эксплуатация |
 
-### raw_egisz
+`raw_egisz` и `raw_nsi` разделены намеренно: это разные физические источники с разными
+контрактами и владельцами (шлюз МИС и портал НСИ), пункт 1 обязательных правил.
 
-| Сейчас | Цель | Примечание |
+### 2.2 Служебный слой
+
+| Сейчас | Предлагается | Грейн | Комментарий |
+|---|---|---|---|
+| `public.etl_state` | `etl_meta.egisz_watermark` | одна строка на конвейер | три курсора: выгрузка журнала, выгрузка реестра подач, разбор |
+| `public.exchangelog_parse_attempts` | `etl_meta.egisz_exchangelog_parse_attempt` | одна строка на LOGID | отметка попытки разбора; отличает «не разбирали» от «разобрали без реквизитов» |
+
+### 2.3 Сырой слой
+
+| Сейчас | Предлагается | Грейн | Комментарий |
+|---|---|---|---|
+| `public.exchangelog_raw` | `raw_egisz.exchangelog` | строка журнала обмена (LOGID) | суффикс `_raw` снимается: повтор слоя в имени таблицы стандарт запрещает |
+| `public.dim_message_document` | `raw_egisz.egisz_message` | запись реестра подач (EGMID) | имя `dim_*` ошибочно: это копия источника, а не измерение |
+| `public.dim_licenses` | `raw_egisz.egisz_license` | строка `EGISZ_LICENSES` | |
+| `public.dim_organizations` | `raw_egisz.jperson` + `mart_common.dim_organization` | юридическое лицо | требует разделения, см. §3.1 |
+| `public.dim_nsi_organization` | `raw_nsi.organization_1461` | запись ФРМО | требует разделения, см. §3.1 |
+| `public.dim_nsi_dictionary` | `raw_nsi.dictionary` | справочник НСИ (OID) | |
+| `public.dim_nsi_semd_guide` | `raw_nsi.semd_guide_638` | руководство по реализации СЭМД | |
+| `public.dim_nsi_semd_guide_alias` | `raw_nsi.semd_guide_alias_638` | синоним OID руководства | |
+| `public.dim_nsi_semd_guide_dictionary` | `raw_nsi.semd_guide_dictionary_805` | руководство × справочник НСИ | |
+
+### 2.4 Слой канонизации
+
+| Сейчас | Предлагается | Грейн | Комментарий |
+|---|---|---|---|
+| `public.transactions` | `stg_egisz.exchange_message` | разобранная строка журнала, ключ (logid, log_date) | партиционировано по месяцам |
+| `public.dim_clinic_oid` | `stg_egisz.clinic_oid_mapping` | пара OID → JID | представление |
+| `public.dim_clinic_endpoint` | `stg_egisz.clinic_endpoint_mapping` | пара адрес → JID | представление |
+
+### 2.5 Витринный слой
+
+| Сейчас | Предлагается | Грейн |
 |---|---|---|
-| `exchangelog_raw` | `exchangelog` | разделы `exchangelog_yYYYYmMM`; `loaded_at` → `_loaded_at` |
-| `dim_message_document` | `egisz_messages` | колонки источника `egmid`, `msgid`, `replyto`, `documentid`, `createdate` и `_loaded_at`; триггер снимается |
+| `public.documents` | `mart_egisz.fact_document` | экземпляр (версия) СЭМД |
+| `public.document_attributes` | `mart_egisz.sat_document_attribute` | 1:1 к `fact_document`, персональные реквизиты |
+| `public.rpt_documents_weekly` | `mart_egisz.agg_document_weekly` | неделя × клиника |
+| `public.rpt_documents_monthly` | `mart_egisz.agg_document_monthly` | месяц × клиника |
+| `public.dim_semd_types` | `mart_egisz.dim_semd_type` | тип СЭМД |
+| `public.dim_semd_guide_oid` | `mart_common.semd_guide_oid` | опубликованный OID руководства |
+| `public.rpt_semd_guides` | `mart_egisz.semd_guide` | вид документации |
+| `public.rpt_semd_dictionaries` | `mart_egisz.semd_dictionary` | вид документации × справочник |
+| `public.dim_document_status` | `mart_egisz.dim_document_status` | статус документа |
+| `public.dim_pending_segments` | `mart_egisz.dim_pending_segment` | срок ожидания ответа |
+| `public.dim_sent_state` | `mart_egisz.dim_sent_state` | состояние отправки |
 
-Строки реестра, загруженные до переноса, уже нормализованы триггером: localUid приведён к
-нижнему регистру, у ИЭМК значение обнулено. Дословное значение даст только повторная выгрузка
-`EGISZ_MESSAGES`. На результат разбора это не влияет: правило нормализации идемпотентно.
+### 2.6 Опубликованный слой
 
-### stg_egisz
+| Сейчас | Предлагается |
+|---|---|
+| `public.rpt_documents` | `mart_egisz_selfservice.document_current` |
+| `public.rpt_document_versions` | `mart_egisz_selfservice.document_version` |
+| `public.rpt_documents_sent` | `mart_egisz_selfservice.document_sent` |
+| `public.rpt_documents_weekly` | `mart_egisz_selfservice.document_weekly` |
+| `public.rpt_documents_monthly` | `mart_egisz_selfservice.document_monthly` |
+| `mart_egisz.agg_document_error_weekly` | `mart_egisz_selfservice.document_error_weekly` |
+| `mart_egisz.agg_document_error_monthly` | `mart_egisz_selfservice.document_error_monthly` |
+| `public.rpt_document_file_request` | `mart_egisz_selfservice.document_file_request` |
+| `public.rpt_clinic_nsi_mapping` | `mart_egisz_selfservice.clinic_nsi_mapping` |
+| `public.rpt_clinic_semd_activity` | `mart_egisz_selfservice.clinic_semd_activity` |
 
-| Сейчас | Цель | Примечание |
+Опубликованный слой становится тонкими представлениями над `mart_egisz`. Материализованное
+представление остаётся в `mart_egisz`, поверх него в опубликованном слое — обычное
+представление; так требование «пользователи работают только с `*_selfservice`»
+выполняется без дублирования данных.
+
+### 2.7 Эксплуатационный слой
+
+| Сейчас | Предлагается |
+|---|---|
+| `public.rpt_health_sync` | `mart_egisz_admin.etl_health` |
+| `public.rpt_health_signals` | `mart_egisz_admin.dq_summary` |
+| `public.rpt_health_message_registry_no_document` | `mart_egisz_admin.source_reconciliation` |
+| `public.rpt_health_by_clinic` | `mart_egisz_admin.clinic_health` |
+| `public.rpt_health_versions` | `mart_egisz_admin.version_dq` |
+| `public.rpt_document_lineage` | `mart_egisz_admin.document_lineage` |
+
+### 2.8 Функции
+
+Стандарт функции не покрывает. Предлагаемое правило: функция живёт в схеме того слоя,
+объекты которого она обслуживает.
+
+- разбор XML, классификация ошибок, определение клиники → `stg_egisz`;
+- границы недель и месяцев, сроки ожидания, метки статусов → `mart_egisz`;
+- точки входа конвейера (`transform_raw_to_facts`, `refresh_report_marts`,
+  `ensure_time_partitions`) → `etl_meta`.
+
+### 2.9 Выполнено: обработка ошибок (26.09.2026)
+
+Объекты обработки ошибок разложены по схемам вместе с переработкой модели ошибок. Справочники отнесены к витринному
+слою: в `stg_egisz` остаются только данные разбора.
+
+| Было | Стало | Грейн |
 |---|---|---|
-| `transactions` | `exchange_messages` | строка журнала — сообщение обмена; имя отличает её от реестра `egisz_messages`; разделы `exchange_messages_yYYYYmMM` |
-| `stg_egisz.message_error` | `network_errors`, `remd_errors`, `ihe_errors` | представления по источникам с исходным текстом; общая форма без текста — `mart_egisz.exchangelog_errors` |
-| `stg_egisz.document_error_current` | `mart_egisz.document_errors` | ошибки текущего состояния документа в общей форме, выше stage |
-| — | `message_registry` (представление) | реестр подач: правило ИЭМК и нормализация localUid вместо триггера |
+| `public.dim_nsi_error_code` | `mart_egisz.dim_nsi_error_code` | код НСИ 305 |
+| `public.dim_nsi_error_code_alias` | `mart_egisz.dim_nsi_error_code_alias` | синоним кода |
+| `public.dim_error_rules` | `mart_egisz.dim_error_rules` | правило классификации или шаг маскирования |
+| — | `mart_egisz.dim_error_category` | вид × категория |
+| `public.dim_error_type_group` | `mart_egisz.dim_error_type` | тип ошибки |
+| — | `stg_egisz.document_error_current` | ошибка текущего состояния документа |
+| — | `stg_egisz.message_error` | элемент ошибки разобранного сообщения |
+| `public.rpt_error_breakdown` | `mart_egisz_selfservice.document_error` | ошибка текущего состояния документа |
+| `public.rpt_network_errors` | `mart_egisz_selfservice.network_error` | ошибка связи |
+| `public.rpt_error_breakdown_weekly` | `mart_egisz.agg_document_error_weekly` | неделя × клиника × вид × категория |
+| `public.rpt_error_breakdown_monthly` | `mart_egisz.agg_document_error_monthly` | месяц × клиника × вид × категория |
 
-### mart_egisz
+Элементы ошибки остаются в `transactions.error_details` до переноса таблицы в
+`stg_egisz.exchange_message`. Исходный текст ошибки хранится только в слое разбора; дашборды
+читают его оттуда по исключению до решения о доступе. `document_error` материализован прямо в опубликованном слое;
+это отступление от §2.6 закрывается вместе с пунктом 6 замечаний к стандарту.
 
-Имена не меняются, меняется только схема.
+## 3. Что требует решения до переезда
 
-| Группа | Объекты |
-|---|---|
-| документы | `documents`, `document_attributes` — выдача базовых таблиц требует отдельного анализа |
-| справочники шлюза | `dim_organizations`, `dim_licenses` |
-| справочники НСИ | `dim_nsi_organizations`, `dim_nsi_dictionaries`, `dim_nsi_semd_guides`, `dim_nsi_semd_guide_aliases`, `dim_nsi_semd_guide_dictionaries` |
-| справочники состояний и классификаторы | `dim_nsi_semd_types`, `dim_document_statuses`, `dim_pending_segments`, `dim_sent_states`, `dim_control_chart_phases` |
-| представления над справочниками | `dim_clinic_oids`, `dim_clinic_hosts`, `dim_semd_guide_oids` |
-| справочники ошибок (уже в схеме) | `dim_error_rules`, `dim_masking_rules`, `dim_responsibility_zones`, `dim_error_categories`, `dim_error_types`, `dim_nsi_error_codes`, `dim_error_code_aliases` |
+### 3.1 Объекты, смешивающие слои
 
-### serving_egisz
+Пункт 4 стандарта требует разделять объект, где сырые колонки соседствуют с расчётом.
+Под это попадают три объекта.
 
-| Сейчас | Цель | Примечание |
-|---|---|---|
-| `rpt_documents`, `rpt_document_versions` | `registration_requests`, `documents_current` | все запросы на регистрацию; состояние документа к выдаче — `documents_current` |
-| `rpt_documents_sent` | `documents_sent` | |
-| `rpt_documents_weekly` | `documents_weekly` | материализованное |
-| `rpt_documents_monthly` | `documents_monthly` | материализованное |
-| `mart_egisz_selfservice.document_error` | `document_errors` | материализованное |
-| `mart_egisz.agg_document_error_weekly` | `document_errors_weekly` | материализованное |
-| `mart_egisz.agg_document_error_monthly` | `document_errors_monthly` | материализованное |
-| `mart_egisz_selfservice.network_error` | `network_errors` | |
-| `rpt_document_file_request` | `document_file_requests` | |
-| `rpt_clinic_nsi_mapping` | `clinic_nsi_mapping` | |
-| `rpt_clinic_semd_activity` | `clinic_semd_activity` | |
-| `rpt_semd_guides` | `semd_guides` | |
-| `rpt_semd_dictionaries` | `semd_dictionaries` | |
+**`dim_organizations`.** Содержит колонки из `JPERSONS` шлюза, `fir_oid` с правилом
+слияния двух источников и `nsi_name` из ФРМО. Разделяется на `raw_egisz.jperson`
+(копия источника) и `mart_common.dim_organization` (согласованное измерение с правилом
+приоритета источников). Измерение организации в общей базе нужно и Redmine-контуру,
+поэтому его место — `mart_common`, а владельца правил сопоставления надо назвать явно
+(пункт 9 стандарта).
 
-Схема `mart_egisz_selfservice` снимается.
+**`dim_nsi_organization`.** Содержит `raw_json` рядом с полусотней разобранных колонок.
+Разделяется на `raw_nsi.organization_1461` (идентификаторы источника и `raw_json`) и
+разобранное представление, которое питает `mart_common.dim_organization`.
 
-### mart_egisz_admin
+**`dim_message_document`.** На таблице висит триггер, обнуляющий `document_uid` для
+контура ИЭМК. Это бизнес-правило в сыром слое, пункт 2 обязательных правил его
+запрещает. Правило переносится в `stg_egisz`, сырая копия остаётся без триггера.
 
-| Сейчас | Цель |
-|---|---|
-| `rpt_health_signals` | `health_signals` |
-| `rpt_health_versions` | `health_document_requests` |
-| `rpt_health_sync` | `health_sync` |
-| `rpt_health_by_clinic` | `health_by_clinic` |
-| `rpt_health_message_registry_no_document` | `health_message_registry_no_document` |
-| `rpt_document_lineage` | `document_lineage` |
+### 3.2 Прямые обращения BI к базовым таблицам
 
-## Функции: размещение и сокращение
+Две карточки дашборда «Интеграция с ЕГИСЗ» («Недоставленные в клинику») читают
+`documents` и `transactions` напрямую. Их надо перевести на опубликованный слой до того,
+как права BI-роли будут ограничены схемами `*_selfservice` и `mart_common`.
 
-Сейчас функций 30, после переноса останется 26.
+### 3.3 Русские имена колонок
 
-| Схема | Функции |
-|---|---|
-| `etl_meta` | `egisz_ensure_time_partitions` (было `ensure_time_partitions`) |
-| `stg_egisz` | `xml_text`, `parse_exchangelog_row`, `classify_async_status`, `normalize_message_id`, `message_registry_key`, `clean_text_value`, `clean_host`, `extract_gost_endpoint`, `normalize_semd_code`, `dwh_id`, `egisz_subsystem`, `network_error_code`, `remd_error_items`, `ihe_error_items`, `xml_attribute`, `normalize_error_text`, `classify_error`, `parse_exchangelog_errors`, `reclassify_errors` |
-| `mart_egisz` | `transform_raw_to_facts`, `link_document_requests`, `recompute_document_attributes`, `recompute_document_jids`, `resolve_document_jid`, `document_status_final`, `document_status_nonfinal`, `recompute_document_error_texts`, `mask_personal_data` |
-| `serving_egisz` | `report_timezone`, `is_pending_at`, `pending_segment_at`, `pending_segment_code_at`, `refresh_report_marts` |
+Представления `rpt_health_*` отдают колонки вида `"JID Клиники"`, `"Уровень здоровья"`.
+Пункт 6 стандарта требует латиницу в snake_case. Колонки переименовываются, подписи
+переносятся в Metabase.
 
-`report_timezone`, `is_pending_at`, `pending_segment_at` и `pending_segment_code_at` вызывают только объекты
-`serving_egisz` и карточки Metabase.
+### 3.4 Срок хранения сырого слоя
 
-Снимаются:
+Журнал шлюза — 65 % базы и растёт. Срок хранения надо согласовать с потребностью в полном
+пересчёте документов и ошибок: сейчас история пересчитывается из `exchangelog_raw` без повторного
+обращения к Firebird, и если раздел журнала удалён, перерасчёт за этот период невозможен.
+Предложение: удерживать полный журнал 24 месяца, старшие разделы выгружать в архив.
 
-- `dim_message_document_guard` — правило переходит в `stg_egisz.message_registry`.
-- `safe_cast_timestamptz` — у неё один вызов. Функция заменяется выражением
-  `NULLIF(btrim(x), '')::timestamptz`. Название обещает защиту от ошибок приведения, которой в
-  теле нет.
-- `jid_from_mo_uid`, `jid_from_host` — их вызывает только `resolve_document_jid`, логика
-  переходит в неё.
+### 3.5 Кандидаты на сокращение
 
-Порядок обновления витрин сейчас задан в трёх местах: в `refresh_report_marts`, в
-`REPORT_MARTS` обоих DAG-ов и в `$ReportMarts` сценария `deploy/apply-dwh-schema.ps1`.
-Остаётся одно определение — функция `serving_egisz.refresh_report_marts()`; DAG-и и сценарий
-вызывают её.
+- `reclass_*` — 11 таблиц, 669 МБ, удалить.
+- `rpt_health_by_clinic`, `rpt_health_sync`, `rpt_health_versions` не используются ни
+  одним дашбордом: либо оставить как эксплуатационные в `mart_egisz_admin`, либо снять.
+- `rpt_document_versions` отличается от `rpt_documents` только снятым фильтром текущей
+  версии. Сводится к одному представлению с признаком.
+- `document_attributes` и `documents` связаны один к одному. Объединение сократило бы
+  объект, но смешало бы персональные данные с остальными полями; рекомендуется оставить
+  раздельно и развести правами.
 
-`transform_raw_to_facts` (около 800 строк) при переносе не меняется. Разбиение — отдельная
-задача.
+## 4. Порядок перехода
 
-## Что меняется вместе со структурой
+Перенос данных выполняется через `ALTER … SET SCHEMA` и `ALTER … RENAME TO`: данные,
+индексы и статистика сохраняются, полная перезагрузка не нужна. Операции оборачиваются
+проверкой `to_regclass()`, чтобы модуль оставался идемпотентным и повторный прогон не
+менял состояние.
 
-- **Модули `db/`.**
-  - Все имена квалифицируются схемой.
-  - Схема `etl_meta` создаётся, если её нет (локальная копия).
-  - `egisz_ensure_time_partitions` и сигнал сетки разделов в `health_signals` ищут разделы в
-    новых схемах, а не в `public`.
-  - Смена владельца в финальном блоке `04_views.sql` обходит схемы ЕГИСЗ.
-  - В начале `dwh_init.sql` проверяется, что в `public` не осталось объектов `egisz`. Без этой
-    проверки модули, применённые до переноса данных, создали бы пустые двойники таблиц.
-- **DAG-и и загрузчики.**
-  - DAG-и переходят на новые имена таблиц и колонок.
-  - `scripts/load_nsi_organization_1461.py` перестаёт создавать таблицу и представление в
-    `public`: их определения остаются только в `db/`.
-- **Metabase.**
-  - Провижининг адресует объекты ссылкой «схема.объект» по фиксированному списку схем
-    `DWH_SCHEMAS_REGEX` в `metabase/setup-dashboards.sh`. Сейчас в списке `public`,
-    `stg_egisz`, `mart_egisz_selfservice`, `mart_egisz`. Объекты схем, которых нет в списке,
-    провижининг не находит.
-  - В список добавляются `serving_egisz` и `mart_egisz_admin`, `public` и `mart_egisz_selfservice`
-    из него убираются.
-  - Генераторы, JSON дашбордов и модели получают новые схемы и имена. Источники карточек по
-    смыслу не меняются.
-- **Сценарии.** `deploy/apply-dwh-schema.ps1`, `scripts/export_dashboard.py`,
-  `scripts/verify_metabase_cards.py`, разовые `scripts/*.sql`.
-- **Задача по доступу.** В `etl_meta` для роли `egisz` заданы права по умолчанию в пользу ролей
-  Redmine: созданные в ней таблицы `egisz_*` получат их права.
+**Этап 1 — служебный и сырой слой.** Metabase этих объектов не видит, риск минимален.
+Здесь же переносятся разделы партиционированных таблиц: `SET SCHEMA` на родителе разделы
+не переносит, каждый раздел переносится отдельно, а `ensure_time_partitions` переводится
+на целевую схему.
 
-## Порядок перехода
+**Этап 2 — слой канонизации и витрины.** Отчётный слой в проекте пересобирается целиком
+при каждом накате, поэтому представления и материализованные представления не
+переносятся, а создаются заново в целевых схемах.
 
-1. Разовый сценарий вне репозитория выполняется одной транзакцией:
-   - создаёт схемы;
-   - переносит таблицы с данными командами `ALTER ... SET SCHEMA`, `RENAME` и `RENAME COLUMN`
-     — меняется только каталог, данные не копируются;
-   - переносит разделы секционированных таблиц по одному: перенос родителя их не затрагивает;
-   - переименовывает первичные ключи и индексы под новые имена таблиц;
-   - переносит функции с зависимыми объектами командой `ALTER FUNCTION ... SET SCHEMA`;
-   - снимает триггер реестра подач;
-   - удаляет представления и функции в `public`.
-2. Модули `db/` применяются дважды: второй прогон ничего не меняет.
-3. Выкладываются DAG-и, затем Metabase переимпортируется, карточки проверяются с параметрами.
+**Этап 3 — опубликованный слой и Metabase.** Наиболее рискованный. Дашборды генерируются
+из исходников и включаются в образ, но фильтры карточек привязаны к идентификаторам полей
+Metabase: переименование объекта рвёт привязку молча — карточка остаётся зелёной в тестах
+и течёт на экране. Порядок: снимок дашбордов, правка генераторов, полная пересборка и
+импорт, прогон `scripts/verify_metabase_cards.py` с параметрами.
 
-Прод переводится отдельно, после репетиции на локальной копии.
+**Этап 4 — права и `search_path`.** Владелец схем — роль `egisz`; BI-роль получает
+`USAGE` только на `mart_egisz_selfservice`, `mart_common` и `mart_egisz_admin`.
+`search_path` задаётся на роль и на подключение, но не на базу: именно установка на
+уровне базы вызвала инцидент 31.08.2026.
+
+Оценка трудоёмкости: SQL-модули, DAG и генераторы — 2–3 дня. Этап 3 считается отдельно,
+его длительность определяется не правкой, а проверкой карточек. Окно на промышленном
+контуре согласовывается заранее, DAG на время наката ставятся на паузу.
+
+## 5. Замечания к стандарту
+
+Стандарт применим, возражений по существу нет. Ниже пробелы, которые обнаружились при
+раскладке живого контура.
+
+1. **Нет шаблона для факта-состояния.** `fact_<event>` описывает событие, но центральный
+   объект контура — накопительный снимок жизненного цикла документа: одна строка,
+   несколько дат-этапов, строка обновляется. Предлагается добавить
+   `fact_<entity>_lifecycle` с обязательным перечнем дат-этапов в описании.
+2. **Нет шаблона для потока сообщений в staging.** Шаблоны `_current`, `_change`,
+   `_history`, `_mapping`, `_reject` не покрывают разобранный поток сообщений обмена одного
+   источника. Единица обмена — сообщение, отдельных событий нет; предлагается
+   `<entity>_message`.
+3. **Нет шаблона для расширения один к одному.** Отдельная таблица атрибутов с иным
+   профилем чувствительности — распространённый приём. Предлагается
+   `sat_<entity>_<subject>`: термин принят в Data Vault и не вводит новой сущности.
+4. **Не описаны функции и процедуры.** Схема размещения и правила именования
+   отсутствуют, хотя в реальном контуре их несколько десятков. Предлагается правило
+   из §2.8 настоящего документа.
+5. **Не описаны разделы партиционированных таблиц.** Нужен единый шаблон имени
+   (`<table>_y<YYYY>m<MM>`) и указание, что якорь сетки считается в UTC.
+6. **Не описан контракт материализованных представлений.** Нужно зафиксировать, кто и
+   когда обновляет и допустимо ли материализованное представление в `*_selfservice`.
+7. **Нет запрета на `ALTER DATABASE … SET search_path` в общей базе.** Это ровно тот
+   приём, который сломал контур 31.08.2026. Предлагается вынести в обязательные правила:
+   `search_path` задаётся на роль или подключение, установка на уровне общей базы
+   запрещена.
+8. **Нет требования к правам на схему.** В общей базе у каждой схемы должны быть
+   владелец-роль и `ALTER DEFAULT PRIVILEGES`, иначе новый объект по умолчанию окажется
+   либо недоступен потребителю, либо доступен всем.
+9. **Не сказано, где хранится грейн.** Пункт 8 обязательных правил требует его
+   документировать, но не говорит где. Предлагается `COMMENT ON TABLE` и
+   `COMMENT ON COLUMN`: комментарий читается Metabase и доступен ИИ-потребителям,
+   в отличие от внешнего документа.
+10. **Нет правила для срока хранения сырого слоя.** Раздел `raw_<source>` описан как
+    хранимый неограниченно, но в общей базе это счёт за диск. Нужен обязательный атрибут
+    retention у каждой raw-таблицы и правило согласования его с потребностью в полном
+    перерасчёте.

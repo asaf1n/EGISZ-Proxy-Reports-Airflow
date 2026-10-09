@@ -1,30 +1,20 @@
-# Контракт репозитория EGISZ-Proxy-Reports-Airflow
+# Контракт репозитория EGISZ-Proxy-Reports-Airflow (состояние прода)
 
-Файл дополняет общие правила агента фактами этого репозитория. Общая модель хранения и представления — [docs/data-model.md](docs/data-model.md); предметная область, регламент конвейера и правила — [README.md](README.md) и [docs/error-catalog.md](docs/error-catalog.md). Схема `db/` приводится к этой модели; изменение сущностей и слоёв начинается с `docs/data-model.md`.
+Ветка соответствует состоянию прода: БД `dwh_egisz`, объекты ЕГИСЗ в `public` и слоях `stg_egisz`, `mart_egisz`, `mart_egisz_selfservice`. Предметная область, регламент конвейера и правила — [README.md](README.md), [docs/error-catalog.md](docs/error-catalog.md), раскладка схем — [docs/dwh-schema-naming-migration.md](docs/dwh-schema-naming-migration.md). Развитие на новых схемах (`dwh_bi`, `serving_egisz`, `mart_egisz_admin`) ведётся в проекте `bi_platform`, здесь не делается.
 
 ## Размещение логики
 
 - Разбор, нормализация, классификация ошибок и сборка документа выполняются в PostgreSQL (`db/*.sql`). DAG в `dags/` вызывают функции DWH, ведут позиции выгрузки и обновляют витрины.
-- Подключения DAG — Airflow Connections `dwh_bi_pg` и `proxy_egisz_fb`.
-- `AGENTS.md` и `CLAUDE.md` хранятся в git; секреты, пароли, токены и строки подключения с учётными данными в них не размещаются.
-- Правила ошибок задаются в `db/02_functions.sql`; накопленные данные приводит к новым правилам задача `reclassify_errors`.
+- Подключения DAG — Airflow Connections `dwh_egisz_pg` и `proxy_egisz_fb`.
+- Секреты, пароли и токены в git не размещаются: в `k8s/**/*secret*.yaml` значения задаются переменными окружения `${ИМЯ}`, `up.ps1` подставляет их при применении.
 
 ## Схема DWH
 
-- Точка сборки — `db/dwh_init.sql`, подключает `01_schema.sql` … `04_views.sql`.
-- Представления и материализованные представления пересоздаются: удаление — в секции `drop_dependents` файла `04_views.sql`, в порядке зависимостей. Новое представление добавляется в эту секцию.
-- Объекты адресуются схемой слоя: `raw_egisz`, `stg_egisz`, `mart_egisz`, `serving_egisz`, `mart_egisz_admin`, `etl_meta`. Сборка выполняется с `search_path = pg_catalog`, поэтому имя без схемы приводит к ошибке.
-- `ANALYZE` выполняется и после `REFRESH MATERIALIZED VIEW`.
-- Позиции выгрузки и разбора фиксируются только после успешного шага.
-
-## Потребители
-
-- Дашборды Metabase (`metabase_dashboards/`) и репозиторий `bi_superset` читают `serving_egisz`, `mart_egisz` и служебные представления `mart_egisz_admin`. Новые отчёты на `raw_egisz` и `stg_egisz` не строятся; исходный текст ошибок для отчётов — из слоя витрин (`mart_egisz.documents.error_text`, `mart_egisz.exchangelog_errors.error_text`) и выдаётся только через функцию скрытия персональных данных `mart_egisz.mask_personal_data`. В `stg_egisz` — только разобранные данные: функций объединения источников и скрытия персональных данных там нет. Исходные записи справочников НСИ (`raw_json`) на слое витрин не хранятся.
-- Состояние документа к выдаче — `serving_egisz.documents_current`; документы без ответа за срок ожидания — только `serving_egisz.documents_no_response`. Все запросы на регистрацию `serving_egisz.registration_requests` читают объекты, которым нужны все запросы или состояние на прошлый момент; связь запроса с документом строит `mart_egisz.link_document_requests`.
-- Изменение столбцов `serving_egisz` синхронно отражается в дашбордах Metabase, в `bi_superset` (или в описании изменения, если тот репозиторий не входит в задачу), в README и в тестах.
+- Точка сборки — `db/dwh_init.sql`, подключает `01_schema.sql` … `04_views.sql`; идемпотентна.
+- Дашборды Metabase (`metabase_dashboards/`, `metabase_models/`) читают те объекты, которые есть на проде; импорт останавливается, если объекта нет в БД.
+- Дашборды и модели правятся в JSON и генераторах (`scripts/apply_dashboard_plan.py`, `scripts/layout_operational_tab.py`), не в живом Metabase.
 
 ## Проверка
 
-- Схема: `psql -U egisz -d dwh_bi_old -v ON_ERROR_STOP=1 -f db/dwh_init.sql`, два прогона.
-- Тесты: `python -m pytest tests -q`.
-- `.\up.ps1` и сценарии `deploy/` запускаются только по запросу пользователя. Контуры с `prod` в имени — внешние, работа с ними требует отдельного подтверждения.
+- Тесты: `python -m pytest tests -q` (с `EGISZ_TEST_PG_DSN` — и живые).
+- `.\up.ps1` и сценарии `deploy/` запускаются только по запросу пользователя. Работа с прод-базой требует подтверждения.

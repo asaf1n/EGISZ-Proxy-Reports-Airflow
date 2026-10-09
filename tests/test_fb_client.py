@@ -148,7 +148,7 @@ def test_raw_window_low_reads_dwh_only() -> None:
 
     assert raw_window_low(pg, since=since) == 100
     sql, params = cur.execute.call_args.args
-    assert "FROM raw_egisz.exchangelog WHERE createdate >= %s" in sql
+    assert "FROM public.exchangelog_raw WHERE createdate >= %s" in sql
     assert params == (since,)
 
 
