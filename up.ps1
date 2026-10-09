@@ -1037,8 +1037,12 @@ function Install-Metabase {
         # Kubernetes не раскрывает переменные: значения вида ${VAR} подставляются здесь из окружения.
         $secretYaml = (Get-Content -Raw -Encoding UTF8 k8s/metabase/metabase-connections-secret.yaml)
         foreach ($m in [regex]::Matches($secretYaml, '\$\{(\w+)\}') | Select-Object -Unique) {
-            $value = [Environment]::GetEnvironmentVariable($m.Groups[1].Value)
-            if ([string]::IsNullOrEmpty($value)) { throw "Переменная окружения $($m.Groups[1].Value) не задана" }
+            $name = $m.Groups[1].Value
+            # Терминал, открытый до задания переменной, её не видит: читаем и уровни пользователя и системы.
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrEmpty($value)) { $value = [Environment]::GetEnvironmentVariable($name, "User") }
+            if ([string]::IsNullOrEmpty($value)) { $value = [Environment]::GetEnvironmentVariable($name, "Machine") }
+            if ([string]::IsNullOrEmpty($value)) { throw "Environment variable $name is not set (needed by the secret file)" }
             $secretYaml = $secretYaml.Replace($m.Value, $value)
         }
         $secretYaml | kubectl apply -n $Namespace -f -
